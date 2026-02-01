@@ -489,9 +489,12 @@ def check_pinned_staleness() -> Optional[str]:
             continue
 
         if merged_date < stale_threshold:
-            # Mark as stale by prepending comment before the ### heading
+            # Mark as stale by inserting comment after the ### heading line.
+            # The marker must be inside the entry_text (which starts at ###)
+            # so that subsequent runs find it and skip re-marking.
             stale_marker = f"<!-- STALE: Last relevant {pr_match.group(1)} -->\n"
-            new_entry = stale_marker + entry_text
+            heading_end = entry_text.index("\n") + 1
+            new_entry = entry_text[:heading_end] + stale_marker + entry_text[heading_end:]
             pinned_content = (
                 pinned_content[:start] + new_entry + pinned_content[end:]
             )

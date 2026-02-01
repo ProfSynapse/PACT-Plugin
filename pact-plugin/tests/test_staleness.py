@@ -140,25 +140,18 @@ class TestCheckPinnedStaleness:
         assert "<!-- STALE:" not in content
 
     def test_already_stale_entry_not_double_marked(self, tmp_path):
-        """
-        Entry already marked stale should not get a second marker.
-
-        KNOWN BUG: The stale marker is prepended BEFORE the ### heading,
-        but the entry parser starts at ###. So on a second pass, the marker
-        falls outside the parsed entry_text and the duplicate-check fails.
-        This test documents the current (buggy) behavior: it WILL add a
-        second marker. When the bug is fixed, update this test to assert
-        stale_count == 1.
-        """
+        """Entry already marked stale should not get a second marker (idempotent)."""
         from session_init import check_pinned_staleness, PINNED_STALENESS_DAYS
 
         old_date = (datetime.now() - timedelta(days=PINNED_STALENESS_DAYS + 10)).strftime("%Y-%m-%d")
 
+        # Marker is placed after the heading (inside entry text), matching
+        # the format that check_pinned_staleness() itself produces.
         claude_md = self._create_project_claude_md(tmp_path, (
             "# Project Memory\n\n"
             "## Pinned Context\n\n"
-            f"<!-- STALE: Last relevant {old_date} -->\n"
             f"### Old Feature (PR #50, merged {old_date})\n"
+            f"<!-- STALE: Last relevant {old_date} -->\n"
             "- Details\n\n"
         ))
 
@@ -168,12 +161,10 @@ class TestCheckPinnedStaleness:
         assert result is not None
         assert "stale" in result.lower()
 
-        # BUG: Currently adds duplicate marker because entry parsing
-        # starts at ### and the existing marker is before ###.
-        # When fixed, this should assert stale_count == 1.
+        # Marker count must remain exactly 1 -- no duplicates
         content = claude_md.read_text(encoding="utf-8")
         stale_count = content.count("<!-- STALE:")
-        assert stale_count == 2  # BUG: should be 1
+        assert stale_count == 1
 
     def test_over_budget_adds_warning(self, tmp_path):
         """Should add token budget warning when pinned content exceeds budget."""
