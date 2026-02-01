@@ -21,6 +21,7 @@ eliminating startup cost for non-memory users.
 import logging
 import os
 import struct
+import subprocess
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -135,7 +136,9 @@ class PACTMemory:
         Initialize the PACTMemory API.
 
         Args:
-            project_id: Project identifier. Auto-detected from CLAUDE_PROJECT_DIR if not provided.
+            project_id: Project identifier. If not provided, auto-detected using
+                        (in order): CLAUDE_PROJECT_DIR env var, git repo root,
+                        or current working directory basename.
             session_id: Session identifier. Auto-detected from CLAUDE_SESSION_ID if not provided.
             db_path: Custom database path. Uses default if not provided.
         """
@@ -152,11 +155,48 @@ class PACTMemory:
 
     @staticmethod
     def _detect_project_id() -> Optional[str]:
-        """Detect project ID from environment."""
+        """
+        Detect project ID from environment with multiple fallback strategies.
+
+        Detection order:
+        1. CLAUDE_PROJECT_DIR environment variable (original behavior)
+        2. Git repository root via 'git rev-parse --show-toplevel'
+        3. Current working directory basename
+
+        Returns:
+            Project ID string (directory basename), or None if all methods fail.
+        """
+        # Strategy 1: Environment variable (original behavior)
         project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
         if project_dir:
-            # Use the directory name as project ID
+            logger.debug("project_id detected from CLAUDE_PROJECT_DIR: %s", Path(project_dir).name)
             return Path(project_dir).name
+
+        # Strategy 2: Git repository root
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                project_name = Path(result.stdout.strip()).name
+                logger.debug("project_id detected from git root: %s", project_name)
+                return project_name
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            # git not installed, not a repo, or command timed out
+            logger.debug("Git detection failed, falling back to cwd")
+
+        # Strategy 3: Current working directory
+        try:
+            cwd_name = Path.cwd().name
+            if cwd_name:
+                logger.debug("project_id detected from cwd: %s", cwd_name)
+                return cwd_name
+        except OSError:
+            logger.debug("Failed to detect project_id from cwd")
+
         return None
 
     @staticmethod
