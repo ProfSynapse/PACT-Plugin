@@ -404,7 +404,7 @@ If a sub-task emerges that is too complex for a single specialist invocation:
 
 **Invoke `pact-test-engineer` with**:
 - Task description
-- CODE phase handoff(s): Pass the handoff summaries from coders for context on what was built
+- CODE phase handoff(s): Pass coder handoff summaries (agent response text, not files on disk)
 - Plan sections above (if any)
 - "Reference the approved plan at `docs/plans/{slug}-plan.md` for full context."
 - "You own ALL substantive testing: unit tests, integration, E2E, edge cases."
