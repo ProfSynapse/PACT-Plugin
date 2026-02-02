@@ -298,6 +298,37 @@ If PREPARE ran and ARCHITECT was marked "Skip," compare PREPARE's recommended ap
 - If the user rejects, continue single-scope as normal
 - Log the detection result for future tuning data regardless of outcome
 
+#### S5 Confirmation for Decomposition
+
+When detection produces a multi-scope recommendation with medium or high confidence, present a decomposition proposal to the user using S5 Decision Framing (see [pact-s5-policy.md](../protocols/pact-s5-policy.md)):
+
+```
+📐 Scope Change: Task may benefit from decomposition
+
+Context: {Source} identified {N} distinct domains with {confidence} confidence.
+Signals: {list of signals fired}. Counter-signals: {list or "none"}.
+
+Options:
+A) Decompose into {N} scopes
+   - Scopes: {scope list with domains and key files}
+   - Trade-off: Better isolation and parallel execution, but coordination overhead
+
+B) Continue single-scope
+   - Trade-off: Simpler orchestration, but higher context pressure on agents
+
+C) Adjust scope boundaries (specify)
+
+Recommendation: {A or B} — {brief rationale based on signals}
+```
+
+**Three outcomes**:
+
+| Outcome | Action |
+|---------|--------|
+| **Confirmed** (user selects A) | Record proposed scopes in the ScopeAssessment. In Phase B interim: invoke `/rePACT` for each scope sequentially. In Phase C+: native sub-scope execution. |
+| **Rejected** (user selects B) | Continue single-scope orchestration. Log rejection for tuning data. |
+| **Adjusted** (user selects C) | User provides modified scope boundaries. Record adjusted scopes in ScopeAssessment and proceed as Confirmed with the user's boundaries. |
+
 ---
 
 ### Phase 2: ARCHITECT → `pact-architect`
