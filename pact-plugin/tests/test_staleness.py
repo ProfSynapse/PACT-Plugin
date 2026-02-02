@@ -258,6 +258,13 @@ class TestCheckPinnedStaleness:
 class TestGetProjectClaudeMdPath:
     """Tests for _get_project_claude_md_path() helper."""
 
+    @pytest.fixture
+    def clean_env_no_claude_project_dir(self):
+        """Remove CLAUDE_PROJECT_DIR from the environment."""
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+        with patch.dict(os.environ, env, clear=True):
+            yield
+
     def test_uses_env_var_when_set(self, tmp_path):
         """Should use CLAUDE_PROJECT_DIR env var first."""
         from session_init import _get_project_claude_md_path
@@ -270,7 +277,7 @@ class TestGetProjectClaudeMdPath:
 
         assert result == claude_md
 
-    def test_falls_back_to_git_root(self, tmp_path):
+    def test_falls_back_to_git_root(self, tmp_path, clean_env_no_claude_project_dir):
         """Should use git root when env var not set."""
         from session_init import _get_project_claude_md_path
 
@@ -281,25 +288,17 @@ class TestGetProjectClaudeMdPath:
         mock_result.returncode = 0
         mock_result.stdout = str(tmp_path) + "\n"
 
-        with patch.dict(os.environ, {}, clear=True), \
-             patch("subprocess.run", return_value=mock_result):
-            env = os.environ.copy()
-            env.pop("CLAUDE_PROJECT_DIR", None)
-            with patch.dict(os.environ, env, clear=True):
-                result = _get_project_claude_md_path()
+        with patch("subprocess.run", return_value=mock_result):
+            result = _get_project_claude_md_path()
 
         assert result == claude_md
 
-    def test_returns_none_when_no_claude_md_found(self, tmp_path):
+    def test_returns_none_when_no_claude_md_found(self, clean_env_no_claude_project_dir):
         """Should return None when CLAUDE.md does not exist anywhere."""
         from session_init import _get_project_claude_md_path
 
-        with patch.dict(os.environ, {}, clear=True), \
-             patch("subprocess.run", side_effect=FileNotFoundError()):
-            env = os.environ.copy()
-            env.pop("CLAUDE_PROJECT_DIR", None)
-            with patch.dict(os.environ, env, clear=True):
-                result = _get_project_claude_md_path()
+        with patch("subprocess.run", side_effect=FileNotFoundError()):
+            result = _get_project_claude_md_path()
 
         assert result is None
 
@@ -356,6 +355,82 @@ class TestBudgetWarningIdempotency:
         assert warning_count == 1, (
             f"Expected exactly 1 budget warning comment, found {warning_count}"
         )
+
+
+class TestStalenessErrorPaths:
+    """Tests for error handling paths in staleness.py."""
+
+    def _create_claude_md(self, tmp_path, content):
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text(content, encoding="utf-8")
+        return claude_md
+
+    def test_read_text_ioerror_returns_none(self, tmp_path):
+        """IOError on read_text() (line 116) should return None gracefully."""
+        from staleness import check_pinned_staleness
+
+        claude_md = self._create_claude_md(tmp_path, "# Project\n")
+
+        # Patch read_text to raise IOError after the path is validated
+        with patch.object(type(claude_md), "read_text", side_effect=IOError("disk error")):
+            result = check_pinned_staleness(claude_md_path=claude_md)
+
+        assert result is None
+
+    def test_read_text_unicode_decode_error_returns_none(self, tmp_path):
+        """UnicodeDecodeError on read_text() should return None gracefully."""
+        from staleness import check_pinned_staleness
+
+        claude_md = self._create_claude_md(tmp_path, "# Project\n")
+
+        error = UnicodeDecodeError("utf-8", b"", 0, 1, "invalid")
+        with patch.object(type(claude_md), "read_text", side_effect=error):
+            result = check_pinned_staleness(claude_md_path=claude_md)
+
+        assert result is None
+
+    def test_write_text_ioerror_returns_error_message(self, tmp_path):
+        """IOError on write_text() (line 218) should return an error message string."""
+        from staleness import check_pinned_staleness, PINNED_STALENESS_DAYS
+        from datetime import datetime, timedelta
+
+        old_date = (datetime.now() - timedelta(days=PINNED_STALENESS_DAYS + 10)).strftime("%Y-%m-%d")
+
+        claude_md = self._create_claude_md(tmp_path, (
+            "# Project Memory\n\n"
+            "## Pinned Context\n\n"
+            f"### Old Feature (PR #50, merged {old_date})\n"
+            "- Details\n\n"
+        ))
+
+        # Let read_text work normally, but make write_text fail
+        with patch.object(type(claude_md), "write_text", side_effect=IOError("read-only fs")):
+            result = check_pinned_staleness(claude_md_path=claude_md)
+
+        # Should return an error message string (not None)
+        assert result is not None
+        assert "Failed to update pinned staleness" in result
+        assert "read-only fs" in result
+
+    def test_write_text_os_error_returns_error_message(self, tmp_path):
+        """OSError on write_text() should also return an error message string."""
+        from staleness import check_pinned_staleness, PINNED_STALENESS_DAYS
+        from datetime import datetime, timedelta
+
+        old_date = (datetime.now() - timedelta(days=PINNED_STALENESS_DAYS + 10)).strftime("%Y-%m-%d")
+
+        claude_md = self._create_claude_md(tmp_path, (
+            "# Project Memory\n\n"
+            "## Pinned Context\n\n"
+            f"### Old Feature (PR #50, merged {old_date})\n"
+            "- Details\n\n"
+        ))
+
+        with patch.object(type(claude_md), "write_text", side_effect=OSError("permission denied")):
+            result = check_pinned_staleness(claude_md_path=claude_md)
+
+        assert result is not None
+        assert "Failed to update pinned staleness" in result
 
 
 class TestStalenessModuleDirect:

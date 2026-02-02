@@ -309,3 +309,324 @@ class TestSyncRetrievedBudgetEnforcement:
         from working_memory import sync_retrieved_to_claude_md
         result = sync_retrieved_to_claude_md([], query="test")
         assert result is False
+
+
+class TestFormatMemoryEntry:
+    """Direct unit tests for _format_memory_entry() helper."""
+
+    def test_basic_fields(self):
+        """Should format context, goal, and memory_id into markdown."""
+        from working_memory import _format_memory_entry
+
+        memory = {"context": "Working on auth", "goal": "Add JWT support"}
+        result = _format_memory_entry(memory, memory_id="abc123")
+
+        assert "**Context**: Working on auth" in result
+        assert "**Goal**: Add JWT support" in result
+        assert "**Memory ID**: abc123" in result
+        assert result.startswith("### ")
+
+    def test_decisions_as_list_of_strings(self):
+        """Decisions provided as a list of strings should be joined with commas."""
+        from working_memory import _format_memory_entry
+
+        memory = {"context": "Test", "decisions": ["Use Redis", "Add caching"]}
+        result = _format_memory_entry(memory)
+
+        assert "**Decisions**: Use Redis, Add caching" in result
+
+    def test_decisions_as_list_of_dicts(self):
+        """Decisions provided as list of dicts should extract 'decision' key."""
+        from working_memory import _format_memory_entry
+
+        memory = {"context": "Test", "decisions": [
+            {"decision": "Use Redis"},
+            {"decision": "Add caching"}
+        ]}
+        result = _format_memory_entry(memory)
+
+        assert "**Decisions**: Use Redis, Add caching" in result
+
+    def test_decisions_as_string(self):
+        """Decisions provided as a plain string should be used directly."""
+        from working_memory import _format_memory_entry
+
+        memory = {"context": "Test", "decisions": "Use Redis for storage"}
+        result = _format_memory_entry(memory)
+
+        assert "**Decisions**: Use Redis for storage" in result
+
+    def test_lessons_as_list(self):
+        """Lessons provided as a list should be joined with commas."""
+        from working_memory import _format_memory_entry
+
+        memory = {"context": "Test", "lessons_learned": ["Cache invalidation is hard", "Use TTL"]}
+        result = _format_memory_entry(memory)
+
+        assert "**Lessons**: Cache invalidation is hard, Use TTL" in result
+
+    def test_lessons_as_string(self):
+        """Lessons provided as a string should be used directly."""
+        from working_memory import _format_memory_entry
+
+        memory = {"context": "Test", "lessons_learned": "Always use TTL for caches"}
+        result = _format_memory_entry(memory)
+
+        assert "**Lessons**: Always use TTL for caches" in result
+
+    def test_missing_optional_fields(self):
+        """Missing optional fields should be omitted from output."""
+        from working_memory import _format_memory_entry
+
+        memory = {"context": "Just context, nothing else"}
+        result = _format_memory_entry(memory)
+
+        assert "**Context**: Just context, nothing else" in result
+        assert "**Goal**" not in result
+        assert "**Decisions**" not in result
+        assert "**Lessons**" not in result
+        assert "**Files**" not in result
+        assert "**Memory ID**" not in result
+
+    def test_files_list(self):
+        """Files list should be formatted as comma-separated values."""
+        from working_memory import _format_memory_entry
+
+        memory = {"context": "Test"}
+        result = _format_memory_entry(memory, files=["src/auth.py", "tests/test_auth.py"])
+
+        assert "**Files**: src/auth.py, tests/test_auth.py" in result
+
+    def test_empty_memory_dict(self):
+        """Empty memory dict should produce only the date header line."""
+        from working_memory import _format_memory_entry
+
+        result = _format_memory_entry({})
+        lines = result.strip().split("\n")
+        assert len(lines) == 1
+        assert lines[0].startswith("### ")
+
+
+class TestFormatRetrievedEntry:
+    """Direct unit tests for _format_retrieved_entry() helper."""
+
+    def test_basic_formatting(self):
+        """Should format query, context, and goal into markdown."""
+        from working_memory import _format_retrieved_entry
+
+        memory = {"context": "Auth implementation", "goal": "Add JWT"}
+        result = _format_retrieved_entry(memory, query="authentication", memory_id="mem1")
+
+        assert '**Query**: "authentication"' in result
+        assert "**Context**: Auth implementation" in result
+        assert "**Goal**: Add JWT" in result
+        assert "**Memory ID**: mem1" in result
+        assert result.startswith("### ")
+
+    def test_context_truncation_at_200_chars(self):
+        """Context longer than 200 chars should be truncated with ellipsis."""
+        from working_memory import _format_retrieved_entry
+
+        long_context = "A" * 250
+        memory = {"context": long_context}
+        result = _format_retrieved_entry(memory, query="test")
+
+        context_line = [l for l in result.split("\n") if "**Context**:" in l][0]
+        context_value = context_line.split("**Context**: ", 1)[1]
+        assert len(context_value) == 200  # 197 + "..."
+        assert context_value.endswith("...")
+
+    def test_score_formatting(self):
+        """Score should be formatted to 2 decimal places."""
+        from working_memory import _format_retrieved_entry
+
+        memory = {"context": "Test"}
+        result = _format_retrieved_entry(memory, query="test", score=0.87654)
+
+        assert "**Relevance**: 0.88" in result
+
+    def test_no_score_omits_relevance(self):
+        """When score is None, Relevance line should be omitted."""
+        from working_memory import _format_retrieved_entry
+
+        memory = {"context": "Test"}
+        result = _format_retrieved_entry(memory, query="test")
+
+        assert "**Relevance**" not in result
+
+    def test_missing_optional_fields(self):
+        """Missing context and goal should be omitted."""
+        from working_memory import _format_retrieved_entry
+
+        result = _format_retrieved_entry({}, query="test")
+
+        assert '**Query**: "test"' in result
+        assert "**Context**" not in result
+        assert "**Goal**" not in result
+
+
+class TestParseWorkingMemorySection:
+    """Direct unit tests for _parse_working_memory_section() helper."""
+
+    def test_section_not_found(self):
+        """When no Working Memory section exists, should return empty entries."""
+        from working_memory import _parse_working_memory_section
+
+        content = "# Project\n\n## Some Other Section\nContent here\n"
+        before, header, after, entries = _parse_working_memory_section(content)
+
+        assert before == content
+        assert header == ""
+        assert after == ""
+        assert entries == []
+
+    def test_no_next_section(self):
+        """Working Memory at end of file (no next section) should capture to EOF."""
+        from working_memory import _parse_working_memory_section
+
+        content = (
+            "# Project\n\n"
+            "## Working Memory\n"
+            "<!-- Auto-managed by pact-memory skill. Last 5 memories shown. "
+            "Full history searchable via pact-memory skill. -->\n\n"
+            "### 2026-01-15 10:00\n"
+            "**Context**: Some entry\n"
+        )
+        before, header, after, entries = _parse_working_memory_section(content)
+
+        assert len(entries) == 1
+        assert "Some entry" in entries[0]
+
+    def test_entries_without_proper_date_headers(self):
+        """Entries without ### YYYY-MM-DD pattern should not be parsed as entries."""
+        from working_memory import _parse_working_memory_section
+
+        content = (
+            "## Working Memory\n"
+            "<!-- Auto-managed by pact-memory skill. Last 5 memories shown. "
+            "Full history searchable via pact-memory skill. -->\n\n"
+            "### Not a date header\n"
+            "Some content\n\n"
+            "## Next Section\n"
+        )
+        _, _, _, entries = _parse_working_memory_section(content)
+
+        # "### Not a date header" does not match ### YYYY-MM-DD pattern
+        assert entries == []
+
+    def test_empty_section(self):
+        """Section with header but no entries should return empty list."""
+        from working_memory import _parse_working_memory_section
+
+        content = (
+            "## Working Memory\n"
+            "<!-- Auto-managed by pact-memory skill. Last 5 memories shown. "
+            "Full history searchable via pact-memory skill. -->\n\n"
+            "## Pinned Context\n"
+        )
+        _, header, _, entries = _parse_working_memory_section(content)
+
+        assert header == "## Working Memory"
+        assert entries == []
+
+    def test_multiple_entries_parsed_correctly(self):
+        """Multiple entries should be parsed as separate items."""
+        from working_memory import _parse_working_memory_section
+
+        content = (
+            "## Working Memory\n"
+            "<!-- Auto-managed by pact-memory skill. Last 5 memories shown. "
+            "Full history searchable via pact-memory skill. -->\n\n"
+            "### 2026-01-15 10:00\n"
+            "**Context**: First entry\n\n"
+            "### 2026-01-14 09:00\n"
+            "**Context**: Second entry\n\n"
+            "## Pinned Context\n"
+        )
+        _, _, _, entries = _parse_working_memory_section(content)
+
+        assert len(entries) == 2
+        assert "First entry" in entries[0]
+        assert "Second entry" in entries[1]
+
+
+class TestParseRetrievedContextSection:
+    """Direct unit tests for _parse_retrieved_context_section() helper."""
+
+    def test_section_not_found(self):
+        """When no Retrieved Context section exists, should return empty entries."""
+        from working_memory import _parse_retrieved_context_section
+
+        content = "# Project\n\n## Working Memory\nContent here\n"
+        before, header, after, entries = _parse_retrieved_context_section(content)
+
+        assert before == content
+        assert header == ""
+        assert after == ""
+        assert entries == []
+
+    def test_no_next_section(self):
+        """Retrieved Context at end of file should capture to EOF."""
+        from working_memory import _parse_retrieved_context_section
+
+        content = (
+            "# Project\n\n"
+            "## Retrieved Context\n"
+            "<!-- Auto-managed by pact-memory skill. Last 3 retrieved memories shown. -->\n\n"
+            "### 2026-01-15 10:00\n"
+            '**Query**: "auth"\n'
+            "**Context**: Some context\n"
+        )
+        _, header, _, entries = _parse_retrieved_context_section(content)
+
+        assert header == "## Retrieved Context"
+        assert len(entries) == 1
+        assert "auth" in entries[0]
+
+    def test_empty_section(self):
+        """Section with header but no entries should return empty list."""
+        from working_memory import _parse_retrieved_context_section
+
+        content = (
+            "## Retrieved Context\n"
+            "<!-- Auto-managed by pact-memory skill. Last 3 retrieved memories shown. -->\n\n"
+            "## Working Memory\n"
+        )
+        _, header, _, entries = _parse_retrieved_context_section(content)
+
+        assert header == "## Retrieved Context"
+        assert entries == []
+
+    def test_entries_without_date_headers_ignored(self):
+        """Non-date ### headings should not be parsed as entries."""
+        from working_memory import _parse_retrieved_context_section
+
+        content = (
+            "## Retrieved Context\n"
+            "<!-- Auto-managed by pact-memory skill. Last 3 retrieved memories shown. -->\n\n"
+            "### Some random heading\n"
+            "Content\n\n"
+            "## Working Memory\n"
+        )
+        _, _, _, entries = _parse_retrieved_context_section(content)
+
+        assert entries == []
+
+    def test_preserves_before_and_after_content(self):
+        """Should correctly split content around the Retrieved Context section."""
+        from working_memory import _parse_retrieved_context_section
+
+        content = (
+            "# Project\n\n"
+            "## Retrieved Context\n"
+            "<!-- Auto-managed by pact-memory skill. Last 3 retrieved memories shown. -->\n\n"
+            "### 2026-01-15 10:00\n"
+            '**Query**: "test"\n\n'
+            "## Working Memory\n"
+            "Some working memory stuff\n"
+        )
+        before, _, after, _ = _parse_retrieved_context_section(content)
+
+        assert "# Project" in before
+        assert "## Working Memory" in after
+        assert "working memory stuff" in after

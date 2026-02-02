@@ -25,6 +25,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+@pytest.fixture
+def clean_env_no_claude_project_dir():
+    """Fixture that removes CLAUDE_PROJECT_DIR from the environment.
+
+    Yields with a patched os.environ that contains all current env vars
+    except CLAUDE_PROJECT_DIR, preventing strategy-1 from short-circuiting.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+    with patch.dict(os.environ, env, clear=True):
+        yield
+
+
 # Path to the actual source file for equivalence checking
 _MEMORY_API_PATH = (
     Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts" / "memory_api.py"
@@ -106,17 +119,36 @@ class TestSourceEquivalence:
     """Verify the test replica matches the real implementation."""
 
     def test_source_equivalence(self):
-        """The replica logic should match the real _detect_project_id method body."""
+        """The replica logic should match the real _detect_project_id method body.
+
+        Verifies key implementation markers are present AND ordered correctly:
+        Strategy 1 (env var) before Strategy 2 (git) before Strategy 3 (cwd).
+        This catches accidental strategy reordering that substring checks alone miss.
+        """
         real_source = _extract_method_body(_MEMORY_API_PATH, "_detect_project_id")
         assert real_source is not None, "Could not find _detect_project_id in memory_api.py"
 
-        # Extract the core logic lines (skip docstring and logging setup)
         # Check key implementation lines are present
         assert 'os.environ.get("CLAUDE_PROJECT_DIR")' in real_source
         assert '["git", "rev-parse", "--show-toplevel"]' in real_source
         assert "timeout=5" in real_source
         assert "(subprocess.TimeoutExpired, FileNotFoundError, OSError)" in real_source
         assert "Path.cwd().name" in real_source
+
+        # Verify strategy ordering in the CODE (not docstring).
+        # Use code-specific markers that won't appear in the docstring.
+        pos_env = real_source.index('os.environ.get("CLAUDE_PROJECT_DIR")')
+        pos_git = real_source.index('["git", "rev-parse", "--show-toplevel"]')
+        pos_cwd = real_source.index("Path.cwd()")
+
+        assert pos_env < pos_git, (
+            f"Strategy ordering violation: env var (pos {pos_env}) should appear "
+            f"before git (pos {pos_git})"
+        )
+        assert pos_git < pos_cwd, (
+            f"Strategy ordering violation: git (pos {pos_git}) should appear "
+            f"before cwd (pos {pos_cwd})"
+        )
 
 
 class TestDetectProjectId:
@@ -149,116 +181,96 @@ class TestDetectProjectId:
 
     # --- Strategy 2: Git repo root ---
 
-    def test_uses_git_when_env_var_not_set(self):
+    def test_uses_git_when_env_var_not_set(self, clean_env_no_claude_project_dir):
         """Should fall back to git rev-parse when no env var."""
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "/users/dev/awesome-repo\n"
 
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("subprocess.run", return_value=mock_result):
+        with patch("subprocess.run", return_value=mock_result):
             result = _detect_project_id_under_test()
         assert result == "awesome-repo"
 
-    def test_git_strips_whitespace_from_output(self):
+    def test_git_strips_whitespace_from_output(self, clean_env_no_claude_project_dir):
         """Should strip trailing newline from git output."""
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "  /path/to/repo  \n"
 
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("subprocess.run", return_value=mock_result):
+        with patch("subprocess.run", return_value=mock_result):
             result = _detect_project_id_under_test()
         assert result == "repo"
 
-    def test_git_nonzero_returncode_falls_through(self):
+    def test_git_nonzero_returncode_falls_through(self, clean_env_no_claude_project_dir):
         """Should fall back to cwd when git returns non-zero (not a repo)."""
         mock_result = MagicMock()
         mock_result.returncode = 128
         mock_result.stdout = ""
 
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("subprocess.run", return_value=mock_result), \
+        with patch("subprocess.run", return_value=mock_result), \
              patch("pathlib.Path.cwd", return_value=Path("/fallback/cwd-dir")):
             result = _detect_project_id_under_test()
         assert result == "cwd-dir"
 
-    def test_git_empty_stdout_falls_through(self):
+    def test_git_empty_stdout_falls_through(self, clean_env_no_claude_project_dir):
         """Should fall back to cwd when git returns empty output."""
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = ""
 
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("subprocess.run", return_value=mock_result), \
+        with patch("subprocess.run", return_value=mock_result), \
              patch("pathlib.Path.cwd", return_value=Path("/fallback/from-cwd")):
             result = _detect_project_id_under_test()
         assert result == "from-cwd"
 
     # --- Strategy 2 failure modes ---
 
-    def test_git_timeout_falls_back_to_cwd(self):
+    def test_git_timeout_falls_back_to_cwd(self, clean_env_no_claude_project_dir):
         """Should fall back to cwd when git subprocess times out."""
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("subprocess.run", side_effect=subprocess.TimeoutExpired("git", 5)), \
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("git", 5)), \
              patch("pathlib.Path.cwd", return_value=Path("/timeout/fallback")):
             result = _detect_project_id_under_test()
         assert result == "fallback"
 
-    def test_git_not_found_falls_back_to_cwd(self):
+    def test_git_not_found_falls_back_to_cwd(self, clean_env_no_claude_project_dir):
         """Should fall back to cwd when git binary is not installed."""
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("subprocess.run", side_effect=FileNotFoundError("git not found")), \
+        with patch("subprocess.run", side_effect=FileNotFoundError("git not found")), \
              patch("pathlib.Path.cwd", return_value=Path("/no-git/project")):
             result = _detect_project_id_under_test()
         assert result == "project"
 
-    def test_git_os_error_falls_back_to_cwd(self):
+    def test_git_os_error_falls_back_to_cwd(self, clean_env_no_claude_project_dir):
         """Should fall back to cwd on generic OSError from subprocess."""
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("subprocess.run", side_effect=OSError("permission denied")), \
+        with patch("subprocess.run", side_effect=OSError("permission denied")), \
              patch("pathlib.Path.cwd", return_value=Path("/oserror/fallback-proj")):
             result = _detect_project_id_under_test()
         assert result == "fallback-proj"
 
     # --- Strategy 3: CWD ---
 
-    def test_cwd_used_as_final_fallback(self):
+    def test_cwd_used_as_final_fallback(self, clean_env_no_claude_project_dir):
         """Should use cwd basename when both env var and git are unavailable."""
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("subprocess.run", side_effect=FileNotFoundError()), \
+        with patch("subprocess.run", side_effect=FileNotFoundError()), \
              patch("pathlib.Path.cwd", return_value=Path("/home/user/my-cwd-project")):
             result = _detect_project_id_under_test()
         assert result == "my-cwd-project"
 
-    def test_cwd_oserror_returns_none(self):
+    def test_cwd_oserror_returns_none(self, clean_env_no_claude_project_dir):
         """Should return None when even cwd() raises OSError."""
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("subprocess.run", side_effect=FileNotFoundError()), \
+        with patch("subprocess.run", side_effect=FileNotFoundError()), \
              patch("pathlib.Path.cwd", side_effect=OSError("cwd deleted")):
             result = _detect_project_id_under_test()
         assert result is None
 
     # --- Subprocess call parameters ---
 
-    def test_git_called_with_correct_args_and_timeout(self):
+    def test_git_called_with_correct_args_and_timeout(self, clean_env_no_claude_project_dir):
         """Should call git with capture_output, text=True, timeout=5."""
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "/some/repo\n"
 
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("subprocess.run", return_value=mock_result) as mock_run:
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
             _detect_project_id_under_test()
 
         mock_run.assert_called_once_with(
