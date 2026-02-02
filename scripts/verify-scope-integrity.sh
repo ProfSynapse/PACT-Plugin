@@ -156,7 +156,7 @@ check_pattern "$COMMANDS_DIR/rePACT.md" \
 echo ""
 
 # --- 7. Integration Phase in orchestrate.md ---
-# orchestrate.md must document the integration phase between CODE and TEST,
+# orchestrate.md must document the integration phase after sub-scopes complete,
 # including delegation to architect and test engineer.
 echo "7. Integration phase in orchestrate.md:"
 check_pattern "$COMMANDS_DIR/orchestrate.md" \
@@ -167,7 +167,7 @@ check_pattern "$COMMANDS_DIR/orchestrate.md" \
     "pact-architect.*contract"
 check_pattern "$COMMANDS_DIR/orchestrate.md" \
     "Integration delegates to test engineer" \
-    "pact-test-engineer.*cross-scope"
+    "pact-test-engineer.*Comprehensive"
 check_pattern "$COMMANDS_DIR/orchestrate.md" \
     "Integration failure routes through imPACT" \
     "imPACT"

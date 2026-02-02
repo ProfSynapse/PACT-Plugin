@@ -24,7 +24,7 @@ Create the full Task hierarchy upfront for workflow visibility:
 4. TaskUpdate: Feature task status = "in_progress"
 ```
 
-**INTEGRATION phase task**: Created retroactively after scope detection confirms decomposition (not upfront — detection occurs after PREPARE). When decomposition fires, create `"INTEGRATION: {feature-slug}"` with `blockedBy = [all scope task IDs]` and update TEST to `blockedBy = [INTEGRATION task ID]`.
+**INTEGRATION phase task**: Created retroactively after scope detection confirms decomposition (not upfront — detection occurs after PREPARE). When decomposition fires, create `"INTEGRATION: {feature-slug}"` with `blockedBy = [all scope task IDs]` and update Feature task to `blockedBy = [INTEGRATION task ID]`. ARCHITECT, CODE, and TEST are skipped (see Scope Detection Evaluation).
 
 For each phase execution:
 ```
@@ -293,7 +293,7 @@ After PREPARE completes (or is skipped with plan context), evaluate whether the 
 
 When detection fires (score >= threshold), follow the evaluation response protocol in [pact-scope-detection.md](../protocols/pact-scope-detection.md) — S5 confirmation flow, user response mapping, and autonomous tier.
 
-**On confirmed decomposition**: Generate a scope contract for each sub-scope before invoking rePACT. See [pact-scope-contract.md](../protocols/pact-scope-contract.md) for the contract format and generation process. Skip top-level ARCHITECT and CODE — scope contracts define cross-scope interfaces, and each sub-scope runs its own phases via rePACT. Mark both tasks `completed` with `{"skipped": true, "skip_reason": "decomposition_active"}`.
+**On confirmed decomposition**: Generate a scope contract for each sub-scope before invoking rePACT. See [pact-scope-contract.md](../protocols/pact-scope-contract.md) for the contract format and generation process. Skip top-level ARCHITECT, CODE, and TEST — scope contracts define cross-scope interfaces, and each sub-scope runs its own phases via rePACT. Mark all three tasks `completed` with `{"skipped": true, "skip_reason": "decomposition_active"}`. The INTEGRATION phase handles both cross-scope verification and comprehensive feature-level testing after all sub-scopes complete.
 
 ---
 
@@ -429,7 +429,7 @@ If a sub-task emerges that is too complex for a single specialist invocation:
 
 **Skip criteria**: No decomposition occurred (no scope contracts generated) → Proceed to Phase 5.
 
-This phase only activates when scope detection triggered decomposition into sub-scopes. It verifies that independently-developed sub-scopes are compatible before comprehensive testing.
+This phase only activates when scope detection triggered decomposition into sub-scopes. It replaces the top-level ARCHITECT, CODE, and TEST phases — verifying cross-scope compatibility and running comprehensive feature-level testing after all sub-scopes complete.
 
 **Task hierarchy**: Create integration phase task blocked by all scope task completions:
 ```
@@ -442,15 +442,16 @@ TaskUpdate: blockedBy = [all scope task IDs]
   - Compare contract fulfillment sections from all sub-scope handoffs
   - Check that exports from each scope match imports expected by siblings
   - Flag interface mismatches, type conflicts, or undelivered contract items
-- **`pact-test-engineer`**: Run cross-scope integration tests
+- **`pact-test-engineer`**: Comprehensive feature-level testing
   - Verify cross-scope interfaces work together (API calls, shared types, data flow)
   - Test integration points identified in scope contracts
   - Confirm no shared file constraint violations occurred
+  - Run full test suite: integration, E2E, edge cases, security, performance
+  - "You own ALL substantive testing for the complete feature. Sub-scopes ran smoke tests only."
 
 **Invoke each with**:
 - Feature description and scope contract summaries
 - All sub-scope handoffs (contract fulfillment sections)
-- "This is cross-scope integration verification. Focus on compatibility between scopes, not internal scope correctness."
 
 **Sub-scope failure policy**: Sub-scope failure is isolated — sibling scopes continue independently. The integration phase catches incompatibilities. Individual scope failures route through `/PACT:imPACT` to the affected scope only. However, when a sub-scope emits HALT, the parent orchestrator stops ALL sub-scopes (consistent with algedonic protocol: "Stop ALL agents"). Preserve work-in-progress for all scopes. After HALT resolution, review interrupted scopes before resuming.
 
@@ -459,9 +460,9 @@ TaskUpdate: blockedBy = [all scope task IDs]
 - Contract deviation → architect reviews whether deviation is acceptable
 - Test failure → test engineer provides details, coder fixes
 
-**Before next phase**:
+**Before completing**:
 - [ ] Cross-scope contract compatibility verified
-- [ ] Integration tests passing
+- [ ] All tests passing (integration, E2E, edge cases)
 - [ ] Specialist handoff(s) received
 - [ ] If blocker reported → `/PACT:imPACT`
 - [ ] **Create atomic commit(s)** of INTEGRATION phase work
@@ -472,6 +473,8 @@ TaskUpdate: blockedBy = [all scope task IDs]
 ### Phase 5: TEST → `pact-test-engineer`
 
 **Skip criteria met?** → Proceed to "After All Phases Complete."
+
+**Decomposition active?** → Already skipped (`decomposition_active`). INTEGRATION phase handles comprehensive testing.
 
 **Plan sections to pass** (if plan exists):
 - "Test Phase"
