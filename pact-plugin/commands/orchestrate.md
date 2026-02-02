@@ -208,6 +208,8 @@ Before skipping, scan the plan section for incompleteness signals (see [pact-com
 
 > **Note**: The plan's Phase Requirements table is advisory. When in doubt, verify against actual section content — the table may be stale if the plan was updated after initial synthesis.
 
+**Scope detection**: After PREPARE completes (or is skipped), scope detection evaluates whether the task warrants decomposition into sub-scopes. See [Scope Detection Evaluation](#scope-detection-evaluation) below.
+
 ---
 
 ## Handling Decisions When Phases Were Skipped
@@ -262,6 +264,69 @@ If PREPARE ran and ARCHITECT was marked "Skip," compare PREPARE's recommended ap
 > Skip rationale: "following established pattern in `src/utils/`"
 > PREPARE recommends "add helper to existing utils" → Skip holds
 > PREPARE recommends "new ValidationService class" → Override, run ARCHITECT
+
+---
+
+### Scope Detection Evaluation
+
+After PREPARE completes (or is skipped with plan context), evaluate whether the task warrants decomposition into sub-scopes. For heuristic definitions and scoring, see [pact-scope-detection.md](../protocols/pact-scope-detection.md).
+
+**When**: After PREPARE output is available (or plan content, if PREPARE was skipped). comPACT bypasses detection entirely.
+
+**Process**:
+1. Score the task against the heuristics table in the protocol
+2. Apply counter-signals to adjust the score downward
+3. Determine tier:
+
+| Result | Action |
+|--------|--------|
+| Score below threshold | Single scope — continue with today's behavior |
+| Score at/above threshold | Propose decomposition (see S5 Confirmation below) |
+| All strong signals fire, no counter-signals, autonomous enabled | Auto-decompose (see Autonomous Tier below) |
+
+**Output format**: `Scope detection: Single scope (score 2/3 threshold)` or `Scope detection: Multi-scope detected (score 4/3 threshold) — proposing decomposition`
+
+#### S5 Confirmation Flow
+
+When detection fires (score >= threshold), use S5 Decision Framing to propose decomposition:
+
+```
+📐 Scope Change: Multi-scope task detected
+
+Context: [What signals fired and why — e.g., "3 distinct domains identified
+(backend API, frontend UI, database migration) with no shared files"]
+
+Options:
+A) Decompose into sub-scopes: [proposed scope boundaries]
+   - Trade-off: Better isolation, parallel execution; overhead of scope coordination
+
+B) Continue as single scope
+   - Trade-off: Simpler coordination; risk of context overflow with large task
+
+C) Adjust boundaries (specify)
+
+Recommendation: [A or B with brief rationale]
+```
+
+**User response mapping**:
+
+| Response | Action |
+|----------|--------|
+| Confirmed (A) | Invoke `/PACT:rePACT` for each identified sub-scope |
+| Rejected (B) | Continue single scope (today's behavior) |
+| Adjusted (C) | Invoke `/PACT:rePACT` with user's modified boundaries |
+
+#### Autonomous Tier
+
+When **all** of the following conditions are true, skip user confirmation and proceed directly to decomposition:
+
+1. ALL strong signals fire (not merely meeting the threshold)
+2. NO counter-signals present
+3. CLAUDE.md contains `autonomous-scope-detection: enabled`
+
+**Output format**: `Scope detection: Multi-scope (autonomous) — decomposing into [scope list]`
+
+> **Note**: Autonomous mode is opt-in and disabled by default. Users enable it in CLAUDE.md after trusting the heuristics through repeated Confirmed-tier usage.
 
 ---
 
