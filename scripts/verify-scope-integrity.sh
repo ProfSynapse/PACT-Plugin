@@ -161,10 +161,10 @@ echo ""
 echo "7. ATOMIZE and CONSOLIDATE phases in orchestrate.md:"
 check_pattern "$COMMANDS_DIR/orchestrate.md" \
     "ATOMIZE phase section exists" \
-    "Phase 4: ATOMIZE"
+    "ATOMIZE Phase (Scoped Orchestration Only)"
 check_pattern "$COMMANDS_DIR/orchestrate.md" \
     "CONSOLIDATE phase section exists" \
-    "Phase 5: CONSOLIDATE"
+    "CONSOLIDATE Phase (Scoped Orchestration Only)"
 check_pattern "$COMMANDS_DIR/orchestrate.md" \
     "Consolidate delegates to architect" \
     "pact-architect.*contract"
@@ -226,10 +226,10 @@ else
     echo "  ✗ orchestrate.md task hierarchy missing CONSOLIDATE phase"
     FAIL=$((FAIL + 1))
 fi
-# TEST must be Phase 6 (after ATOMIZE and CONSOLIDATE)
+# TEST must be Phase 4 (standard flow; scoped phases are unnumbered)
 check_pattern "$COMMANDS_DIR/orchestrate.md" \
-    "TEST is Phase 6" \
-    "Phase 6: TEST"
+    "TEST is Phase 4" \
+    "Phase 4: TEST"
 echo ""
 
 # --- Summary ---

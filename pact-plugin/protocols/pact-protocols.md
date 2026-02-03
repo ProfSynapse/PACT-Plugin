@@ -1278,9 +1278,9 @@ Recommendation: [A or B with brief rationale]
 
 | Response | Action |
 |----------|--------|
-| Confirmed (A) | Generate scope contracts (see [pact-scope-contract.md](pact-scope-contract.md)), then proceed to ATOMIZE phase (Phase 4), which dispatches `/PACT:rePACT` for each sub-scope |
+| Confirmed (A) | Generate scope contracts (see [pact-scope-contract.md](pact-scope-contract.md)), then proceed to ATOMIZE phase, which dispatches `/PACT:rePACT` for each sub-scope |
 | Rejected (B) | Continue single scope (today's behavior) |
-| Adjusted (C) | Generate scope contracts with user's modified boundaries, then proceed to ATOMIZE phase (Phase 4), which dispatches `/PACT:rePACT` for each sub-scope |
+| Adjusted (C) | Generate scope contracts with user's modified boundaries, then proceed to ATOMIZE phase, which dispatches `/PACT:rePACT` for each sub-scope |
 
 #### Autonomous Tier
 

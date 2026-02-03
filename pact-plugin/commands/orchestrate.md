@@ -298,7 +298,7 @@ After PREPARE completes (or is skipped with plan context), evaluate whether the 
 
 When detection fires (score >= threshold), follow the evaluation response protocol in [pact-scope-detection.md](../protocols/pact-scope-detection.md) — S5 confirmation flow, user response mapping, and autonomous tier.
 
-**On confirmed decomposition**: Generate a scope contract for each sub-scope before invoking rePACT. See [pact-scope-contract.md](../protocols/pact-scope-contract.md) for the contract format and generation process. Skip top-level ARCHITECT and CODE — mark both `completed` with `{"skipped": true, "skip_reason": "decomposition_active"}`. The workflow switches to scoped PACT phases: ATOMIZE (dispatch sub-scopes) → CONSOLIDATE (verify contracts) → TEST (comprehensive feature testing). See Phase 4 and Phase 5 below.
+**On confirmed decomposition**: Generate a scope contract for each sub-scope before invoking rePACT. See [pact-scope-contract.md](../protocols/pact-scope-contract.md) for the contract format and generation process. Skip top-level ARCHITECT and CODE — mark both `completed` with `{"skipped": true, "skip_reason": "decomposition_active"}`. The workflow switches to scoped PACT phases: ATOMIZE (dispatch sub-scopes) → CONSOLIDATE (verify contracts) → TEST (comprehensive feature testing). See ATOMIZE Phase and CONSOLIDATE Phase below.
 
 ---
 
@@ -430,9 +430,9 @@ If a sub-task emerges that is too complex for a single specialist invocation:
 
 ---
 
-### Phase 4: ATOMIZE (Scoped Orchestration Only)
+### ATOMIZE Phase (Scoped Orchestration Only)
 
-**Skip criteria**: No decomposition occurred (no scope contracts generated) → Proceed to Phase 5.
+**Skip criteria**: No decomposition occurred (no scope contracts generated) → Proceed to CONSOLIDATE phase.
 
 This phase dispatches sub-scopes for independent execution. Each sub-scope runs a full PACT cycle (Prepare → Architect → Code → Test) via rePACT.
 
@@ -448,9 +448,9 @@ This phase dispatches sub-scopes for independent execution. Each sub-scope runs 
 
 ---
 
-### Phase 5: CONSOLIDATE (Scoped Orchestration Only)
+### CONSOLIDATE Phase (Scoped Orchestration Only)
 
-**Skip criteria**: No decomposition occurred → Proceed to Phase 6.
+**Skip criteria**: No decomposition occurred → Proceed to Phase 4 (TEST).
 
 This phase verifies that independently-developed sub-scopes are compatible before comprehensive testing.
 
@@ -484,7 +484,7 @@ This phase verifies that independently-developed sub-scopes are compatible befor
 
 ---
 
-### Phase 6: TEST → `pact-test-engineer`
+### Phase 4: TEST → `pact-test-engineer`
 
 **Skip criteria met?** → Proceed to "After All Phases Complete."
 

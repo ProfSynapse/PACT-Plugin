@@ -179,14 +179,14 @@ check_pattern_file() {
     fi
 }
 
-# Standard phases
+# Standard phases (numbered 1-4)
 check_pattern_file "$COMMANDS_DIR/orchestrate.md" "Phase 1: PREPARE exists" "Phase 1: PREPARE"
 check_pattern_file "$COMMANDS_DIR/orchestrate.md" "Phase 2: ARCHITECT exists" "Phase 2: ARCHITECT"
 check_pattern_file "$COMMANDS_DIR/orchestrate.md" "Phase 3: CODE exists" "Phase 3: CODE"
-# Scoped phases
-check_pattern_file "$COMMANDS_DIR/orchestrate.md" "Phase 4: ATOMIZE exists" "Phase 4: ATOMIZE"
-check_pattern_file "$COMMANDS_DIR/orchestrate.md" "Phase 5: CONSOLIDATE exists" "Phase 5: CONSOLIDATE"
-check_pattern_file "$COMMANDS_DIR/orchestrate.md" "Phase 6: TEST exists" "Phase 6: TEST"
+check_pattern_file "$COMMANDS_DIR/orchestrate.md" "Phase 4: TEST exists" "Phase 4: TEST"
+# Scoped phases (unnumbered, only active when decomposition occurs)
+check_pattern_file "$COMMANDS_DIR/orchestrate.md" "ATOMIZE Phase exists" "ATOMIZE Phase (Scoped Orchestration Only)"
+check_pattern_file "$COMMANDS_DIR/orchestrate.md" "CONSOLIDATE Phase exists" "CONSOLIDATE Phase (Scoped Orchestration Only)"
 echo ""
 
 echo "Scope-aware conventions (pact-protocols.md SSOT):"
