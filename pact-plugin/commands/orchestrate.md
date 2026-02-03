@@ -432,13 +432,13 @@ If a sub-task emerges that is too complex for a single specialist invocation:
 
 ### ATOMIZE Phase (Scoped Orchestration Only)
 
-Execute the ATOMIZE phase workflow defined in [pact-scope-phases.md](../protocols/pact-scope-phases.md#atomize-phase).
+Execute the [ATOMIZE Phase](../protocols/pact-scope-phases.md#atomize-phase) protocol.
 
 ---
 
 ### CONSOLIDATE Phase (Scoped Orchestration Only)
 
-Execute the CONSOLIDATE phase workflow defined in [pact-scope-phases.md](../protocols/pact-scope-phases.md#consolidate-phase).
+Execute the [CONSOLIDATE Phase](../protocols/pact-scope-phases.md#consolidate-phase) protocol.
 
 ---
 
