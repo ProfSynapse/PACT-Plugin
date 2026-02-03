@@ -1448,7 +1448,7 @@ These mappings are noted for future reference. C5 does not depend on TeammateToo
 > These phases replace the standard ARCHITECT and CODE phases when scope detection fires.
 > For single-scope workflows, these phases are skipped entirely.
 
-### ATOMIZE Phase (Scoped Orchestration Only)
+### ATOMIZE Phase
 
 **Skip criteria**: No decomposition occurred (no scope contracts generated) → Proceed to CONSOLIDATE phase.
 
@@ -1466,7 +1466,7 @@ This phase dispatches sub-scopes for independent execution. Each sub-scope runs 
 
 ---
 
-### CONSOLIDATE Phase (Scoped Orchestration Only)
+### CONSOLIDATE Phase
 
 **Skip criteria**: No decomposition occurred → Proceed to TEST phase.
 

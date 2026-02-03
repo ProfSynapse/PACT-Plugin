@@ -432,17 +432,13 @@ If a sub-task emerges that is too complex for a single specialist invocation:
 
 ### ATOMIZE Phase (Scoped Orchestration Only)
 
-See [pact-scope-phases.md](../protocols/pact-scope-phases.md#atomize-phase-scoped-orchestration-only) for the full ATOMIZE phase workflow.
-
-**Summary**: Dispatch sub-scopes via rePACT with scope contracts. Sub-scopes run concurrently unless they share files. Sub-scope failure is isolated (siblings continue), but HALT stops all sub-scopes. Wait for all to complete or HALT.
+Execute the ATOMIZE phase workflow defined in [pact-scope-phases.md](../protocols/pact-scope-phases.md#atomize-phase).
 
 ---
 
 ### CONSOLIDATE Phase (Scoped Orchestration Only)
 
-See [pact-scope-phases.md](../protocols/pact-scope-phases.md#consolidate-phase-scoped-orchestration-only) for the full CONSOLIDATE phase workflow.
-
-**Summary**: Verify cross-scope contract compatibility (pact-architect) and run integration tests (pact-test-engineer) in parallel. Route failures through imPACT.
+Execute the CONSOLIDATE phase workflow defined in [pact-scope-phases.md](../protocols/pact-scope-phases.md#consolidate-phase).
 
 ---
 
