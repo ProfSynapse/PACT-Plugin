@@ -165,7 +165,8 @@ Sequential execution is the exception requiring explicit justification. When ass
 ---
 
 1. **Create feature branch** if not already on one
-2. **Check for plan** in `docs/plans/` matching this task
+2. **Setup worktree** (if `worktree-mode` is not `never`): Execute the [Setup Protocol](../protocols/pact-worktree.md#setup-protocol)
+3. **Check for plan** in `docs/plans/` matching this task
 
 ### Plan Status Handling
 
@@ -392,6 +393,8 @@ Before concurrent dispatch, check internally: shared files? shared interfaces? c
 
 **Include in prompts for concurrent specialists**: "You are working concurrently with other specialists. Your scope is [files]. Do not modify files outside your scope."
 
+**Worktree path** (if worktree active): Include `Working directory: {worktree_path}` in agent prompts. Agents must use absolute paths within this directory. See [Work Protocol](../protocols/pact-worktree.md#work-protocol).
+
 **Invoke coder(s) with**:
 - Task description
 - ARCHITECT phase outputs:
@@ -466,6 +469,10 @@ Execute the [CONSOLIDATE Phase protocol](../protocols/pact-scope-phases.md#conso
 
 **Concurrent dispatch within TEST**: If test suites are independent (e.g., "unit tests AND E2E tests" or "API tests AND UI tests"), invoke multiple test engineers at once with clear suite boundaries.
 
+### Post-TEST Worktree Merge
+
+If worktree active: Execute the [Merge-Back Protocol](../protocols/pact-worktree.md#merge-back-protocol) before proceeding.
+
 ---
 
 ## Agent Stall Detection
@@ -491,8 +498,9 @@ On signal detected: Follow Signal Task Handling in CLAUDE.md.
 
 1. **Update plan status** (if plan exists): IN_PROGRESS → IMPLEMENTED
 2. **Verify all work is committed** — CODE and TEST phase commits should already exist; if any uncommitted changes remain, commit them now
-3. **TaskUpdate**: Feature task status = "completed" (all phases done, all work committed)
-4. **Run `/PACT:peer-review`** to create PR and get multi-agent review
+3. **Cleanup worktree** (if worktree active): Execute the [Cleanup Protocol](../protocols/pact-worktree.md#cleanup-protocol)
+4. **TaskUpdate**: Feature task status = "completed" (all phases done, all work committed)
+5. **Run `/PACT:peer-review`** to create PR and get multi-agent review
 5. **Present review summary and stop** — orchestrator never merges (S5 policy)
 6. **S4 Retrospective** (after user decides): Briefly note—what worked well? What should we adapt for next time?
 7. **High-variety audit trail** (variety 10+ only): Delegate to `pact-memory-agent` to save key orchestration decisions, S3/S4 tensions resolved, and lessons learned
