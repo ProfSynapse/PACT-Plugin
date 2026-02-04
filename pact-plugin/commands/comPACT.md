@@ -144,6 +144,28 @@ Before invoking multiple specialists concurrently, perform this coordination che
 
 ---
 
+## Worktree Support (Optional)
+
+comPACT supports optional worktree isolation based on configuration and user request.
+
+| Mode | Behavior |
+|------|----------|
+| `worktree-mode: tiered` (default) | No worktree unless user requests or heuristic proposes |
+| `worktree-mode: always` | Create worktree before dispatch |
+| `worktree-mode: never` | No worktree |
+
+**Heuristic trigger** (tiered mode): Propose worktree when task touches 3+ files across 2+ directories.
+
+**Conversational overrides**:
+- "Fix the bug, use a worktree" → Create worktree
+- "comPACT this — no worktree" → Skip worktree even if `always`
+
+When worktree is created, pass the worktree path to specialists in the dispatch prompt.
+
+See [Worktree Protocol](../protocols/pact-worktree.md) for lifecycle, naming conventions, and cleanup.
+
+---
+
 ## Invocation
 
 ### Multiple Specialists Concurrently (Default)
