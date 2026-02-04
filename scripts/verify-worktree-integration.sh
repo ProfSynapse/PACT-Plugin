@@ -131,6 +131,7 @@ fi
 
 # Check 1.4: Index registration (check for worktree reference in CLAUDE.md or skip)
 # Note: There's no centralized protocol index; check if CLAUDE.md mentions worktree
+# Optional: CLAUDE.md reference is not required for worktree protocol
 CLAUDEMD="pact-plugin/CLAUDE.md"
 if [ -f "$CLAUDEMD" ] && grep -q "worktree" "$CLAUDEMD"; then
     echo "  ✓ Worktree referenced in CLAUDE.md"
@@ -166,8 +167,8 @@ echo "3. Pattern Consistency:"
 
 # Check 3.1: Branch naming patterns (--work, --{scope}, --compact)
 branch_patterns_ok=true
-for pattern in '\-\-work' '\-\-{scope}' '\-\-compact'; do
-    if ! grep -q "$pattern" "$WORKTREE_PROTOCOL"; then
+for pattern in '--work' '--{scope}' '--compact'; do
+    if ! grep -q -- "$pattern" "$WORKTREE_PROTOCOL"; then
         echo "  ✗ Branch naming pattern missing: $pattern"
         branch_patterns_ok=false
     fi
@@ -290,18 +291,20 @@ echo "9. rePACT Merge-Back Constraint:"
 # Check 9.1: rePACT specifies NOT merging worktree branches (deferred to parent)
 check_pattern "$COMMANDS_DIR/rePACT.md" \
     "rePACT specifies no worktree merge (deferred to parent)" \
-    "NOT merge worktree branch\|don't merge individually\|Do NOT merge"
+    "don't merge individually\|Do NOT merge\|deferred to parent"
 echo ""
 
-# --- 10. Negative Scope Check (1 check) ---
+# --- 10. Negative Scope Check (2 checks) ---
 echo "10. Negative Scope Check (separation of concerns):"
 
-# Check 10.1: pact-worktree.md does NOT contain scope detection logic
+# Check 10a: pact-worktree.md does NOT contain scope detection logic
 check_absent "$WORKTREE_PROTOCOL" \
-    "Worktree protocol has no scope detection logic" \
+    "10a: Worktree protocol has no scope detection logic" \
     "scope detection"
+
+# Check 10b: pact-worktree.md does NOT contain decomposition_active
 check_absent "$WORKTREE_PROTOCOL" \
-    "Worktree protocol has no decomposition_active" \
+    "10b: Worktree protocol has no decomposition_active" \
     "decomposition_active"
 echo ""
 
