@@ -94,35 +94,20 @@ Check for and run the **first matching** dependency installer:
 
 If none of these files exist, skip this step (no dependencies to install).
 
-### Step 6: Verify Clean Baseline
-
-Verify the worktree starts clean by running a build check (e.g., `npm run build`, `cargo check`). A full test suite run is optional — it provides stronger assurance but adds latency, especially for sub-scope worktrees.
-
-```bash
-cd "$REPO_ROOT/.worktrees/{branch}"
-```
-
-Use the project's standard build or check command. Choose based on the same dependency file detected in Step 5.
-
-**If the check passes**: Continue to Step 7.
-
-**If it fails**: Report the failures to the user and ask: "Build is failing in the new worktree. This likely means it also fails on the base branch. Proceed anyway, or investigate first?"
-
-### Step 7: Report
+### Step 6: Report
 
 Output the result:
 
 ```
 Worktree ready at {REPO_ROOT}/.worktrees/{branch}
 Branch: {branch}
-Tests: passing (or: failing — user chose to proceed)
 ```
 
 **Return the worktree path** so it can be passed to subsequent phases and agents.
 
 ## Output
 
-The orchestrator captures the worktree path from the Step 7 report line:
+The orchestrator captures the worktree path from the Step 6 report line:
 
 > Worktree ready at `{absolute_path}`
 
@@ -137,4 +122,3 @@ Store this as `worktree_path` for the current workflow. Pass it to all specialis
 | Branch name already exists | Ask user: check out existing or create new name |
 | Creation fails (disk/permissions) | Surface error, offer fallback to main repo |
 | No dependency files found | Skip dependency install step |
-| Tests fail on fresh worktree | Report and ask user whether to proceed |
