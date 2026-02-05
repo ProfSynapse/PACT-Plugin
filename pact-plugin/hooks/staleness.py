@@ -40,8 +40,8 @@ def get_project_claude_md_path() -> Optional[Path]:
     Get the path to the project-level CLAUDE.md.
 
     Checks CLAUDE_PROJECT_DIR env var first, then falls back to git
-    worktree/repo root detection via `git rev-parse --show-toplevel`,
-    then to the current working directory.
+    worktree/repo root detection via `git rev-parse --git-common-dir`
+    (worktree-safe), then to the current working directory.
 
     Returns:
         Path to project CLAUDE.md if found, None otherwise.
@@ -52,17 +52,25 @@ def get_project_claude_md_path() -> Optional[Path]:
         if path.exists():
             return path
 
-    # Fallback: detect git root
+    # Fallback: detect git root (worktree-safe)
+    # Uses --git-common-dir instead of --show-toplevel because the latter
+    # returns the worktree path when run inside a worktree, which may not
+    # contain CLAUDE.md. --git-common-dir always points to the shared .git
+    # directory; its parent is the main repo root where CLAUDE.md lives.
+    # NOTE: Twin pattern in skills/pact-memory/scripts/memory_api.py
+    #       (_detect_project_id) and working_memory.py (_get_claude_md_path)
+    #       -- keep in sync.
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
+            ["git", "rev-parse", "--git-common-dir"],
             capture_output=True,
             text=True,
             timeout=5
         )
         if result.returncode == 0 and result.stdout.strip():
-            git_root = result.stdout.strip()
-            path = Path(git_root) / "CLAUDE.md"
+            git_common_dir = result.stdout.strip()
+            repo_root = Path(git_common_dir).resolve().parent
+            path = repo_root / "CLAUDE.md"
             if path.exists():
                 return path
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):

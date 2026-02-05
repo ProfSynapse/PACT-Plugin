@@ -61,17 +61,24 @@ def _get_claude_md_path() -> Optional[Path]:
         if claude_md.exists():
             return claude_md
 
-    # Fallback: detect git root (handles worktrees correctly)
+    # Fallback: detect git root (worktree-safe)
+    # Uses --git-common-dir instead of --show-toplevel because the latter
+    # returns the worktree path when run inside a worktree, which may not
+    # contain CLAUDE.md. --git-common-dir always points to the shared .git
+    # directory; its parent is the main repo root where CLAUDE.md lives.
+    # NOTE: Twin pattern in memory_api.py (_detect_project_id) and
+    #       hooks/staleness.py (get_project_claude_md_path) -- keep in sync.
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
+            ["git", "rev-parse", "--git-common-dir"],
             capture_output=True,
             text=True,
             timeout=5
         )
         if result.returncode == 0 and result.stdout.strip():
-            git_root = result.stdout.strip()
-            claude_md = Path(git_root) / "CLAUDE.md"
+            git_common_dir = result.stdout.strip()
+            repo_root = Path(git_common_dir).resolve().parent
+            claude_md = repo_root / "CLAUDE.md"
             if claude_md.exists():
                 return claude_md
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):

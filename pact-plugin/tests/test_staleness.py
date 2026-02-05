@@ -278,7 +278,11 @@ class TestGetProjectClaudeMdPath:
         assert result == claude_md
 
     def test_falls_back_to_git_root(self, tmp_path, clean_env_no_claude_project_dir):
-        """Should use git root when env var not set."""
+        """Should use git root when env var not set.
+
+        --git-common-dir returns the .git directory path; the code resolves
+        its parent to get the repo root where CLAUDE.md lives.
+        """
         from session_init import _get_project_claude_md_path
 
         claude_md = tmp_path / "CLAUDE.md"
@@ -286,7 +290,7 @@ class TestGetProjectClaudeMdPath:
 
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = str(tmp_path) + "\n"
+        mock_result.stdout = str(tmp_path / ".git") + "\n"
 
         with patch("subprocess.run", return_value=mock_result):
             result = _get_project_claude_md_path()

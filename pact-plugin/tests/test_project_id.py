@@ -3,7 +3,7 @@ Tests for PACTMemory._detect_project_id() -- 3-strategy fallback detection.
 
 Tests cover:
 1. Strategy 1: CLAUDE_PROJECT_DIR env var
-2. Strategy 2: git rev-parse --show-toplevel
+2. Strategy 2: git rev-parse --git-common-dir (worktree-safe repo root)
 3. Strategy 3: Current working directory basename
 4. Fallback ordering when strategies fail
 5. Explicit project_id in constructor overrides detection
@@ -61,16 +61,24 @@ def _detect_project_id_under_test():
         logger.debug("project_id detected from CLAUDE_PROJECT_DIR: %s", Path(project_dir).name)
         return Path(project_dir).name
 
-    # Strategy 2: Git repository root
+    # Strategy 2: Git repository root (worktree-safe)
+    # Uses --git-common-dir instead of --show-toplevel because the latter
+    # returns the worktree path when run inside a worktree, fragmenting
+    # project_id across sessions. --git-common-dir always points to the
+    # shared .git directory; its parent is the main repo root.
+    # NOTE: Twin pattern in working_memory.py (_get_claude_md_path) and
+    #       hooks/staleness.py (get_project_claude_md_path) -- keep in sync.
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
+            ["git", "rev-parse", "--git-common-dir"],
             capture_output=True,
             text=True,
             timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
-            project_name = Path(result.stdout.strip()).name
+            git_common_dir = result.stdout.strip()
+            repo_root = Path(git_common_dir).resolve().parent
+            project_name = repo_root.name
             logger.debug("project_id detected from git root: %s", project_name)
             return project_name
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
@@ -130,7 +138,7 @@ class TestSourceEquivalence:
 
         # Check key implementation lines are present
         assert 'os.environ.get("CLAUDE_PROJECT_DIR")' in real_source
-        assert '["git", "rev-parse", "--show-toplevel"]' in real_source
+        assert '["git", "rev-parse", "--git-common-dir"]' in real_source
         assert "timeout=5" in real_source
         assert "(subprocess.TimeoutExpired, FileNotFoundError, OSError)" in real_source
         assert "Path.cwd().name" in real_source
@@ -138,7 +146,7 @@ class TestSourceEquivalence:
         # Verify strategy ordering in the CODE (not docstring).
         # Use code-specific markers that won't appear in the docstring.
         pos_env = real_source.index('os.environ.get("CLAUDE_PROJECT_DIR")')
-        pos_git = real_source.index('["git", "rev-parse", "--show-toplevel"]')
+        pos_git = real_source.index('["git", "rev-parse", "--git-common-dir"]')
         pos_cwd = real_source.index("Path.cwd()")
 
         assert pos_env < pos_git, (
@@ -172,7 +180,7 @@ class TestDetectProjectId:
         """Env var should win even when git would return a different value."""
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "/some/git/repo\n"
+        mock_result.stdout = "/some/git/repo/.git\n"
 
         with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/env/var/project"}), \
              patch("subprocess.run", return_value=mock_result):
@@ -182,20 +190,24 @@ class TestDetectProjectId:
     # --- Strategy 2: Git repo root ---
 
     def test_uses_git_when_env_var_not_set(self, clean_env_no_claude_project_dir):
-        """Should fall back to git rev-parse when no env var."""
+        """Should fall back to git rev-parse when no env var.
+
+        --git-common-dir returns the .git directory path; the code resolves
+        its parent to get the repo root, then takes .name for project_id.
+        """
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "/users/dev/awesome-repo\n"
+        mock_result.stdout = "/users/dev/awesome-repo/.git\n"
 
         with patch("subprocess.run", return_value=mock_result):
             result = _detect_project_id_under_test()
         assert result == "awesome-repo"
 
     def test_git_strips_whitespace_from_output(self, clean_env_no_claude_project_dir):
-        """Should strip trailing newline from git output."""
+        """Should strip trailing whitespace/newline from git output."""
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "  /path/to/repo  \n"
+        mock_result.stdout = "  /path/to/repo/.git  \n"
 
         with patch("subprocess.run", return_value=mock_result):
             result = _detect_project_id_under_test()
@@ -268,13 +280,13 @@ class TestDetectProjectId:
         """Should call git with capture_output, text=True, timeout=5."""
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "/some/repo\n"
+        mock_result.stdout = "/some/repo/.git\n"
 
         with patch("subprocess.run", return_value=mock_result) as mock_run:
             _detect_project_id_under_test()
 
         mock_run.assert_called_once_with(
-            ["git", "rev-parse", "--show-toplevel"],
+            ["git", "rev-parse", "--git-common-dir"],
             capture_output=True,
             text=True,
             timeout=5,

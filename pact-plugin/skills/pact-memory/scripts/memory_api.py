@@ -160,7 +160,7 @@ class PACTMemory:
 
         Detection order:
         1. CLAUDE_PROJECT_DIR environment variable (original behavior)
-        2. Git repository root via 'git rev-parse --show-toplevel'
+        2. Git repository root via 'git rev-parse --git-common-dir' (worktree-safe)
         3. Current working directory basename
 
         Returns:
@@ -172,16 +172,24 @@ class PACTMemory:
             logger.debug("project_id detected from CLAUDE_PROJECT_DIR: %s", Path(project_dir).name)
             return Path(project_dir).name
 
-        # Strategy 2: Git repository root
+        # Strategy 2: Git repository root (worktree-safe)
+        # Uses --git-common-dir instead of --show-toplevel because the latter
+        # returns the worktree path when run inside a worktree, fragmenting
+        # project_id across sessions. --git-common-dir always points to the
+        # shared .git directory; its parent is the main repo root.
+        # NOTE: Twin pattern in working_memory.py (_get_claude_md_path) and
+        #       hooks/staleness.py (get_project_claude_md_path) -- keep in sync.
         try:
             result = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
+                ["git", "rev-parse", "--git-common-dir"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
             if result.returncode == 0 and result.stdout.strip():
-                project_name = Path(result.stdout.strip()).name
+                git_common_dir = result.stdout.strip()
+                repo_root = Path(git_common_dir).resolve().parent
+                project_name = repo_root.name
                 logger.debug("project_id detected from git root: %s", project_name)
                 return project_name
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
