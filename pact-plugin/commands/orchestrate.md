@@ -164,7 +164,7 @@ Sequential execution is the exception requiring explicit justification. When ass
 
 ---
 
-1. **Create feature branch** if not already on one
+1. **Set up worktree**: If already in a worktree for this feature, reuse it. Otherwise, invoke `/PACT:worktree-setup` with the feature branch name. All subsequent phases work in the worktree.
 2. **Check for plan** in `docs/plans/` matching this task
 
 ### Plan Status Handling
@@ -392,6 +392,8 @@ Before concurrent dispatch, check internally: shared files? shared interfaces? c
 
 **Include in prompts for concurrent specialists**: "You are working concurrently with other specialists. Your scope is [files]. Do not modify files outside your scope."
 
+**Include worktree path in all agent prompts**: "You are working in a git worktree at `{worktree_path}`. All file paths must be absolute and within this worktree."
+
 **Invoke coder(s) with**:
 - Task description
 - ARCHITECT phase outputs:
@@ -434,11 +436,15 @@ If a sub-task emerges that is too complex for a single specialist invocation:
 
 Execute the [ATOMIZE Phase protocol](../protocols/pact-scope-phases.md#atomize-phase).
 
+**Worktree isolation**: Before dispatching each sub-scope's rePACT, invoke `/PACT:worktree-setup` with the suffix branch name (e.g., `feature-X--backend`). Pass the resulting worktree path to the rePACT invocation.
+
 ---
 
 ### CONSOLIDATE Phase (Scoped Orchestration Only)
 
 Execute the [CONSOLIDATE Phase protocol](../protocols/pact-scope-phases.md#consolidate-phase).
+
+**Worktree cleanup**: After merging each sub-scope branch back to the feature branch, invoke `/PACT:worktree-cleanup` for that sub-scope's worktree.
 
 ---
 

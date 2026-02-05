@@ -139,7 +139,7 @@ Before invoking multiple specialists concurrently, perform this coordination che
 
 ## Pre-Invocation (Required)
 
-1. **Feature branch** — If on `main`/`master`, create feature branch first; if already on feature branch, proceed
+1. **Set up worktree** — If already in a worktree for this feature, reuse it. Otherwise, invoke `/PACT:worktree-setup` with the feature branch name. All subsequent work happens in the worktree.
 2. **S2 coordination** (if concurrent) — Check for file conflicts, assign boundaries
 
 ---
@@ -152,6 +152,7 @@ When the task contains multiple independent items, invoke multiple specialists t
 
 ```
 comPACT mode (concurrent): You are one of [N] specialists working concurrently.
+You are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree.
 
 YOUR SCOPE: [specific sub-task and files this agent owns]
 OTHER AGENTS' SCOPE: [what other agents are handling - do not touch]
@@ -184,6 +185,7 @@ Use a single specialist agent only when:
 **Invoke the specialist with**:
 ```
 comPACT mode: Work directly from this task description.
+You are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree.
 Check docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist—reference relevant context.
 Do not create new documentation artifacts in docs/.
 Focus on the task at hand.
@@ -222,10 +224,10 @@ For agent stall detection and recovery, see [Agent Stall Detection](orchestrate.
 4. **Create atomic commit(s)** — stage and commit before proceeding
 5. **TaskUpdate**: Feature task status = "completed"
 
-**Next steps** (user decides):
-- Done → work is committed
-- Review needed → `/PACT:peer-review`
-- More work → continue with comPACT or orchestrate
+**Next steps** — After commit, ask: "Work committed. Create PR?"
+- **Yes (Recommended)** → invoke `/PACT:peer-review`
+- **Not yet** → worktree persists; user resumes later
+- **More work** → continue with comPACT or orchestrate
 
 **If blocker reported**:
 
