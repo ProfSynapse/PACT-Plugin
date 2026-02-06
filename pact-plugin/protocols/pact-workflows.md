@@ -5,7 +5,6 @@
 | **PACT** | Complex/greenfield work | Context-aware multi-agent orchestration |
 | **plan-mode** | Before complex work, need alignment | Multi-agent planning consultation, no implementation |
 | **comPACT** | Focused, single-domain tasks | Single-domain delegation with light ceremony (parallelizable) |
-| **rePACT** | Complex sub-tasks within orchestration | Recursive nested P→A→C→T cycle (single or multi-domain) |
 | **imPACT** | When blocked or need to iterate | Triage: Redo prior phase? Additional agents needed? |
 
 ---

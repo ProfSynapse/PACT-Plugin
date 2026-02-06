@@ -581,20 +581,16 @@ Nested PACT: "Research and implement OAuth2 token refresh mechanism"
   - Mini-Test: Smoke test the refresh flow
 ```
 
-### Orchestrator-Initiated Recursion (/PACT:rePACT)
+### Orchestrator-Initiated Decomposition
 
-While specialists can invoke nested cycles autonomously, the orchestrator can also initiate them:
+While specialists can invoke nested cycles autonomously, the orchestrator can also initiate decomposition by spawning teammates for sub-scopes:
 
 | Initiator | Mechanism | When |
 |-----------|-----------|------|
 | Specialist | Autonomy Charter | Discovers complexity during work |
-| Orchestrator | `/PACT:rePACT` command | Identifies complex sub-task upfront |
+| Orchestrator | Scope detection + teammate spawning | Identifies complex sub-task upfront |
 
-**Usage:**
-- Single-domain: `/PACT:rePACT backend "implement rate limiting"`
-- Multi-domain: `/PACT:rePACT "implement audit logging sub-system"`
-
-See [rePACT.md](../commands/rePACT.md) for full command documentation.
+**Orchestrator usage**: When scope detection fires (see [pact-scope-detection.md](pact-scope-detection.md)), the orchestrator proceeds to the ATOMIZE phase and spawns teammates for each sub-scope using `Task(subagent_type="{specialist}", team_name="{team}", name="scope-{scope_id}-{role}", ...)`.
 
 ---
 
@@ -688,7 +684,7 @@ Score each dimension 1-4 and sum:
 **Amplify** (increase response capacity):
 - Invoke additional specialists
 - Enable parallel execution (primary CODE phase strategy; use QDCL from orchestrate.md)
-- Invoke nested PACT (`/PACT:rePACT`) for complex sub-components
+- Spawn teammates for complex sub-components (scope detection + ATOMIZE phase)
 - Run PREPARE phase to build understanding
 - Apply risk-tiered testing (CRITICAL/HIGH) for high-risk areas
 
@@ -710,7 +706,6 @@ At phase transitions, briefly assess:
 | **PACT** | Complex/greenfield work | Context-aware multi-agent orchestration |
 | **plan-mode** | Before complex work, need alignment | Multi-agent planning consultation, no implementation |
 | **comPACT** | Focused, single-domain tasks | Single-domain delegation with light ceremony (parallelizable) |
-| **rePACT** | Complex sub-tasks within orchestration | Recursive nested P→A→C→T cycle (single or multi-domain) |
 | **imPACT** | When blocked or need to iterate | Triage: Redo prior phase? Additional agents needed? |
 
 ---
@@ -1225,7 +1220,7 @@ A score of 0 means counter-signals outweighed detection signals, not that no sig
 
 | Tier | Trigger | Behavior |
 |------|---------|----------|
-| **Manual** | User invokes `/rePACT` explicitly | Always available — bypasses detection entirely |
+| **Manual** | User requests decomposition explicitly | Always available — bypasses detection entirely |
 | **Confirmed** (default) | Score >= threshold | Orchestrator proposes decomposition via S5 decision framing; user confirms, rejects, or adjusts boundaries |
 | **Autonomous** | ALL strong signals fire (Distinct domain boundaries + Non-overlapping work areas) AND no counter-signals AND autonomous mode enabled | Orchestrator auto-decomposes without user confirmation |
 
@@ -1249,7 +1244,7 @@ When autonomous mode is not enabled, all detection-triggered decomposition uses 
 
 - **Ongoing sub-scope execution** does not re-evaluate detection (no recursive detection within sub-scopes). Scoped sub-scopes cannot themselves trigger scope detection -- this bypass rule is the primary architectural mechanism; the 1-level nesting limit (see S1 Autonomy & Recursion constraints) serves as the safety net.
 - **comPACT** bypasses scope detection entirely — it is inherently single-domain
-- **Manual `/rePACT`** bypasses detection — user has already decided to decompose
+- **Manual decomposition request** bypasses detection — user has already decided to decompose
 
 ### Evaluation Response
 
@@ -1281,9 +1276,9 @@ Recommendation: [A or B with brief rationale]
 
 | Response | Action |
 |----------|--------|
-| Confirmed (A) | Generate scope contracts (see [pact-scope-contract.md](pact-scope-contract.md)), then proceed to ATOMIZE phase, which dispatches `/PACT:rePACT` for each sub-scope |
+| Confirmed (A) | Generate scope contracts (see [pact-scope-contract.md](pact-scope-contract.md)), then proceed to ATOMIZE phase, which spawns teammates for each sub-scope |
 | Rejected (B) | Continue single scope (today's behavior) |
-| Adjusted (C) | Generate scope contracts with user's modified boundaries, then proceed to ATOMIZE phase, which dispatches `/PACT:rePACT` for each sub-scope |
+| Adjusted (C) | Generate scope contracts with user's modified boundaries, then proceed to ATOMIZE phase, which spawns teammates for each sub-scope |
 
 #### Autonomous Tier
 
@@ -1299,7 +1294,7 @@ When **all** of the following conditions are true, skip user confirmation and pr
 
 ### Post-Detection: Scope Contract Generation
 
-When decomposition is confirmed (by user or autonomous tier), the orchestrator generates a scope contract for each identified sub-scope before invoking rePACT. See [pact-scope-contract.md](pact-scope-contract.md) for the contract format and generation process.
+When decomposition is confirmed (by user or autonomous tier), the orchestrator generates a scope contract for each identified sub-scope before spawning teammates. See [pact-scope-contract.md](pact-scope-contract.md) for the contract format and generation process.
 
 ---
 
