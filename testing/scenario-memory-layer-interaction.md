@@ -148,7 +148,7 @@ Search pact-memory for lessons about "verification scripts"
 | No duplication | Compare MEMORY.md vs Working Memory | Complementary content, not overlapping |
 | pact-memory saves work | Query SQLite after task completion | New entry appears with structured fields |
 | Working Memory sync | Check CLAUDE.md after save | Section updated with latest entries, max 3 |
-| Agent memory frontmatter | `grep "memory: user" pact-plugin/agents/*.md` | All 7 specialist agents have the setting |
+| Agent memory frontmatter | `grep "memory: user" pact-plugin/agents/*.md` | All 8 agent definition files have the setting |
 | Agent memory directory | `ls ~/.claude/agent-memory/` | Directories exist after agents have run |
 | Staleness detection | Check Pinned Context for markers | Old entries flagged, recent entries clean |
 | Semantic search | Search returns relevant results | Structured memories returned, ranked by relevance |

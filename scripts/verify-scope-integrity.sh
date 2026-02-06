@@ -14,6 +14,7 @@ PROTOCOLS_DIR="pact-plugin/protocols"
 COMMANDS_DIR="pact-plugin/commands"
 SKILLS_DIR="pact-plugin/skills"
 HOOKS_DIR="pact-plugin/hooks"
+AGENTS_DIR="pact-plugin/agents"
 SSOT="$PROTOCOLS_DIR/pact-protocols.md"
 
 if [ ! -f "$SSOT" ]; then
@@ -257,7 +258,6 @@ echo ""
 # The canonical nesting limit must be "1 level" (not "2 levels") across all key files.
 # This prevents a coordinated regression that changes the value back in all files.
 echo "13. Nesting limit value assertions:"
-AGENTS_DIR="pact-plugin/agents"
 
 # Positive checks: canonical files must contain "1 level" nesting limit
 check_pattern "$COMMANDS_DIR/rePACT.md" \
