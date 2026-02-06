@@ -757,14 +757,14 @@ At phase transitions, briefly assess:
 
 **Two questions**:
 1. **Redo prior phase?** — Is the issue upstream in P→A→C→T?
-2. **Additional agents needed?** — Do I need subagents to assist?
+2. **Additional agents needed?** — Do I need teammates to assist?
 
 **Three outcomes**:
 | Outcome | When | Action |
 |---------|------|--------|
 | Redo solo | Prior phase broken, I can fix it | Loop back and fix yourself |
-| Redo with help | Prior phase broken, need specialist | Loop back with subagent assistance |
-| Proceed with help | Current phase correct, blocked on execution | Invoke subagents to help forward |
+| Redo with help | Prior phase broken, need specialist | Loop back with teammate assistance |
+| Proceed with help | Current phase correct, blocked on execution | Invoke teammates to help forward |
 
 If neither question is "Yes," you're not blocked—continue.
 
@@ -1103,15 +1103,15 @@ If work spans sessions, update CLAUDE.md with:
 ## Agent Stall Detection
 
 **Stalled indicators**:
-- Background task running but no progress at monitoring checkpoints
+- Teammate running but no progress at monitoring checkpoints
 - Task completed but no handoff received
 - Process terminated without handoff or blocker report
 
-Detection is event-driven: check at signal monitoring points (after dispatch, on completion, on stoppage). If a background task returned but produced no handoff or blocker, treat as stalled immediately.
+Detection is event-driven: check at signal monitoring points (after dispatch, on completion, on stoppage). If a teammate returned but produced no handoff or blocker, treat as stalled immediately.
 
 ### Recovery Protocol
 
-1. Check the agent's output (from `run_in_background`) for partial work or error messages
+1. Check the teammate's output for partial work or error messages
 2. Mark the stalled agent task as `completed` with `metadata={"stalled": true, "reason": "{what happened}"}`
 3. Assess: Is the work partially done? Can it be continued from where it stopped?
 4. Create a new agent task to retry or continue the work, passing any partial output as context
