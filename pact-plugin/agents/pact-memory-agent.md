@@ -104,7 +104,7 @@ When context has been compacted (lost to summarization):
 
 You do NOT need to manually edit CLAUDE.md. Just call `memory.save({...})` and the sync happens automatically.
 
-**Relationship to auto-memory**: The platform's auto-memory (MEMORY.md) captures free-form session learnings automatically. Working Memory provides a complementary structured view -- PACT-specific context (goals, decisions, lessons) sourced from the SQLite database. Both are loaded into the system prompt independently. The reduced entry count (3 instead of 5) limits token overlap while retaining the structured format that auto-memory does not provide.
+**Relationship to auto-memory**: The platform's auto-memory (MEMORY.md) captures free-form session learnings automatically. Working Memory provides a complementary structured view — PACT-specific context (goals, decisions, lessons) sourced from the SQLite database. Both are loaded into the system prompt independently. The reduced entry count (3 instead of 5) limits token overlap while retaining the structured format that auto-memory does not provide.
 
 ## 5. Memory Cleanup
 

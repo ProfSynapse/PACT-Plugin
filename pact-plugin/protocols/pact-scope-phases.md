@@ -24,7 +24,7 @@ Task(
     prompt="Scope Contract: {scope_id}\n...\nWorktree: {worktree_path}"
 )
 ```
-Sub-scope teammates run concurrently (default) unless they share files. When generating scope contracts, ensure `shared_files` constraints are set per the generation process in [pact-scope-contract.md](pact-scope-contract.md) -- sibling scopes must not modify each other's owned files.
+Sub-scope teammates run concurrently (default) unless they share files. When generating scope contracts, ensure `shared_files` constraints are set per the generation process in [pact-scope-contract.md](pact-scope-contract.md) — sibling scopes must not modify each other's owned files.
 
 **Sub-scope failure policy**: Sub-scope failure is isolated — sibling scopes continue independently. Individual scope failures route through `/PACT:imPACT` to the affected scope only. However, when a sub-scope teammate emits HALT (dual-delivery: direct to lead + broadcast to peers), the lead stops ALL sub-scope teammates (consistent with algedonic protocol: "Stop ALL teammates"). Preserve work-in-progress for all scopes. After HALT resolution, review interrupted scopes before resuming.
 

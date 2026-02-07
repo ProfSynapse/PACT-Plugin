@@ -107,7 +107,7 @@ After completing your work but BEFORE sending your HANDOFF message, save your wo
 
 Do this BEFORE sending your HANDOFF. Memory saves that happen after your process ends may be lost.
 
-## On Completion -- HANDOFF (Required)
+## On Completion — HANDOFF (Required)
 
 Every completed task must end with a structured HANDOFF delivered to the lead.
 
@@ -118,7 +118,7 @@ HANDOFF:
 1. Produced: Files created/modified
 2. Key decisions: Decisions with rationale, assumptions that could be wrong
 3. Areas of uncertainty (PRIORITIZED):
-   - [HIGH] {description} -- Why risky, suggested test focus
+   - [HIGH] {description} — Why risky, suggested test focus
    - [MEDIUM] {description}
    - [LOW] {description}
 4. Integration points: Other components touched

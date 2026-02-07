@@ -1257,7 +1257,7 @@ When autonomous mode is not enabled, all detection-triggered decomposition uses 
 
 ### Bypass Rules
 
-- **Ongoing sub-scope execution** does not re-evaluate detection (no recursive detection within sub-scopes). Scoped sub-scopes cannot themselves trigger scope detection -- this bypass rule is the primary architectural mechanism; the 1-level nesting limit (see S1 Autonomy & Recursion constraints) serves as the safety net.
+- **Ongoing sub-scope execution** does not re-evaluate detection (no recursive detection within sub-scopes). Scoped sub-scopes cannot themselves trigger scope detection — this bypass rule is the primary architectural mechanism; the 1-level nesting limit (see S1 Autonomy & Recursion constraints) serves as the safety net.
 - **comPACT** bypasses scope detection entirely — it is inherently single-domain
 - **Manual decomposition request** bypasses detection — user has already decided to decompose
 
@@ -1489,7 +1489,7 @@ Task(
     prompt="Scope Contract: {scope_id}\n...\nWorktree: {worktree_path}"
 )
 ```
-Sub-scope teammates run concurrently (default) unless they share files. When generating scope contracts, ensure `shared_files` constraints are set per the generation process in [pact-scope-contract.md](pact-scope-contract.md) -- sibling scopes must not modify each other's owned files.
+Sub-scope teammates run concurrently (default) unless they share files. When generating scope contracts, ensure `shared_files` constraints are set per the generation process in [pact-scope-contract.md](pact-scope-contract.md) — sibling scopes must not modify each other's owned files.
 
 **Sub-scope failure policy**: Sub-scope failure is isolated — sibling scopes continue independently. Individual scope failures route through `/PACT:imPACT` to the affected scope only. However, when a sub-scope teammate emits HALT (dual-delivery: direct to lead + broadcast to peers), the lead stops ALL sub-scope teammates (consistent with algedonic protocol: "Stop ALL teammates"). Preserve work-in-progress for all scopes. After HALT resolution, review interrupted scopes before resuming.
 
