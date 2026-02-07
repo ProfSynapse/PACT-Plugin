@@ -4,7 +4,7 @@ argument-hint: [e.g., add user authentication with JWT]
 ---
 Create a comprehensive implementation plan for: $ARGUMENTS
 
-**This is PLANNING ONLY** -- no code changes, no git branches, no implementation.
+**This is PLANNING ONLY** —no code changes, no git branches, no implementation.
 
 ---
 
@@ -16,23 +16,23 @@ Create a planning Task hierarchy:
 1. TaskCreate: Planning task "Plan: {feature}"
 2. TaskUpdate: Planning task status = "in_progress"
 3. Analyze: Which specialists to consult?
-4. TaskCreate: Consultation task(s) -- one per specialist
+4. TaskCreate: Consultation task(s) —one per specialist
 5. Spawn consultant teammates into the session team (planning-only mode)
 6. Consultants submit analysis plans for lead approval
 7. After approval, consultants analyze and send perspectives via SendMessage
 8. Collect perspectives as messages arrive
 9. Shutdown consultants after all perspectives received
 10. TaskUpdate: Consultation tasks status = "completed"
-11. Synthesize -> write plan document
+11. Synthesize →write plan document
 12. TaskUpdate: Planning task status = "completed", metadata.artifact = plan path
 ```
 
 **Example structure:**
 ```
 [Planning] "Plan: user authentication"      (blockedBy: consult1, consult2, consult3)
-|-- [Consult] "preparer: research auth patterns"
-|-- [Consult] "architect: design auth service"
-+-- [Consult] "test-engineer: testing strategy"
+├── [Consult] "preparer: research auth patterns"
+├── [Consult] "architect: design auth service"
+└── [Consult] "test-engineer: testing strategy"
 ```
 
 ---
@@ -45,7 +45,7 @@ This command is the primary **S4 (Intelligence)** activity in PACT. While `/PACT
 - **Future focus**: What approach will lead to long-term success?
 - **Strategic thinking**: What are the risks? What could change?
 
-The output -- an approved plan -- bridges S4 intelligence to S3 execution. When `/PACT:orchestrate` runs, it shifts to S3 mode while referencing the S4 plan.
+The output —an approved plan —bridges S4 intelligence to S3 execution. When `/PACT:orchestrate` runs, it shifts to S3 mode while referencing the S4 plan.
 
 **S4 Questions to Hold Throughout**:
 - Are we solving the right problem?
@@ -92,9 +92,9 @@ Skip specialists clearly not relevant (e.g., skip database engineer for pure UI 
 - Convert task to lowercase kebab-case
 - Keep it concise (3-5 words max)
 - Examples:
-  - "Add user authentication with JWT" -> `user-auth-jwt`
-  - "Refactor payment processing module" -> `refactor-payment-processing`
-  - "Fix dashboard loading performance" -> `fix-dashboard-performance`
+  - "Add user authentication with JWT" →`user-auth-jwt`
+  - "Refactor payment processing module" →`refactor-payment-processing`
+  - "Fix dashboard loading performance" →`fix-dashboard-performance`
 
 ### Phase 1: Spawn Consultant Teammates
 
@@ -142,7 +142,7 @@ Task(
 #### Consultant Prompt Template
 
 ```
-PLANNING CONSULTATION ONLY -- No implementation, no code changes.
+PLANNING CONSULTATION ONLY —No implementation, no code changes.
 You are a consultant teammate providing planning perspective.
 
 Task: {task description}
@@ -179,7 +179,7 @@ WORKFLOW:
 3. Send your perspective to the lead via SendMessage with clear headers matching the 5 sections above.
 4. Mark your task complete via TaskUpdate.
 
-Do NOT implement anything -- planning consultation only.
+Do NOT implement anything —planning consultation only.
 ```
 
 **Domain-specific additions to the template:**
@@ -208,7 +208,7 @@ For **pact-test-engineer**, also ask:
 
 When a consultant submits their analysis plan via ExitPlanMode:
 1. Receive the plan approval request message
-2. Review the plan -- ensure it covers the consultant's assigned domain
+2. Review the plan —ensure it covers the consultant's assigned domain
 3. Approve or reject with feedback:
    ```
    SendMessage(type: "plan_approval_response",
@@ -240,10 +240,10 @@ Consultants will approve the shutdown via their pact-task-tracking protocol.
 **Handling incomplete or missing responses**:
 
 If a consultant provides minimal, incomplete, or off-topic output:
-1. Note the gap -- record which consultant and which sections are missing
-2. Proceed with synthesis -- use the inputs you have
-3. Flag in the plan -- add to "Limitations" section with specific gaps identified
-4. Do NOT re-invoke -- avoid infinite loops; missing input is data for the plan
+1. Note the gap —record which consultant and which sections are missing
+2. Proceed with synthesis —use the inputs you have
+3. Flag in the plan —add to "Limitations" section with specific gaps identified
+4. Do NOT re-invoke —avoid infinite loops; missing input is data for the plan
 
 If a consultant fails entirely (timeout, error, unexpected stoppage):
 1. Log the failure in synthesis notes
@@ -300,7 +300,7 @@ After collecting all consultant outputs, use extended thinking to synthesize:
        - [ ] Unchecked questions to resolve
        - [ ] Empty/placeholder sections
        - [ ] Unresolved open questions
-     - **Any signal present** -> mark phase as REQUIRED
+     - **Any signal present** →mark phase as REQUIRED
        - For more details on incompleteness signals, see [pact-completeness.md](../protocols/pact-completeness.md)
 
 6. **Risk Assessment**
@@ -317,9 +317,9 @@ After collecting all consultant outputs, use extended thinking to synthesize:
    - [ ] Cross-cutting concerns have been considered
 
    If validation fails:
-   - For insufficient specialist input -> Flag in "Limitations", proceed with available data
-   - For unresolved blocking conflict -> Present partial plan with BLOCKED status
-   - For missing mandatory sections -> Populate with "TBD - requires {specific input}"
+   - For insufficient specialist input →Flag in "Limitations", proceed with available data
+   - For unresolved blocking conflict →Present partial plan with BLOCKED status
+   - For missing mandatory sections →Populate with "TBD - requires {specific input}"
 
 ### Phase 3: Plan Output
 
@@ -360,16 +360,16 @@ If a plan already exists for this feature slug:
 > Status: PENDING APPROVAL
 
 <!-- Status Lifecycle:
-     PENDING APPROVAL -> APPROVED -> IN_PROGRESS -> IMPLEMENTED
-                    \-> SUPERSEDED (if replaced by newer plan)
-                    \-> BLOCKED (if unresolved conflicts)
+     PENDING APPROVAL →APPROVED →IN_PROGRESS →IMPLEMENTED
+                    \→SUPERSEDED (if replaced by newer plan)
+                    \→BLOCKED (if unresolved conflicts)
 
      Transition Ownership:
-     - PENDING APPROVAL -> APPROVED: User (explicit approval)
-     - APPROVED -> IN_PROGRESS: Orchestrator (when /PACT:orchestrate starts)
-     - IN_PROGRESS -> IMPLEMENTED: Orchestrator (after successful completion)
-     - Any -> SUPERSEDED: plan-mode (when creating replacement plan)
-     - Any -> BLOCKED: plan-mode (when unresolved blocking conflicts)
+     - PENDING APPROVAL →APPROVED: User (explicit approval)
+     - APPROVED →IN_PROGRESS: Orchestrator (when /PACT:orchestrate starts)
+     - IN_PROGRESS →IMPLEMENTED: Orchestrator (after successful completion)
+     - Any →SUPERSEDED: plan-mode (when creating replacement plan)
+     - Any →BLOCKED: plan-mode (when unresolved blocking conflicts)
 -->
 
 <!-- Forward Reference Convention:
@@ -474,8 +474,8 @@ If a plan already exists for this feature slug:
 
 > **Note**: This sequence represents the intended final git history order, **not** the execution order. Independent commits may be implemented in parallel even if numbered sequentially here. The orchestrator must analyze actual dependencies to determine execution strategy.
 
-1. `{type}: {description}` -- {what this commit does}
-2. `{type}: {description}` -- {what this commit does}
+1. `{type}: {description}` —{what this commit does}
+2. `{type}: {description}` —{what this commit does}
 
 ---
 
@@ -523,7 +523,7 @@ If a plan already exists for this feature slug:
 - **Overall Complexity**: {Low/Medium/High/Very High}
 - **Estimated Files**: {N} modified, {M} new
 - **Specialists Required**: {List}
-- **External Dependencies**: {Yes/No -- details}
+- **External Dependencies**: {Yes/No —details}
 
 ---
 
@@ -536,10 +536,10 @@ If a plan already exists for this feature slug:
 
 | Phase | Required? | Rationale |
 |-------|-----------|-----------|
-| PREPARE | {Yes/No} | {e.g., "Yes -- 3 unchecked research items remain" or "No -- all research complete, no TBD items"} |
-| ARCHITECT | {Yes/No} | {e.g., "Yes -- interface contracts marked TBD" or "No -- all design decisions resolved"} |
+| PREPARE | {Yes/No} | {e.g., "Yes —3 unchecked research items remain" or "No —all research complete, no TBD items"} |
+| ARCHITECT | {Yes/No} | {e.g., "Yes —interface contracts marked TBD" or "No —all design decisions resolved"} |
 | CODE | Yes | Always required |
-| TEST | {Yes/No} | {e.g., "Yes -- integration tests needed" or "No -- trivial change, no test scenarios"} |
+| TEST | {Yes/No} | {e.g., "Yes —integration tests needed" or "No —trivial change, no test scenarios"} |
 
 ---
 
@@ -607,7 +607,7 @@ After saving the plan:
 
 **Do NOT exit plan mode** while "Require User Decision" items remain unresolved.
 
-**Do NOT proceed to implementation** -- await user approval or feedback.
+**Do NOT proceed to implementation** —await user approval or feedback.
 
 ---
 
@@ -615,9 +615,9 @@ After saving the plan:
 
 If during Phase 0 analysis you determine:
 
-- **Task is trivial** (typo, config change, single-line fix) -> Recommend `/PACT:comPACT` instead
-- **Task is unclear** -> Ask clarifying questions before proceeding with planning
-- **Task requires immediate research first** -> Recommend running preparation phase alone first
+- **Task is trivial** (typo, config change, single-line fix) →Recommend `/PACT:comPACT` instead
+- **Task is unclear** →Ask clarifying questions before proceeding with planning
+- **Task requires immediate research first** →Recommend running preparation phase alone first
 
 ---
 

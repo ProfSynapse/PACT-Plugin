@@ -18,7 +18,7 @@ Create a simpler Task hierarchy than full orchestrate:
 1. TaskCreate: Feature task "{verb} {feature}" (single-domain work)
 2. TaskUpdate: Feature task status = "in_progress"
 3. Analyze: How many teammates needed?
-4. TaskCreate: Agent task(s) -- direct children of feature
+4. TaskCreate: Agent task(s) —direct children of feature
 5. TaskUpdate: Agent tasks status = "in_progress"
 6. TaskUpdate: Feature task addBlockedBy = [all agent IDs]
 7. Spawn teammates with task IDs in their prompts
@@ -34,9 +34,9 @@ Create a simpler Task hierarchy than full orchestrate:
 **Example structure:**
 ```
 [Feature] "Fix 3 backend bugs"           (blockedBy: agent1, agent2, agent3)
-+-- [Agent] "backend-coder: fix bug A"
-+-- [Agent] "backend-coder: fix bug B"
-+-- [Agent] "backend-coder: fix bug C"
+├── [Agent] "backend-coder: fix bug A"
+├── [Agent] "backend-coder: fix bug B"
+└── [Agent] "backend-coder: fix bug C"
 ```
 
 ---
@@ -141,8 +141,8 @@ Before spawning multiple specialists concurrently, perform this coordination che
 
 ## Pre-Invocation (Required)
 
-1. **Set up worktree** -- If already in a worktree for this feature, reuse it. Otherwise, invoke `/PACT:worktree-setup` with the feature branch name. All subsequent work happens in the worktree.
-2. **S2 coordination** (if concurrent) -- Check for file conflicts, assign boundaries
+1. **Set up worktree** —If already in a worktree for this feature, reuse it. Otherwise, invoke `/PACT:worktree-setup` with the feature branch name. All subsequent work happens in the worktree.
+2. **S2 coordination** (if concurrent) —Check for file conflicts, assign boundaries
 
 ---
 
@@ -165,10 +165,10 @@ The team already exists (created by the session-start hook). comPACT spawns spec
 **Spawn tasks and teammates together in a single message** (parallel tool calls):
 ```
 Single message (all parallel):
-+-- TaskCreate("Fix auth bug", owner="backend-1")
-+-- TaskCreate("Fix cache bug", owner="backend-2")
-+-- Task(spawn backend-1 teammate)
-+-- Task(spawn backend-2 teammate)
+├── TaskCreate("Fix auth bug", owner="backend-1")
+├── TaskCreate("Fix cache bug", owner="backend-2")
+├── Task(spawn backend-1 teammate)
+└── Task(spawn backend-2 teammate)
 ```
 
 ### Multiple Specialists Concurrently (Default)
@@ -180,12 +180,12 @@ comPACT mode (concurrent): You are one of [N] specialists working concurrently a
 You are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree.
 
 YOUR SCOPE: [specific sub-task and files this agent owns]
-OTHER AGENTS' SCOPE: [what other agents are handling -- do not touch]
+OTHER AGENTS' SCOPE: [what other agents are handling —do not touch]
 
 Work directly from this task description.
-Check docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist -- reference relevant context.
+Check docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist —reference relevant context.
 Do not create new documentation artifacts in docs/.
-Stay within your assigned scope -- do not modify files outside your boundary.
+Stay within your assigned scope —do not modify files outside your boundary.
 
 Testing responsibilities:
 - New unit tests: Required for logic changes.
@@ -211,7 +211,7 @@ Use a single specialist only when:
 ```
 comPACT mode: Work directly from this task description.
 You are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree.
-Check docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist -- reference relevant context.
+Check docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist —reference relevant context.
 Do not create new documentation artifacts in docs/.
 Focus on the task at hand.
 Testing responsibilities:
@@ -219,7 +219,7 @@ Testing responsibilities:
 - Existing tests: If your changes break existing tests, fix them.
 - Before handoff: Run the test suite and ensure all tests pass.
 
-> **Smoke vs comprehensive tests**: These are verification tests -- enough to confirm your implementation works. Comprehensive coverage (edge cases, integration, E2E, adversarial) is TEST phase work handled by `pact-test-engineer`.
+> **Smoke vs comprehensive tests**: These are verification tests —enough to confirm your implementation works. Comprehensive coverage (edge cases, integration, E2E, adversarial) is TEST phase work handled by `pact-test-engineer`.
 
 If you hit a blocker, STOP and report it via SendMessage to the lead.
 
@@ -258,19 +258,19 @@ All teammates are spawned with `mode="plan"`. Before implementing, each teammate
 Teammates deliver their HANDOFF via `SendMessage` to the lead, then mark their task complete via `TaskUpdate`.
 
 1. **Receive HANDOFF** via SendMessage from teammate(s)
-2. **Run tests** -- verify work passes. If tests fail, message the teammate with details for fixes.
+2. **Run tests** —verify work passes. If tests fail, message the teammate with details for fixes.
 3. **Shutdown teammate** after successful completion:
    ```
    SendMessage(type: "shutdown_request", recipient: "{teammate-name}",
      content: "Work complete, shutting down")
    ```
-4. **Create atomic commit(s)** -- stage and commit before proceeding
+4. **Create atomic commit(s)** —stage and commit before proceeding
 5. **TaskUpdate**: Feature task status = "completed"
 
-**Next steps** -- After commit, ask: "Work committed. Create PR?"
-- **Yes (Recommended)** -- invoke `/PACT:peer-review` (reviewers spawn into the SAME existing team)
-- **Not yet** -- worktree persists; user resumes later. Clean up manually with `/PACT:worktree-cleanup` when done.
-- **More work** -- continue with comPACT or orchestrate
+**Next steps** —After commit, ask: "Work committed. Create PR?"
+- **Yes (Recommended)** —invoke `/PACT:peer-review` (reviewers spawn into the SAME existing team)
+- **Not yet** —worktree persists; user resumes later. Clean up manually with `/PACT:worktree-cleanup` when done.
+- **More work** —continue with comPACT or orchestrate
 
 **If blocker reported** (teammate sends BLOCKER via SendMessage):
 

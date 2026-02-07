@@ -45,29 +45,29 @@ Create a review Task hierarchy:
 20. TaskUpdate: Review task status = "completed", metadata.artifact = PR URL
 ```
 
-> **Convention**: Synchronous user steps (step tasks, approval tasks) skip the `in_progress` transition -- they go directly from `pending` to `completed` since the orchestrator handles them inline without background dispatch.
+> **Convention**: Synchronous user steps (step tasks, approval tasks) skip the `in_progress` transition —they go directly from `pending` to `completed` since the orchestrator handles them inline without background dispatch.
 
 **Example structure:**
 ```
 [Review] "Review: user authentication"
-|-- [Agent] "architect: design review"
-|-- [Agent] "test-engineer: coverage review"
-|-- [Agent] "backend-coder: implementation review"
-|-- [Remediation] (dynamic, for major issues)
-|   +-- [Agent] "fix: auth vulnerability"
-|-- [Step] "User: review minor issues"
-|-- [Remediation] (dynamic, for "fix now" minors)
-|   +-- [Agent] "fix: input validation"
-+-- [Approval] "Awaiting merge decision"
+├── [Agent] "architect: design review"
+├── [Agent] "test-engineer: coverage review"
+├── [Agent] "backend-coder: implementation review"
+├── [Remediation] (dynamic, for major issues)
+│   └── [Agent] "fix: auth vulnerability"
+├── [Step] "User: review minor issues"
+├── [Remediation] (dynamic, for "fix now" minors)
+│   └── [Agent] "fix: input validation"
+└── [Approval] "Awaiting merge decision"
 ```
 
 ## Remediation Task State
 
 ```
 Review task: in_progress (persists until merge-ready)
-|-- Cycle N: remediation tasks -> re-review (verify-only) -> check
-|-- After 2 failed cycles: BLOCKER task -> addBlockedBy review -> /PACT:imPACT
-+-- On resolution: blocker completed -> review resumes
+├── Cycle N: remediation tasks → re-review (verify-only) → check
+├── After 2 failed cycles: BLOCKER task → addBlockedBy review → /PACT:imPACT
+└── On resolution: blocker completed → review resumes
 ```
 
 **Key rules**: Review stays `in_progress` until merge-ready; fresh tasks per cycle; re-review is verify-only (minimal scope); imPACT escalation blocks (doesn't complete/delete) review; resume after resolution.
@@ -84,10 +84,10 @@ Standard reviewer combination:
 - **Domain specialist coder** (selected below): Implementation quality specific to the domain
 
 Select the domain coder based on PR focus:
-- Frontend changes -> **pact-frontend-coder** (UI implementation quality, accessibility, state management)
-- Backend changes -> **pact-backend-coder** (Server-side implementation quality, API design, error handling)
-- Database changes -> **pact-database-engineer** (Query efficiency, schema design, data integrity)
-- Multiple domains -> Coder for domain with most significant changes, or all relevant domain coders if changes are equally significant
+- Frontend changes →**pact-frontend-coder** (UI implementation quality, accessibility, state management)
+- Backend changes →**pact-backend-coder** (Server-side implementation quality, API design, error handling)
+- Database changes →**pact-database-engineer** (Query efficiency, schema design, data integrity)
+- Multiple domains →Coder for domain with most significant changes, or all relevant domain coders if changes are equally significant
 
 ### Reviewer Spawn Pattern
 
@@ -122,7 +122,7 @@ Task(
 ### Reviewer Prompt Template
 
 ```
-PEER REVIEW -- You are a reviewer teammate on this PR.
+PEER REVIEW —You are a reviewer teammate on this PR.
 
 PR: {PR URL or description}
 Branch: {branch name}
@@ -150,7 +150,7 @@ REVIEW FORMAT (send via SendMessage to "team-lead"):
 
 When a reviewer submits their review plan via ExitPlanMode:
 1. Receive the plan approval request message
-2. Review the plan -- ensure it covers the reviewer's assigned domain
+2. Review the plan —ensure it covers the reviewer's assigned domain
 3. Approve or reject with feedback:
    ```
    SendMessage(type: "plan_approval_response",
@@ -216,20 +216,20 @@ Reviewers will approve the shutdown via their pact-task-tracking protocol.
    - **No recommendations**: If the table is empty (no blocking, minor, or future items), proceed directly to step 4.
    - **Blocking**: Automatically address all blocking items:
      - Batch fixes by selecting appropriate workflow(s) based on combined scope:
-       - Single-domain items -> `/PACT:comPACT` (invoke concurrently if independent)
-       - Multi-domain items -> `/PACT:orchestrate`
-       - Mixed (both single and multi-domain) -> Use `/PACT:comPACT` for the single-domain batch AND `/PACT:orchestrate` for the multi-domain batch (can run in parallel if independent)
+       - Single-domain items →`/PACT:comPACT` (invoke concurrently if independent)
+       - Multi-domain items →`/PACT:orchestrate`
+       - Mixed (both single and multi-domain) →Use `/PACT:comPACT` for the single-domain batch AND `/PACT:orchestrate` for the multi-domain batch (can run in parallel if independent)
      - After all fixes complete, re-run review to verify fixes only (not a full PR re-review)
-     - **Termination**: If blocking items persist after 2 fix-verify cycles -> escalate via `/PACT:imPACT`
+     - **Termination**: If blocking items persist after 2 fix-verify cycles →escalate via `/PACT:imPACT`
    - **Minor + Future**:
 
-     **Step A -- Initial Gate Question** (Yes/No only):
+     **Step A —Initial Gate Question** (Yes/No only):
      - Use `AskUserQuestion` tool: "Would you like to review the minor and future recommendations?"
        - Options: **Yes** (review each item) / **No** (skip to merge readiness)
      - If **No**: Skip to step 4 directly
      - If **Yes**: Continue to Step B
 
-     **Step B -- Preemptive Context Gathering**:
+     **Step B —Preemptive Context Gathering**:
      - Before asking per-recommendation questions, gather and present context for ALL minor and future recommendations
      - For each recommendation, provide:
        - Why it matters (impact on code quality, maintainability, security, performance)
@@ -239,32 +239,32 @@ Reviewers will approve the shutdown via their pact-task-tracking protocol.
      - Present as a formatted list (one entry per recommendation) so user can review all context at once.
      - After presenting all context, proceed to Step C.
 
-     **Step C -- Per-Recommendation Questions** (after context presented):
+     **Step C —Per-Recommendation Questions** (after context presented):
      - Use `AskUserQuestion` tool with one question per recommendation
      - For each **minor** recommendation, ask "Address [recommendation] now?" with options:
-       - **Yes** -- Fix it in this PR
-       - **No** -- Skip for now
-       - **More context** -- Get additional details (if more detail is needed)
+       - **Yes** —Fix it in this PR
+       - **No** —Skip for now
+       - **More context** —Get additional details (if more detail is needed)
      - For each **future** recommendation, ask "What would you like to do with [recommendation]?" with options:
-       - **Create GitHub issue** -- Track for future work
-       - **Skip** -- Don't track or address
-       - **Address now** -- Fix it in this PR
-       - **More context** -- Get additional details (if more detail is needed)
+       - **Create GitHub issue** —Track for future work
+       - **Skip** —Don't track or address
+       - **Address now** —Fix it in this PR
+       - **More context** —Get additional details (if more detail is needed)
      - Note: Tool supports 2-4 options per question and 1-4 questions per call. If >4 recommendations exist, make multiple `AskUserQuestion` calls to cover all items.
        - **Handling "More context" responses**:
          - When user selects "More context", provide deeper explanation beyond the preemptive context (e.g., implementation specifics, examples, related patterns)
          - After providing additional context, re-ask the same question for that specific recommendation (without the "More context" option)
          - Handle inline: provide context immediately, get the answer, then continue to the next recommendation
        - **Collect all answers first**, then batch work:
-         - Group all minor=Yes items AND future="Address now" items -> Select workflow based on combined scope:
-           - Single-domain items -> `/PACT:comPACT` (invoke concurrently if independent)
-           - Multi-domain items -> `/PACT:orchestrate`
-         - Group all future="Create GitHub issue" items -> Create GitHub issues
-       - If any items fixed (minor or future addressed now) -> re-run review to verify fixes only (not a full PR re-review)
+         - Group all minor=Yes items AND future="Address now" items →Select workflow based on combined scope:
+           - Single-domain items →`/PACT:comPACT` (invoke concurrently if independent)
+           - Multi-domain items →`/PACT:orchestrate`
+         - Group all future="Create GitHub issue" items →Create GitHub issues
+       - If any items fixed (minor or future addressed now) →re-run review to verify fixes only (not a full PR re-review)
 
 4. State merge readiness (only after ALL blocking fixes complete AND minor/future item handling is done): "Ready to merge" or "Changes requested: [specifics]"
 
-5. Present to user and **stop** -- merging requires explicit user authorization (S5 policy)
+5. Present to user and **stop** —merging requires explicit user authorization (S5 policy)
 
 ---
 

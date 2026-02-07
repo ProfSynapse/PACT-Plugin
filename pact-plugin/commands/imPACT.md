@@ -112,7 +112,7 @@ Answer two questions:
 | **Augment present phase** | Need help in current phase | Message blocked teammate with additional context + spawn parallel teammates |
 | **Escalate to orchestrate** | Sub-task needs its own P→A→C→T cycle | Use `/PACT:orchestrate` for a standalone cycle |
 | **Not truly blocked** | Neither question is "Yes" | Message teammate with clarified guidance to continue |
-| **Escalate to user** | 3+ imPACT cycles without resolution | Proto-algedonic signal -- systemic issue needs user input |
+| **Escalate to user** | 3+ imPACT cycles without resolution | Proto-algedonic signal —systemic issue needs user input |
 
 **When to consider escalating to orchestrate**:
 If the blocker reveals that a sub-task is more complex than expected and needs its own research/design phases, escalate to `/PACT:orchestrate` instead of just augmenting:
@@ -126,7 +126,7 @@ If the blocker reveals that a sub-task is more complex than expected and needs i
 
 **Context**: Invoked from [orchestrate.md](orchestrate.md) when redoing a prior phase. Complete original blocker first ([Task Operations](#task-operations) step 4). Retry failure triggers 3+ cycle escalation (ALERT: META-BLOCK).
 
-**Worktree context**: Phase re-entry operates within the current worktree. The re-entered phase inherits the same worktree path -- no new worktree is created.
+**Worktree context**: Phase re-entry operates within the current worktree. The re-entered phase inherits the same worktree path —no new worktree is created.
 
 When imPACT decides to redo a prior phase (e.g., "redo ARCHITECT because the design was wrong"), follow this Task lifecycle:
 
