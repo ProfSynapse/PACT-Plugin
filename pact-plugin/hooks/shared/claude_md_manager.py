@@ -611,9 +611,13 @@ def strip_orphan_kernel_block() -> str | None:
             # #1247: the containment check in _atomic_write_text REPLACES the
             # former leaf is_symlink guard. It runs inside this lock (TOCTOU-
             # safe, since callers hold file_lock) and is the RIGHT control
-            # here: resolve()-then-commonpath against the anchor below catches
-            # the symlinked-PARENT escape the leaf is_symlink guard MISSED
-            # (F1). It does NOT dominate is_symlink -- the two catch
+            # here: kernel-object ancestry on a pinned parent descriptor
+            # catches the symlinked-PARENT escape the leaf is_symlink guard
+            # MISSED (F1). No resolver runs inside the guard -- see
+            # _atomic_write_text; do NOT reintroduce one, and in particular do
+            # not resolve the target and reuse it downstream, which would make
+            # the WRITE follow the leaf.
+            # It does NOT dominate is_symlink -- the two catch
             # overlapping-but-different sets: containment safely ALLOWS a
             # benign in-project leaf redirect (os.replace swaps the leaf, no
             # write-through) that the old blanket guard refused.
@@ -881,7 +885,10 @@ def ensure_project_memory_md() -> str | None:
             # #1247: containment (in _atomic_write_text) REPLACES the former
             # leaf is_symlink guard -- it runs inside the lock (TOCTOU-safe)
             # and catches the symlinked-PARENT escape the leaf guard MISSED
-            # (F1), via resolve()-then-commonpath. It does NOT dominate
+            # (F1), via kernel-object ancestry on a pinned parent descriptor.
+            # No resolver runs inside the guard -- do NOT reintroduce one, and
+            # do not resolve the target and reuse it downstream: that makes the
+            # WRITE follow the leaf. It does NOT dominate
             # is_symlink: it safely ALLOWS a benign in-project leaf redirect
             # (os.replace leaf-swap, no write-through) the old guard refused.
             if target_file.exists():
