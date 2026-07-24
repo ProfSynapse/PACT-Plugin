@@ -347,7 +347,27 @@ def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
             if (node_stat.st_dev, node_stat.st_ino) == anchor_key:
                 contained = True
                 break
-            up = os.open("..", os.O_RDONLY | os.O_DIRECTORY, dir_fd=node)
+            try:
+                up = os.open("..", os.O_RDONLY | os.O_DIRECTORY, dir_fd=node)
+            except NotImplementedError:
+                # NARROW BY DESIGN -- only NotImplementedError is mapped here.
+                # A genuine OSError from this open (EACCES on an ancestor the
+                # user cannot read) must keep propagating RAW through the outer
+                # handler; relabelling it would report a permission failure as
+                # a capability failure.
+                # NotImplementedError has to be named explicitly because it is
+                # a RuntimeError SUBCLASS, NOT an OSError one, while
+                # ContainmentError subclasses OSError. So the callers'
+                # `except ContainmentError` / `except OSError` arms are blind
+                # to it: unmapped, it would escape as-is and CRASH the hook
+                # instead of failing closed into the site's opaque skip status.
+                # This is the same reason given at the parent-directory open;
+                # it applies wherever a dir_fd argument is passed, and this is
+                # the second such site.
+                raise ContainmentError(
+                    "refusing write: platform lacks directory-descriptor "
+                    "ancestry traversal"
+                )
             walked.append(up)
             up_stat = os.fstat(up)
             if (up_stat.st_dev, up_stat.st_ino) == (
