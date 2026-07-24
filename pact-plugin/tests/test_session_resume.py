@@ -723,20 +723,33 @@ class TestUpdateSessionInfoLocking:
         t.join(timeout=5)
 
 
-class TestUpdateSessionInfoSymlinkRefusal:
-    """SECURITY hardening — update_session_info refuses to operate on symlinks.
+class TestUpdateSessionInfoLeafSymlinkAllowed:
+    """SECURITY — update_session_info never writes THROUGH a leaf symlink.
 
-    Matches the pattern in remove_stale_kernel_block and update_pact_routing:
-    if the project CLAUDE.md is a symlink, return an opaque 'Session info
-    skipped: ... path precondition not met.' string and do not follow the
-    link. is_symlink uses lstat so it does not follow the link.
+    The property that matters is that an out-of-project file pointed at by the
+    project CLAUDE.md is never modified. That property holds, and it holds for a
+    structural reason rather than a guard: the write publishes via renameat(2),
+    which binds the final path component as a directory ENTRY without following
+    it, so the payload lands on the in-project entry.
 
-    The status string is deliberately opaque — no mention of 'symlink' or
-    'refusing' to avoid disclosing the internal guard to a local attacker."""
+    An earlier form of this class ALSO refused to write at all when the target
+    was a symlink, and asserted that refusal. That ban was an over-block on
+    benign in-project symlinks, and containment now decides on the parent chain
+    without consulting the leaf, so a contained target is written even when its
+    leaf points outside. The victim-untouched guarantee is unchanged."""
 
-    def test_update_session_info_refuses_symlink(self, tmp_path, monkeypatch):
-        """If the project CLAUDE.md is a symlink, update_session_info returns
-        an opaque skip status and does not touch the symlink target."""
+    def test_leaf_symlink_out_of_project_allowed_target_untouched(
+        self, tmp_path, monkeypatch
+    ):
+        """A leaf symlink escaping the project is written IN-PROJECT: the entry
+        becomes a real file and the out-of-project target keeps its bytes.
+
+        Both boundaries are asserted. Target-byte-identical is the security
+        property, but it would hold under a refusal too, so it cannot on its own
+        show that anything was permitted; the entry-no-longer-a-symlink
+        assertion is what distinguishes ALLOW from REFUSE and what flips if the
+        write is ever made to follow the leaf.
+        """
         import os
         from shared.session_resume import update_session_info
 
@@ -761,13 +774,14 @@ class TestUpdateSessionInfoSymlinkRefusal:
         result = update_session_info("sess-new", "pact-new")
 
         assert result is not None
-        assert "Session info skipped" in result
-        assert "path precondition not met" in result
-        assert "symlink" not in result.lower()
-        assert "refusing" not in result.lower()
-        # Symlink target is byte-identical (untouched)
+        assert "Session info updated" in result
+        # Boundary 1 -- the out-of-project target is BYTE-identical. This is the
+        # security property, and it survives the change from refuse to allow.
         assert symlink_target.read_text(encoding="utf-8") == symlink_target_content
-        assert managed_path.is_symlink()
+        # Boundary 2 -- the write happened at the IN-PROJECT entry, replacing the
+        # symlink with a real file carrying the new session id.
+        assert not managed_path.is_symlink()
+        assert "sess-new" in managed_path.read_text(encoding="utf-8")
 
 
 class TestCheckPausedState:

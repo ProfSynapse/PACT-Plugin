@@ -1799,22 +1799,48 @@ class TestMigrateToManagedStructure:
 
         assert result is None
 
-    def test_symlink_guard(self, tmp_path, monkeypatch):
-        """Returns 'skipped' message when target is a symlink."""
+    def test_leaf_symlink_out_of_project_allowed_victim_untouched(
+        self, tmp_path, monkeypatch
+    ):
+        """A leaf symlink pointing OUT of the project is ALLOWED, and the write
+        lands at the in-project entry instead of following the link.
+
+        This replaces a negative that asserted a 'skipped' status. That refusal
+        was an OVER-BLOCK: containment is decided on the parent chain and the
+        leaf is never consulted, so this topology is contained. It is SAFE for
+        the reason the assertions below check rather than by assumption --
+        os.replace is renameat(2), which binds the final component as a
+        directory ENTRY and never follows it, so the payload lands in-project
+        and the outside file keeps its bytes.
+
+        BOTH boundaries are asserted deliberately, and the order of reasoning
+        matters: victim-byte-unchanged would ALSO hold if the write had simply
+        been refused, so on its own it cannot distinguish ALLOW from REFUSE and
+        would leave this test unable to fail for the right reason. The
+        entry-is-no-longer-a-symlink assertion is what pins that the write
+        actually happened, and happened in-project.
+        """
         from shared.claude_md_manager import migrate_to_managed_structure
 
         project_dir = tmp_path / "project"
         project_dir.mkdir()
-        real_file = tmp_path / "real_claude.md"
-        real_file.write_text("# Project Memory\n")
+        outside_victim = tmp_path / "real_claude.md"
+        outside_victim.write_text("# Project Memory\n", encoding="utf-8")
+        before = outside_victim.read_text(encoding="utf-8")
         claude_md = project_dir / "CLAUDE.md"
-        claude_md.symlink_to(real_file)
+        claude_md.symlink_to(outside_victim)
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
 
         result = migrate_to_managed_structure()
 
         assert result is not None
-        assert "skipped" in result.lower()
+        assert "skipped" not in result.lower()
+        # Boundary 1 -- the out-of-project victim is byte-unchanged.
+        assert outside_victim.read_text(encoding="utf-8") == before
+        # Boundary 2 -- the write landed at the IN-PROJECT entry, replacing the
+        # symlink with a real file.
+        assert not claude_md.is_symlink()
+        assert claude_md.is_file()
 
     def test_migrated_file_has_secure_permissions(self, tmp_path, monkeypatch):
         """Migrated file should have 0o600 permissions."""
@@ -2857,22 +2883,42 @@ class TestStripOrphanKernelBlock(_StripOrphanBlockTestBase):
         assert "skipped" in result.lower()
         assert "PACT_END appears before PACT_START" in result
 
-    def test_symlink_returns_skip_status(self, tmp_path):
-        # Replace target_file with a symlink to a real file under tmp_path
+    def test_leaf_symlink_out_of_config_allowed_victim_untouched(self, tmp_path):
+        """A leaf symlink escaping the config dir is ALLOWED; the strip lands on
+        the in-config entry and the outside file is untouched.
+
+        Replaces a negative asserting a 'skipped' status. That refusal was an
+        OVER-BLOCK -- the leaf is never consulted, and the target's parent IS the
+        anchor here, so the topology is contained. os.replace binds the final
+        component as a directory ENTRY without following it, which is why the
+        outside file survives a write that was permitted.
+
+        Both boundaries are asserted: victim-byte-unchanged alone cannot tell
+        ALLOW from REFUSE (it holds either way), so the entry-no-longer-a-symlink
+        assertion is what makes this test able to fail for the right reason.
+        """
         real_target = tmp_path / "real_claude.md"
         real_target.write_text(
             f"# user\n{self.START_MARKER}\nstale\n{self.END_MARKER}\n",
             encoding="utf-8",
         )
+        before = real_target.read_text(encoding="utf-8")
         self.target_file.parent.mkdir(parents=True, exist_ok=True)
         if self.target_file.exists():
             self.target_file.unlink()
         self.target_file.symlink_to(real_target)
+
         result = self.call_stripper()
+
         assert result is not None
-        assert "skipped" in result.lower()
-        # Real target must not have been rewritten
-        assert self.START_MARKER in real_target.read_text(encoding="utf-8")
+        assert "Removed obsolete PACT kernel block" in result
+        # Boundary 1 -- the out-of-config victim is BYTE-unchanged, not merely
+        # still carrying its marker.
+        assert real_target.read_text(encoding="utf-8") == before
+        # Boundary 2 -- the strip landed on the in-config entry, which is now a
+        # real file rather than the symlink.
+        assert not self.target_file.is_symlink()
+        assert self.START_MARKER not in self.target_file.read_text(encoding="utf-8")
 
     def test_missing_target_file_returns_none(self):
         # File doesn't exist — stripper short-circuits to None.

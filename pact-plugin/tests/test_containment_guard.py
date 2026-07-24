@@ -335,7 +335,24 @@ _ORPHAN = "# Global\n<!-- PACT_START: kernel -->\nstale kernel block\n<!-- PACT_
 
 
 class TestSite5StripOrphanGlobalAnchor:
-    def test_f1_escape_from_global_config_refused(self, tmp_path, monkeypatch):
+    def test_leaf_out_of_config_allowed_and_victim_untouched(self, tmp_path, monkeypatch):
+        """LEAF-out at the global-config anchor: ALLOWED, victim untouched.
+
+        WHY THIS SITE HAS NO PARENT-OUT TOPOLOGY, which is why the test looks
+        different from every other site's: the anchor here IS the target's
+        parent (the config dir holds CLAUDE.md directly), so no intermediate
+        component sits between anchor and leaf and there is nothing to point
+        outward. A leaf symlink is the only escape-shaped construction
+        available. This test was previously named for F1 and asserted a
+        refusal; the name described a topology it does not build, and the
+        refusal was the over-block #1247 exists to remove.
+
+        Containment is decided on the parent chain and never consults the leaf,
+        so this is contained and the write proceeds. It is SAFE because
+        os.replace is renameat(2): it binds the final component as a directory
+        ENTRY without following it, so the payload lands on the in-config entry
+        and the outside victim keeps its bytes.
+        """
         from shared.claude_md_manager import strip_orphan_kernel_block
 
         config = tmp_path / "cfg"
@@ -344,23 +361,25 @@ class TestSite5StripOrphanGlobalAnchor:
         outside.mkdir()
         victim = outside / "victim.md"
         victim.write_text(_ORPHAN, encoding="utf-8")  # orphan block => write-path reached
-        os.symlink(str(victim), str(config / "CLAUDE.md"))  # global CLAUDE.md escapes cfg
+        entry = config / "CLAUDE.md"
+        os.symlink(str(victim), str(entry))  # global CLAUDE.md leaf points outside cfg
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
         before = victim.read_text(encoding="utf-8")
 
         strip_orphan_kernel_block()
 
-        # No write-through: the out-of-config victim keeps its orphan block. (This
-        # holds via os.replace's leaf-swap alone, so it is NOT guard-coupled.)
+        # Boundary 1 -- no write-through: the out-of-config victim is byte-intact.
+        # This holds via renameat's leaf-swap and would ALSO hold under a refusal,
+        # so on its own it cannot distinguish ALLOW from REFUSE.
         assert victim.read_text(encoding="utf-8") == before
-        # GUARD-COUPLED assertion: the containment guard REFUSES the escaping write
-        # BEFORE os.replace, so config/CLAUDE.md stays a symlink. Without the guard,
-        # os.replace would replace the leaf symlink with a real (stripped) file, so
-        # is_symlink() would flip to False -- this is what turns the test RED on a
-        # guard revert (leaf-swap alone would leave this GREEN).
-        assert (config / "CLAUDE.md").is_symlink(), (
-            "guard did not refuse: the escaping leaf symlink was replaced"
+        # Boundary 2 -- the write HAPPENED, at the in-config entry: the symlink is
+        # replaced by a real, stripped file. This is the assertion that pins the
+        # ALLOW, and it is the one that flips if anyone makes the write follow the
+        # leaf or re-adds a leaf-symlink ban.
+        assert not entry.is_symlink(), (
+            "expected the in-config entry to be replaced by a real file"
         )
+        assert "PACT_START" not in entry.read_text(encoding="utf-8")
 
     def test_benign_global_file_allows_strip(self, tmp_path, monkeypatch):
         from shared.claude_md_manager import strip_orphan_kernel_block

@@ -927,17 +927,21 @@ class TestCheckPinnedStalenessHardening:
             "## Working Memory\n"
         )
 
-    def test_symlink_target_rejected_with_opaque_status(self, tmp_path):
-        """If the project CLAUDE.md is a symlink whose target ESCAPES the
-        project root, check_pinned_staleness returns an opaque 'precondition
-        not met' string and does NOT touch the attacker-chosen target.
+    def test_leaf_symlink_out_of_project_allowed_victim_untouched(self, tmp_path):
+        """A leaf symlink pointing OUT of the project is ALLOWED, and the write
+        lands in-project rather than on the out-of-project victim.
 
-        This is the F1 write-through threat: a symlink (leaf here, or via a
-        symlinked parent) redirecting the write to an out-of-project victim
-        (e.g. the user's global ~/.claude/CLAUDE.md). The #1247 containment
-        guard resolves the target and refuses when it escapes the anchor.
-        (An IN-PROJECT redirect is contained and allowed — see
-        test_in_project_symlink_redirect_allowed_containment_supersedes_ban.)
+        THIS IS THE TRAP-1 COUPLING TRIPWIRE at this site, and it could not
+        exist before the corrected predicate, because the earlier one refused
+        this topology outright. It replaces a negative that asserted the
+        refusal. That refusal was an over-block: containment is decided on the
+        parent chain and the leaf is never consulted. The genuine escape shape
+        at this site is a symlinked PARENT, which is covered separately.
+
+        DO NOT 'fix' a failure here by making the guard refuse the topology.
+        The victim survives because os.replace is renameat(2) -- it binds the
+        final component as a directory ENTRY without following it. A failure
+        here means the WRITE SHAPE changed, not that the guard weakened.
         """
         from session_init import check_pinned_staleness
 
@@ -945,36 +949,34 @@ class TestCheckPinnedStalenessHardening:
         proj_dir = tmp_path / "proj"
         proj_dir.mkdir()
 
-        # Plant the attacker-chosen target OUTSIDE the project root, seeded
-        # with stale content so the read-through drives modified=True (the
-        # gate into the file_lock write path).
+        # Plant a file OUTSIDE the project root, seeded with stale content so
+        # the read-through drives modified=True (the gate into the write path).
         outside_dir = tmp_path / "outside"
         outside_dir.mkdir()
-        escaping_target = outside_dir / "external_target.md"
-        escaping_target.write_text(self._stale_pinned_content(), encoding="utf-8")
+        outside_victim = outside_dir / "external_target.md"
+        outside_victim.write_text(self._stale_pinned_content(), encoding="utf-8")
 
-        # project CLAUDE.md is a symlink escaping to that out-of-project target.
+        # project CLAUDE.md is a leaf symlink pointing at that outside file.
         managed_path = proj_dir / "CLAUDE.md"
-        os.symlink(str(escaping_target), str(managed_path))
+        os.symlink(str(outside_victim), str(managed_path))
         assert managed_path.is_symlink()
 
         with patch("session_init._get_project_claude_md_path", return_value=managed_path), \
              patch("staleness._get_project_claude_md_path", return_value=managed_path):
             result = check_pinned_staleness()
 
-        # Status string is opaque — does not reveal the internal containment
-        # check to a local attacker reading hook stderr.
         assert result is not None
-        assert "skipped" in result.lower()
-        assert "symlink" not in result.lower()
-        assert "refusing" not in result.lower()
+        assert "skipped" not in result.lower()
 
-        # Critical: the out-of-project target is byte-identical to what we
-        # wrote (the stale content). The guard refused before any write — no
-        # STALE marker, no budget warning, no write-through to the victim.
-        assert escaping_target.read_text(encoding="utf-8") == self._stale_pinned_content()
-        # The symlink itself is untouched (refusal happened before os.replace).
-        assert managed_path.is_symlink()
+        # Boundary 1 -- the out-of-project victim is BYTE-identical: no STALE
+        # marker, no budget warning, no write-through. Note this would ALSO hold
+        # under a refusal, so it cannot by itself show the write was permitted.
+        assert outside_victim.read_text(encoding="utf-8") == self._stale_pinned_content()
+        # Boundary 2 -- the write landed at the IN-PROJECT entry, which is now a
+        # real file. This is the assertion that pins the ALLOW and the one that
+        # flips if the write is ever made to follow the leaf.
+        assert not managed_path.is_symlink()
+        assert "STALE" in managed_path.read_text(encoding="utf-8")
 
     def test_in_project_symlink_redirect_allowed_containment_supersedes_ban(self, tmp_path):
         """#1247 deliberate behavior change: an IN-PROJECT symlink redirect is
@@ -1022,17 +1024,25 @@ class TestCheckPinnedStalenessHardening:
         `except ContainmentError` arm were ordered after `except OSError` (or
         dropped), an escape would be silently misattributed to a lock failure.
         This pins the arm ordering end-to-end via the real write path.
+
+        THE TOPOLOGY IS LOAD-BEARING, not incidental scenery. The escape must be
+        a symlinked PARENT, never a symlinked leaf. Containment is decided on the
+        parent chain and the leaf is never consulted, so a leaf pointing outside
+        is ALLOWED and raises nothing -- this test would then go green while
+        exercising no refusal path at all, and would keep passing with the
+        `except` arms in the wrong order. Only a parent-out topology reaches the
+        refusal this test exists to attribute.
         """
         from session_init import check_pinned_staleness
 
-        proj_dir = tmp_path / "proj"
-        proj_dir.mkdir()
-        outside_dir = tmp_path / "outside"
-        outside_dir.mkdir()
-        escaping_target = outside_dir / "victim.md"
-        escaping_target.write_text(self._stale_pinned_content(), encoding="utf-8")
-        managed_path = proj_dir / "CLAUDE.md"
-        os.symlink(str(escaping_target), str(managed_path))
+        project = tmp_path / "proj"
+        project.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        os.symlink(str(outside), str(project / ".claude"), target_is_directory=True)
+        managed_path = project / ".claude" / "CLAUDE.md"  # resolves into `outside`
+        managed_path.write_text(self._stale_pinned_content(), encoding="utf-8")
+        before = (outside / "CLAUDE.md").read_text(encoding="utf-8")
 
         with patch("session_init._get_project_claude_md_path", return_value=managed_path), \
              patch("staleness._get_project_claude_md_path", return_value=managed_path):
@@ -1040,6 +1050,8 @@ class TestCheckPinnedStalenessHardening:
 
         assert result == "Pinned staleness skipped: path precondition not met."
         assert "lock contention" not in result.lower()
+        # The out-of-project victim is untouched by the refusal.
+        assert (outside / "CLAUDE.md").read_text(encoding="utf-8") == before
 
     def test_concurrent_content_change_skips_write(self, tmp_path, monkeypatch):
         """If content changes between the outer read at L348 and the
