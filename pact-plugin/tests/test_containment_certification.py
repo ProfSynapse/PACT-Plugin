@@ -306,23 +306,47 @@ def _find_python39():
 # ---------------------------------------------------------------------------
 
 class _CapabilityInjector:
-    """Raises at EXACTLY ONE of the four sites that pass a `dir_fd`.
+    """Raises at EXACTLY ONE capability site.
 
-    Three of the four sites are `os.open`, so a naive patch cannot tell them
-    apart. The discriminator is the pair (dir_fd, path):
+    MEMBERSHIP PREDICATE, stated because leaving it unstated is what let the
+    count be wrong three times. The covered set is EVERY `os.*` call in
+    `_atomic_write_text` whose `NotImplementedError` must not reach the caller
+    unmapped. That is FIVE sites, of which FOUR are MAPPED to a distinct
+    `ContainmentError` and the FIFTH is SWALLOWED so the original exception
+    wins.
 
-        site 1  parent-directory open   dir_fd is None
-        site 2  ancestry walk           dir_fd is not None and path == ".."
-        site 3  temp create             dir_fd is not None and path != ".."
-        site 4  rename                  os.replace
+    `dir_fd` was never the discriminator -- only a proxy close enough to look
+    like one. Counting "sites that raise ContainmentError" gives four; counting
+    "sites the capability contract covers" gives five; and an argument sweep on
+    `dir_fd` misses the parent open (which passes none) while a read of the
+    mapped-site list misses the cleanup unlink (which passes one). Three
+    observers counted three different sets and each believed the list complete.
+    Ask of any new `os.*` call: must its NotImplementedError not reach the
+    caller? Yes means it belongs here, whatever its arguments look like.
+
+    Three of the five sites are `os.open`, so a naive patch cannot tell them
+    apart. The MECHANICAL discriminator -- an implementation detail of this
+    injector, not the definition -- is the pair (dir_fd, path):
+
+        site 1  parent-directory open   os.open,    dir_fd is None      MAPPED
+        site 2  ancestry walk           os.open,    dir_fd, path ".."   MAPPED
+        site 3  temp create             os.open,    dir_fd, path != ".."MAPPED
+        site 4  rename                  os.replace                      MAPPED
+        site 5  cleanup unlink          os.unlink,  dir_fd            SWALLOWED
 
     Getting this subtly wrong lands the injection on a DIFFERENT site while
     every assertion still passes -- which is why each test asserts the
     site-distinct message rather than merely that a ContainmentError was
     raised.
 
+    Site 5 needs a PRECONDITION the others do not: the cleanup arm only runs
+    after something already failed, so site 5 also raises at the rename to
+    reach it. The rename raise is scaffolding; `unlink_hits` is what proves the
+    site-5 injection itself fired.
+
     Also records, for non-vacuity and fd accounting:
       * `hits`         - times the chosen site actually fired
+      * `unlink_hits`  - times the cleanup unlink fired (site 5 only)
       * `walk_calls`   - times the walk's os.open was reached at all
       * `parent_closes`- closes counted against the CAPTURED parent fd. Exactly
                          1 is correct; 0 is a leak; 2 is a double-close.
@@ -333,12 +357,14 @@ class _CapabilityInjector:
         self.site = site
         self.exc_factory = exc_factory
         self.hits = 0
+        self.unlink_hits = 0
         self.walk_calls = 0
         self.parent_fd = None
         self.parent_closes = 0
         self._real_open = os.open
         self._real_replace = os.replace
         self._real_close = os.close
+        self._real_unlink = os.unlink
 
     def open(self, path, flags, mode=0o777, *, dir_fd=None, **kw):
         is_walk = dir_fd is not None and path == ".."
@@ -362,10 +388,19 @@ class _CapabilityInjector:
         return fd
 
     def replace(self, src, dst, **kw):
-        if self.site == 4:
+        # Site 5 raises here too, as the PRECONDITION that reaches the cleanup
+        # arm -- the ContainmentError this produces is the one site 5 asserts
+        # survives, so it is scaffolding rather than the subject.
+        if self.site in (4, 5):
             self.hits += 1
             raise self.exc_factory()
         return self._real_replace(src, dst, **kw)
+
+    def unlink(self, path, *, dir_fd=None, **kw):
+        if self.site == 5:
+            self.unlink_hits += 1
+            raise self.exc_factory()
+        return self._real_unlink(path, dir_fd=dir_fd, **kw)
 
     def close(self, fd):
         if self.parent_fd is not None and fd == self.parent_fd:
@@ -376,6 +411,7 @@ class _CapabilityInjector:
         monkeypatch.setattr(os, "open", self.open)
         monkeypatch.setattr(os, "replace", self.replace)
         monkeypatch.setattr(os, "close", self.close)
+        monkeypatch.setattr(os, "unlink", self.unlink)
 
 
 def _unsupported():
@@ -549,6 +585,71 @@ class TestCapabilityBranchInjection:
         )
         assert excinfo.value.errno == 13
         assert injector.hits == 1
+        assert injector.parent_closes == 1, (
+            f"parent fd closed {injector.parent_closes}x -- 1 is correct, "
+            f"0 leaks, 2 is a double-close"
+        )
+        assert target.read_bytes() == before
+        assert _fd_count() == fds_before
+
+    def test_cleanup_unlink_is_swallowed_and_the_original_error_survives(
+        self, tmp_path, monkeypatch, twin
+    ):
+        """SITE 5 -- the SWALLOWED site. Deliberately NOT in the family above.
+
+        The four rows above assert "a ContainmentError with THIS site's own
+        message". Site 5 asserts the opposite shape: NO new exception, and the
+        exception already in flight arrives INTACT. Parametrizing it alongside
+        them would force the shared assertion down to whatever all five satisfy,
+        which means dropping the message check that makes the other four
+        meaningful -- and a row labelled "site 5" inside a family whose
+        docstring says "each site raises a distinct message" would misdescribe
+        what it checks.
+
+        WHY IDENTITY AND NOT TYPE. The cleanup runs while an exception is
+        already propagating, so anything raised there REPLACES it and the
+        handler's bare `raise` never runs. Asserting only that "a
+        ContainmentError arrived" would therefore pass even if the cleanup
+        raised its OWN ContainmentError -- the precise substitution this site
+        exists to forbid, sailing through the test written to forbid it. So the
+        assertion is on the MESSAGE: the rename's message, unchanged.
+
+        ARTIFICIAL, like the rest of this class: `os.unlink` supports `dir_fd`
+        on every platform measured, so nothing here is evidence the capability
+        is missing anywhere real. It proves the SWALLOW, not the branch.
+
+        A STRAY TEMP SURVIVES ON THIS PATH, and that is inherent rather than a
+        defect: the primitive being injected IS the cleanup, so nothing
+        downstream can remove the file. The fix corrects the exception CLASS; it
+        cannot perform a removal the platform cannot perform. Do not "repair"
+        this test by asserting the temp is gone -- that assertion can only be
+        made true by adding a second cleanup path, which is new machinery on a
+        branch that has never executed.
+        """
+        project, target = _nested_project(tmp_path)
+        before = target.read_bytes()
+        fds_before = _fd_count()
+
+        injector = _CapabilityInjector(5, _unsupported)
+        injector.install(monkeypatch)
+        with pytest.raises(twin.ContainmentError) as excinfo:
+            twin._atomic_write_text(target, "NEW PAYLOAD\n", project)
+        monkeypatch.undo()
+
+        # IDENTITY, not type: the rename's message must arrive unaltered.
+        assert str(excinfo.value) == MSG_CAP_RENAME, (
+            "the cleanup substituted its own error for the one it was cleaning "
+            "up after -- a stray temp file must never outrank the reason the "
+            "write was refused"
+        )
+        # NON-VACUITY, both legs: the precondition reached the cleanup arm, and
+        # the site-5 injection itself fired inside it. Without the second the
+        # first would only prove the rename mapping still works.
+        assert injector.hits == 1, "the rename precondition did not fire"
+        assert injector.unlink_hits == 1, (
+            f"the cleanup unlink fired {injector.unlink_hits}x -- the swallow "
+            f"was never exercised"
+        )
         assert injector.parent_closes == 1, (
             f"parent fd closed {injector.parent_closes}x -- 1 is correct, "
             f"0 leaks, 2 is a double-close"

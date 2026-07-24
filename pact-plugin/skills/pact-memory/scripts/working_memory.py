@@ -446,10 +446,25 @@ def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
                     "refusing write: platform lacks directory-descriptor rename"
                 )
         except BaseException:
-            # Never leave a stray temp file behind next to the user's CLAUDE.md.
+            # Remove the temp rather than leave it beside the user's CLAUDE.md.
+            # BEST-EFFORT, not absolute: if the removal itself fails the temp
+            # survives, because nothing downstream of here can remove it. That
+            # is the deliberate trade below -- a stray file is preferable to
+            # losing the reason the write was refused.
             try:
                 os.unlink(tmp_name, dir_fd=parent_fd)
-            except OSError:
+            except (OSError, NotImplementedError):
+                # SWALLOWED, not mapped -- the one capability site handled this
+                # way, and deliberately so. This cleanup runs while an exception
+                # is already in flight; anything raised here REPLACES it, and
+                # the bare `raise` below never runs. The caller would then see
+                # a cleanup failure instead of the containment refusal that
+                # actually stopped the write, so a leftover temp file would
+                # outrank the reason the write was refused. The original
+                # exception wins; best-effort cleanup stays best-effort.
+                # NotImplementedError is named for the same reason as at the
+                # dir_fd sites above: it subclasses RuntimeError, NOT OSError,
+                # so a bare `except OSError` is blind to it.
                 pass
             raise
     finally:
