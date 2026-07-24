@@ -13,6 +13,8 @@ Used by:
 - Test files: test_working_memory.py tests all functions in this module
 """
 
+from __future__ import annotations
+
 import fcntl
 import logging
 import os

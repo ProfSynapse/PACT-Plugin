@@ -15,6 +15,8 @@ slug) because skill scripts can't import from the hooks package (different
 Python package boundary).
 """
 
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path

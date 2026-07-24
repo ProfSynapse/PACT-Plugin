@@ -1,7 +1,8 @@
 """
 Location: pact-plugin/tests/test_py39_annotation_compat.py
-Summary: Static AST guard keeping pact-plugin/hooks/ importable under
-         Python 3.9 (GUI-launched macOS sessions run hooks on
+Summary: Static AST guard keeping the plugin's bare-python3 surfaces
+         importable under Python 3.9 -- hooks/, skills/pact-memory/scripts/
+         and scripts/ (GUI-launched macOS sessions run these on
          /usr/bin/python3 = 3.9.x). Four rules:
          R0 every scanned .py parses at ast feature_version=(3, 9) — a
             best-effort syntax floor per CPython policy: it rejects
@@ -38,10 +39,14 @@ import pytest
 
 PLUGIN_ROOT = Path(__file__).parent.parent
 
-# Extension point: add adjacent bare-python3 surfaces here (one line each),
-# e.g. PLUGIN_ROOT / "skills" / "pact-memory" / "scripts",
-#      PLUGIN_ROOT / "scripts".
-SCANNED_ROOTS: tuple[Path, ...] = (PLUGIN_ROOT / "hooks",)
+# Every bare-python3 surface in the plugin: code a consumer can end up running
+# on /usr/bin/python3 rather than a managed interpreter. Extension point --
+# add further such surfaces here, one line each.
+SCANNED_ROOTS: tuple[Path, ...] = (
+    PLUGIN_ROOT / "hooks",
+    PLUGIN_ROOT / "skills" / "pact-memory" / "scripts",
+    PLUGIN_ROOT / "scripts",
+)
 
 # Integer-flag namespaces: `a.X | a.Y` rooted here is bitwise-OR on int
 # constants, valid on every Python 3.x — never a type union.
@@ -373,15 +378,25 @@ class TestDiscoveryFloor:
     """Discovery must never silently collapse to an empty scan."""
 
     def test_scanned_file_count_floor(self):
-        # If SCANNED_ROOTS resolves empty (directory rename, anchor break),
-        # the per-file parameter sets degrade to a single skip each and the
-        # aggregate rules pass vacuously over zero files — silently green.
-        # Floor rather than exact count so adding hooks never breaks it;
-        # bump the floor as hooks/ grows, never lower it without a
-        # deliberate scope decision. Lowered 63 -> 55 when the dormant
-        # hooks/refresh/ package (8 modules) was removed, dropping the
-        # scanned count 66 -> 58; the floor keeps the same slack of 3.
-        assert len(_SCANNED_FILES) >= 55
+        # If a root in SCANNED_ROOTS resolves empty (directory rename, anchor
+        # break), the per-file parameter sets degrade to a single skip each and
+        # the aggregate rules pass vacuously over those files — silently green.
+        # Floor rather than exact count so adding files never breaks it; bump
+        # the floor as the scanned roots grow, never lower it without a
+        # deliberate scope decision. History: lowered 63 -> 55 when the dormant
+        # hooks/refresh/ package (8 modules) was removed, dropping the scanned
+        # count 66 -> 58; raised 55 -> 71 when skills/pact-memory/scripts and
+        # scripts were added, taking the count 58 -> 74. Both moves keep the
+        # same slack of 3, and that tightness is the point: at the old floor of
+        # 55 the entire skills/pact-memory/scripts root could vanish (74 -> 60)
+        # and this assertion would still pass, so the widened scan would have
+        # been guarded in name only.
+        #
+        # LIMIT, stated rather than implied: a count floor cannot protect a
+        # single-file root. Losing scripts/ takes the count to 73, which no
+        # workable floor distinguishes from normal churn. This test guards
+        # against a LARGE root collapsing, not against every root.
+        assert len(_SCANNED_FILES) >= 71
 
 
 class TestPy39SyntaxFloor:
