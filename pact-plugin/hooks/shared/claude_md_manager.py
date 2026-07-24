@@ -26,8 +26,8 @@ import fcntl  # Unix-only; PACT supports macOS/Linux. No Windows compat shim.
 import os
 import re
 import sys
-import tempfile
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -205,8 +205,8 @@ class ContainmentError(OSError):
 
 
 def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
-    """Replace `target`'s contents with `content` atomically, iff `target` is
-    contained within `project_root` (#1247).
+    """Replace `target`'s contents with `content` atomically, iff the directory
+    the write will bind into is contained within `project_root` (#1247).
 
     `Path.write_text` truncates the file and THEN writes, so a crash, a full
     disk, or a kill between those two steps leaves a TRUNCATED CLAUDE.md. That
@@ -218,34 +218,89 @@ def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
     write. The temp file is created in the TARGET'S OWN DIRECTORY because
     `os.replace` is only atomic within a single filesystem.
 
-    The mode is set on the TEMP file before the rename, so the target is never
-    momentarily visible with the wrong permissions -- unlike a chmod after the
-    write, which leaves exactly such a window on a file holding user content.
+    CONTAINMENT -- WHY THERE IS NO PATH RESOLVER HERE
+    -------------------------------------------------
+    An earlier form of this guard compared `str(target.resolve())` against the
+    resolved root. `resolve()` follows every component INCLUDING the leaf; the
+    write follows only the PARENT chain and then binds the leaf as a directory
+    entry. Those are two independent traversals of two different path
+    expressions, and on a two-leg symlink topology they name different
+    directories -- so the guard certified a path the write never touched.
 
-    #1247 CONTAINMENT: before creating the temp, refuse (fail-CLOSED) unless the
-    RESOLVED target is inside the RESOLVED `project_root`. `project_root` MUST be
-    the trusted base the target's OWN resolver used (never a re-derivation) -- a
-    symlinked-parent `.claude` (F1) perturbs `target.resolve()` but not the
-    base's, so the escape is caught. `commonpath` (not `Path.is_relative_to`,
-    3.9+ vs the repo's 3.7 floor; not `str.startswith`, which wrongly allows the
-    sibling-prefix `/abc` vs `/ab`). Any resolution/commonpath error fails closed.
+    The general defect is that `Path.resolve()` and `os.path.realpath` are
+    SECOND implementations of path resolution, running in userspace, which the
+    write does not use. A predicate built on one is sound exactly while the two
+    agree, and the disagreement set (symlink loops, absent components) is
+    discovered, never bounded. So this function asks the kernel instead:
+
+      anchor  = (st_dev, st_ino) of os.stat(project_root)
+      node    = the directory the write will bind into, held OPEN
+      walk up via ".." comparing (st_dev, st_ino) until the anchor matches
+      (CONTAINED) or a directory is its own parent (filesystem root, REFUSE)
+
+    and then performs temp-create, fchmod, fsync, rename and cleanup THROUGH
+    that same descriptor. The object CHECKED is the object MUTATED, by
+    construction rather than by agreement. Consequences that fall out rather
+    than being bolted on: version-invariant (no `Path.resolve()` exists here, so
+    its 3.9-3.12 vs 3.13+ RuntimeError split is unreachable, not caught);
+    strict (an absent parent raises instead of being lexically completed);
+    immune to case-folding, Unicode normalisation form and trailing separators,
+    because nothing is compared as text; and sibling-prefix (`/abc` under
+    `/ab`) is refused structurally, since `/abc` never walks up to `/ab`'s
+    inode.
+
+    The parent is opened FOLLOWING symlinks -- see the inline note. Mounts
+    beneath the project are ALLOWED: `..` from a mount root yields the mount
+    POINT's parent, so the walk crosses one transparently, and the write still
+    lands inside the anchor's subtree.
+
+    THE LEAF IS NEVER CONSULTED, AND THAT COUPLES THIS TO THE WRITE SHAPE
+    --------------------------------------------------------------------
+    Containment is entirely a property of the parent chain, because the parent
+    chain is the only part the kernel traverses on the way to the write. A leaf
+    symlink pointing OUTSIDE the root is therefore ALLOWED, and that is the
+    correct verdict, not a concession: `os.replace` is renameat(2), which
+    unlinks whatever entry sits at the final name and binds the temp file's
+    inode there. It never opens the leaf and never follows it, so the payload
+    lands at the in-project entry and any outside victim is left byte-intact.
+
+    That ALLOW is sound ONLY while the write replaces the leaf ENTRY rather
+    than writing THROUGH it. Two rewrites would silently convert every such
+    ALLOW into a real escape, with this predicate untouched: (1) resolving the
+    target once and using it downstream -- proposed as a cheap way to make the
+    check and the act agree, which it does, on the WRONG side, by making the
+    write follow the leaf; (2) replacing temp-plus-rename with an open/truncate
+    on the target. MEASURED, so the guarantee is stated at its real strength:
+    with either rewrite spliced in, `TestR6InProjectRedirectResidualDocumented`
+    turns RED on its victim-untouched assertion, so the in-project half of this
+    coupling IS pinned by an executing test today. The out-of-project half is
+    pinned separately, and could not be pinned at all before this predicate,
+    because the earlier one refused that topology outright.
 
     Callers must already hold `file_lock` for the target. The lock closes the
-    concurrent-writer window; this closes the crash/truncation window; the
-    containment check runs inside the lock by construction (callers hold it),
-    preserving the TOCTOU defense the replaced leaf `is_symlink` guards had.
+    concurrent-writer window; this closes the crash/truncation window.
 
-    Requires write permission on the target's DIRECTORY (to create the temp),
-    where a bare `write_text` needed only permission on the file itself. A
-    read-only directory holding a writable CLAUDE.md would now fail the write
-    rather than truncate it -- a safe direction, but a real behaviour change.
+    Requires read+execute on the target's directory and write permission on it
+    (to create the temp), where a bare `write_text` needed only permission on
+    the file itself. A read-only directory holding a writable CLAUDE.md fails
+    the write rather than truncating it -- a safe direction, but a real
+    behaviour change.
+
+    SCOPE LIMIT, stated because the natural summary of this change overclaims:
+    `file_lock` runs BEFORE this function at every call site and does its own
+    unprotected `target_file.resolve()`. Removing `Path.resolve()` from this
+    guard makes the GUARD version-invariant; it does NOT make the write path
+    version-invariant end-to-end, and a symlink loop still raises upstream.
 
     NOTE: a deliberate duplicate of `_atomic_write_text` in
     `skills/pact-memory/scripts/working_memory.py`, which cannot import from
     `hooks/shared/` (separate package). This twin IS drift-gated by
     TestAtomicWriteTwinCopyDrift (mirroring TestFileLockTwinCopyDrift): the
     containment CHECK is a security invariant that must not silently diverge
-    between the hook and skill copies (#1118-class hazard).
+    between the hook and skill copies (#1118-class hazard). That gate compares
+    only THIS function's body, which is why the check is inlined here rather
+    than extracted -- a named helper would have to be twinned too, and would
+    sit outside every drift gate in the repo.
 
     Args:
         target: Path to replace. Its parent directory must already exist.
@@ -253,52 +308,142 @@ def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
         project_root: The trusted base directory `target` must be contained in.
 
     Raises:
-        ContainmentError: `target` resolves outside `project_root`.
+        ContainmentError: the write's parent directory is not the project root
+            or a descendant of it; or the boundary could not be established at
+            all. Fail-CLOSED in every case, with a distinct message per cause.
     """
-    # #1247 containment guard, fail-CLOSED, BEFORE creating the temp file.
+    # #1247 CONTAINMENT, fail-CLOSED, BEFORE anything is created: kernel object
+    # ancestry on a pinned directory descriptor. No Path.resolve(), no
+    # os.path.realpath, no string comparison takes part in this decision.
     try:
-        resolved_target = str(target.resolve())
-        resolved_root = str(project_root.resolve())
-        contained = (
-            os.path.commonpath([resolved_root, resolved_target]) == resolved_root
-        )
-    except (ValueError, OSError):
-        contained = False
-    if not contained:
+        anchor_stat = os.stat(str(project_root))
+        anchor_key = (anchor_stat.st_dev, anchor_stat.st_ino)
+        # FOLLOWS symlinks, deliberately: this is exactly how the kernel will
+        # traverse the parent chain for the write. O_NOFOLLOW here would refuse
+        # any symlinked final component of the parent path -- including a benign
+        # in-project `.claude` -> `<project>/config/claude`, which the pre-#1247
+        # code allowed -- a NEW over-block on an axis that is not containment.
+        # It would also add nothing: the ancestry test below runs ON this
+        # descriptor, so there is no check-then-open gap for it to close.
+        parent_fd = os.open(str(target.parent), os.O_RDONLY | os.O_DIRECTORY)
+    except (OSError, NotImplementedError):
+        # An absent parent, a parent that is not a directory, a symlink loop
+        # (ELOOP), and an unsupported-primitive failure all land here. Bare
+        # RuntimeError is deliberately NOT caught: it is unreachable, because no
+        # Path.resolve() call exists in this function, and catching it would
+        # imply one still did and invite one back. NotImplementedError is named
+        # explicitly -- it is a RuntimeError SUBCLASS, and it is Python's
+        # documented signal for an unsupported dir_fd argument.
         raise ContainmentError(
-            "refusing write: target escapes the project containment boundary"
+            "refusing write: cannot establish the containment boundary"
         )
 
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp"
-    )
+    walked = []
     try:
-        # os.fdopen takes ownership of fd only on success; if it raises, the
-        # raw fd mkstemp opened would leak (the outer cleanup unlinks the temp
-        # FILE but cannot close a descriptor it never received a handle for).
-        try:
-            handle = os.fdopen(fd, "w", encoding="utf-8")
-        except BaseException:
-            os.close(fd)
-            raise
-        with handle:
-            handle.write(content)
-            handle.flush()
-            # Without the fsync the rename can be persisted while the data
-            # behind it is not, which reintroduces the empty-file failure this
-            # function exists to prevent.
-            os.fsync(handle.fileno())
-        # mkstemp already creates 0o600; setting it explicitly keeps the mode a
-        # property of this function rather than of the stdlib's default.
-        os.chmod(tmp_name, 0o600)
-        os.replace(tmp_name, target)
+        # 1024 is an INLINE LITERAL rather than a module constant because a
+        # constant would sit outside the region the twin drift gate compares
+        # (only this function's body) and could diverge between the twins
+        # silently. It is a LIVENESS backstop, not a policy ceiling: a POSIX
+        # path is PATH_MAX-bounded and every component costs at least two bytes
+        # including its separator, so no reachable path carries this many
+        # components. Reaching it means the filesystem is misreporting "..",
+        # not that the path is legitimately deep -- which is why exhaustion
+        # raises its own message below instead of the escape one. Normal
+        # operation terminates at the filesystem root and never arrives here.
+        contained = False
+        node = parent_fd
+        for _ in range(1024):
+            node_stat = os.fstat(node)
+            if (node_stat.st_dev, node_stat.st_ino) == anchor_key:
+                contained = True
+                break
+            up = os.open("..", os.O_RDONLY | os.O_DIRECTORY, dir_fd=node)
+            walked.append(up)
+            up_stat = os.fstat(up)
+            if (up_stat.st_dev, up_stat.st_ino) == (
+                node_stat.st_dev,
+                node_stat.st_ino,
+            ):
+                # A directory that is its own parent is the filesystem root:
+                # the walk is over and the anchor was never reached.
+                break
+            node = up
+        else:
+            raise ContainmentError(
+                "refusing write: containment walk did not terminate"
+            )
+        if not contained:
+            raise ContainmentError(
+                "refusing write: target escapes the project containment boundary"
+            )
     except BaseException:
-        # Never leave a stray temp file behind next to the user's CLAUDE.md.
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
+        os.close(parent_fd)
         raise
+    finally:
+        for extra in walked:
+            os.close(extra)
+
+    try:
+        tmp_name = f".{target.name}.{uuid.uuid4().hex}.tmp"
+        try:
+            fd = os.open(
+                tmp_name,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+                dir_fd=parent_fd,
+            )
+        except NotImplementedError:
+            raise ContainmentError(
+                "refusing write: platform lacks directory-descriptor file creation"
+            )
+        try:
+            # os.fdopen takes ownership of fd only on success; if it raises, the
+            # raw fd would leak (the cleanup below unlinks the temp FILE but
+            # cannot close a descriptor it never received a handle for).
+            try:
+                handle = os.fdopen(fd, "w", encoding="utf-8")
+            except BaseException:
+                os.close(fd)
+                raise
+            with handle:
+                handle.write(content)
+                handle.flush()
+                # fchmod on the OPEN HANDLE, never os.chmod by name: a chmod by
+                # name after the close would reintroduce the name-based race
+                # this descriptor design exists to remove. It is NOT guarding
+                # against over-permissiveness -- umask can only CLEAR bits, so
+                # os.open(..., 0o600) cannot yield anything more permissive than
+                # 0o600. Its actual effect is the opposite: it RESTORES an
+                # owner-write bit a restrictive umask removed (measured: with
+                # the open mode alone, umask 0o277 leaves 0o400). The property
+                # is DETERMINISM -- the mode belongs to this function rather
+                # than to the caller's umask. It precedes the fsync so the mode
+                # change is part of what that fsync flushes.
+                os.fchmod(handle.fileno(), 0o600)
+                # Without the fsync the rename can be persisted while the data
+                # behind it is not, which reintroduces the empty-file failure
+                # this function exists to prevent.
+                os.fsync(handle.fileno())
+            try:
+                os.replace(
+                    tmp_name,
+                    target.name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+            except NotImplementedError:
+                raise ContainmentError(
+                    "refusing write: platform lacks directory-descriptor rename"
+                )
+        except BaseException:
+            # Never leave a stray temp file behind next to the user's CLAUDE.md.
+            try:
+                os.unlink(tmp_name, dir_fd=parent_fd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(parent_fd)
 
 
 def _strip_legacy_lines(content: str) -> str:
@@ -633,8 +778,10 @@ def ensure_dot_claude_parent(path: Path) -> None:
     a regular file (e.g., a local attacker deliberately blocking mkdir
     by creating a file where `.claude/` should be). Without this guard
     the code path would fall through to the subsequent `_atomic_write_text`
-    call and surface a less-clear OSError from `tempfile.mkstemp`, which
-    needs the parent to be a writable directory.
+    call, whose `os.open(parent, O_DIRECTORY)` fails on a non-directory
+    parent and reports it as a ContainmentError -- accurate as a fail-closed
+    refusal, but it names the containment boundary rather than the blocking
+    file, so the clearer error belongs here.
 
     Args:
         path: The target CLAUDE.md path (e.g. /proj/.claude/CLAUDE.md).

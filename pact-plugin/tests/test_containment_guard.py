@@ -410,22 +410,43 @@ class TestSite5StripOrphanGlobalAnchor:
 # ---------------------------------------------------------------------------
 
 class TestR6InProjectRedirectResidualDocumented:
-    """DOCUMENTED negative test for the R6 residual — do NOT 'fix' this back.
+    """DOCUMENTED negative test for the R6 residual -- do NOT 'fix' this back.
 
-    Containment ALLOWS an in-project leaf-symlink redirect (it is contained).
-    That is the DELIBERATE #1247 behavior change: the old leaf `is_symlink` ban
-    refused ALL symlinks, an over-block on benign in-project symlinks; containment
-    refuses only ESCAPES. It is SAFE because `os.replace` REPLACES the leaf entry
-    rather than writing THROUGH it, so a crafted in-project redirect cannot
-    overwrite its pointed-to file — it clobbers the attacker's own symlink.
+    Containment ALLOWS a leaf-symlink redirect. The leaf is never consulted at
+    all: containment is decided entirely on the PARENT chain, because the parent
+    chain is the only part the kernel traverses on the way to the write. The old
+    leaf `is_symlink` ban refused ALL symlinks, an over-block on benign ones.
 
-    The residual fd-relative TOCTOU (a symlink swapped between `resolve()` and the
-    write) is security-engineer-signed-off as BELOW the good-faith threat floor
-    and deferred to a FUTURE FD-relative-atomic-write follow-up (open+verify the
-    parent-dir fd, then O_NOFOLLOW + renameat). It is OUT OF #1247 SCOPE. Re-adding
-    an `is_symlink` ban to 'close' it would re-introduce the cardinal over-block
-    #1247 removed. This test pins the current, intended behavior so a future
-    reader does not regress it.
+    It is SAFE because `os.replace` is renameat(2), which REPLACES the leaf entry
+    rather than writing THROUGH it: it unlinks whatever entry sits at the final
+    name and binds the temp file's inode there, never opening or following the
+    leaf. So a crafted redirect cannot overwrite its pointed-to file -- it
+    clobbers the attacker's own symlink.
+
+    THIS TEST IS A COUPLING TRIPWIRE, and that is its real job. The ALLOW above
+    is sound only while the write replaces the leaf ENTRY. Two rewrites would
+    silently turn it into a real escape with the predicate untouched: resolving
+    the target once and using it downstream (which makes check and act agree by
+    making the WRITE follow the leaf), or replacing temp-plus-rename with an
+    open/truncate on the target. MEASURED: with either rewrite spliced in, the
+    victim-untouched assertion below turns RED. Do NOT 'fix' a failure here by
+    making the guard refuse the topology -- that would re-introduce the cardinal
+    over-block #1247 removed. A failure here means the WRITE SHAPE changed.
+
+    SUPERSEDED PRESCRIPTION, recorded because it appeared in three places and its
+    available reading was harmful: earlier notes sketched the follow-up as
+    "open+verify the parent-dir fd, then O_NOFOLLOW + renameat". The pinned form
+    has since landed, and it does NOT use O_NOFOLLOW anywhere. O_NOFOLLOW on the
+    parent open would refuse any symlinked final component of the parent path,
+    including a benign in-project `.claude` -> `<project>/config/claude` that
+    both the old and the current code allow -- a NEW over-block on an axis that
+    is not containment. It would also add nothing: the ancestry test runs ON the
+    opened descriptor, so there is no check-then-open gap for it to close.
+
+    The fd-relative TOCTOU that was signed off as BELOW the good-faith threat
+    floor and deferred is now closed as a side effect, since the check and the
+    write share one pinned parent descriptor. That closure was a bonus of the
+    pinned form, never its justification.
     """
 
     def test_in_project_redirect_allowed_and_os_replace_does_not_write_through(self, tmp_path):
