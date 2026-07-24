@@ -3,10 +3,14 @@ containment guard.
 
 The guard is inlined at the top of the `_atomic_write_text` twin
 (hooks/shared/claude_md_manager.py + skills/pact-memory/scripts/working_memory.py):
-it refuses a write unless the RESOLVED target is contained within the RESOLVED
-`project_root` (os.path.commonpath, fail-CLOSED). Correctness hinges on ANCHOR
-IDENTITY — each of the 7 write callers passes its OWN pre-resolve base, never a
-re-derived root.
+it refuses a write unless the directory the write will BIND INTO is contained
+within `project_root`, decided by KERNEL OBJECT ANCESTRY on a pinned directory
+descriptor — no `Path.resolve()`, no `os.path.realpath`, no string comparison
+takes part (#1247). Correctness hinges on ANCHOR IDENTITY — each of the 7 write
+callers passes its OWN pre-resolve base, never a re-derived root.
+
+The per-obligation certification of that predicate lives in the sibling file
+test_containment_certification.py; this file is the cross-SITE sweep.
 
 The seed tests (test_staleness.py) cover site 1 (staleness) via a LEAF symlink.
 This file WIDENS to the actual F1 vector — a symlinked-PARENT `.claude` — driven
@@ -281,7 +285,8 @@ class TestSites89DisplayOverBlockAnchorIdentity:
         monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 
         # Swap the base to the MAIN repo root (the wrong anchor). The worktree
-        # target is NOT under main -> commonpath != main -> ContainmentError.
+        # target's parent chain never walks up to main's inode -> the ancestry
+        # walk reaches the filesystem root without matching -> ContainmentError.
         def _wrong_base():
             return (target, main)
         monkeypatch.setattr(wm, "_resolve_display_claude_md_with_base", _wrong_base)
@@ -488,12 +493,22 @@ class TestR6InProjectRedirectResidualDocumented:
 
 
 # ---------------------------------------------------------------------------
-# Predicate discriminator — sibling-prefix mounted layout (commonpath, not
-# str.startswith). `/abc` is NOT within `/ab`, but startswith would allow it.
+# Predicate discriminator — sibling-prefix mounted layout. `/abc` is NOT within
+# `/ab`, and the refusal is now STRUCTURAL rather than a property of a chosen
+# string primitive.
 # ---------------------------------------------------------------------------
 
 class TestSiblingPrefixMountedLayout:
-    def test_sibling_prefix_refused_commonpath_not_startswith(self, tmp_path):
+    def test_sibling_prefix_refused_structurally(self, tmp_path):
+        """RATIONALE UPDATED FOR THE CORRECTED PREDICATE (#1247).
+
+        This case used to be explained by the choice of `os.path.commonpath`
+        over `str.startswith`. That primitive has left the write path
+        entirely, so the old rationale named a mechanism that no longer
+        exists. The refusal now has nothing to do with text: `/abc` simply
+        never walks up to `/ab`'s inode. The string-prefix trap the old
+        wording guarded against cannot even be expressed in this predicate.
+        """
         from shared.claude_md_manager import _atomic_write_text, ContainmentError
 
         anchor = tmp_path / "ab"
@@ -503,16 +518,20 @@ class TestSiblingPrefixMountedLayout:
         target = sibling / "CLAUDE.md"
         target.write_text("orig\n", encoding="utf-8")
 
-        # commonpath([/ab, /abc/CLAUDE.md]) == /  != /ab  -> REFUSE.
-        # str(target).startswith(str(anchor)) would WRONGLY allow it.
+        # The ancestry walk from /abc reaches the filesystem root without ever
+        # matching /ab's (st_dev, st_ino) -> REFUSE.
         with pytest.raises(ContainmentError):
             _atomic_write_text(target, "new\n", anchor)
         assert target.read_text(encoding="utf-8") == "orig\n"
 
     def test_benign_prefix_symlink_on_base_allowed(self, tmp_path):
-        """A benign symlinked mount on the base (the /tmp->/private/tmp class)
-        canonicalizes identically on both sides -> contained -> ALLOWED. Proves
-        containment is resolved-vs-resolved (raw-vs-resolved would false-refuse)."""
+        """A benign symlinked alias of the anchor (the /tmp->/private/tmp
+        class) -> contained -> ALLOWED.
+
+        `os.stat` on the alias FOLLOWS it, so the anchor key is the real
+        directory's (st_dev, st_ino) and the walk matches it. The alias and the
+        real directory are one kernel object, so there is no spelling for the
+        predicate to disagree about."""
         from shared.claude_md_manager import _atomic_write_text
 
         real_root = tmp_path / "real"

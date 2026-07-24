@@ -1504,10 +1504,19 @@ class TestAtomicWriteTwinCopyDrift:
     def test_atomic_write_text_bodies_are_identical(self):
         """The _atomic_write_text body MUST be byte-identical across the twins.
 
-        The body carries the #1247 containment check (commonpath, fail-closed);
-        a divergence would let the hook and skill write paths enforce different
-        containment, silently defeating the guard on one side. Compares logic
-        only -- docstrings are allowed to differ.
+        The body carries the #1247 containment check (kernel object ancestry on
+        a pinned directory descriptor, fail-closed); a divergence would let the
+        hook and skill write paths enforce different containment, silently
+        defeating the guard on one side. Compares logic only -- docstrings are
+        allowed to differ.
+
+        THIS GATE PROVES BYTE-IDENTITY, NOT THAT EITHER COPY IS EXERCISED. It
+        goes red whenever the bodies diverge for ANY reason, including a
+        deliberate single-twin experiment -- so a red here is not by itself
+        evidence of a behavioural regression, and counting it as one inflates
+        the apparent coverage of whichever twin was left untouched. The
+        behavioural coverage of each copy lives in
+        test_containment_certification.py, which drives both independently.
         """
         from shared.claude_md_manager import _atomic_write_text as canonical
         from working_memory import _atomic_write_text as twin
