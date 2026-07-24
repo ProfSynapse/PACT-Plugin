@@ -386,8 +386,10 @@ class TestDiscoveryFloor:
         # deliberate scope decision. History: lowered 63 -> 55 when the dormant
         # hooks/refresh/ package (8 modules) was removed, dropping the scanned
         # count 66 -> 58; raised 55 -> 71 when skills/pact-memory/scripts and
-        # scripts were added, taking the count 58 -> 74. Both moves keep the
-        # same slack of 3, and that tightness is the point: at the old floor of
+        # scripts were added, taking the count 59 -> 74 (hooks/ had gained one
+        # file since the 58 above, so measure the count -- do not carry a
+        # figure forward from this history). Both moves keep the same slack of
+        # 3, and that tightness is the point: at the old floor of
         # 55 the entire skills/pact-memory/scripts root could vanish (74 -> 60)
         # and this assertion would still pass, so the widened scan would have
         # been guarded in name only.
