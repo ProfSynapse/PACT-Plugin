@@ -328,6 +328,10 @@ class TestProjectDirDivergenceResidual:
         sidecar_b = path_b.parent / f".{path_b.name}.lock"
         assert sidecar_a != sidecar_b, (
             "Different caller roots → different sidecars → no shared lock. The "
-            "lock serializes only when all writers resolve the SAME root; the "
-            "divergence path is unprotected by design (note-not-guard)."
+            "lock serializes only when all writers resolve the SAME root; ROOT "
+            "divergence is unprotected by design (note-not-guard). That is a "
+            "DIFFERENT residual from the LEAF divergence the sidecar formula "
+            "fixes -- a lock keyed on the resolved leaf changed identity when "
+            "the write replaced that leaf. Do not read this note as blessing "
+            "that one: it was a defect and it is closed."
         )

@@ -111,12 +111,23 @@ def file_lock(target_file: Path):
     would alter this body and trip the drift test; the OS-level non-re-entrancy
     plus the callers' fail-open already bound the worst case).
     """
-    # Resolve the WHOLE target, not just its parent: fcntl.flock serialises on
-    # the sidecar's inode, so two spellings of one file must produce one sidecar
-    # name. Resolving only the parent still keys a symlinked FILE by its alias
-    # (two names, one inode -> two sidecars -> no mutual exclusion).
-    resolved_target = target_file.resolve()
-    lock_path = resolved_target.parent / f".{resolved_target.name}.lock"
+    # Key the sidecar on the DIRECTORY THE WRITE BINDS INTO plus the LITERAL
+    # leaf name, so lock identity and write identity are the same thing and
+    # cannot diverge when the write replaces the leaf entry.
+    # The PARENT is resolved so two spellings of one directory produce one
+    # sidecar, and therefore one lock. The LEAF is deliberately NOT resolved:
+    # os.replace is renameat(2) and binds the final component as a directory
+    # ENTRY without following it, so resolving the leaf would key the lock on a
+    # path the write never touches -- and would make the key CHANGE across the
+    # write, which is a lock whose identity is a function of the state it is
+    # supposed to protect. Mirrors the write's own os.open(target.parent) +
+    # target.name; see the write-shape dependency noted in _atomic_write_text.
+    # NOT provided, deliberately: two NAMES for one INODE do not collapse onto
+    # one sidecar. A hardlink pair is exactly that and never collapsed under
+    # any spelling of this formula, because resolve() canonicalises symlinks
+    # and not inodes -- the justification this comment replaced claimed
+    # otherwise and was wrong about its own code.
+    lock_path = target_file.parent.resolve() / f".{target_file.name}.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     # 0o600: the lock file is adjacent to user-private CLAUDE.md content;
     # match the same permissions to avoid leaving a world-readable sidecar.
@@ -209,6 +220,17 @@ def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
 
     CONTAINMENT -- WHY THERE IS NO PATH RESOLVER HERE
     -------------------------------------------------
+
+    PRECONDITION. This guard eliminates one class outright and narrows another.
+    The class eliminated is disagreement between two path resolutions: only
+    one traversal happens here and its result is held OPEN, so no second
+    resolution exists to disagree with it. What is narrowed is time. The walk
+    establishes ancestry AT THE INSTANT OF THE WALK, and a descriptor pins
+    IDENTITY, not POSITION -- so containment holds provided the directory the
+    write binds into does not change position relative to the anchor between
+    the walk and the rename. Only the chain from that directory up to the
+    anchor matters; relocating anything off it is irrelevant.
+
     An earlier form of this guard compared `str(target.resolve())` against the
     resolved root. `resolve()` follows every component INCLUDING the leaf; the
     write follows only the PARENT chain and then binds the leaf as a directory
