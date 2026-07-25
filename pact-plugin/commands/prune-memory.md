@@ -43,7 +43,7 @@ The CLI emits a JSON payload with `evictable_pins`:
     {"index": 0, "heading": "First Pin", "chars": 40, "stale": false, "override": false,
      "age_days": 60, "overdue": true},
     {"index": 1, "heading": "Second Pin", "chars": 30, "stale": true, "override": false,
-     "age_days": null, "overdue": false},
+     "age_days": null, "overdue": null},
     ...
   ]
 }
