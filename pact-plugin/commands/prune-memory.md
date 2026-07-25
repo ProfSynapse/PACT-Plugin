@@ -153,10 +153,15 @@ writes the pin block to pact-memory, re-fetches it by the returned `memory_id`,
 and confirms the block is present byte-for-byte:
 
 ```json
-{"outcome": "ARCHIVED", "memory_id": "<32-hex>", "heading": "...", "chars": 412, "contained": true}
-{"outcome": "NOT_ARCHIVED", "memory_id": "<32-hex>|null", "reason": "<why>", "heading": "..."}
-{"outcome": "UNEVALUABLE", "reason": "<why>", "heading": "...|null"}
+{"outcome": "ARCHIVED", "memory_id": "<32-hex>", "heading": "...", "claude_md_path": "/abs/path/CLAUDE.md", "chars": 412, "contained": true}
+{"outcome": "NOT_ARCHIVED", "memory_id": "<32-hex>|null", "reason": "<why>", "heading": "...", "claude_md_path": "/abs/path/CLAUDE.md"}
+{"outcome": "UNEVALUABLE", "reason": "<why>", "heading": "...|null", "claude_md_path": "/abs/path/CLAUDE.md|null"}
 ```
+
+`outcome`, `heading` and `claude_md_path` are present in **every** verdict.
+`claude_md_path` names the file this run actually read and is null only when
+resolution itself failed — which is also the case where there is nothing to
+edit, so a null path is a refusal, never a prompt to guess.
 
 **Check the returned `heading` against the pin the curator chose in Step 2.**
 `--index N` is a position in `evictable_pins`, and the script re-resolves that
@@ -213,13 +218,58 @@ the `UNEVALUABLE` escape hatch was explicitly acknowledged.** If neither holds,
 this step does not run — go back and report the refusal. Do not remove a pin
 you cannot show is somewhere else.
 
-Read the current CLAUDE.md. Locate the pin block for the selected
-`{heading}`:
+Read the CLAUDE.md at **`claude_md_path`, the absolute path the Step 3 verdict
+reports** — not "the project's CLAUDE.md". That field names the file the
+archival run actually read, and editing anything else breaks the one link that
+makes the verdict mean something about the file you are about to change.
 
-- The date comment immediately preceding `### {heading}` (if any).
-- The `### {heading}` line itself.
-- The body up to (but not including) the next `### ` heading OR the
-  end of the `## Pinned Context` section.
+The two are not reliably the same file. Resolution falls back through
+`CLAUDE_PROJECT_DIR`, then the git common dir's parent, then the working
+directory, so the file that gets read is not always the one the invocation
+seems to name. **If `claude_md_path` is not the project you expected, STOP and
+report it; do not edit.**
+
+The script refuses one case for you and cannot refuse the other. A fall-through
+that lands **outside** the starting directory's repository is refused outright —
+that verdict arrives as `UNEVALUABLE` with a reason naming both the directory
+and the file it would otherwise have used. A fall-through **within the same
+repository is allowed**, deliberately: PACT's own worktrees have no CLAUDE.md
+of their own, so every normal invocation depends on reaching the main
+checkout's file. That residual is the one you have to catch by reading
+`claude_md_path` — which is the whole reason this step names it.
+
+Step 3's heading cross-check cannot save you here. Step 1 uses the *same*
+resolver, so both agree on the same wrong file and the headings match — it
+detects an index shift *within* one file and is structurally blind to a
+wrong-*file* resolution. A cross-check only catches disagreement between two
+things that can disagree, and these two cannot.
+
+Locate the pin block for the selected `{heading}`. **The block runs from this
+pin's own span start to the NEXT pin's span start** — where a span starts at
+its date-comment line if it has one, and at its `### ` heading otherwise:
+
+- Start: the date comment immediately preceding `### {heading}` (if any),
+  from that line's first character; otherwise the `### {heading}` line.
+- End: the **next pin's date comment line** — NOT the next `### ` heading —
+  or the end of the `## Pinned Context` section for the last pin.
+
+**Ending at the next `### ` heading is wrong and destroys content.** A span
+begins at the date comment, which sits *above* the heading, so a block that
+runs to the next heading swallows the following pin's entire date comment —
+including any `pin-size-override` rationale, which this command elsewhere
+calls load-bearing verbatim content. Measured on a three-pin fixture: the
+correct rule removes 50 characters, the next-heading rule removes 153, and
+the extra 103 are the surviving neighbour's date comment. That neighbour
+silently loses its override flag and its pinned date. **Those bytes belong to
+a pin that was never selected and were never archived, so nothing holds a
+copy** — the precise loss this command exists to prevent, on the default path,
+since every pin carries a date comment.
+
+Computing both edges by the same span rule makes the blocks partition the
+section instead of overlapping. This is the identical boundary
+`archive_pin.py` uses to build the block it archives, and the two must agree:
+if the destroy rule is wider than the archive rule, the difference is by
+definition content that was destroyed without being stored.
 
 Use the `Edit` tool to remove the full block, preserving surrounding
 blank lines (one blank line between remaining pins). The `pin_caps_gate`
@@ -306,6 +356,25 @@ inside it — a curator's reason containing an apostrophe or a backtick passes
 through verbatim instead of closing the quote and aborting the write under
 `set -e`. Construct JSON-valid string content (escape `\"`, `\\`, and control
 characters).
+
+The success event is emitted at Step 5, once the removal Edit has landed:
+
+```bash
+set -e
+trap 'rc=$?; echo "[JOURNAL WRITE FAILED] prune-memory.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/shared/session_journal.py" write \
+  --type pin_pruned --session-dir '{session_dir}' --stdin <<'JSON'
+{"heading": "First Pin", "memory_id": "0f3a9c1d7e2b48f6a5c04d8e1b7f2a93", "pin_count": 12}
+JSON
+```
+
+Two things in that payload are deliberate and are the ones most likely to be
+"corrected" by a later editor. There is **no `outcome` field** — only required
+fields are validated, so an extra one would land in the audit trail looking
+authoritative while guaranteed by nothing. And `pin_count` is **12, the count
+BEFORE the removal**, matching the skip event above so both carry the same
+referent; the post-eviction count is derivable, since this command never evicts
+more than one pin per invocation.
 
 ## Notes
 
