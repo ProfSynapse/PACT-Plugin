@@ -463,6 +463,45 @@ class TestPruneMemoryProseContract:
                 f"prune-memory.md missing evictable_pins field {field!r}"
             )
 
+    def test_json_example_honors_the_three_state_age_contract(self, prune_md):
+        """The RULE and the EXAMPLE are two independent claims and can
+        disagree — this pins the example, because the example is the one
+        that gets copied.
+
+        prune-memory.md states that `age_days: null` is a third state and
+        is NOT `overdue: false`; `check_pin_caps.py` emits
+        `None if age_days is None else ...`, so the pairing the example
+        showed is one the code never produces. Found by `coder-prose`, and
+        verified by OBSERVATION rather than by reading the ternary: a
+        `--status` run over a CLAUDE.md with one dated and one undated pin
+        returned `age_days=2397, overdue=True` and `age_days=None,
+        overdue=None`. The dated pin is the positive control — an all-null
+        result would have meant a broken harness rather than a finding.
+
+        WHY THE EXAMPLE AND NOT THE RULE. The failure mode is a curator
+        COPYING the example, so the misleading artifact is the example
+        itself; adjacent prose is more likely to be skimmed than a JSON
+        block is to be mis-transcribed. A curator reasoning from
+        `overdue: false` treats an undated pin as not-overdue, silently
+        exempting the pin most likely to have sat longest — which is the
+        failure the third state exists to prevent.
+        """
+        pairs = re.findall(
+            r'"age_days":\s*(null|\d+),\s*"overdue":\s*(null|true|false)',
+            prune_md,
+        )
+        assert pairs, (
+            "no age_days/overdue pair found in prune-memory.md's JSON "
+            "example — this guard cannot check an example it cannot locate"
+        )
+        for age, overdue in pairs:
+            if age == "null":
+                assert overdue == "null", (
+                    f'example pairs "age_days": null with "overdue": '
+                    f"{overdue} — the code emits null; an unknown age is "
+                    "not the same as not-overdue"
+                )
+
     def test_declares_pagination_rule(self, prune_md):
         """Pagination (3-per-page + Show more, last page + Cancel) must
         survive as a grammar-observable contract."""
