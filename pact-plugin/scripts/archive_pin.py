@@ -27,15 +27,27 @@ Usage:
   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/archive_pin.py" --index N
   python3 archive_pin.py --index 0 --db-path /tmp/test.db   # tests only
 
-Output (stdout, JSON, ALWAYS exit 0). `outcome` and `heading` are present
-in every verdict; `heading` is null only when the pin could not be resolved
-at all, and is NEVER derived from the requested index:
+Output (stdout, JSON, ALWAYS exit 0). `outcome`, `heading` and
+`claude_md_path` are present in EVERY verdict. `heading` is null only when the
+pin could not be resolved at all and is NEVER derived from the requested
+index; `claude_md_path` is null only when resolution itself failed:
 
-  {"outcome": "ARCHIVED",     "heading": str, "memory_id": str,
-   "chars": int, "contained": true}
-  {"outcome": "NOT_ARCHIVED", "heading": str, "memory_id": str|null,
-   "reason": str}
-  {"outcome": "UNEVALUABLE",  "heading": str|null, "reason": str}
+  {"outcome": "ARCHIVED",     "heading": str, "claude_md_path": str,
+   "memory_id": str, "chars": int, "contained": true}
+  {"outcome": "NOT_ARCHIVED", "heading": str, "claude_md_path": str,
+   "memory_id": str|null, "reason": str}
+  {"outcome": "UNEVALUABLE",  "heading": str|null,
+   "claude_md_path": str|null, "reason": str}
+
+`claude_md_path` names the file THIS RUN ACTUALLY READ. It exists because
+resolution can succeed on the WRONG file: the order is CLAUDE_PROJECT_DIR ->
+git common-dir parent -> CWD, and a miss at any step falls through silently,
+so a CLAUDE_PROJECT_DIR naming a directory with no CLAUDE.md resolves to some
+other project's file and reports a confident success. The command's heading
+cross-check cannot catch it -- check_pin_caps.py uses the SAME resolver, so
+the listing and the archival agree on the same wrong file. Emitting the path
+is what makes a wrong file visible; `resolve_claude_md` additionally REFUSES
+the cross-project case outright.
 
 Anything but ARCHIVED means the command REFUSES the eviction. NOT_ARCHIVED
 and UNEVALUABLE are kept distinct because collapsing "cannot tell" into
@@ -140,6 +152,18 @@ parse_pins = _pin_caps.parse_pins
 _PIN_HEADING_RE = _pin_caps._PIN_HEADING_RE
 _parse_pinned_section = _staleness._parse_pinned_section
 get_project_claude_md_path = _staleness.get_project_claude_md_path
+# The (path, base) form. `base` is the directory the resolver ACTUALLY found
+# the file under, captured before descending into `.claude` -- a trusted
+# pre-resolve anchor rather than a re-derivation from the returned path.
+_resolve_project_claude_md_with_base = (
+    _staleness._resolve_project_claude_md_with_base
+)
+_find_existing_claude_md = _staleness._find_existing_claude_md
+# Lexical inverse of the resolver's base/CLAUDE.md construction. Purely
+# lexical (pathlib .parent never follows symlinks), and already locked to
+# the resolver's own shape by TestStalenessLexicalBaseParity -- so it is
+# the right primitive for project attribution, not a second derivation.
+_lexical_base_of = _staleness._lexical_base_of
 
 
 class _Unevaluable(Exception):
@@ -149,10 +173,15 @@ class _Unevaluable(Exception):
     for the cases where the pin WAS resolved before the failure occurred.
     """
 
-    def __init__(self, reason: str, heading: str | None = None):
+    def __init__(self, reason: str, heading: str | None = None,
+                 claude_md_path: str | None = None):
         super().__init__(reason)
         self.reason = reason
         self.heading = heading
+        # The file this run read, when one was resolved before the failure.
+        # None only when resolution itself failed -- there is genuinely no
+        # path to name, and inventing one would be worse than null.
+        self.claude_md_path = claude_md_path
 
 
 def _span_start(pinned_content: str, heading_start: int, date_comment) -> int:
@@ -194,8 +223,12 @@ def extract_pin_block(pinned_content: str, index: int, pins) -> str:
     CONSTRUCTION, so the containment test measures the only thing it ever
     could: whether the storage round-trip preserved the bytes.
 
-    Span rule, per the spec:
-      - `end`   = the next `### ` heading start, or end of section for the last pin.
+    Span rule:
+      - `end`   = the NEXT PIN'S SPAN START (its date-comment line, else its
+                  heading), or end of section for the last pin. NOT the next
+                  `### ` heading -- see the boundary note below; an earlier
+                  revision of this docstring said heading-start and a reader
+                  acted on it, which is why the rule is stated once, here.
       - `start` = walk backward from the heading start over blank lines; if the
                   first non-blank preceding line matches the date-comment
                   pattern, `start` is the offset of THAT LINE'S FIRST CHARACTER
@@ -244,6 +277,95 @@ def extract_pin_block(pinned_content: str, index: int, pins) -> str:
         block_end = len(pinned_content)
 
     return pinned_content[block_start:block_end]
+
+
+def _same_repository(env_dir: Path, base: Path) -> bool:
+    """True when `base` is the main repo of the git checkout at `env_dir`.
+
+    The discriminator between a LEGITIMATE fall-through and a wrong-project
+    one. PACT's own primary workflow sets CLAUDE_PROJECT_DIR to a WORKTREE,
+    where CLAUDE.md is gitignored and therefore absent; the resolver's
+    git-common-dir step then finds the MAIN repo's file, which is the correct
+    and intended answer. A blanket "env dir has no CLAUDE.md -> refuse" rule
+    would break that flow on every invocation -- a cardinal over-block.
+    Measured: this worktree has no CLAUDE.md and the main checkout does.
+
+    So the question is not "did we fall through" but "did we fall through to
+    somewhere that is still the same project". `--git-common-dir` answers it:
+    every worktree of a repo shares one common dir, so its parent is the main
+    root for both the worktree and the main checkout.
+
+    Fail-safe: any git error, timeout, or non-repo directory returns False,
+    which routes to a REFUSAL. On a destructive path declining to guess is the
+    safe direction -- refusing costs a recoverable UNEVALUABLE, while guessing
+    wrong archives and evicts from a project nobody named.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(env_dir), "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+    if result.returncode != 0 or not result.stdout.strip():
+        return False
+    common_dir = Path(result.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = Path(env_dir) / common_dir
+    try:
+        return common_dir.resolve().parent == Path(base).resolve()
+    except OSError:
+        return False
+
+
+def resolve_claude_md():
+    """Resolve the CLAUDE.md to operate on, refusing a cross-project fallback.
+
+    Returns (path, base). RAISES `_Unevaluable` rather than silently operating
+    on a file the invocation never named.
+
+    THE DEFECT THIS CLOSES. Resolution order is CLAUDE_PROJECT_DIR -> git
+    common-dir parent -> CWD, and a miss at any step falls through SILENTLY.
+    So CLAUDE_PROJECT_DIR naming a directory with no CLAUDE.md does not fail --
+    it resolves to a DIFFERENT project's file and reports a confident success.
+    Reproduced deliberately: with the env var naming project_b and the CWD in
+    project_a, the resolver returns project_a's CLAUDE.md.
+
+    Step 3's heading cross-check cannot see this. `check_pin_caps.py` uses the
+    SAME resolver, so the listing step and the archival step agree on the same
+    wrong file and every heading matches. That check catches an index shift
+    WITHIN a file; nothing catches a wrong FILE.
+
+    THE REFUSAL IS NARROW BY CONSTRUCTION. It fires only when
+    CLAUDE_PROJECT_DIR is explicitly set, names a directory with no CLAUDE.md,
+    AND the resolver landed outside that directory's own repository. The
+    worktree fall-through -- the case PACT itself depends on -- stays inside
+    the same repository and is allowed through.
+    """
+    # Resolve through `get_project_claude_md_path` -- the seam the rest of the
+    # suite already patches -- and derive the base LEXICALLY from the result,
+    # rather than taking the with-base form directly. Same answer in
+    # production (the with-base call is what this wraps), but it keeps one
+    # resolution seam for the whole codebase instead of introducing a second
+    # that fixtures would have to know about separately.
+    env_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    path = get_project_claude_md_path()
+    if path is None:
+        raise _Unevaluable("CLAUDE.md not found")
+    base = _lexical_base_of(path)
+
+    if env_dir:
+        env_path = Path(env_dir)
+        if (_find_existing_claude_md(env_path) is None
+                and not _same_repository(env_path, base)):
+            raise _Unevaluable(
+                f"CLAUDE_PROJECT_DIR={env_dir} contains no CLAUDE.md, and "
+                f"resolution fell through to {path} in a different project. "
+                f"Refusing rather than archiving a pin the invocation never "
+                f"named. Set CLAUDE_PROJECT_DIR to the project that owns the "
+                f"pin, or unset it to resolve from the working directory."
+            )
+    return path, base
 
 
 def project_dir_for(claude_md: Path) -> Path:
@@ -422,28 +544,37 @@ def archive_pin(index: int, db_path=None) -> dict:
     Raises:
         _Unevaluable: whenever the pin's state cannot be established.
     """
-    claude_md = get_project_claude_md_path()
-    if claude_md is None:
-        raise _Unevaluable("CLAUDE.md not found")
+    # Refuses a cross-project fall-through rather than silently operating on
+    # a file the invocation never named. `resolved_base` is the resolver's own
+    # trusted anchor, used for the archive's project attribution instead of
+    # re-deriving it from the leaf path (which followed symlinks).
+    claude_md, resolved_base = resolve_claude_md()
+    # Every verdict from here on names the file actually read, so a wrong-file
+    # resolution is visible rather than silent.
+    claude_md_path = str(claude_md)
 
     try:
         content = claude_md.read_text(encoding="utf-8")
     except (IOError, OSError, UnicodeDecodeError) as exc:
-        raise _Unevaluable(f"CLAUDE.md unreadable ({type(exc).__name__})")
+        raise _Unevaluable(f"CLAUDE.md unreadable ({type(exc).__name__})",
+                           claude_md_path=claude_md_path)
 
     parsed = _parse_pinned_section(content)
     if parsed is None:
-        raise _Unevaluable("no Pinned Context section")
+        raise _Unevaluable("no Pinned Context section",
+                           claude_md_path=claude_md_path)
 
     _, _, pinned_content = parsed
     try:
         pins = parse_pins(pinned_content)
     except Exception as exc:  # noqa: BLE001 -- parse fault is unevaluable
-        raise _Unevaluable(f"pin parse failed ({type(exc).__name__})")
+        raise _Unevaluable(f"pin parse failed ({type(exc).__name__})",
+                           claude_md_path=claude_md_path)
 
     if index < 0 or index >= len(pins):
         raise _Unevaluable(
-            f"pin index {index} out of range ({len(pins)} pins parsed)"
+            f"pin index {index} out of range ({len(pins)} pins parsed)",
+            claude_md_path=claude_md_path,
         )
 
     pin = pins[index]
@@ -456,7 +587,8 @@ def archive_pin(index: int, db_path=None) -> dict:
 
     block = extract_pin_block(pinned_content, index, pins)
     if not block.strip():
-        raise _Unevaluable("pin block is empty", heading=heading)
+        raise _Unevaluable("pin block is empty", heading=heading,
+                           claude_md_path=claude_md_path)
 
     # Source-side tripwire. The slice makes this true BY CONSTRUCTION, so it
     # costs nothing in the normal case -- it exists to fail loudly if the
@@ -465,14 +597,14 @@ def archive_pin(index: int, db_path=None) -> dict:
     if block not in content:
         raise _Unevaluable(
             "extracted block is not verbatim in CLAUDE.md (extractor bug)",
-            heading=heading,
+            heading=heading, claude_md_path=claude_md_path,
         )
 
     # --- conjunct 1: save returned a memory_id -----------------------------
     # Passed on STDIN rather than argv: the record embeds arbitrary curator
     # text, and an argv-borne payload would be bounded by ARG_MAX and would
     # surface the pin body in the process table.
-    project_dir = project_dir_for(claude_md)
+    project_dir = resolved_base
     payload = json.dumps(_build_record(block, heading))
     # STANDALONE: always `save` (create), never `update` (fold). See
     # _build_record -- a fold runs no marker code and is invisible to an
@@ -489,6 +621,7 @@ def archive_pin(index: int, db_path=None) -> dict:
         return {
             "outcome": "NOT_ARCHIVED",
             "heading": heading,
+            "claude_md_path": claude_md_path,
             "memory_id": None,
             "reason": f"save returned no memory_id -- {_classify_cli_error(stderr)}",
         }
@@ -505,7 +638,7 @@ def archive_pin(index: int, db_path=None) -> dict:
         raise _Unevaluable(
             f"saved as {memory_id} but re-fetch failed -- "
             f"{_classify_cli_error(stderr)}",
-            heading=heading,
+            heading=heading, claude_md_path=claude_md_path,
         )
 
     # --- conjunct 3: the pin block is present AT THE DESTINATION -----------
@@ -523,6 +656,7 @@ def archive_pin(index: int, db_path=None) -> dict:
         return {
             "outcome": "NOT_ARCHIVED",
             "heading": heading,
+            "claude_md_path": claude_md_path,
             "memory_id": memory_id,
             "reason": (
                 "saved record does not contain the pin block verbatim "
@@ -533,6 +667,7 @@ def archive_pin(index: int, db_path=None) -> dict:
     return {
         "outcome": "ARCHIVED",
         "heading": heading,
+        "claude_md_path": claude_md_path,
         "memory_id": memory_id,
         "chars": len(block),
         "contained": True,
@@ -553,12 +688,14 @@ def build_verdict(index: int, db_path=None) -> dict:
         return {
             "outcome": "UNEVALUABLE",
             "heading": exc.heading,
+            "claude_md_path": exc.claude_md_path,
             "reason": exc.reason,
         }
     except Exception as exc:  # noqa: BLE001 -- never crash the curator's flow
         return {
             "outcome": "UNEVALUABLE",
             "heading": None,
+            "claude_md_path": None,
             "reason": f"internal error: {type(exc).__name__}",
         }
 
