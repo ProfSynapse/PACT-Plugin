@@ -485,6 +485,23 @@ class TestPruneMemoryCommand_Grammar:
     # non-expanding set and `<<\EOF` -- which bash does NOT expand -- is
     # flagged. Three independently-authored predicates each carried
     # exactly one of these defects; this is the intersection.
+    #
+    # KNOWN RESIDUAL, deliberately not fixed: arithmetic left-shift inside
+    # `$(( ))` is flagged as an expanding heredoc -- `x=$((1<<3))` and
+    # `x=$((a<<b))` both match. It is an OVER-BLOCK, so it surfaces as a red
+    # test a human investigates rather than as a hole something slips
+    # through, and it is currently unreachable: this file contains no
+    # arithmetic. TWO FIXES WERE TRIED AND REJECTED, recorded so neither is
+    # re-attempted:
+    #   (?<![<0-9])  fixes `1<<3` but NOT `a<<b` -- half the case for real
+    #                added complexity.
+    #   excluding a preceding identifier character fixes both and BREAKS a
+    #                valid heredoc: `cat<<EOF` with no space is legal bash
+    #                (measured), so a letter may legitimately precede `<<`.
+    # A documented over-block on a construct that cannot currently occur is
+    # a better resting place than a more complex pattern with its own
+    # untested edges. This guard has already been wrong three times from
+    # exactly that instinct.
     _DELIM_RE = re.compile(r"(?<!<)<<-?[ \t]*(?!<)(.)")
     _NON_EXPANDING_LEAD = ("'", '"', "\\")
 
@@ -504,6 +521,10 @@ class TestPruneMemoryCommand_Grammar:
         ("<< EOF", True), ("<< 'EOF'", False), ('<< "EOF"', False),
         ("<<   EOF", True), ("<<-  'EOF'", False), ("<<-\t'EOF'", False),
         ("<<\\EOF", False), ("<<$VAR", True),
+        # Backslash-escaped delimiters, added because they LOOK unquoted at a
+        # glance and are the forms most likely to be got wrong by a future
+        # edit. All three measured non-expanding.
+        ("<< \\EOF", False), ("<<-  \\EOF", False), ("<<-\\EOF", False),
     ]
 
     def test_expanding_heredoc_predicate_matches_bash(self):
@@ -543,7 +564,7 @@ class TestPruneMemoryCommand_Grammar:
             "<<EOF", "<<-EOF", "<< EOF", "<<   EOF", "<<$VAR",      # expanding
             "<<'EOF'", '<<"EOF"', "<<-'EOF'", '<<-"EOF"',           # quoted
             "<< 'EOF'", '<< "EOF"', "<<-  'EOF'", "<<-\t'EOF'",     # quoted + space/tab
-            "<<\\EOF",                                              # escaped
+            "<<\\EOF", "<< \\EOF", "<<-  \\EOF", "<<-\\EOF",         # escaped
         })
         missing = required - {form for form, _ in self._HEREDOC_FORMS}
         assert not missing, (
