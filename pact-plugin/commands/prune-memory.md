@@ -153,7 +153,8 @@ writes the pin block to pact-memory, re-fetches it by the returned `memory_id`,
 and confirms the block is present byte-for-byte:
 
 ```json
-{"outcome": "ARCHIVED", "memory_id": "<32-hex>", "heading": "...", "claude_md_path": "/abs/path/CLAUDE.md", "chars": 412, "contained": true}
+{"outcome": "ARCHIVED", "memory_id": "<32-hex>", "heading": "...", "claude_md_path": "/abs/path/CLAUDE.md", "chars": 412, "contained": true, "occurrences": 1}
+{"outcome": "ARCHIVED_DELETE_UNSAFE", "memory_id": "<32-hex>", "heading": "...", "claude_md_path": "/abs/path/CLAUDE.md", "occurrences": 2, "locations": [1043, 2871], "reason": "<why>"}
 {"outcome": "NOT_ARCHIVED", "memory_id": "<32-hex>|null", "reason": "<why>", "heading": "...", "claude_md_path": "/abs/path/CLAUDE.md"}
 {"outcome": "UNEVALUABLE", "reason": "<why>", "heading": "...|null", "claude_md_path": "/abs/path/CLAUDE.md|null"}
 ```
@@ -178,13 +179,41 @@ index against itself and pass unconditionally. It is `null` only on
 pinned section, index out of range). **Read `null` as unresolvable and take the
 escape hatch below — never as a mismatch**; there is no heading to disagree with.
 
-Then act on the verdict — only one of the three permits removal:
+Then act on the verdict. **Only `ARCHIVED` permits the removal Edit** — the
+name determines the disposition, so no row needs a footnote to be actionable:
 
 | Verdict | Meaning | Action |
 |---|---|---|
 | `ARCHIVED` | the pin's bytes are provably in long-term memory | proceed to Step 4 |
+| `ARCHIVED_DELETE_UNSAFE` | the archive **succeeded**; only the automatic removal is unsafe | do NOT Edit; hand the curator `memory_id`, `occurrences` and `locations` for manual removal; emit `delete_unsafe`; stop |
 | `NOT_ARCHIVED` | the archive definitively failed | **refuse**; report `reason`; emit `archive_refused`; stop |
 | `UNEVALUABLE` | could not tell — CLI absent, crash, timeout, unreadable file | **refuse**; report `reason`; offer the escape hatch below |
+
+#### `ARCHIVED_DELETE_UNSAFE` — a redirect, not a refusal
+
+**The archive worked.** The pin's content is in long-term memory and the
+verdict carries the `memory_id` that proves it. What failed is only the
+automatic removal: the emitted handle did not occur exactly once in the file,
+so an `Edit` keyed on it would match the wrong text or none at all.
+
+So the command does not remove the pin, and tells the curator plainly: *your
+content is safe under this `memory_id`; the block was found `occurrences`
+times; remove the pin by hand.* **The curator is not stuck at the cap** — the
+eviction can still be completed manually, and the safety guarantee this command
+exists to provide already held. Say that explicitly; a curator meeting an
+unfamiliar refusal at 12/12 will otherwise read it as a dead end and start
+hand-editing without the memory_id in view.
+
+`locations` are character offsets and are **diagnostic — where to look, never
+what to delete.** An offset computed at verdict time is silently wrong if the
+file changed afterwards, which is the whole reason the removal is keyed on
+content rather than position.
+
+There is **no escape hatch** on this verdict, and that is deliberate rather
+than an omission. The hatch exists for *cannot tell*; this is a known-bad
+precondition for the delete. Offering proceed-anyway would hand the curator an
+ambiguous target to remove by hand, which is worse than declining to remove it
+automatically.
 
 **Do NOT warn-and-proceed on a failed archive.** Elsewhere in PACT a failed
 journal write degrades to a warning because the journal survives independently
@@ -307,13 +336,26 @@ trail is what makes a skipped archive visible at all.
 | `evictable_pins` empty | `pin_prune_skipped` | `no_candidates` |
 | `slot_status` unknown | `pin_prune_skipped` | `unknown_state` |
 | Archive refused (Step 3) | `pin_prune_skipped` | `archive_refused` |
+| Archived but removal unsafe (Step 3) | `pin_prune_skipped` | `delete_unsafe` |
 | Escape-hatch eviction | `pin_prune_skipped` | `unverified_eviction` |
 | Pin archived and removed | `pin_pruned` | — (no `outcome` field) |
 
+`delete_unsafe` is a **distinct value and must not be folded into
+`archive_refused`.** That value means the archive definitively failed, and a run
+of them is the signal that the archival mechanism itself is broken. On this exit
+the archive SUCCEEDED, so reusing it would make a run of successful archives
+read as a failing archiver — poisoning the one diagnostic that row exists for.
+
 `pin_prune_skipped` carries `outcome`, `pin_count` at the time of the skip, and
 `age_distribution` (oldest / newest / median `age_days`, over pins whose age is
-known). `reason` is optional — a bare Cancel does not elicit one, and emitting a
-field with nothing behind it is a report with no measurement in it.
+known). An **empty `age_distribution` means the measured set was empty** — no
+pins with a known age existed at that moment. It is never a placeholder and
+never means not-applicable: the field is computed identically on every exit and
+is not conditional on the outcome. In particular `no_candidates` means
+`evictable_pins` is empty, which is NOT the same as no pins existing, so where
+dated pins are present the real distribution goes in even though none are
+evictable. `reason` is optional — a bare Cancel does not elicit one, and
+emitting a field with nothing behind it is a report with no measurement in it.
 
 `pin_pruned` carries `heading`, the `memory_id` of the archive, and `pin_count`
 — the count BEFORE the removal, matching `pin_prune_skipped`'s "count at the
@@ -356,6 +398,59 @@ inside it — a curator's reason containing an apostrophe or a backtick passes
 through verbatim instead of closing the quote and aborting the write under
 `set -e`. Construct JSON-valid string content (escape `\"`, `\\`, and control
 characters).
+
+The remaining skip outcomes take the same form; the `set -e` and `trap` lines
+above apply to each and are not repeated. **One emit per fence** — do not
+combine them.
+
+`no_candidates`, where the empty `age_distribution` records that the measured
+set was empty rather than standing in for a value:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/shared/session_journal.py" write \
+  --type pin_prune_skipped --session-dir '{session_dir}' --stdin <<'JSON'
+{"outcome": "no_candidates", "pin_count": 0, "age_distribution": {}}
+JSON
+```
+
+`unknown_state`, where the CLI could not parse CLAUDE.md, so no age is known:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/shared/session_journal.py" write \
+  --type pin_prune_skipped --session-dir '{session_dir}' --stdin <<'JSON'
+{"outcome": "unknown_state", "pin_count": 12, "age_distribution": {}, "reason": "Pin slots: unknown (CLAUDE.md unparseable)"}
+JSON
+```
+
+`archive_refused`, where the archive definitively failed and the pin survives:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/shared/session_journal.py" write \
+  --type pin_prune_skipped --session-dir '{session_dir}' --stdin <<'JSON'
+{"outcome": "archive_refused", "pin_count": 12, "age_distribution": {"oldest": 60, "newest": 3, "median": 33}, "reason": "memory CLI timed out"}
+JSON
+```
+
+`delete_unsafe`, where the archive SUCCEEDED and only the automatic removal was
+declined — note it still carries a `reason`, because unlike a bare Cancel this
+exit always has one:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/shared/session_journal.py" write \
+  --type pin_prune_skipped --session-dir '{session_dir}' --stdin <<'JSON'
+{"outcome": "delete_unsafe", "pin_count": 12, "age_distribution": {"oldest": 60, "newest": 3, "median": 33}, "reason": "block occurs 2 times; removal would be ambiguous"}
+JSON
+```
+
+`unverified_eviction` is emitted on the escape-hatch path, where the pin was
+removed without a verified archive:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/shared/session_journal.py" write \
+  --type pin_prune_skipped --session-dir '{session_dir}' --stdin <<'JSON'
+{"outcome": "unverified_eviction", "pin_count": 12, "age_distribution": {"oldest": 60, "newest": 3, "median": 33}, "reason": "curator acknowledged the pin block was captured elsewhere"}
+JSON
+```
 
 The success event is emitted at Step 5, once the removal Edit has landed:
 
