@@ -524,23 +524,34 @@ class TestPruneMemoryCommand_Grammar:
         from the regex -- deriving it would make this test agree with the
         implementation by construction and assert nothing.
         """
-        # A REQUIRED-SET, not `len(...) == 14`. A count conflates deletion
-        # with addition and fails BOTH ways: swap `<<-EOF` for `<<~EOF` and
-        # the count holds at 14 while a load-bearing expanding form silently
-        # loses coverage, and a legitimate 15th form fails a guard that
-        # should not care. Naming the forms whose coverage is load-bearing
-        # -- every form bash EXPANDS, plus the quoted/escaped controls --
-        # makes deletion fail regardless of what was added alongside it.
-        required = {
-            "<<EOF", "<<-EOF", "<< EOF", "<<   EOF",      # expanding
-            "<<'EOF'", '<<"EOF"', "<<\\EOF",              # non-expanding controls
-        }
+        # A REQUIRED-SET over EVERY form, not a count and not a subset.
+        # Measured against five mutations; only this shape gets all five
+        # right (count: 2 wrong, 7-form subset: 1, count+subset: 1):
+        #   delete a listed row      -> caught (a count catches this too)
+        #   SWAP one form for another-> caught; A COUNT PASSES IT at 14
+        #                               while a form silently loses coverage
+        #   add a legitimate 15th    -> ALLOWED; a count wrongly fails it
+        #   empty table              -> caught
+        # A count conflates deletion with addition; a subset cannot see the
+        # deletion of a row outside it. Enumerating every form makes the
+        # table's contents the contract and leaves it free to grow.
+        #
+        # This literal is deliberately NOT derived from _HEREDOC_FORMS.
+        # `{f for f, _ in TABLE} - {f for f, _ in TABLE}` is empty by
+        # construction -- a self-referential guard that can never fail.
+        required = frozenset({
+            "<<EOF", "<<-EOF", "<< EOF", "<<   EOF", "<<$VAR",      # expanding
+            "<<'EOF'", '<<"EOF"', "<<-'EOF'", '<<-"EOF"',           # quoted
+            "<< 'EOF'", '<< "EOF"', "<<-  'EOF'", "<<-\t'EOF'",     # quoted + space/tab
+            "<<\\EOF",                                              # escaped
+        })
         missing = required - {form for form, _ in self._HEREDOC_FORMS}
         assert not missing, (
-            f"heredoc form table lost coverage of: {sorted(missing)}. These "
-            "forms are load-bearing -- each expanding one was a real hole in "
-            "a shipped revision of this guard, and each control pins a form "
-            "an earlier revision wrongly banned."
+            f"heredoc form table lost coverage of: {sorted(missing)}. Every "
+            "expanding form listed was a real hole in a shipped revision of "
+            "this guard, and every quoted/escaped form pins one that a "
+            "revision wrongly banned. Adding forms is free; removing one "
+            "means re-deriving why it stopped mattering."
         )
         for form, expands in self._HEREDOC_FORMS:
             flagged = bool(self._expanding(f"cat {form}\npayload\nEOF\n"))

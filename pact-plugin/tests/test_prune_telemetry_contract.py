@@ -1,0 +1,194 @@
+"""The prose<->journal-registry seam for /PACT:prune-memory telemetry.
+
+THIS TEST DELIBERATELY SPANS TWO OWNERS, and that is the reason it exists
+rather than an awkwardness to apologise for.
+
+`commands/prune-memory.md` (command prose) EMITS journal events.
+`hooks/shared/session_journal.py` (Python) VALIDATES them. Neither file's
+own test suite can see the other: the suites reading the prose carry no
+`session_journal` import, and the suites exercising the registry never read
+the prose. So the contract between them was correct only BY INSPECTION --
+a rename, a field change or a typo on either side would drift silently,
+with both suites green.
+
+That is the same shape as two defects already found in this feature's CODE
+phase: a contract spanning two agents' file boundaries, invisible from
+inside either scope by construction. A test that belongs to neither owner
+is the only kind that can hold it.
+
+WHAT THIS DOES *NOT* COVER, stated so a later reader does not over-trust it:
+the `outcome` VALUE set (`cancelled` / `no_candidates` / `unknown_state` /
+`archive_refused` / `unverified_eviction`) has NO single source of truth.
+`_REQUIRED_FIELDS_BY_TYPE` types `outcome` as `str`, not as a value set, and
+the writer is not enum-gated -- so `outcome="banana"` validates green today.
+Pinning those five strings HERE would mint a THIRD source of truth (prose,
+this test, and nowhere authoritative) rather than connect two, so it is
+deliberately not done. Tracked as a named residual; the fix is to constrain
+the value set at the registry, which is where a value-set contract belongs.
+"""
+import importlib.util
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+_PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load(name, relpath):
+    spec = importlib.util.spec_from_file_location(name, _PLUGIN_ROOT / relpath)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="module")
+def journal():
+    return _load("session_journal", "hooks/shared/session_journal.py")
+
+
+@pytest.fixture(scope="module")
+def prune_md():
+    return (_PLUGIN_ROOT / "commands" / "prune-memory.md").read_text(
+        encoding="utf-8"
+    )
+
+
+@pytest.fixture(scope="module")
+def pin_event_types(journal):
+    """The registry's pin-related event types, read from the REGISTRY.
+
+    Derived from the Python side rather than from a literal list here, so a
+    newly registered `pin_*` type is picked up automatically and must then
+    justify its absence from the prose.
+    """
+    return {
+        name: fields
+        for name, fields in journal._REQUIRED_FIELDS_BY_TYPE.items()
+        if name.startswith("pin_")
+    }
+
+
+def test_registry_pin_types_are_the_expected_two(pin_event_types):
+    """NON-VACUITY GATE for every test below that iterates this selection.
+
+    A `pin_` prefix typo, a rename, or a registry restructure yields an
+    EMPTY selection -- and an empty selection makes every loop below pass
+    over nothing. That is the vacuous-loop green: a test reporting success
+    while measuring nothing, which is the exact defect this whole feature
+    exists to remove. Asserting the cardinality BEFORE anything iterates is
+    what stops this suite shipping that defect inside the test written to
+    close a seam.
+    """
+    assert set(pin_event_types) == {"pin_prune_skipped", "pin_pruned"}, (
+        f"expected exactly the two pin telemetry types, got "
+        f"{sorted(pin_event_types)}"
+    )
+
+
+def test_every_registered_pin_type_appears_in_the_prose(
+    pin_event_types, prune_md
+):
+    """Driven FROM the registry, which catches drift in BOTH directions.
+
+    Rename the registry key and the new name is absent from the prose ->
+    fails. Rename it in the prose and the registered key is absent -> fails.
+    A prose-driven check would only catch the first.
+    """
+    for event_type in pin_event_types:
+        assert event_type in prune_md, (
+            f"journal type {event_type!r} is registered in "
+            f"_REQUIRED_FIELDS_BY_TYPE but never named in prune-memory.md — "
+            "the emitting prose and the validating schema have drifted"
+        )
+
+
+def test_documented_payload_validates_against_the_shipped_schema(
+    journal, prune_md, pin_event_types
+):
+    """The payload a curator is TOLD to emit must pass the schema that will
+    validate it.
+
+    This is stronger than comparing key names, and it is why the parse here
+    is safe rather than a new drift surface: the prose carries a real
+    heredoc JSON literal, so this extracts a bounded, machine-checkable
+    example rather than parsing freeform prose. If either side drifts, the
+    documented example stops validating.
+    """
+    payloads = re.findall(r"<<'JSON'\n(.*?)\nJSON", prune_md, re.DOTALL)
+    assert payloads, (
+        "no quoted-heredoc JSON payload found in prune-memory.md — this "
+        "test cannot validate an example it cannot locate. Re-aim the "
+        "extraction rather than deleting this line: without it, zero "
+        "payloads would pass as 'all payloads valid'."
+    )
+
+    emitted_types = re.findall(r"--type\s+(\S+)", prune_md)
+    assert emitted_types, "no `--type` invocation found in prune-memory.md"
+
+    for raw, event_type in zip(payloads, emitted_types):
+        assert event_type in pin_event_types, (
+            f"prune-memory.md emits --type {event_type!r}, which is not "
+            "registered in _REQUIRED_FIELDS_BY_TYPE. An unregistered type "
+            "validates VACUOUSLY — the writer is not enum-gated."
+        )
+        event = dict(json.loads(raw), type=event_type, v=1)
+        ok, message = journal._validate_event_schema(event)
+        assert ok, (
+            f"the payload prune-memory.md documents for {event_type!r} does "
+            f"NOT validate against the shipped schema: {message}"
+        )
+
+
+def test_the_validator_rejects_malformed_payloads(journal):
+    """NON-VACUITY CONTROL for the test above.
+
+    A validator that accepted everything would make the documented-payload
+    check pass while measuring nothing. These prove it discriminates, so a
+    green above means the example is genuinely well-formed.
+    """
+    base = {
+        "type": "pin_prune_skipped", "v": 1, "outcome": "cancelled",
+        "pin_count": 12,
+        "age_distribution": {"oldest": 60, "newest": 3, "median": 33},
+    }
+    assert journal._validate_event_schema(base)[0], "control payload must pass"
+
+    for description, mutation in [
+        ("missing required field", {k: v for k, v in base.items()
+                                    if k != "pin_count"}),
+        ("wrong scalar type", dict(base, pin_count="12")),
+        ("bool where int expected", dict(base, pin_count=True)),
+        ("empty required string", dict(base, outcome="")),
+        ("wrong container type", dict(base, age_distribution="oldest=60")),
+    ]:
+        ok, _ = journal._validate_event_schema(mutation)
+        assert not ok, f"validator accepted a malformed payload: {description}"
+
+
+def test_pin_pruned_cannot_be_emitted_for_an_unverified_eviction(journal):
+    """The escape-hatch invariant, enforced STRUCTURALLY rather than by prose.
+
+    An escape-hatch eviction has no `memory_id` — that is what makes it
+    unverified. `pin_pruned` requires a non-empty one, so the success event
+    is unemittable on that path by construction and such an eviction can
+    only be filed under `pin_prune_skipped`. The schema enforces the
+    semantic instead of trusting the prose to, which matters because prose
+    rules failing is this feature's founding premise.
+    """
+    for value in ("", "   ", "\t"):
+        ok, _ = journal._validate_event_schema({
+            "type": "pin_pruned", "v": 1, "heading": "Some Pin",
+            "memory_id": value, "pin_count": 12,
+        })
+        assert not ok, (
+            f"pin_pruned validated with memory_id={value!r} — an eviction "
+            "with no archive record could then be filed as a SUCCESS"
+        )
+
+    ok, _ = journal._validate_event_schema({
+        "type": "pin_pruned", "v": 1, "heading": "Some Pin",
+        "memory_id": "a" * 32, "pin_count": 12,
+    })
+    assert ok, "a well-formed pin_pruned event must still validate"

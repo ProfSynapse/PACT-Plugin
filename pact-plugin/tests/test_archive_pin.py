@@ -235,7 +235,12 @@ class TestExtractPinBlock_Verbatim:
             f"another pin's pinned-date"
         )
         assert block.count("<!-- pinned:") == 1, (
-            "exactly one date comment belongs in a pin's block"
+            "this fixture's pins carry one date comment each, so a second "
+            "one in pin 0's block means it swallowed pin 1's. NOT a general "
+            "invariant: a pin whose body documents the pin format "
+            "legitimately contains two, and that slice is correct. The "
+            "fixture-independent property is the assertion above — a block "
+            "contains its OWN pin's comment and not its successor's."
         )
 
     def test_spans_partition_the_section_without_overlap(self):
