@@ -400,12 +400,28 @@ class TestProjectDirResolution:
         assert resolved != plugin_root
 
 
+@pytest.mark.requires_embedding_backend
 class TestArchivePin_RealCLI:
     """End-to-end against the REAL memory CLI and a temp database.
 
     Without at least one of these, the whole suite would be verifying its
     own stubs. These exercise the actual save/get envelope handling, the
     real embedding backend, and real byte round-tripping.
+
+    DECLARED EXTERNAL DEPENDENCY (marker registered in conftest.py). The
+    `save` path spins the embedding backend, which reads its model from a
+    local cache. Every measurement behind these tests was taken against a
+    WARM cache; cold-cache behaviour is UNMEASURED, and on a cold cache
+    that read becomes a network download. In a container with no network
+    it is not a slower test, it is a DIFFERENT FAILURE.
+
+    The marker does not skip. These run by default, so the dependency
+    cannot be satisfied by quietly not exercising the one path that keeps
+    the suite from verifying its own stubs; a constrained environment
+    deselects with `-m 'not requires_embedding_backend'`, which shows up
+    in the pytest header rather than inside the skip count. The point is
+    that the dependency is now NAMED: if it bites, it presents as a
+    deselected marker or a legible failure, not as unexplained flakiness.
     """
 
     def test_archives_and_verifies_containment(self, claude_md, tmp_path):

@@ -376,13 +376,32 @@ class TestPruneMemoryProseContract:
         rename or removal of a named step still fails.
         """
         headings = re.findall(r"^### Step \d+ — (.+)$", prune_md, re.MULTILINE)
+        assert headings, (
+            "no '### Step N — ' headings found in prune-memory.md — this "
+            "guard cannot verify a sequence it cannot locate. Re-aim the "
+            "pattern rather than deleting this line: an empty match set "
+            "would satisfy every assertion below by vacuity."
+        )
+        # BIJECTION, not `any(required in h for h in headings)`. Matching
+        # each required name against ANY heading lets ONE heading satisfy
+        # TWO requirements, so folding a step into a sibling's title --
+        # "### Step 3 — Archive the selected pin and Report" while renaming
+        # step 5 -- DELETES a step and still passes, with the >= 5 floor met
+        # by whatever filler remains. Measured: `any()` passes that
+        # mutation, this does not. Consuming each match makes "every
+        # required step exists as its OWN heading" the actual assertion,
+        # which is what the docstring above has always claimed.
+        remaining = list(headings)
         for required in ("Read the evictable-pin list", "Ask the curator",
                          "Archive the selected pin", "Remove the selected pin",
                          "Report"):
-            assert any(required in h for h in headings), (
-                f"prune-memory.md missing required step {required!r}; "
-                f"found {headings}"
+            match = next((h for h in remaining if required in h), None)
+            assert match is not None, (
+                f"prune-memory.md missing required step {required!r} as a "
+                f"distinct heading; unconsumed headings: {remaining} "
+                f"(all headings: {headings})"
             )
+            remaining.remove(match)
         assert len(headings) >= 5, (
             f"prune-memory.md should have at least 5 steps, found "
             f"{len(headings)}: {headings}"
