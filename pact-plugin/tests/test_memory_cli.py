@@ -2481,3 +2481,138 @@ class TestCliHelpOutput:
         captured = capsys.readouterr()
         assert "--limit" in captured.out
         assert "query" in captured.out.lower()
+
+
+# ---------------------------------------------------------------------------
+# save(sync_to_claude=...) — the Working Memory projection, made optional
+# ---------------------------------------------------------------------------
+
+
+class TestSaveSyncSuppression:
+    """`save()` gained `sync_to_claude`, completing a half-built symmetry.
+
+    `search()` has carried this parameter all along and the CLI's search path
+    already passes False; `save()` never got it and called the sync
+    unconditionally. That asymmetry is why the pin-archival path could not
+    avoid writing the archived block straight back into the CLAUDE.md it was
+    removing it from — freeing the pin SLOT while leaving the bytes.
+
+    THE DEFAULT DIRECTION IS THE ONE THAT MATTERS HERE. Suppressing the sync
+    for a caller that did not ask is the damaging failure: it presents as a
+    projection quietly not appearing, which nobody notices. So the default
+    path is tested by asserting the sync ACTUALLY FIRES, not merely that the
+    save returned an id.
+    """
+
+    def _spy(self, monkeypatch):
+        calls = []
+        import scripts.memory_api as memory_api
+        monkeypatch.setattr(
+            memory_api, "sync_to_claude_md",
+            lambda *a, **k: calls.append((a, k)),
+        )
+        return calls
+
+    def test_default_still_syncs(self, tmp_path, monkeypatch):
+        """A caller that omits the parameter must be byte-identical to before."""
+        calls = self._spy(monkeypatch)
+        memory = PACTMemory(db_path=tmp_path / "d.db")
+        memory_id = memory.save(make_cli_memory_dict())
+        assert memory_id, "save must still return an id"
+        assert memory.get(memory_id) is not None, (
+            "save must still persist — otherwise the sync assertion below is "
+            "measuring a crash rather than a default"
+        )
+        assert len(calls) == 1, (
+            "the default path MUST still sync; silently suppressing it for "
+            "every existing caller is the damaging direction of this change"
+        )
+
+    def test_explicit_true_syncs(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        memory = PACTMemory(db_path=tmp_path / "d.db")
+        memory.save(make_cli_memory_dict(), sync_to_claude=True)
+        assert len(calls) == 1
+
+    def test_false_suppresses(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        memory = PACTMemory(db_path=tmp_path / "d.db")
+        memory_id = memory.save(make_cli_memory_dict(), sync_to_claude=False)
+        assert memory.get(memory_id) is not None, (
+            "the save must PERSIST — a crashed save also produces zero sync "
+            "calls, and the two are indistinguishable without this assertion"
+        )
+        assert calls == [], "sync_to_claude=False must not project"
+
+    def test_signature_mirrors_search(self):
+        """The parameter exists on both, with the same name and default."""
+        import inspect
+        save_p = inspect.signature(PACTMemory.save).parameters
+        search_p = inspect.signature(PACTMemory.search).parameters
+        assert "sync_to_claude" in save_p
+        assert save_p["sync_to_claude"].default is True
+        assert search_p["sync_to_claude"].default is True
+
+    def test_claude_md_untouched_when_suppressed(self, tmp_path):
+        """End-to-end against the REAL file the autouse fixture seeded.
+
+        Byte-identity rather than a content check: it fails if ANYTHING
+        writes, including a writer nobody has thought of, whereas a check for
+        one specific string only fails for the writer you already suspected.
+        """
+        # The autouse fixture seeds the PREFERRED layout, .claude/CLAUDE.md,
+        # not the legacy sibling — asserted rather than assumed, because a
+        # wrong path here would make every byte comparison below vacuous.
+        claude_md = tmp_path / ".claude" / "CLAUDE.md"
+        assert claude_md.exists(), "isolation fixture must have seeded a file"
+
+        before = claude_md.read_bytes()
+        memory = PACTMemory(db_path=tmp_path / "s.db")
+        memory_id = memory.save(make_cli_memory_dict(), sync_to_claude=False)
+        assert memory.get(memory_id) is not None
+        assert claude_md.read_bytes() == before, (
+            "suppressed save wrote to CLAUDE.md"
+        )
+
+        # CONTROL: the unsuppressed path MUST change the file, or the
+        # assertion above passes for a harness that cannot detect a write.
+        memory.save(make_cli_memory_dict(), sync_to_claude=True)
+        assert claude_md.read_bytes() != before, (
+            "the unsuppressed control did not write — this test cannot "
+            "distinguish suppression from an inert sync"
+        )
+
+
+class TestCliNoSyncFlag:
+    """`--no-sync` on the save subcommand, threading to the parameter."""
+
+    def test_flag_parses_and_defaults_false(self):
+        parser = build_parser()
+        assert parser.parse_args(["save", "{}"]).no_sync is False
+        assert parser.parse_args(["save", "{}", "--no-sync"]).no_sync is True
+
+    def test_flag_threads_to_the_api(self, tmp_path, monkeypatch):
+        seen = {}
+
+        def _capture(self, memory, files=None, include_tracked=True,
+                     sync_to_claude=True):
+            seen["sync_to_claude"] = sync_to_claude
+            return "a" * 32
+
+        monkeypatch.setattr(PACTMemory, "save", _capture)
+        parser = build_parser()
+
+        with pytest.raises(SystemExit):
+            cmd_save(parser.parse_args(
+                ["save", json.dumps(make_cli_memory_dict()), "--no-sync"]
+            ), db_path=str(tmp_path / "x.db"))
+        assert seen["sync_to_claude"] is False
+
+        seen.clear()
+        with pytest.raises(SystemExit):
+            cmd_save(parser.parse_args(
+                ["save", json.dumps(make_cli_memory_dict())]
+            ), db_path=str(tmp_path / "x.db"))
+        assert seen["sync_to_claude"] is True, (
+            "omitting --no-sync must reach the API as True, not as absent"
+        )

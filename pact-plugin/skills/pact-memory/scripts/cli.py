@@ -116,7 +116,16 @@ def cmd_save(args, db_path=None):
 
     memory = PACTMemory(db_path=db_path)
     try:
-        memory_id = memory.save(memory_dict)
+        # Pass the kwarg ONLY when suppressing, so the default call site
+        # stays literally `memory.save(memory_dict)`. That is a stronger form
+        # of "existing callers are unaffected" than relying on the parameter
+        # default: the call is byte-identical, not merely equivalent. The
+        # suite's existing exact-call assertions pin this, and they were
+        # right to -- they caught the weaker version.
+        save_kwargs = {}
+        if getattr(args, "no_sync", False):
+            save_kwargs["sync_to_claude"] = False
+        memory_id = memory.save(memory_dict, **save_kwargs)
     except ValueError as exc:
         _error(
             "ValueError",
@@ -327,6 +336,15 @@ def build_parser():
     save_parser.add_argument("json_data", nargs="?", help="JSON memory object")
     save_parser.add_argument(
         "--stdin", action="store_true", help="Read JSON from stdin"
+    )
+    save_parser.add_argument(
+        "--no-sync",
+        action="store_true",
+        help=(
+            "Do not project this memory into CLAUDE.md's Working Memory. "
+            "Use when the projection would undo the caller's purpose, e.g. "
+            "archiving a pin that is about to be removed from CLAUDE.md."
+        ),
     )
 
     # search
