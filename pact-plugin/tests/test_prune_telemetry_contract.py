@@ -116,18 +116,54 @@ def test_documented_payload_validates_against_the_shipped_schema(
     example rather than parsing freeform prose. If either side drifts, the
     documented example stops validating.
     """
-    payloads = re.findall(r"<<'JSON'\n(.*?)\nJSON", prune_md, re.DOTALL)
-    assert payloads, (
-        "no quoted-heredoc JSON payload found in prune-memory.md — this "
-        "test cannot validate an example it cannot locate. Re-aim the "
-        "extraction rather than deleting this line: without it, zero "
-        "payloads would pass as 'all payloads valid'."
+    # EACH FENCE IS PARSED AS A UNIT — the type and the payload are taken
+    # from the SAME block. This replaces an earlier form that gathered two
+    # flat lists over the document and `zip`ped them, which had three
+    # defects, all silent:
+    #   - a bare `--type` in PROSE joined the type list and SHIFTED the
+    #     pairing, validating a payload against the WRONG schema — and
+    #     passing;
+    #   - `zip` TRUNCATED to the shorter list, so a surplus payload or type
+    #     vanished and the completeness half went vacuous while green;
+    #   - even at equal length the lists could be MIS-ORDERED, which a count
+    #     assertion is blind to by construction.
+    # Pairing within a block removes all three by construction rather than
+    # detecting them. The first was found by `coder-prose` in this test,
+    # which is my own.
+    #
+    # The ordering risk was NOT hypothetical: two emit sites exist, and a
+    # swapped pairing was caught only because the two schemas happen to
+    # differ enough to fail validation. That is the SCHEMAS doing the work,
+    # not this test, and it stops the moment two events share a field shape.
+    blocks = re.findall(r"```bash\n(.*?)```", prune_md, re.DOTALL)
+    assert blocks, (
+        "no ```bash fence found in prune-memory.md — this test cannot "
+        "locate the emit sites it validates. Re-aim rather than deleting: "
+        "an empty scan yields zero pairs, which would pass as "
+        "'all payloads valid'."
     )
 
-    emitted_types = re.findall(r"--type\s+(\S+)", prune_md)
-    assert emitted_types, "no `--type` invocation found in prune-memory.md"
+    pairs = []
+    for block in blocks:
+        types = re.findall(r"--type\s+(\S+)", block)
+        payloads = re.findall(r"<<'JSON'\n(.*?)\nJSON", block, re.DOTALL)
+        if not types and not payloads:
+            continue  # a fence that emits nothing (e.g. a plain CLI call)
+        assert len(types) == 1 and len(payloads) == 1, (
+            f"a bash fence carries {len(types)} `--type` invocation(s) and "
+            f"{len(payloads)} JSON payload(s); each emit fence must carry "
+            "exactly one of each so the pairing is unambiguous. Split the "
+            "fence rather than relaxing this — a fence with two of either "
+            "cannot be paired without reintroducing positional guessing."
+        )
+        pairs.append((types[0], payloads[0]))
 
-    for raw, event_type in zip(payloads, emitted_types):
+    assert pairs, (
+        "no bash fence contains BOTH a `--type` invocation and a JSON "
+        "payload — this test cannot validate an emit it cannot locate."
+    )
+
+    for event_type, raw in pairs:
         assert event_type in pin_event_types, (
             f"prune-memory.md emits --type {event_type!r}, which is not "
             "registered in _REQUIRED_FIELDS_BY_TYPE. An unregistered type "

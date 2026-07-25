@@ -323,6 +323,69 @@ class TestExtractPinBlock_Verbatim:
             f"  expected: {pinned[:nearest]!r}\n  actual:   {alpha!r}"
         )
 
+    def test_delete_to_next_heading_would_destroy_a_RETAINED_pins_date(self):
+        """The archive rule and the next-`### `-heading rule are NOT
+        interchangeable, and the difference is another pin's content.
+
+        WHAT THIS PINS. `extract_pin_block` ends a pin at the NEXT PIN'S
+        SPAN START (its date-comment line). A removal step that instead
+        ran to the next `### ` HEADING would delete a strict SUPERSET —
+        and the excess is the date comment belonging to the pin being
+        RETAINED. Stripping it makes that pin undatable, so `age_days`
+        becomes null, and by the three-state rule it drops out of the
+        overdue ordering permanently. The prune corrupts a pin nobody
+        chose to prune.
+
+        WHY IT IS WORTH A TEST WHEN NO PYTHON RUNS THE REMOVAL. The
+        removal is an LLM-executed Edit driven by prose, so what actually
+        gets deleted is not observable here. This does not attempt to
+        observe it. It pins the thing that IS observable and that makes
+        the prose's wording load-bearing rather than stylistic: that the
+        two candidate boundary rules diverge, and by exactly what. A
+        reader who changes the removal wording meets a measured statement
+        of what the other rule costs.
+
+        HONEST BOUND, so this is not mistaken for coextensivity: this
+        cannot catch the prose stating the wrong rule — that needs a
+        prose-contract guard — and neither can observe the actual delete.
+        Full span equality is only reachable by removing the SECOND
+        DERIVATION: emit the block or its offsets in the verdict so the
+        command has no boundaries to re-derive.
+        """
+        pinned = (
+            "<!-- pinned: 2026-01-01 -->\n"
+            "### Alpha\n"
+            "Alpha's body.\n\n"
+            "<!-- pinned: 2026-02-02 -->\n"
+            "### Beta\n"
+            "Beta's body.\n"
+        )
+        pins = pin_caps.parse_pins(pinned)
+        assert len(pins) == 2, f"fixture must parse as 2 pins, got {len(pins)}"
+        assert pins[1].date_comment, "the RETAINED pin must carry a date comment"
+
+        heading_starts = [
+            m.start() for m in pin_caps._PIN_HEADING_RE.finditer(pinned)
+        ]
+        archived = archive_pin.extract_pin_block(pinned, 0, pins)
+        # The rule a removal step must NOT use.
+        to_next_heading = pinned[pinned.index(archived):heading_starts[1]]
+
+        excess = to_next_heading[len(archived):]
+        assert excess, (
+            "the two boundary rules produced identical spans — this fixture "
+            "no longer discriminates them, so the test is measuring nothing. "
+            "Re-aim it rather than deleting it."
+        )
+        assert pins[1].date_comment in excess, (
+            "expected the excess to be the RETAINED pin's date comment; the "
+            f"rules still differ but not in the way documented. excess={excess!r}"
+        )
+        assert pins[1].date_comment not in archived, (
+            "the archived block already contains the next pin's date comment "
+            "— the span END regressed to the next-heading rule"
+        )
+
     def test_spans_partition_the_section_without_overlap(self):
         """Stronger than the pairwise checks: every pin's span is disjoint
         from every other's, and concatenating them in order reproduces a
