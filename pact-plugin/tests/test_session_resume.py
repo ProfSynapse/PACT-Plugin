@@ -45,6 +45,7 @@ _build_journal_resume() -- truncation boundary:
        81 (truncated to 77+"..."), 120 (well over, truncated)
 """
 
+import datetime as _dt
 import sys
 from pathlib import Path
 
@@ -934,6 +935,65 @@ def _write_journal_events(session_dir, events):
             f.write(_json.dumps(event) + "\n")
 
 
+# ---------------------------------------------------------------------------
+# Frozen clock — for tests whose fixtures carry ABSOLUTE timestamps that
+# production compares against `now`.
+#
+# WHY THIS EXISTS. `check_paused_state` applies a 14-day TTL by computing
+# `(datetime.now(utc) - paused_at).days`, so a fixture pinning an absolute
+# instant tests a DIFFERENT branch every day and eventually crosses the
+# threshold. That is not hypothetical: it fired, and it reddened CI on every
+# PR in the repo until this fixture landed.
+#
+# WHY FREEZE RATHER THAN COMPUTE THE TIMESTAMPS RELATIVE TO NOW. Three
+# reasons, in order of weight:
+#   1. Several of these tests assert on OUTPUT TEXT THAT EMBEDS THE DATE
+#      ("A stale refreshed claim from 2026-07-09 also exists."). Relativising
+#      the fixture would force the expected string to be computed too, so the
+#      test would no longer state what it expects.
+#   2. The fixtures encode INTERLOCKING instants — a paused event, a refresh
+#      event and a consumption record — read against TWO different thresholds
+#      (the 14-day paused TTL and the 48-hour refresh horizon). Re-deriving
+#      them all is arithmetic that, if wrong, leaves the test PASSING on a
+#      different branch than the one it names.
+#   3. Freezing keeps every constant meaning exactly what its author meant. A
+#      future reader cannot tell a re-derived timestamp from a deliberately
+#      chosen one.
+#
+# WHY A SUBCLASS AND NOT A Mock. `session_resume` binds the CLASS via
+# `from datetime import datetime`, so patching that name replaces it for EVERY
+# use in the module — including `datetime.fromisoformat`, which parses each of
+# these timestamps. A Mock would break parsing rather than freeze the clock,
+# and would fail in a way that looks like a production bug.
+# ---------------------------------------------------------------------------
+
+# Chosen so every absolute paused fixture in this module sits 8-9 days old:
+# comfortably INSIDE the 14-day window, but far enough from 0 that lowering
+# the threshold actually flips the branch (a frozen `now` a few hours after
+# the fixtures would keep them fresh under almost any threshold, making the
+# tests insensitive to the very cutoff they exist to pin).
+_FROZEN_NOW = _dt.datetime(2026, 7, 18, 12, 0, 0, tzinfo=_dt.timezone.utc)
+
+
+class _FrozenDatetime(_dt.datetime):
+    """A real `datetime` in every respect except that `now()` is fixed."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return _FROZEN_NOW if tz is not None else _FROZEN_NOW.replace(tzinfo=None)
+
+
+@pytest.fixture
+def frozen_clock(monkeypatch):
+    """Freeze `shared.session_resume`'s clock at `_FROZEN_NOW`.
+
+    Returns the frozen instant so a test can derive an age from it explicitly
+    rather than restating a date.
+    """
+    monkeypatch.setattr("shared.session_resume.datetime", _FrozenDatetime)
+    return _FROZEN_NOW
+
+
 def _refresh_event(ts="2026-07-10T12:00:00Z", **fields):
     """Minimal valid session_refreshed event with optional overrides."""
     event = {
@@ -1182,7 +1242,9 @@ class TestResumeArbitration:
         assert "A stale paused claim from 2026-07-09 also exists." in result
         assert "Paused work detected" not in result
 
-    def test_paused_newer_wins_and_mentions_stale_refreshed(self, tmp_path):
+    def test_paused_newer_wins_and_mentions_stale_refreshed(
+        self, tmp_path, frozen_clock
+    ):
         sd = tmp_path / "s2"
         sd.mkdir()
         _write_journal_events(sd, [
@@ -1460,7 +1522,9 @@ class TestArbitrationHaltSurvival:
         ):
             return check_resume_state(prev_session_dir=str(sd))
 
-    def test_newer_pause_beats_halt_refresh_halt_line_survives(self, tmp_path):
+    def test_newer_pause_beats_halt_refresh_halt_line_survives(
+        self, tmp_path, frozen_clock
+    ):
         sd = tmp_path / "h1"
         sd.mkdir()
         _write_journal_events(sd, [
@@ -1591,9 +1655,62 @@ class TestCheckResumeState:
         assert "refresh_ts=2026-07-10T12:00:00Z" in result
         assert "Do NOT message any pre-refresh teammate name" in result
 
-    def test_paused_only_delegation_intact(self, tmp_path):
+    def test_stale_paused_state_surfaces_stale_branch(self, tmp_path, frozen_clock):
+        """The STALE side of the 14-day TTL, pinned explicitly.
+
+        WHY THIS EXISTS AS A SEPARATE TEST. The threshold previously had
+        coverage on ONE SIDE ONLY at this level: a single test asserted the
+        fresh branch, so when its fixture drifted past the cutoff the suite
+        reported a failure rather than a silent branch change — and nothing
+        anywhere asserted that the stale branch still produced the stale
+        message. One-sided coverage cannot distinguish "the cutoff moved"
+        from "my fixture aged".
+
+        Paired with `test_spent_refresh_falls_back_to_paused`, this straddles
+        the cutoff. The pair is only meaningful if the two sit on OPPOSITE
+        sides, so the check that matters is not that both go red when the
+        threshold is perturbed — two tests on the same side would do that —
+        but that they fail in OPPOSITE DIRECTIONS: inverting the comparison
+        makes this one report the FRESH message and its sibling report the
+        STALE one.
+        """
+        from unittest.mock import patch as mock_patch
+        from shared.session_resume import check_resume_state
+
+        sd = tmp_path / "stale-paused"
+        sd.mkdir()
+        # 17 days before the frozen now — past the 14-day cutoff, and derived
+        # from it rather than restated, so the margin cannot drift apart from
+        # the clock it is measured against.
+        paused_at = frozen_clock - _dt.timedelta(days=17)
+        _write_journal_events(sd, [{
+            "v": 1, "type": "session_paused", "pr_number": 55,
+            "pr_url": "https://github.com/o/r/pull/55", "branch": "feat/old",
+            "worktree_path": "/tmp/wt-old", "consolidation_completed": True,
+            "ts": paused_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }])
+
+        with mock_patch(
+            "shared.session_resume._check_pr_state", return_value="OPEN"
+        ):
+            result = check_resume_state(prev_session_dir=str(sd))
+
+        assert result == (
+            f"Stale paused state from {paused_at.strftime('%Y-%m-%d')} "
+            f"(older than 14 days). PR #55 on feat/old."
+        )
+        # The fresh branch must NOT be taken — this is the assertion that
+        # inverts against the sibling's.
+        assert not result.startswith("Paused work detected")
+
+    def test_paused_only_delegation_intact(self, tmp_path, frozen_clock):
         """The paused leg through the entry point behaves exactly like
-        check_paused_state: same prompt, same PR-gated logic."""
+        check_paused_state: same prompt, same PR-gated logic.
+
+        `frozen_clock` because the fixture pins an absolute instant against
+        the 14-day TTL; unfrozen, this asserts the fresh branch only until
+        the fixture ages out.
+        """
         from unittest.mock import patch as mock_patch
         from shared.session_resume import check_paused_state, check_resume_state
 
@@ -1613,7 +1730,17 @@ class TestCheckResumeState:
         assert via_entry == via_legacy
         assert via_entry.startswith("Paused work detected: PR #88")
 
-    def test_spent_refresh_falls_back_to_paused(self, tmp_path):
+    def test_spent_refresh_falls_back_to_paused(self, tmp_path, frozen_clock):
+        """A spent (consumed) refresh falls back to the FRESH-paused branch.
+
+        Uses `frozen_clock` because the fixture below pins absolute instants
+        against production's 14-day TTL; without it this test silently
+        migrates to the stale branch once the fixture ages past the cutoff.
+        Its stale-branch counterpart is
+        `TestCheckResumeState::test_stale_paused_state_surfaces_stale_branch`
+        — the two straddle the threshold and must fail in OPPOSITE
+        directions, which is what stops the pair from drifting to one side.
+        """
         from unittest.mock import patch as mock_patch
         from shared.session_resume import check_resume_state
 
