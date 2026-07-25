@@ -177,6 +177,81 @@ def test_documented_payload_validates_against_the_shipped_schema(
         )
 
 
+def test_emitted_outcomes_are_declared_in_the_exit_table(prune_md):
+    """Narrow value-set pin for THIS event family only.
+
+    WHY THIS EXISTS NOW WHEN THIS FILE'S OWN DOCSTRING DECLINED IT. The
+    module header states that the `outcome` VALUE set has no SSOT and that
+    pinning the values here would mint a THIRD source of truth. That was
+    the right call when the value set was incidental. A design change made
+    it load-bearing: the registry pins event TYPES, so a new type surfaces
+    as a completeness failure, but NOTHING pins values — so reusing an
+    existing outcome for a new situation passes every test we have.
+
+    The cost is specific rather than cosmetic. `session_journal.py` calls
+    `archive_refused` "the highest-value row — a run of refusals is the
+    signal that the archival mechanism itself is broken." Reusing it for a
+    case where the archive SUCCEEDED poisons the diagnostic that row
+    exists to carry: a run of them reads as a broken archiver while every
+    archive in the run worked. A false positive built into the monitoring
+    channel of the feature whose purpose is a trustworthy audit trail.
+
+    NO THIRD COPY IS MINTED. The exit table in prune-memory.md is treated
+    as the SSOT and this test is only its checker — the values are read
+    from the table, never restated here. That is the same shape as the
+    type bridge above, one level down from type to value.
+
+    WHAT THIS DOES NOT CATCH, stated because the bound is the point:
+      - the TABLE itself declaring a wrong value — it is the source, so
+        this cannot audit it;
+      - SEMANTIC misuse, i.e. a payload correctly using a declared value
+        for the wrong situation. That is the `archive_refused`-for-a-
+        delete-unsafe case, and it is not mechanically decidable here;
+      - runtime rejection. `_validate_event_schema` still accepts any
+        string for `outcome`; general enum-gating of the registry is
+        deliberately a separate cycle. This pins the DOCUMENT, not the
+        writer.
+    """
+    declared = set(
+        re.findall(
+            r"^\|[^|]+\|\s*`pin_prune_skipped`\s*\|\s*`([a-z_]+)`\s*\|",
+            prune_md,
+            re.MULTILINE,
+        )
+    )
+    assert declared, (
+        "no `pin_prune_skipped` rows found in prune-memory.md's exit table "
+        "— this test cannot check emitted values against a declaration it "
+        "cannot locate. Re-aim the extraction rather than deleting this "
+        "line: an empty declared set makes every membership check below "
+        "pass vacuously."
+    )
+
+    blocks = re.findall(r"```bash\n(.*?)```", prune_md, re.DOTALL)
+    emitted = set()
+    for block in blocks:
+        if "--type pin_prune_skipped" not in block:
+            continue
+        for raw in re.findall(r"<<'JSON'\n(.*?)\nJSON", block, re.DOTALL):
+            value = json.loads(raw).get("outcome")
+            if value is not None:
+                emitted.add(value)
+
+    assert emitted, (
+        "no `pin_prune_skipped` payload carrying an `outcome` was found in "
+        "a bash fence — nothing to check against the exit table."
+    )
+
+    undeclared = emitted - declared
+    assert not undeclared, (
+        f"payload(s) emit outcome(s) {sorted(undeclared)} that the exit "
+        f"table does not declare (declared: {sorted(declared)}). An "
+        "undeclared value validates green today — the schema types "
+        "`outcome` as `str` — so this document check is the only thing "
+        "standing between a typo and a poisoned audit trail."
+    )
+
+
 def test_the_validator_rejects_malformed_payloads(journal):
     """NON-VACUITY CONTROL for the test above.
 
