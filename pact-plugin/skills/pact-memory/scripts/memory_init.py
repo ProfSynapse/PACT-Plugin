@@ -19,6 +19,8 @@ Used by:
 Thread-safety: Uses threading.Lock for the session-scoped initialization flag.
 """
 
+from __future__ import annotations
+
 import logging
 import struct
 import subprocess

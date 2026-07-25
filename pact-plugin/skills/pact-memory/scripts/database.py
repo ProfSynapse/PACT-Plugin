@@ -13,6 +13,8 @@ Standard library sqlite3 has enable_load_extension disabled by default.
 Falls back gracefully to keyword-only search when extensions unavailable.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import logging

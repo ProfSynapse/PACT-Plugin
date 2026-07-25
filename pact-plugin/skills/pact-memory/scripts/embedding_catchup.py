@@ -12,6 +12,8 @@ Used by:
 - memory_api.py: May use for manual catch-up operations
 """
 
+from __future__ import annotations
+
 import logging
 import platform
 import struct

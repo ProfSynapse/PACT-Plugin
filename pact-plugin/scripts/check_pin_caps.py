@@ -57,6 +57,8 @@ Used by:
   - Test files: tests/test_check_pin_caps.py (advisory-path coverage)
 """
 
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import json

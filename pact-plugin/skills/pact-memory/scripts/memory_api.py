@@ -17,6 +17,8 @@ Note: Memory initialization is lazy-loaded on first use via memory_init.py,
 eliminating startup cost for non-memory users.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
