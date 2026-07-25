@@ -379,8 +379,13 @@ class TestPruneMemoryProseContract:
         assert headings, (
             "no '### Step N — ' headings found in prune-memory.md — this "
             "guard cannot verify a sequence it cannot locate. Re-aim the "
-            "pattern rather than deleting this line: an empty match set "
-            "would satisfy every assertion below by vacuity."
+            "pattern rather than deleting this line. NOTE this is a "
+            "DIAGNOSTIC, not a vacuity guard: measured, an empty match set "
+            "already fails every assertion below (the bijection finds no "
+            "match for the first required name, and the floor fails at 0 "
+            "of 5). It exists so the failure names the real cause — a "
+            "broken pattern — instead of surfacing as a confusing report "
+            "that every required step is missing."
         )
         # BIJECTION, not `any(required in h for h in headings)`. Matching
         # each required name against ANY heading lets ONE heading satisfy

@@ -568,11 +568,12 @@ class TestPruneMemoryCommand_Grammar:
         })
         missing = required - {form for form, _ in self._HEREDOC_FORMS}
         assert not missing, (
-            f"heredoc form table lost coverage of: {sorted(missing)}. Every "
-            "expanding form listed was a real hole in a shipped revision of "
-            "this guard, and every quoted/escaped form pins one that a "
-            "revision wrongly banned. Adding forms is free; removing one "
-            "means re-deriving why it stopped mattering."
+            f"heredoc form table lost coverage of: {sorted(missing)}. Four "
+            "of the five expanding forms listed were real holes in a "
+            "shipped revision of this guard; `<<EOF` is the control the "
+            "original regex caught correctly. The quoted and escaped forms "
+            "pin cases a revision wrongly banned. Adding forms is free; "
+            "removing one means re-deriving why it stopped mattering."
         )
         for form, expands in self._HEREDOC_FORMS:
             flagged = bool(self._expanding(f"cat {form}\npayload\nEOF\n"))

@@ -243,6 +243,86 @@ class TestExtractPinBlock_Verbatim:
             "contains its OWN pin's comment and not its successor's."
         )
 
+    @pytest.mark.parametrize("decoy_placement", ["mid_body", "adjacent"])
+    def test_span_start_takes_the_NEAREST_preceding_date_comment(
+        self, decoy_placement
+    ):
+        """`_span_start` must resolve a pin's date comment by NEAREST
+        preceding occurrence, not first.
+
+        THE PROPERTY, stated so it survives a rewrite: pin 1's span begins
+        at the comment ADJACENT TO ITS OWN HEADING. When an identical
+        comment string also appears earlier — inside pin 0's body — the
+        earlier one must not capture the span.
+
+        WHY THIS TEST EXISTS AND NO OTHER COVERS IT. Every other fixture in
+        this file has distinct date comments, so `rfind` and `find` return
+        the same offset and the whole suite passes under either. Measured:
+        swapping `preceding.rfind(date_comment)` for `.find(...)` leaves the
+        suite at 55 passed. Under `find`, pin 1's span starts at the decoy
+        and swallows the tail of pin 0's body, while pin 0's block truncates
+        at the decoy — and the archived record still satisfies every
+        containment conjunct, because a wrong span is still a verbatim
+        substring. Boundaries are exactly what containment cannot see.
+
+        `adjacent` is the sharper case: the decoy sits immediately before
+        the real comment, so anything weaker than nearest-occurrence picks
+        the wrong one by a single line.
+
+        NOTE WHAT IS DELIBERATELY *NOT* ASSERTED. Pin 0's block here
+        legitimately contains TWO date comments — the decoy is part of its
+        body. `count("<!-- pinned:") == 1` is a property of the live file's
+        current CONTENT, never an extractor invariant, and this fixture is
+        the counterexample. Asserting it would manufacture a false RED.
+        """
+        decoy = "<!-- pinned: 2026-02-02 -->"
+        # Text BETWEEN the decoy and the real comment. This is what a
+        # first-occurrence resolver drags into pin 1's block, so it must sit
+        # AFTER the decoy to discriminate — a marker placed before it is
+        # invisible to the bug.
+        between = (
+            "\n" if decoy_placement == "adjacent"
+            else "DRAGGED_IN_UNDER_FIND — still alpha's body.\n\n"
+        )
+        pinned = (
+            "<!-- pinned: 2026-01-01 -->\n"
+            "### Alpha\n"
+            "Alpha's body documents the pin format:\n"
+            f"{decoy}\n"
+            f"{between}"
+            f"{decoy}\n"
+            "### Beta\n"
+            "Beta's body.\n"
+        )
+        pins = pin_caps.parse_pins(pinned)
+        assert len(pins) == 2, f"fixture must parse as 2 pins, got {len(pins)}"
+        assert pinned.count(decoy) == 2, "fixture must contain the decoy twice"
+
+        alpha = archive_pin.extract_pin_block(pinned, 0, pins)
+        beta = archive_pin.extract_pin_block(pinned, 1, pins)
+
+        # THE load-bearing assertions, and they are ABSOLUTE OFFSETS rather
+        # than content checks. Pin 1 is last, so its span runs from the
+        # NEAREST (last) decoy occurrence to the end of the section.
+        #
+        # Content checks alone are too weak in the `adjacent` case, and
+        # PARTITION CANNOT CATCH THIS AT ALL: pin 0's end and pin 1's start
+        # are computed by the SAME `_span_start` call, so they move together
+        # and `alpha + beta == pinned` holds under both resolvers. Only an
+        # assertion pinned to the expected OFFSET discriminates.
+        nearest = pinned.rfind(decoy)
+        assert beta == pinned[nearest:], (
+            "pin 1's span did not begin at the NEAREST preceding date "
+            "comment. `_span_start` resolved the FIRST matching occurrence "
+            "instead, so an identical comment inside pin 0's body captured "
+            f"the span.\n  expected: {pinned[nearest:]!r}\n  actual:   {beta!r}"
+        )
+        assert alpha == pinned[:nearest], (
+            "pin 0's block did not end at pin 1's real span start — its END "
+            "boundary resolved to the decoy inside its own body.\n"
+            f"  expected: {pinned[:nearest]!r}\n  actual:   {alpha!r}"
+        )
+
     def test_spans_partition_the_section_without_overlap(self):
         """Stronger than the pairwise checks: every pin's span is disjoint
         from every other's, and concatenating them in order reproduces a
