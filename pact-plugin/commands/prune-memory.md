@@ -228,13 +228,17 @@ A curator at the cap with a broken memory CLI must not be trapped between a
 command that will not add and a command that will not remove. So on
 `UNEVALUABLE` — and never on `NOT_ARCHIVED`, where the failure is definite:
 
-1. Read the pin block from CLAUDE.md and **print it verbatim into the
-   conversation**, under a heading stating it is the only remaining copy.
-   (If CLAUDE.md cannot be read, there is nothing to print and nothing to
-   evict — refuse outright and stop.)
+1. **Print `delete_string` verbatim into the conversation**, under a heading
+   stating it is the only remaining copy. The verdict carries it whenever the
+   pin was located, so this path needs no separate reading of the file — the
+   hatch consumes the same checked handle as Step 4 rather than working out
+   its own boundary. (If the verdict carries no handle, the pin was never
+   located: there is nothing to print and nothing to evict — refuse outright
+   and stop.)
 2. Ask the curator to confirm they have captured it elsewhere. This is an
    explicit acknowledgement — never a default, never inferred from silence.
-3. Only on that acknowledgement, proceed to Step 4.
+3. Only on that acknowledgement, proceed to Step 4, which removes that same
+   string.
 4. Emit the skip event with outcome `unverified_eviction`, so the unverified
    eviction is auditable.
 
@@ -273,37 +277,30 @@ detects an index shift *within* one file and is structurally blind to a
 wrong-*file* resolution. A cross-check only catches disagreement between two
 things that can disagree, and these two cannot.
 
-Locate the pin block for the selected `{heading}`. **The block runs from this
-pin's own span start to the NEXT pin's span start** — where a span starts at
-its date-comment line if it has one, and at its `### ` heading otherwise:
+**Remove exactly the string the Step 3 verdict emitted as `delete_string`, at
+`claude_md_path`:**
 
-- Start: the date comment immediately preceding `### {heading}` (if any),
-  from that line's first character; otherwise the `### {heading}` line.
-- End: the **next pin's date comment line** — NOT the next `### ` heading —
-  or the end of the `## Pinned Context` section for the last pin.
+    Edit(file_path=<claude_md_path>, old_string=<delete_string>, new_string="")
 
-**Ending at the next `### ` heading is wrong and destroys content.** A span
-begins at the date comment, which sits *above* the heading, so a block that
-runs to the next heading swallows the following pin's entire date comment —
-including any `pin-size-override` rationale, which this command elsewhere
-calls load-bearing verbatim content. Measured on a three-pin fixture: the
-correct rule removes 50 characters, the next-heading rule removes 153, and
-the extra 103 are the surviving neighbour's date comment. That neighbour
-silently loses its override flag and its pinned date. **Those bytes belong to
-a pin that was never selected and were never archived, so nothing holds a
-copy** — the precise loss this command exists to prevent, on the default path,
-since every pin carries a date comment.
+**Use the emitted string exactly as given. Do not trim, pad, reformat or tidy
+it, and do not add, remove or adjust blank lines around the Edit** — the string
+spans exactly what must be removed. A curator who "cleans up" the value breaks
+the match, and the Edit then fails rather than removing the wrong bytes. That
+failure is the safe direction, but it is a confusing dead end, so do not walk
+into it: if the Edit does not match, something changed the file after the
+verdict was produced. **Stop and re-run from Step 1 — do not search for a
+near-match and do not hand-edit.**
 
-Computing both edges by the same span rule makes the blocks partition the
-section instead of overlapping. This is the identical boundary
-`archive_pin.py` uses to build the block it archives, and the two must agree:
-if the destroy rule is wider than the archive rule, the difference is by
-definition content that was destroyed without being stored.
+`delete_string` is a **checked handle, not simply the pin's text.** The script
+emits it only once it has established the string can be used — that it is
+present and occurs exactly once. Where that could not be established the field
+is absent, and the verdict says so through its outcome rather than handing you
+something unusable. **A field is present exactly when the fact it names was
+established**, which is why a missing handle is a refusal and never an
+invitation to reconstruct one.
 
-Use the `Edit` tool to remove the full block, preserving surrounding
-blank lines (one blank line between remaining pins). The `pin_caps_gate`
-hook ALLOWS the edit because `len(post_pins) < len(pre_pins)` — strictly
-better, not worse.
+The `pin_caps_gate` hook ALLOWS the edit because `len(post_pins) <
+len(pre_pins)` — strictly better, not worse.
 
 ### Step 5 — Report
 

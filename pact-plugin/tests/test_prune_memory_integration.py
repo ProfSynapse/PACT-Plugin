@@ -450,6 +450,61 @@ class TestPruneMemoryProseContract:
                     "must not imply the pin is discarded"
                 )
 
+    def test_step_4_consumes_the_handle_and_derives_no_boundary(self, prune_md):
+        """Step 4 removes an emitted string; it must NOT restate the span rule.
+
+        The span rule lived in BOTH `archive_pin.py` and this prose, and the
+        two diverged: the prose kept an end-boundary the script had already
+        corrected, so the destroy range was a superset of the archive range
+        and the excess was a RETAINED pin's date comment. The fix was to
+        delete the second copy, not to correct it — a corrected copy is still
+        a copy, and the copy is the drift mechanism.
+
+        So after the deletion, any reappearance of span-derivation vocabulary
+        in Step 4 IS the defect returning, which is why the negative arm is
+        the point of this test.
+
+        POSITIVE AND NEGATIVE ARMS ARE COUPLED HERE DELIBERATELY — DO NOT
+        SPLIT THEM. A bare `not in` assertion passes trivially over an empty
+        string: delete Step 4, restructure the file, or let the section
+        extraction miss, and it goes green forever. A negative assertion has
+        no natural non-vacuity arm, because absence is exactly what it seeks
+        — it cannot distinguish "the bad thing is gone" from "nothing is
+        here". The positive arm is what establishes the surface exists, so
+        the negative one means something. Split across two tests, the
+        positive reads as trivially true, someone deletes it, and the
+        negative silently becomes decoration.
+        """
+        section = re.search(
+            r"^### Step 4 — .*?(?=^### Step \d+ — )", prune_md,
+            re.MULTILINE | re.DOTALL)
+        assert section, (
+            "Step 4 section not found in prune-memory.md — the extraction is "
+            "broken or the step was removed. Re-aim rather than deleting: "
+            "without this, the negative assertions below pass over an empty "
+            "string and this guard silently protects nothing."
+        )
+        body = section.group(0)
+
+        # POSITIVE: the step consumes the emitted handle at the resolved path.
+        for required in ("delete_string", "claude_md_path"):
+            assert required in body, (
+                f"Step 4 no longer references {required!r}. It must remove the "
+                "string the verdict emitted, at the path the verdict reports — "
+                "not a boundary it works out for itself."
+            )
+
+        # NEGATIVE: and it derives no boundary of its own.
+        for banned in ("span start", "date comment line", "next `### ` heading",
+                       "preserving surrounding blank lines"):
+            assert banned not in body, (
+                f"Step 4 restates the span rule ({banned!r}). That is a SECOND "
+                "copy of a rule the archiver already owns, and the two diverged "
+                "once already — the prose kept an end-boundary the script had "
+                "corrected, destroying a retained pin's date comment. Remove "
+                "the restatement; the emitted handle is the boundary."
+            )
+
     def test_references_advisory_cli(self, prune_md):
         """Step 1 must point curators at check_pin_caps --status."""
         assert "check_pin_caps.py" in prune_md
