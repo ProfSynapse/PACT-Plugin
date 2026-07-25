@@ -6,7 +6,10 @@ Risk tier: HIGH. These tests exercise the full evict-retry loop that
 curators will run when the count cap fires:
   1. Curator attempts to add a 13th pin → pin_caps_gate DENIES (count cap).
   2. Curator runs `check_pin_caps --status` → JSON lists 12 evictable pins.
-  3. Curator simulates prune-memory.md's Step 3: Edit removing one pin.
+  3. Curator simulates prune-memory.md's Step 4: Edit removing one pin.
+     (Step 3, the archive-and-verify gate that must pass before that Edit
+     is emitted, is exercised separately — this round-trip covers the
+     gate/CLI interlock, not the archival path.)
      → pin_caps_gate ALLOWS (post < pre → net-worse=False).
   4. Curator retries the original add → pin_caps_gate ALLOWS (under cap now).
 
@@ -136,20 +139,46 @@ class TestMockCuratorRoundTrip:
         assert "Pin count cap" in result
 
     def test_cli_status_lists_all_evictable_pins(self, curator_env):
-        """Step 2: CLI --status returns the evictable-pin list."""
+        """Step 2: CLI --status returns the evictable-pin list.
+
+        The key set is asserted as an EXACT equality and the contract has
+        GROWN: `age_days` and `overdue` joined the original five when the
+        additive age signal landed, because the eviction ordering needs a
+        signal that actually fires (the marker-based `stale` flag does not
+        fire on the canonical pin format).
+
+        Kept as `==` rather than relaxed to a subset check when it grew.
+        prune-memory.md instructs curators to parse these entries BY NAME,
+        so a field that silently vanishes breaks the command just as badly
+        as one that silently appears, and a subset check can only see the
+        second. Widening the expected set records the new contract;
+        loosening the operator would have discarded the property.
+        """
         curator_env["reset_state"](n_pins=12)
         rc, payload = curator_env["call_cli"](["--status"])
         assert rc == 0
         assert payload["allowed"] is True
         assert len(payload["evictable_pins"]) == 12
-        # Each entry has the documented shape.
+        # Each entry has the documented shape. Kept as an EXACT set rather
+        # than a subset check: prune-memory.md tells curators to parse these
+        # entries by name, so an unannounced field addition or rename in the
+        # CLI contract should fail here rather than surface as a curator
+        # reading a key that is no longer there. `age_days` / `overdue` are
+        # the additive age signal the eviction ordering keys on.
         for entry in payload["evictable_pins"]:
             assert set(entry.keys()) == {
-                "index", "heading", "chars", "stale", "override"
+                "index", "heading", "chars", "stale", "override",
+                "age_days", "overdue",
             }
             assert isinstance(entry["index"], int)
             assert isinstance(entry["heading"], str)
             assert not entry["heading"].startswith("### ")  # Stripped per CLI.
+            # Dated fixture pins, so both age fields are populated here. The
+            # unknown-age third state (both null) is covered where the age
+            # computation itself is tested; what matters for the prune flow
+            # is that `overdue` is never a bare False standing in for null.
+            assert isinstance(entry["age_days"], int)
+            assert isinstance(entry["overdue"], bool)
 
     def test_prune_edit_allowed_when_count_decreases(self, curator_env):
         """Step 3: Edit removing one pin block is ALLOWED.
@@ -329,14 +358,73 @@ class TestPruneMemoryProseContract:
         )
         return path.read_text(encoding="utf-8")
 
-    def test_has_four_step_process(self, prune_md):
-        """Spec is structured as four steps. A step deletion would
-        silently amputate the workflow."""
-        step_headings = re.findall(r"^### Step \d+", prune_md, re.MULTILINE)
-        assert len(step_headings) == 4, (
-            f"prune-memory.md should have exactly 4 steps, found "
-            f"{len(step_headings)}: {step_headings}"
+    def test_has_all_required_steps(self, prune_md):
+        """Spec is a named step sequence, and a step deletion would
+        silently amputate the workflow.
+
+        This guard's STATED purpose has always been deletion-detection.
+        It previously spelled that as `len(step_headings) == 4`, which
+        is both stricter and weaker than the intent: stricter because it
+        rejects a justified ADDITION, and weaker because a count cannot
+        say WHICH step vanished — swapping two steps for two others
+        passes it. Pinning the steps BY NAME is strictly better
+        deletion-detection, so the rewrite is a correction to the
+        assertion rather than a relaxation of the guard.
+
+        The floor permits justified addition — an archive-and-verify
+        step was added when eviction became archive-gated — while any
+        rename or removal of a named step still fails.
+        """
+        headings = re.findall(r"^### Step \d+ — (.+)$", prune_md, re.MULTILINE)
+        for required in ("Read the evictable-pin list", "Ask the curator",
+                         "Archive the selected pin", "Remove the selected pin",
+                         "Report"):
+            assert any(required in h for h in headings), (
+                f"prune-memory.md missing required step {required!r}; "
+                f"found {headings}"
+            )
+        assert len(headings) >= 5, (
+            f"prune-memory.md should have at least 5 steps, found "
+            f"{len(headings)}: {headings}"
         )
+
+    def test_decision_prompt_frames_removal_as_demotion(self, prune_md):
+        """The AskUserQuestion prompt is the DECISION SURFACE — the one
+        sentence the curator reads at the moment they choose to give up a
+        pin — so it is where the demotion framing has to hold. Prose
+        elsewhere in the file explaining that demotion preserves content
+        does not reach a curator who reads only the prompt.
+
+        SCOPED TO THE PROMPT TEXT, deliberately. A file-wide ban on
+        'evict' is impossible and would be wrong: `evictable_pins` is the
+        CLI's field name, and 'eviction' is the accurate technical term
+        in the instructions addressed to the executing agent. The word is
+        only misleading where it describes the CONSEQUENCE to the curator,
+        which is this one line.
+
+        The negative arm is what makes this non-vacuous: a positive-only
+        check passes on a prompt reading 'Demote or evict?'.
+        """
+        prompts = re.findall(r'^\s*question:\s*"([^"]*)"', prune_md, re.MULTILINE)
+        # Guard the guard: if the AskUserQuestion block is ever restructured
+        # so no prompt is extractable, this test must fail loudly rather
+        # than pass over an empty list.
+        assert prompts, (
+            "no AskUserQuestion `question:` line found in prune-memory.md — "
+            "this guard cannot verify a decision surface it cannot locate"
+        )
+        for prompt in prompts:
+            assert re.search(r"demote", prompt, re.IGNORECASE), (
+                f"decision prompt {prompt!r} does not frame the action as "
+                "demotion; AC-B3 requires the curator-facing wording to say "
+                "the content is preserved, not removed"
+            )
+            for banned in ("evict", "delete"):
+                assert banned not in prompt.lower(), (
+                    f"decision prompt {prompt!r} contains {banned!r}; the "
+                    "prompt describes the consequence to the curator and "
+                    "must not imply the pin is discarded"
+                )
 
     def test_references_advisory_cli(self, prune_md):
         """Step 1 must point curators at check_pin_caps --status."""

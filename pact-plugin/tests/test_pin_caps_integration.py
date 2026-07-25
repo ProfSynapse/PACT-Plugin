@@ -13,6 +13,7 @@ Covers:
 Risk tier: CRITICAL.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -403,12 +404,14 @@ class TestPruneMemoryCommand_Grammar:
     """/PACT:prune-memory contract assertions (cycle-8 commit 7).
 
     The prune flow that pin-memory.md previously embedded now lives in
-    a dedicated command. prune-memory.md describes a 4-step interactive
+    a dedicated command. prune-memory.md describes a 5-step interactive
     flow:
         1. Invoke check_pin_caps.py --status to get evictable_pins
         2. AskUserQuestion (paginated) on the list
-        3. Edit CLAUDE.md to remove the selected block
-        4. Report + commit
+        3. Archive the selected pin and verify it arrived; refuse the
+           eviction on anything short of a verified archive
+        4. Edit CLAUDE.md to remove the selected block
+        5. Report (+ journal event)
 
     Tests here pin the informational contract (CLI invocation shape,
     pagination structure, cross-references) so structural refactors
@@ -469,19 +472,39 @@ class TestPruneMemoryCommand_Grammar:
         workflow is discoverable from either direction."""
         assert "/PACT:pin-memory" in prune_memory_content
 
-    def test_no_shell_scaffolding_heredoc(self, prune_memory_content):
-        """Regression guard: prune-memory.md MUST NOT introduce the
-        shell-scaffolding surface that pin-memory.md shed in cycle-8.
-        The `check_pin_caps.py --status` invocation is pure (no body
-        input required) so no heredoc is needed."""
-        assert "<<'" not in prune_memory_content
-        assert '<<"' not in prune_memory_content
-        # One `bash` fence is allowed (the plain CLI invocation); it
-        # takes no stdin, so no heredoc form should appear.
-        heredoc_markers = prune_memory_content.count("<<")
-        assert heredoc_markers == 0, (
-            "prune-memory.md contains heredoc marker(s); the advisory "
-            "CLI reads no stdin, so heredoc forms should not appear here."
+    def test_no_expanding_heredoc(self, prune_memory_content):
+        """Regression guard, NARROWED — and the original rationale is
+        retracted rather than merely relaxed.
+
+        The previous assertion banned every heredoc marker on a NECESSITY
+        premise: "the `check_pin_caps.py --status` invocation is pure (no
+        body input required) so no heredoc is needed." That premise no
+        longer holds. prune-memory.md now emits skip/prune journal events
+        whose payload carries curator free text, and this project's
+        mandated journal-write form is a QUOTED heredoc — adopted
+        precisely because an unquoted one let an apostrophe in a
+        substituted value close the bash quote and silently abort the
+        write under `set -e`.
+
+        The security concern was never heredocs as such; it was SHELL
+        EXPANSION inside them. So the quoted form is permitted and the
+        expanding form stays banned. Note the archival path does NOT
+        widen this surface: `archive_pin.py --index N` passes no body
+        through the shell and needs no heredoc at all.
+
+        The sibling guard on pin-memory.md (`test_no_heredoc_scaffolding`)
+        rests on a SECURITY claim rather than a necessity claim, remains
+        true, and is deliberately NOT narrowed.
+        """
+        assert '<<"' not in prune_memory_content, (
+            "expanding heredoc in prune-memory.md; use the quoted form <<'DELIM' "
+            "so bash performs no substitution inside the payload."
+        )
+        bare = re.findall(r"<<(?!['\"])\w+", prune_memory_content)
+        assert bare == [], (
+            f"unquoted heredoc delimiter(s) in prune-memory.md: {bare}. "
+            "An unquoted delimiter re-enables shell expansion inside the "
+            "payload — quote it as <<'DELIM'."
         )
 
 

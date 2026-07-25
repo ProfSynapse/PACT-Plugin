@@ -254,6 +254,63 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     # passes isinstance but is meaningless — that "missing artifact" case is the
     # task_lifecycle_gate backstop's job, NOT a zero-length event).
     "artifact_paths": {"workflow": str, "feature": str, "paths": list},
+    # commands/prune-memory.md writes pin_prune_skipped on EVERY no-eviction
+    # exit, not only on Cancel: cancelled / no_candidates / unknown_state /
+    # archive_refused / unverified_eviction. `archive_refused` is the
+    # highest-value row — a run of refusals is the signal that the archival
+    # mechanism itself is broken, and emitting only on Cancel would make that
+    # failure mode invisible to the audit this event exists for.
+    # `pin_count` is the count at the time of the skip; `age_distribution` is
+    # the oldest/newest/median summary, computable only because
+    # check_pin_caps --status now carries per-pin age_days.
+    #
+    # `reason` is deliberately NOT required (it is declared optional below).
+    # It is not obtainable on a bare Cancel without adding a prompt to every
+    # cancellation, and registering it as required would force either that
+    # extra prompt or a fabricated value — emitting a field we cannot
+    # populate is a success report with no measurement behind it, which is
+    # the exact defect class this work exists to remove.
+    "pin_prune_skipped": {
+        "outcome": str,
+        "pin_count": int,
+        "age_distribution": dict,
+    },
+    # commands/prune-memory.md writes pin_pruned on the SUCCESS path, after
+    # the removal Edit lands, carrying the memory_id the archival returned.
+    #
+    # Why a success event exists at all: pin_caps_gate ALLOWS the eviction
+    # Edit by construction (a deny-on-improvement predicate would trap a
+    # curator at 12/12 on the only cap-relief path), so nothing MECHANICALLY
+    # enforces that the archive ran. Detectability is therefore the entire
+    # remaining control. With skip-only telemetry a curator who bypassed the
+    # archive and went straight to the removal Edit would emit NOTHING and be
+    # indistinguishable from a correctly-archived eviction — the audit trail
+    # would be blind to precisely the failure mode it exists to catch.
+    # `memory_id` is what makes the claim CHECKABLE rather than asserted: an
+    # auditor can fetch it.
+    #
+    # `pin_count` is the count BEFORE the removal, matching
+    # pin_prune_skipped's "count at the time of the decision" so the two
+    # events share one referent and stay directly comparable.
+    #
+    # NO `outcome` FIELD, deliberately: only required fields are validated,
+    # so an unvalidated extra would sit in the audit trail looking
+    # authoritative while guaranteed by nothing.
+    #
+    # READING THE TRAIL — an eviction is a UNION, not a single event. An
+    # escape-hatch eviction removed a pin but is filed under
+    # pin_prune_skipped (outcome "unverified_eviction"), because it has no
+    # memory_id and this type requires one:
+    #     evictions = pin_pruned
+    #                 UNION (pin_prune_skipped WHERE outcome = unverified_eviction)
+    # The second arm IS the set of evictions with no archive record. Querying
+    # only pin_pruned under-counts, and misses the unverified population an
+    # audit most needs to see.
+    "pin_pruned": {
+        "heading": str,
+        "memory_id": str,
+        "pin_count": int,
+    },
 }
 
 
@@ -362,6 +419,17 @@ _OPTIONAL_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     # missed_wake).
     "teachback_ack": {
         "concern": str,
+    },
+    # commands/prune-memory.md writes pin_prune_skipped with an optional
+    # `reason`, present ONLY where the flow genuinely elicited one: a
+    # curator-supplied cancel reason, or the machine reason on
+    # archive_refused / unknown_state. A bare Cancel collects nothing, which
+    # is exactly why this is optional rather than required — see the
+    # required-fields registration above. The required-fields entry is what
+    # ACTIVATES this optional check (same activation pattern as session_end /
+    # missed_wake / teachback_ack).
+    "pin_prune_skipped": {
+        "reason": str,
     },
     # hooks/shared/task_metadata_snapshot.emit_task_metadata_snapshot writes
     # task_metadata_snapshot with these optionals. subject is sentinel-
