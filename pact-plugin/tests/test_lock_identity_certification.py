@@ -62,6 +62,7 @@ intuitive choice and a later reader will otherwise "harden" them backwards.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import inspect
 import os
@@ -168,6 +169,22 @@ def _extract_t1_paragraph(source: str) -> str:
     while end < len(lines) and lines[end].strip():
         end += 1
     return "".join(lines[start:end]).rstrip("\n")
+
+
+def _atomic_write_docstring(rel: str) -> str:
+    """Return `_atomic_write_text`'s docstring, via AST.
+
+    WHY AST AND NOT A LINE SCAN. This region is the scope for the token
+    assertion below, and a line-scan region would itself be an ANCHORED
+    EXTRACTION -- i.e. a guard whose own failure mode is the one it exists to
+    guard against. `ast` gets the docstring from the parser, so the region
+    cannot drift out from under the assertion the way an anchor can.
+    """
+    tree = ast.parse(_read(rel))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_atomic_write_text":
+            return ast.get_docstring(node, clean=False) or ""
+    return ""
 
 
 def _read(rel: str) -> str:
@@ -291,6 +308,22 @@ class TestT1PreconditionParity:
         hands you something that feels like success. Uniqueness is what closes
         it -- measured 1 and 1 at the time this gate was written, asserted
         rather than assumed to stay so.
+
+        THE TWO ASSERTIONS HAVE DIFFERENT SCOPES ON PURPOSE. The TOKEN count is
+        scoped to `_atomic_write_text`'s docstring; the ANCHOR count is
+        WHOLE-FILE. That is not an oversight and must not be "tidied" into
+        symmetry.
+
+        The anchor assertion mirrors an invariant the EXTRACTOR genuinely has:
+        `_extract_t1_paragraph` searches the WHOLE FILE and returns "" unless it
+        finds exactly one anchor. An assertion mirroring an extractor invariant
+        must carry the EXTRACTOR's scope, not the region's -- scope it to the
+        docstring while the extractor stays whole-file and you get a silent
+        disagreement, where a second anchor elsewhere makes the extractor return
+        "" (reddening the non-empty test) while this assertion reports fine.
+
+        COUPLING, because it is invisible from either side alone: IF ANYONE EVER
+        SCOPES THE EXTRACTOR'S SEARCH, THE ANCHOR ASSERTION MUST MOVE WITH IT.
         """
         for rel in (CANONICAL_REL, TWIN_REL):
             src = _read(rel)
@@ -301,14 +334,43 @@ class TestT1PreconditionParity:
                 f"{rel} has {len(anchors)} {T1_ANCHOR!r} anchors; the extractor "
                 f"can no longer identify the paragraph unambiguously"
             )
-            assert src.count(T1_TOKEN) == 1, (
-                f"{rel} has {src.count(T1_TOKEN)} occurrences of the token; it "
-                f"is no longer distinctive enough to validate the extraction"
+            # SCOPED TO THE DOCSTRING, DELIBERATELY ASYMMETRIC WITH THE
+            # ANCHOR ASSERTION ABOVE -- see the coupling note in this test's
+            # docstring. Whole-file counting made a legitimate CROSS-REFERENCE
+            # elsewhere in the module (`# See the "IDENTITY, not POSITION"
+            # precondition ...`) redden this gate while the paragraph was
+            # byte-identical and the digest matched: a false alarm on exactly
+            # the kind of cross-reference this codebase models as good practice.
+            doc = _atomic_write_docstring(rel)
+            assert doc, f"{rel}: _atomic_write_text docstring not found"
+            assert doc.count(T1_TOKEN) == 1, (
+                f"{rel} has {doc.count(T1_TOKEN)} occurrences of the token IN "
+                f"THE DOCSTRING; it is no longer distinctive enough to validate "
+                f"the extraction"
             )
 
     def test_paragraph_matches_the_reference_digest_and_length(self):
         """Pins the CONTENT, not just parity. Two copies could match each other
-        while both having drifted from the accepted wording."""
+        while both having drifted from the accepted wording.
+
+        THIS ASSERTION IS THE LOAD-BEARING WRONG-SPAN EXCLUSION. DO NOT DELETE
+        IT AS DUPLICATIVE OF THE TOKEN CHECK -- that is the exact simplification
+        an adversarial review measured to be wrong. Of five adversarial
+        docstrings crafted to impersonate this paragraph, FOUR satisfied all
+        three of the cheap guards (non-emptiness, distinctive token, anchor
+        uniqueness). Only the digest and length excluded them. The cheap guards
+        look like the substantive checks and are the weaker ones.
+
+        WHAT THE CHEAP GUARDS BUY, since they are not redundant either: the
+        digest is SELF-CERTIFYING AT THE MOMENT IT IS RE-BASELINED. When the
+        paragraph is legitimately reworded someone updates the reference to
+        whatever the extractor returned -- and at that instant the digest
+        cannot detect a broken extractor; it gets pinned TO the wrong span and
+        confirms it forever after. The token and anchor checks are independent
+        of the reference value and are the only guards still standing during a
+        re-pin. So: the digest catches drift, the cheap guards protect the
+        update. Removing either leaves a window.
+        """
         for rel in (CANONICAL_REL, TWIN_REL):
             para = _extract_t1_paragraph(_read(rel))
             digest = hashlib.sha256(para.encode("utf-8")).hexdigest()
@@ -386,7 +448,25 @@ class TestExistingDriftGatesUnmodified:
 
 
 # ===========================================================================
-# Behavioural core -- L1/L2/L3/L4/L8
+# Behavioural core -- L1/L2/L3/L4
+#
+# L8 IS NOT CERTIFIED BY A TEST IN THIS FILE, AND THAT IS A DELIBERATE
+# ABSTENTION RATHER THAN AN OVERSIGHT. It is recorded here because every other
+# obligation is traceable to a docstring, and an obligation named in a banner
+# but claimed by nothing reads as a gap.
+#
+# L8 asks that the failure-log site is unchanged in behaviour. It is covered BY
+# INHERITANCE: that site carries its OWN leaf `is_symlink()` guard inside the
+# lock and pre-creates its parent before taking it, so on the only topology
+# where the two formulas differ -- a symlinked leaf -- the write is refused
+# under BOTH, and the site can create no directory either way. Its existing
+# tests pass untouched.
+#
+# STATE THE STRENGTH HONESTLY: that is weaker than L1-L4, which are certified
+# directly here. Inheritance is an argument that the site cannot be affected,
+# not a measurement that it was not. If the failure-log site ever loses its own
+# leaf guard or stops pre-creating its parent, this obligation silently becomes
+# uncovered and nothing in this file will notice.
 #
 # DERIVATION, and it is named here so a reader can tell it from the scratch
 # harness used during the fix: the sidecar is taken from the path PRODUCTION
@@ -547,6 +627,49 @@ def _topology(kind, root: Path):
 
 
 
+def _assert_points_outside(link: Path, proj: Path, label: str) -> None:
+    """Assert a symlink's DESTINATION is outside the project.
+
+    SYMLINK-NESS IS NOT OUT-NESS, and the difference is load-bearing. A
+    precondition that checks only "is a symlink, is dangling" is satisfied by a
+    degraded fixture pointing IN-PROJECT at a path whose parent exists -- under
+    which the superseded formula creates ZERO directories, so the L3 DoS
+    regression test PASSES and can no longer fail for the reason it exists.
+
+    That is the failure `assert_topology_constructed` was written to prevent,
+    one level deeper: the guard against fixture rot was itself under-specified.
+
+    Uses `os.readlink` rather than `resolve()` because these destinations are
+    frequently DANGLING, and `resolve()` on a dangling link would not tell us
+    where it was aiming. The destination is made absolute against the link's own
+    directory so a relative symlink is judged by where it actually points.
+
+    DO NOT lean on production to reject a degraded fixture on the suite's
+    behalf: `file_lock` calls `mkdir(parents=True)` and will happily create a
+    missing `.claude` itself, so a degraded `plain` case is masked by PRODUCTION
+    rather than caught by the test.
+    """
+    dest = Path(os.readlink(str(link)))
+    if not dest.is_absolute():
+        dest = (link.parent / dest)
+    proj_resolved = proj.resolve()
+    # `os.path.realpath` and NOT `normpath`: the destination is frequently
+    # DANGLING, but its existing ANCESTORS still need resolving or the two
+    # sides of the comparison are spelled differently and it silently never
+    # matches. On macOS a tmp path is /var/... while proj.resolve() yields
+    # /private/var/..., so a normpath-only comparison accepts an in-project
+    # destination -- MEASURED: it did, and the degraded fixture sailed through.
+    # realpath is non-strict: it resolves the existing prefix and leaves the
+    # absent tail lexical, which is exactly what a dangling link needs.
+    dest_norm = Path(os.path.realpath(str(dest)))
+    assert not (
+        dest_norm == proj_resolved or proj_resolved in dest_norm.parents
+    ), (
+        f"{label}: symlink points IN-PROJECT ({dest_norm}) -- the topology is "
+        f"degenerate and the test would pass for the wrong reason"
+    )
+
+
 def assert_topology_constructed(kind, proj: Path, target: Path) -> None:
     """FIXTURE PRECONDITION -- fail if the defective topology was not built.
 
@@ -575,6 +698,7 @@ def assert_topology_constructed(kind, proj: Path, target: Path) -> None:
     claude_dir = proj / ".claude"
     if kind == "plain":
         assert not claude_dir.is_symlink(), "plain: .claude should be a real dir"
+        assert claude_dir.is_dir(), "plain: .claude should already EXIST as a dir"
         assert not target.is_symlink(), "plain: leaf should be a real file path"
         return
     if kind == "leaf-out-existing":
@@ -588,17 +712,21 @@ def assert_topology_constructed(kind, proj: Path, target: Path) -> None:
     if kind == "leaf-out-dangling":
         assert target.is_symlink(), "leaf-out-dangling: leaf is NOT a symlink"
         assert not target.exists(), "leaf-out-dangling: destination should be absent"
+        _assert_points_outside(target, proj, "leaf-out-dangling")
         return
     if kind == "parent-out-existing":
         assert claude_dir.is_symlink(), "parent-out-existing: .claude is NOT a symlink"
         assert claude_dir.exists(), "parent-out-existing: destination should exist"
+        _assert_points_outside(claude_dir, proj, "parent-out-existing")
         return
     if kind == "parent-out-dangling":
         assert claude_dir.is_symlink(), "parent-out-dangling: .claude is NOT a symlink"
         assert not claude_dir.exists(), "parent-out-dangling: should be dangling"
+        _assert_points_outside(claude_dir, proj, "parent-out-dangling")
         return
     if kind == "two-leg":
         assert claude_dir.is_symlink(), "two-leg: .claude (leg 1) is NOT a symlink"
+        _assert_points_outside(claude_dir, proj, "two-leg leg 1")
         outside_entry = Path(os.readlink(str(claude_dir))) / "CLAUDE.md"
         assert outside_entry.is_symlink(), "two-leg: leg 2 is NOT a symlink"
         assert outside_entry.resolve() == (proj / "real.md").resolve(), (
@@ -680,6 +808,31 @@ class TestSidecarAgreesWithTheWrite:
         alias = tmp_path / "alias"
         _os.symlink(str(real), str(alias), target_is_directory=True)
 
+        # READ THIS BEFORE ADDING CASE OR UNICODE VARIANTS TO THIS TEST.
+        #
+        # The property is MUTUAL EXCLUSION. It is verified here by PATH-STRING
+        # EQUALITY, which is a STRICTER PROXY than the property -- sound only
+        # for the case built above, where `resolve()` collapses a directory
+        # symlink alias to one string.
+        #
+        # It does NOT generalise. A case-variant (`Proj` vs `proj`) and an
+        # NFC/NFD pair are the SAME kernel object reached by DIFFERENT strings,
+        # so the two derived sidecar paths differ while `samefile` is True and
+        # `flock` serialises on the inode regardless -- mutual exclusion is
+        # fully intact and this assertion would nonetheless FAIL.
+        #
+        # So widening this test with those rows produces a RED THAT IS THE
+        # INSTRUMENT'S FAULT, and the natural repair -- deleting the rows you
+        # just added -- discards correct coverage to silence a wrong check. To
+        # cover them, assert `samefile` on the two sidecars, or actual `flock`
+        # exclusion (hold via one spelling, attempt via the other). NOT path
+        # equality.
+        #
+        # THE PRECEDENT THAT WILL TEMPT YOU IS ONE FILE AWAY:
+        # test_containment_certification.py has case-variant and NFD-variant
+        # tests for the neighbouring containment property, where they are
+        # correct. Copying that pattern here without changing the assertion is
+        # the specific mistake this comment exists to prevent.
         via_real = derive_sidecar_from_production(mod, real / ".claude" / "CLAUDE.md")
         via_alias = derive_sidecar_from_production(mod, alias / ".claude" / "CLAUDE.md")
         assert via_real == via_alias, (
