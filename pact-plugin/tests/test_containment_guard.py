@@ -471,6 +471,27 @@ class TestR6InProjectRedirectResidualDocumented:
     floor and deferred is now closed as a side effect, since the check and the
     write share one pinned parent descriptor. That closure was a bonus of the
     pinned form, never its justification.
+
+    THE LOCK KEYING ALSO DEPENDS ON THIS TEST, AND THAT IS NOT OBVIOUS FROM
+    THE LOCK CODE.
+    `file_lock` keys its sidecar on `target_file.parent.resolve()` plus the
+    LITERAL leaf name -- it deliberately does NOT follow the leaf. That is
+    only correct while the write REPLACES the leaf entry rather than writing
+    THROUGH it, which is the exact property this test pins.
+
+    Two names for one inode therefore no longer share a lock, and that was
+    retired ON PURPOSE: a rename-based write destroys the alias relationship
+    on the first commit, so the property protected a relationship that no
+    longer exists.
+
+    If the write ever became an open/truncate on the target, the two names
+    would share a destination again, the lost-update silhouette would become
+    real, and the lock keying would become WRONG -- SILENTLY, because the lock
+    would still look correct from the lock code. There is no path from
+    `file_lock` back to this test, so anyone weakening or deleting this
+    tripwire is also invalidating the lock keying and has no way to learn it
+    where they are working. That is why the dependency is stated here rather
+    than only in the design document.
     """
 
     def test_in_project_redirect_allowed_and_os_replace_does_not_write_through(self, tmp_path):
