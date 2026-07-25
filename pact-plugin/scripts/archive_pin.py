@@ -27,10 +27,10 @@ Usage:
   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/archive_pin.py" --index N
   python3 archive_pin.py --index 0 --db-path /tmp/test.db   # tests only
 
-Output (stdout, JSON, ALWAYS exit 0). `outcome`, `heading` and
-`claude_md_path` are present in EVERY verdict. `heading` is null only when the
-pin could not be resolved at all and is NEVER derived from the requested
-index; `claude_md_path` is null only when resolution itself failed:
+Output (stdout, JSON, ALWAYS exit 0). `outcome`, `heading`, `claude_md_path`
+and `delete_string` are present as KEYS in every verdict; when a value is null
+that is governed by the invariant below, not by a per-failure enumeration.
+`heading` is NEVER derived from the requested index:
 
   {"outcome": "ARCHIVED",               "heading": str, "claude_md_path": str,
    "delete_string": str, "memory_id": str, "chars": int, "contained": true,
@@ -48,10 +48,10 @@ FOUR outcomes. Only ARCHIVED permits the removal Edit to proceed.
 `delete_string` is the verbatim block, a CONTENT handle: the removal is
 `Edit(old_string=delete_string, new_string="")`, which matches on content, so
 a file that moved under the caller makes the Edit FAIL LOUDLY rather than
-delete the wrong bytes. It is emitted whenever the pin RESOLVES -- including
-NOT_ARCHIVED and a located-pin UNEVALUABLE -- because it is a property of
-WHICH PIN, not of whether the archive worked; null only when the pin does not
-resolve. Uniqueness is verified after the save.
+delete the wrong bytes. It is a property of WHICH PIN, not of whether the
+archive worked, so it is present on NOT_ARCHIVED and on a located-pin
+UNEVALUABLE too. Uniqueness is verified after the save. Presence is governed
+by the invariant below.
 
 ARCHIVED_DELETE_UNSAFE means the archive SUCCEEDED and the removal is unsafe:
 the block is not unique, so an Edit keyed on it would be ambiguous. It is a
@@ -61,19 +61,41 @@ reason table, which is how a permission gets inherited by a condition it was
 never designed for. It offers no escape hatch, and does not trap the curator
 at the cap: the content is archived, so manual removal is a redirect.
 
-`claude_md_path` names the file THIS RUN ACTUALLY READ. It exists because
-resolution can succeed on the WRONG file: the order is CLAUDE_PROJECT_DIR ->
-git common-dir parent -> CWD, and a miss at any step falls through silently,
-so a CLAUDE_PROJECT_DIR naming a directory with no CLAUDE.md resolves to some
-other project's file and reports a confident success. The command's heading
-cross-check cannot catch it -- check_pin_caps.py uses the SAME resolver, so
-the listing and the archival agree on the same wrong file. Emitting the path
-is what makes a wrong file visible; `resolve_claude_md` additionally REFUSES
-the cross-project case outright.
+THE CONTRACT, stated as the INVARIANT THE CODE ENFORCES rather than as a
+list of which failures null which fields:
 
-Anything but ARCHIVED means the command REFUSES the eviction. NOT_ARCHIVED
-and UNEVALUABLE are kept distinct because collapsing "cannot tell" into
-"definitely bad" is how a two-valued validator destroys by construction.
+    EACH FIELD IS PRESENT IFF THE FACT IT NAMES WAS ACTUALLY ESTABLISHED.
+
+  `claude_md_path`  the file this run read.  Established once resolution
+                    succeeds -- so it survives EVERY later failure.
+  `heading`         which pin.  Established once the pin is located.
+  `delete_string`   a USABLE handle for the removal Edit.  Established once
+                    the block is sliced AND is non-empty AND is verbatim in
+                    the source.
+
+An enumeration ("null only when X") is a claim about observed data and is
+falsified by the first path nobody thought of -- which is exactly how the
+previous version of this contract came to be false the day it was written.
+The invariant above cannot be falsified by adding a fourth failure path,
+because it says what the code guarantees rather than what it was seen doing.
+
+TWO CONSEQUENCES a reader is likely to misread as bugs, so they are stated:
+
+1. A LATER failure never reports LESS than an earlier one.  Context is
+   attached at the boundary where it becomes known and is never dropped
+   afterwards, so a verdict's context grows monotonically with how far the
+   run got.  A post-resolution CLI failure therefore reports MORE than a
+   pre-resolution bad index, not less.  (It once reported less; that was the
+   bug this contract now pins.)
+
+2. Two post-resolution paths DELIBERATELY omit `delete_string`, and adding
+   it there would be a regression rather than a consistency fix.  An empty
+   block and a block that fails the source-side verbatim tripwire are both
+   cases where a handle was computed but is NOT USABLE -- an Edit keyed on
+   either would fail to match.  Emitting a handle known to be bad is worse
+   than emitting none, because the caller's whole reason to trust it is that
+   it was checked.  `heading` and `claude_md_path` are still present on both,
+   because those facts WERE established.
 
 Used by:
   - commands/prune-memory.md: invoked before the removal Edit; the verdict
@@ -682,6 +704,35 @@ def archive_pin(index: int, db_path=None) -> dict:
             heading=heading, claude_md_path=claude_md_path,
         )
 
+    def _cli(args, **kwargs):
+        """Invoke the memory CLI, enriching any UNEVALUABLE with pin context.
+
+        `_run_memory_cli` raises bare -- correctly, since it is a generic
+        helper with no idea which pin is being archived. But EVERY failure it
+        can raise happens AFTER the pin was resolved: CLAUDE.md read, pins
+        parsed, block already sliced. So the verdict can and must still name
+        the file, the heading and the delete handle.
+
+        Without this the LATER a failure occurs the LESS context survives,
+        which is backwards and is not something anyone would choose: a
+        pre-resolution bad index reported `claude_md_path` while a
+        post-resolution CLI timeout reported nothing at all.
+
+        It bit hardest exactly where it mattered most. A CLI timeout and a
+        missing CLI are the canonical CANNOT-TELL cases -- they are when the
+        escape hatch runs -- so the hatch would have had no mechanical
+        delete boundary in its own primary use case.
+        """
+        try:
+            return _run_memory_cli(args, **kwargs)
+        except _Unevaluable as exc:
+            raise _Unevaluable(
+                exc.reason,
+                heading=heading,
+                claude_md_path=claude_md_path,
+                delete_string=block,
+            ) from exc
+
     # --- conjunct 1: save returned a memory_id -----------------------------
     # Passed on STDIN rather than argv: the record embeds arbitrary curator
     # text, and an argv-borne payload would be bounded by ARG_MAX and would
@@ -697,7 +748,7 @@ def archive_pin(index: int, db_path=None) -> dict:
     # file was not, and the duplicate would make the curator's removal Edit
     # ambiguous. Measured: without it the block occurs twice and the file
     # grows; with it CLAUDE.md is byte-identical across the save.
-    _, stdout, stderr = _run_memory_cli(
+    _, stdout, stderr = _cli(
         [_ARCHIVE_SUBCOMMAND, "--stdin", "--no-sync"], db_path=db_path,
         stdin_data=payload, cwd=project_dir,
     )
@@ -716,7 +767,7 @@ def archive_pin(index: int, db_path=None) -> dict:
         }
 
     # --- conjunct 2: the record is retrievable by that id ------------------
-    _, stdout, stderr = _run_memory_cli(
+    _, stdout, stderr = _cli(
         ["get", memory_id], db_path=db_path, cwd=project_dir
     )
     fetched = _parse_envelope(stdout)

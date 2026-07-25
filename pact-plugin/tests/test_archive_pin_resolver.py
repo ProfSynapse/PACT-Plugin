@@ -539,3 +539,164 @@ class TestArchivedDeleteUnsafe:
         assert verdict["outcome"] == "ARCHIVED_DELETE_UNSAFE"
         assert "ambiguous" in verdict["reason"]
         assert verdict["occurrences"] == 2
+
+
+class TestPostResolutionFailuresKeepPinContext:
+    """A failure AFTER the pin resolved must not report LESS than one before.
+
+    Every failure `_run_memory_cli` can raise happens once CLAUDE.md has been
+    read, the pins parsed and the block sliced — so the verdict can still
+    name the file, the heading and the delete handle. It previously reported
+    none of them, which made the LATER a failure occurred, the LESS context
+    survived. Backwards, and not something anyone would choose: the
+    pre-resolution control below reported MORE than a post-resolution CLI
+    timeout did.
+
+    It bit hardest exactly where it mattered most. A CLI timeout and a
+    missing CLI are the canonical CANNOT-TELL cases — they are precisely when
+    the escape hatch runs — so the hatch had no mechanical delete boundary in
+    its own primary use case. Found by `coder-prose`, who blocked a deletion
+    that depended on the contract rather than trusting it.
+
+    Patched at the SUBPROCESS seam, not at `_run_memory_cli`: stubbing the
+    function under test would bypass the branch under test.
+    """
+
+    def _project(self, isolated, monkeypatch, name):
+        a = _make_project(isolated / name, "CTX PIN")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
+        monkeypatch.chdir(a)
+        return a
+
+    def _assert_full_context(self, verdict, label, reason_marker):
+        """`reason_marker` is what stops a FALSE CLEAR.
+
+        Asserting only the outcome and the fields lets a test pass by
+        exercising a DIFFERENT path that happens to produce the same shape —
+        which is exactly how `coder-prose`'s second probe reported CLEARED
+        while verifying one path twice under two labels. Two green rows that
+        were secretly the same row. So each test also proves the trigger it
+        intended actually reached the verdict.
+        """
+        assert verdict["outcome"] == "UNEVALUABLE", f"{label}: {verdict}"
+        assert reason_marker in verdict["reason"], (
+            f"{label}: the intended trigger did not reach the verdict — "
+            f"expected {reason_marker!r} in reason, got {verdict['reason']!r}. "
+            f"This test would otherwise pass on any path with the same shape."
+        )
+        assert verdict["heading"] == "CTX PIN", (
+            f"{label}: heading lost — the pin WAS resolved before this failure"
+        )
+        assert verdict["claude_md_path"] is not None, (
+            f"{label}: claude_md_path lost — the file was read before this "
+            f"failure, so the verdict can name it"
+        )
+        assert verdict["delete_string"] is not None, (
+            f"{label}: delete_string lost — this is a CANNOT-TELL case, so it "
+            f"is exactly when the escape hatch runs and needs a boundary"
+        )
+        assert "CTX PIN" in verdict["delete_string"]
+
+    def test_cli_timeout_keeps_context(self, isolated, monkeypatch):
+        self._project(isolated, monkeypatch, "t1")
+
+        def _boom(*a, **k):
+            raise subprocess.TimeoutExpired(cmd="save", timeout=1)
+
+        monkeypatch.setattr(subprocess, "run", _boom)
+        self._assert_full_context(archive_pin.build_verdict(0), "timeout",
+                                  "timed out")
+
+    def test_cli_launch_failure_keeps_context(self, isolated, monkeypatch):
+        self._project(isolated, monkeypatch, "t2")
+
+        def _boom(*a, **k):
+            raise OSError("cannot launch")
+
+        monkeypatch.setattr(subprocess, "run", _boom)
+        self._assert_full_context(archive_pin.build_verdict(0), "launch",
+                                  "could not launch")
+
+    def test_missing_cli_keeps_context(self, isolated, monkeypatch):
+        self._project(isolated, monkeypatch, "t3")
+        monkeypatch.setattr(
+            archive_pin, "_MEMORY_CLI", Path("/nonexistent/cli.py")
+        )
+        self._assert_full_context(archive_pin.build_verdict(0), "missing cli",
+                                  "not found")
+
+    def test_pre_resolution_failure_still_reports_less(
+        self, isolated, monkeypatch
+    ):
+        """THE CONTROL, and the reason the above is a defect rather than a
+        design choice. A genuinely pre-resolution failure — the pin never
+        resolved — correctly reports no heading and no delete handle, while
+        still naming the file, because resolution itself succeeded. If this
+        ever started reporting a heading, the tests above would be passing
+        for the wrong reason."""
+        self._project(isolated, monkeypatch, "t4")
+        verdict = archive_pin.build_verdict(99)
+        assert verdict["outcome"] == "UNEVALUABLE"
+        assert verdict["heading"] is None
+        assert verdict["delete_string"] is None
+        assert verdict["claude_md_path"] is not None
+
+
+class TestDeliberateDeleteStringOmissions:
+    """Two post-resolution paths omit `delete_string` ON PURPOSE.
+
+    A derived census of every `_Unevaluable` raise flagged these two as
+    "post-resolution without full context" — and they are correct. That is
+    the distinction the contract invariant exists to make legible:
+
+        each field is present iff THE FACT IT NAMES was established.
+
+    `delete_string` does not name "the block"; it names *a usable handle for
+    the removal Edit*. On both paths a block was computed and is NOT usable:
+    an empty block is no handle at all, and a block failing the source-side
+    verbatim tripwire is one an Edit provably cannot match. **Emitting a
+    handle known to be bad is worse than emitting none**, because the
+    caller's entire reason to trust it is that it was checked.
+
+    `heading` and `claude_md_path` ARE present on both, because those facts
+    were established. This class exists so a future "consistency fix" that
+    adds `delete_string` here goes red with the reason attached.
+    """
+
+    def test_empty_block_omits_the_handle_but_keeps_the_rest(
+        self, isolated, monkeypatch
+    ):
+        a = _make_project(isolated / "empty_block", "EB PIN")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
+        monkeypatch.chdir(a)
+        monkeypatch.setattr(archive_pin, "extract_pin_block",
+                            lambda *args, **kw: "   \n  ")
+        verdict = archive_pin.build_verdict(0)
+        assert verdict["outcome"] == "UNEVALUABLE"
+        assert "empty" in verdict["reason"]
+        assert verdict["delete_string"] is None, (
+            "an empty block is not a usable delete handle; emitting it would "
+            "hand the caller something an Edit cannot match"
+        )
+        assert verdict["heading"] == "EB PIN"
+        assert verdict["claude_md_path"] is not None
+
+    def test_non_verbatim_block_omits_the_handle_but_keeps_the_rest(
+        self, isolated, monkeypatch
+    ):
+        a = _make_project(isolated / "not_verbatim", "NV PIN")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
+        monkeypatch.chdir(a)
+        monkeypatch.setattr(
+            archive_pin, "extract_pin_block",
+            lambda *args, **kw: "### Fabricated\nnot from the source",
+        )
+        verdict = archive_pin.build_verdict(0)
+        assert verdict["outcome"] == "UNEVALUABLE"
+        assert "not verbatim" in verdict["reason"]
+        assert verdict["delete_string"] is None, (
+            "a block that fails the verbatim tripwire is a handle an Edit "
+            "provably cannot match — worse than none"
+        )
+        assert verdict["heading"] == "NV PIN"
+        assert verdict["claude_md_path"] is not None
