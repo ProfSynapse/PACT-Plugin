@@ -342,3 +342,200 @@ class TestVerdictCarriesTheResolvedPath:
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
         assert "claude_md_path" in payload
+
+
+class TestSyncSuppressionAndDeleteString:
+    """The archival save must not write the block back, and must hand the
+    caller a content handle for the removal.
+
+    THE SUPPRESSION IS MEASURED BY BYTE-IDENTITY, not by a block count. A
+    count check is conditioned on the hypothesis it tests — it only detects a
+    writer that duplicates THIS block. Byte-identity fails if anything at all
+    writes, including a writer nobody has thought of. That distinction is not
+    academic here: if some other path also writes the block back, uniqueness
+    never holds and the emit-time check redirects EVERY eviction to manual
+    removal — a de-facto disabling of the automated path, arriving through
+    the fix rather than the defect.
+    """
+
+    def test_archival_save_leaves_claude_md_byte_identical(
+        self, isolated, monkeypatch, tmp_path
+    ):
+        a = _make_project(isolated / "project_a", "PIN A")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
+        monkeypatch.chdir(a)
+        claude_md = a / ".claude" / "CLAUDE.md"
+
+        before = claude_md.read_bytes()
+        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+
+        assert verdict["outcome"] == "ARCHIVED", verdict
+        assert verdict["memory_id"], (
+            "the archive must have PERSISTED — a crashed save also leaves the "
+            "file untouched, and the two are indistinguishable without this"
+        )
+        assert claude_md.read_bytes() == before, (
+            "the archival save wrote to CLAUDE.md; the Working Memory "
+            "projection is putting back the bytes the archive exists to remove"
+        )
+
+    def test_delete_string_is_the_verbatim_span_and_unique(
+        self, isolated, monkeypatch, tmp_path
+    ):
+        a = _make_project(isolated / "project_a", "PIN A")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
+        monkeypatch.chdir(a)
+        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+
+        content = (a / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
+        handle = verdict["delete_string"]
+        assert handle in content, "delete_string must be verbatim in the file"
+        assert content.count(handle) == 1, (
+            "a non-unique handle makes the curator's Edit ambiguous"
+        )
+        assert "### PIN A" in handle
+        assert verdict["occurrences"] == 1
+
+    def test_delete_string_present_on_a_located_pin_unevaluable(
+        self, isolated, monkeypatch
+    ):
+        """It is a property of WHICH PIN, not of whether the archive worked —
+        so the escape-hatch path gets a mechanical boundary too and no
+        consumer has to re-derive one."""
+        a = _make_project(isolated / "project_a", "PIN A")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
+        monkeypatch.chdir(a)
+
+        def _stub(args, **kwargs):
+            if args[0] == "save":
+                return 0, json.dumps(
+                    {"ok": True, "result": {"memory_id": "e" * 32}}
+                ), ""
+            return 1, "", json.dumps({"ok": False, "error": "NOT_FOUND",
+                                      "message": "gone"})
+
+        monkeypatch.setattr(archive_pin, "_run_memory_cli", _stub)
+        verdict = archive_pin.build_verdict(0)
+        assert verdict["outcome"] == "UNEVALUABLE"
+        assert verdict["delete_string"] is not None
+        assert "### PIN A" in verdict["delete_string"]
+
+    def test_unresolvable_pin_has_null_delete_string(
+        self, isolated, monkeypatch
+    ):
+        a = _make_project(isolated / "project_a", "PIN A")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
+        monkeypatch.chdir(a)
+        verdict = archive_pin.build_verdict(99)
+        assert verdict["outcome"] == "UNEVALUABLE"
+        assert verdict["delete_string"] is None
+
+
+class TestArchivedDeleteUnsafe:
+    """The FOURTH outcome: archive succeeded, removal unsafe.
+
+    Not UNEVALUABLE — that means *cannot tell*, and a duplicated block is a
+    KNOWN-BAD precondition. Not NOT_ARCHIVED — that asserts the archive
+    failed, which is false, and putting a falsehood in the one report whose
+    job is truthful measurement is the defect this feature exists to remove.
+
+    It is a distinct outcome rather than a reason on an existing one because
+    THE OUTCOME NAME MUST DETERMINE THE DISPOSITION. One outcome with two
+    dispositions forces a reason table, and a reason table is how a
+    permission gets inherited by a condition it was never designed for.
+    """
+
+    def _duplicated_project(self, root):
+        """A CLAUDE.md where the pin's whole span appears twice."""
+        root.mkdir(parents=True, exist_ok=True)
+        (root / ".claude").mkdir(parents=True, exist_ok=True)
+        # The duplicate must match the SPAN, not just the block: the span
+        # runs to the next pin's start and so carries the trailing blank
+        # line. A copy without it is a different string and the uniqueness
+        # check would correctly pass -- the fixture, not the code, would be
+        # wrong. The precondition assertion in the test catches that.
+        block = "<!-- pinned: 2026-01-01 -->\n### DUP\nbody of DUP\n"
+        (root / ".claude" / "CLAUDE.md").write_text(
+            "# P\n\n## Pinned Context\n\n" + block + "\n"
+            "## Working Memory\n\n" + block + "\n",
+            encoding="utf-8",
+        )
+        return root
+
+    def test_duplicate_block_yields_archived_delete_unsafe(
+        self, isolated, monkeypatch, tmp_path
+    ):
+        a = self._duplicated_project(isolated / "dup_project")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
+        monkeypatch.chdir(a)
+
+        content = (a / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
+        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+
+        # Precondition: the fixture really does duplicate the span, or this
+        # test passes for the wrong reason.
+        assert content.count(verdict["delete_string"]) > 1, (
+            "fixture did not actually duplicate the block — the unsafe "
+            "verdict below would be measuring something else"
+        )
+        assert verdict["outcome"] == "ARCHIVED_DELETE_UNSAFE", verdict
+        assert verdict["memory_id"], (
+            "the archive SUCCEEDED — the verdict must carry its id, because "
+            "the content being safe is what makes this a redirect and not a trap"
+        )
+        assert verdict["occurrences"] > 1
+        assert len(verdict["locations"]) == verdict["occurrences"]
+        assert verdict["delete_string"] is not None
+
+    def test_unsafe_is_not_mislabelled_as_a_failed_archive(
+        self, isolated, monkeypatch, tmp_path
+    ):
+        """Reusing NOT_ARCHIVED here would assert the archive failed when it
+        succeeded — and downstream that maps to the `archive_refused` journal
+        row, whose stated purpose is detecting a BROKEN ARCHIVER. A run of
+        them would read as a failing archiver while every archive worked."""
+        a = self._duplicated_project(isolated / "dup_project2")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
+        monkeypatch.chdir(a)
+        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+        assert verdict["outcome"] not in ("NOT_ARCHIVED", "UNEVALUABLE")
+        assert verdict["contained"] is True
+
+    def test_zero_occurrences_is_described_as_absence_not_ambiguity(self):
+        """`occurrences != 1` catches BOTH directions, and they are different
+        conditions with different curator responses.
+
+        Zero means the block was read from the file moments earlier and is
+        gone from the post-save re-read — concurrent modification, a live
+        hazard on a file the curator may have open. A curator told
+        "ambiguous" goes hunting for a second copy that does not exist.
+        The disposition must be readable from what the verdict SAYS.
+        """
+        zero = archive_pin._unsafe_reason(0, "/p/CLAUDE.md", "a" * 32)
+        many = archive_pin._unsafe_reason(3, "/p/CLAUDE.md", "a" * 32)
+
+        assert "ambiguous" not in zero, (
+            "zero occurrences is ABSENCE, not ambiguity — there is no second "
+            "copy for the curator to disambiguate against"
+        )
+        assert "NO LONGER PRESENT" in zero
+        assert "concurrently" in zero
+        assert "ambiguous" in many, "the >1 case genuinely IS ambiguous"
+        assert "occurs 3 times" in many
+        # Both must still report the archive succeeded — that is what makes
+        # either a redirect rather than a trap at the cap.
+        for reason in (zero, many):
+            assert "archive SUCCEEDED" in reason
+            assert "a" * 32 in reason
+
+    def test_both_unsafe_directions_share_the_outcome(self, isolated,
+                                                      monkeypatch, tmp_path):
+        """Same outcome name, different explanation — the split is in the
+        reason, never in the disposition."""
+        a = self._duplicated_project(isolated / "dup_project3")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
+        monkeypatch.chdir(a)
+        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+        assert verdict["outcome"] == "ARCHIVED_DELETE_UNSAFE"
+        assert "ambiguous" in verdict["reason"]
+        assert verdict["occurrences"] == 2

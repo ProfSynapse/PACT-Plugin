@@ -256,7 +256,16 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     "artifact_paths": {"workflow": str, "feature": str, "paths": list},
     # commands/prune-memory.md writes pin_prune_skipped on EVERY no-eviction
     # exit, not only on Cancel: cancelled / no_candidates / unknown_state /
-    # archive_refused / unverified_eviction. `archive_refused` is the
+    # archive_refused / unverified_eviction / delete_unsafe.
+    #
+    # `delete_unsafe` is DISTINCT from `archive_refused` and must not be
+    # folded into it. It means the archive SUCCEEDED but the removal was
+    # unsafe (the block was not unique, so an Edit keyed on it would be
+    # ambiguous). Reusing `archive_refused` there would record a falsehood --
+    # and worse, it would POISON the diagnostic below: a run of them would
+    # read as a broken archiver while every archive in fact succeeded.
+    #
+    # `archive_refused` is the
     # highest-value row — a run of refusals is the signal that the archival
     # mechanism itself is broken, and emitting only on Cancel would make that
     # failure mode invisible to the audit this event exists for.
@@ -423,7 +432,8 @@ _OPTIONAL_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     # commands/prune-memory.md writes pin_prune_skipped with an optional
     # `reason`, present ONLY where the flow genuinely elicited one: a
     # curator-supplied cancel reason, or the machine reason on
-    # archive_refused / unknown_state. A bare Cancel collects nothing, which
+    # archive_refused / unknown_state / delete_unsafe. A bare Cancel
+    # collects nothing, which
     # is exactly why this is optional rather than required — see the
     # required-fields registration above. The required-fields entry is what
     # ACTIVATES this optional check (same activation pattern as session_end /

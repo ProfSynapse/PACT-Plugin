@@ -32,12 +32,34 @@ Output (stdout, JSON, ALWAYS exit 0). `outcome`, `heading` and
 pin could not be resolved at all and is NEVER derived from the requested
 index; `claude_md_path` is null only when resolution itself failed:
 
-  {"outcome": "ARCHIVED",     "heading": str, "claude_md_path": str,
-   "memory_id": str, "chars": int, "contained": true}
-  {"outcome": "NOT_ARCHIVED", "heading": str, "claude_md_path": str,
-   "memory_id": str|null, "reason": str}
-  {"outcome": "UNEVALUABLE",  "heading": str|null,
-   "claude_md_path": str|null, "reason": str}
+  {"outcome": "ARCHIVED",               "heading": str, "claude_md_path": str,
+   "delete_string": str, "memory_id": str, "chars": int, "contained": true,
+   "occurrences": 1}
+  {"outcome": "ARCHIVED_DELETE_UNSAFE", "heading": str, "claude_md_path": str,
+   "delete_string": str, "memory_id": str, "occurrences": int,
+   "locations": [int], "reason": str}
+  {"outcome": "NOT_ARCHIVED",           "heading": str, "claude_md_path": str,
+   "delete_string": str, "memory_id": str|null, "reason": str}
+  {"outcome": "UNEVALUABLE",            "heading": str|null,
+   "claude_md_path": str|null, "delete_string": str|null, "reason": str}
+
+FOUR outcomes. Only ARCHIVED permits the removal Edit to proceed.
+
+`delete_string` is the verbatim block, a CONTENT handle: the removal is
+`Edit(old_string=delete_string, new_string="")`, which matches on content, so
+a file that moved under the caller makes the Edit FAIL LOUDLY rather than
+delete the wrong bytes. It is emitted whenever the pin RESOLVES -- including
+NOT_ARCHIVED and a located-pin UNEVALUABLE -- because it is a property of
+WHICH PIN, not of whether the archive worked; null only when the pin does not
+resolve. Uniqueness is verified after the save.
+
+ARCHIVED_DELETE_UNSAFE means the archive SUCCEEDED and the removal is unsafe:
+the block is not unique, so an Edit keyed on it would be ambiguous. It is a
+distinct outcome rather than a reason on another one because THE OUTCOME NAME
+MUST DETERMINE THE DISPOSITION -- one outcome with two dispositions forces a
+reason table, which is how a permission gets inherited by a condition it was
+never designed for. It offers no escape hatch, and does not trap the curator
+at the cap: the content is archived, so manual removal is a redirect.
 
 `claude_md_path` names the file THIS RUN ACTUALLY READ. It exists because
 resolution can succeed on the WRONG file: the order is CLAUDE_PROJECT_DIR ->
@@ -174,10 +196,16 @@ class _Unevaluable(Exception):
     """
 
     def __init__(self, reason: str, heading: str | None = None,
-                 claude_md_path: str | None = None):
+                 claude_md_path: str | None = None,
+                 delete_string: str | None = None):
         super().__init__(reason)
         self.reason = reason
         self.heading = heading
+        # The block to remove, when the pin RESOLVED before the failure. It is
+        # a property of WHICH PIN, not of whether the archive worked, so the
+        # escape-hatch path gets a mechanical boundary too and no consumer has
+        # to re-derive one.
+        self.delete_string = delete_string
         # The file this run read, when one was resolved before the failure.
         # None only when resolution itself failed -- there is genuinely no
         # path to name, and inventing one would be worse than null.
@@ -491,6 +519,60 @@ def _classify_cli_error(stderr: str) -> str:
     return text.splitlines()[-1][:300]
 
 
+def _unsafe_reason(occurrences: int, claude_md_path: str, memory_id: str) -> str:
+    """Explain WHY the removal is unsafe -- the two causes are different.
+
+    `occurrences != 1` catches both directions, but they are not the same
+    condition and a curator acts differently on each:
+
+      > 1   the block appears more than once, so an Edit keyed on it cannot be
+            targeted. DUPLICATION.
+      0     the block is not there at all. It was present when this run read
+            the file and is gone from the post-save re-read, which means
+            something modified CLAUDE.md concurrently -- a live hazard on a
+            file the curator may have open in an editor. ABSENCE, not ambiguity.
+
+    Telling a curator "ambiguous" when the block has VANISHED sends them
+    hunting for a second copy that does not exist. The disposition must be
+    readable from what the verdict says rather than reconstructed, and a
+    reason string that misdescribes its own condition is that failure in
+    miniature.
+    """
+    archived = (
+        f"The archive SUCCEEDED (memory_id {memory_id}) -- the content is "
+        f"safe. Remove the pin manually."
+    )
+    if occurrences == 0:
+        return (
+            f"the pin block is NO LONGER PRESENT in {claude_md_path}. It was "
+            f"read from that file moments ago, so something modified the file "
+            f"concurrently -- check for an editor or another process holding "
+            f"it. This is absence, not ambiguity: there is no second copy to "
+            f"find. {archived}"
+        )
+    return (
+        f"the pin block occurs {occurrences} times in {claude_md_path}; a "
+        f"removal Edit keyed on it would be ambiguous. {archived}"
+    )
+
+
+def _occurrence_offsets(text: str, needle: str) -> list:
+    """Character offsets of every occurrence of `needle`, for the unsafe verdict.
+
+    Offsets are DIAGNOSTIC only -- they tell a curator where the copies are.
+    They are deliberately NOT the delete handle: a positional handle computed
+    now and consumed later is silently wrong if anything touches the file in
+    between, whereas the content handle makes a stale Edit fail loudly.
+    """
+    offsets, start = [], 0
+    while True:
+        at = text.find(needle, start)
+        if at == -1:
+            return offsets
+        offsets.append(at)
+        start = at + 1
+
+
 def _build_record(block: str, heading: str) -> dict:
     """Build the pact-memory record for an archived pin.
 
@@ -609,9 +691,15 @@ def archive_pin(index: int, db_path=None) -> dict:
     # STANDALONE: always `save` (create), never `update` (fold). See
     # _build_record -- a fold runs no marker code and is invisible to an
     # archive scan.
+    # --no-sync: the Working Memory projection would write the record's
+    # `context` -- the block, verbatim -- back into the same CLAUDE.md this
+    # archive exists to remove it from. The pin SLOT would be freed while the
+    # file was not, and the duplicate would make the curator's removal Edit
+    # ambiguous. Measured: without it the block occurs twice and the file
+    # grows; with it CLAUDE.md is byte-identical across the save.
     _, stdout, stderr = _run_memory_cli(
-        [_ARCHIVE_SUBCOMMAND, "--stdin"], db_path=db_path, stdin_data=payload,
-        cwd=project_dir,
+        [_ARCHIVE_SUBCOMMAND, "--stdin", "--no-sync"], db_path=db_path,
+        stdin_data=payload, cwd=project_dir,
     )
     result = _parse_envelope(stdout)
     memory_id = result.get("memory_id") if isinstance(result, dict) else None
@@ -622,6 +710,7 @@ def archive_pin(index: int, db_path=None) -> dict:
             "outcome": "NOT_ARCHIVED",
             "heading": heading,
             "claude_md_path": claude_md_path,
+            "delete_string": block,
             "memory_id": None,
             "reason": f"save returned no memory_id -- {_classify_cli_error(stderr)}",
         }
@@ -639,6 +728,7 @@ def archive_pin(index: int, db_path=None) -> dict:
             f"saved as {memory_id} but re-fetch failed -- "
             f"{_classify_cli_error(stderr)}",
             heading=heading, claude_md_path=claude_md_path,
+            delete_string=block,
         )
 
     # --- conjunct 3: the pin block is present AT THE DESTINATION -----------
@@ -657,6 +747,7 @@ def archive_pin(index: int, db_path=None) -> dict:
             "outcome": "NOT_ARCHIVED",
             "heading": heading,
             "claude_md_path": claude_md_path,
+            "delete_string": block,
             "memory_id": memory_id,
             "reason": (
                 "saved record does not contain the pin block verbatim "
@@ -664,13 +755,57 @@ def archive_pin(index: int, db_path=None) -> dict:
             ),
         }
 
+    # --- delete_string uniqueness, checked AFTER the save --------------
+    # AFTER, because that is the state the curator's destructive Edit will
+    # actually meet -- checking before would validate a precondition on a file
+    # something may since have written to, which is the assumption under test.
+    # The before == after assertion turns that judgement call into a
+    # measurement: with the sync suppressed the two must agree, and a
+    # divergence surfaces loudly instead of being absorbed by whichever side
+    # was picked.
+    try:
+        post = claude_md.read_text(encoding="utf-8")
+    except (IOError, OSError, UnicodeDecodeError) as exc:
+        raise _Unevaluable(
+            f"CLAUDE.md unreadable after save ({type(exc).__name__})",
+            heading=heading, claude_md_path=claude_md_path,
+            delete_string=block,
+        )
+
+    occurrences = post.count(block)
+    if occurrences != 1:
+        # ARCHIVE SUCCEEDED, REMOVAL IS UNSAFE -- a distinct outcome, not a
+        # variant of another. Not UNEVALUABLE: that means "cannot tell", and
+        # this is a KNOWN-BAD precondition for the delete. Not NOT_ARCHIVED:
+        # that asserts the archive failed, which is false here and would put a
+        # falsehood in the one report whose job is truthful measurement.
+        # No escape hatch -- the curator removes the pin manually WITH the
+        # content already safely archived, so this redirects rather than traps
+        # them at the cap. The outcome NAME determines the disposition; a
+        # reason string would not, and a reason table is how a permission gets
+        # inherited by a condition it was never designed for.
+        return {
+            "outcome": "ARCHIVED_DELETE_UNSAFE",
+            "heading": heading,
+            "claude_md_path": claude_md_path,
+            "delete_string": block,
+            "memory_id": memory_id,
+            "chars": len(block),
+            "contained": True,
+            "occurrences": occurrences,
+            "locations": _occurrence_offsets(post, block),
+            "reason": _unsafe_reason(occurrences, claude_md_path, memory_id),
+        }
+
     return {
         "outcome": "ARCHIVED",
         "heading": heading,
         "claude_md_path": claude_md_path,
+        "delete_string": block,
         "memory_id": memory_id,
         "chars": len(block),
         "contained": True,
+        "occurrences": 1,
     }
 
 
@@ -689,6 +824,7 @@ def build_verdict(index: int, db_path=None) -> dict:
             "outcome": "UNEVALUABLE",
             "heading": exc.heading,
             "claude_md_path": exc.claude_md_path,
+            "delete_string": exc.delete_string,
             "reason": exc.reason,
         }
     except Exception as exc:  # noqa: BLE001 -- never crash the curator's flow
@@ -696,6 +832,7 @@ def build_verdict(index: int, db_path=None) -> dict:
             "outcome": "UNEVALUABLE",
             "heading": None,
             "claude_md_path": None,
+            "delete_string": None,
             "reason": f"internal error: {type(exc).__name__}",
         }
 
