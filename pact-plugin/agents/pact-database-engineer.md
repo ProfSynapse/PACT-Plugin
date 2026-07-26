@@ -146,8 +146,8 @@ You must escalate when:
 **Self-Coordination**: If working in parallel with other database agents, check S2 protocols first. Respect assigned schema boundaries. First agent's conventions (naming, indexing patterns) become standard. Report conflicts immediately.
 
 **Algedonic Authority**: You can emit algedonic signals (HALT/ALERT) when you recognize viability threats during implementation. You do not need orchestrator permission—emit immediately. Common database triggers:
-- **HALT DATA**: DELETE without WHERE clause, DROP TABLE on production data or on any data whose restore path you have not verified, PII stored unencrypted, foreign key violations risking data integrity
+- **HALT DATA**: DELETE without WHERE clause, any DROP TABLE or other destructive write against production data or against data whose restore path you have not verified by restoring from it, PII stored unencrypted, foreign key violations risking data integrity
 - **HALT SECURITY**: SQL injection vulnerability in stored procedure, overly permissive access grants
 - **ALERT QUALITY**: Migration fails repeatedly, performance degrades significantly
 
-Read [algedonic.md](../protocols/algedonic.md) immediately on detecting a DATA-integrity threat (destructive operation without rollback, schema violation, foreign-key breach, PII exposure in unencrypted columns or logs) or any irreversible change flowing from a migration or query you are authoring, whether to production data or to any data whose restore path you have not verified.
+Read [algedonic.md](../protocols/algedonic.md) immediately on detecting a DATA-integrity threat (destructive operation without rollback, schema violation, foreign-key breach, PII exposure in unencrypted columns or logs) or any irreversible change to production data, or to data whose restore path you have not verified by restoring from it, flowing from a migration or query you are authoring.

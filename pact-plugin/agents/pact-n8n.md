@@ -157,10 +157,10 @@ You must escalate when:
 
 **Algedonic Authority**: You can emit algedonic signals (HALT/ALERT) when you recognize viability threats during workflow implementation. You do not need orchestrator permission—emit immediately. Common n8n triggers:
 - **HALT SECURITY**: Credentials exposed in workflow, webhook lacks authentication, sensitive data logged
-- **HALT DATA**: Workflow could corrupt or delete production data or data whose restore path you have not verified, PII handled without encryption
+- **HALT DATA**: Workflow could corrupt or delete production data or data whose restore path you have not verified by restoring from it, PII handled without encryption
 - **ALERT QUALITY**: Validation errors persist after 3+ fix attempts, workflow design has fundamental issues
 
-Read [algedonic.md](../protocols/algedonic.md) immediately on detecting a SECURITY flaw (webhook accepting unauthenticated requests, credential exposure in workflow JSON or expressions, plaintext API key in HTTP node) or a DATA risk (irreversible workflow operation against production data or against data whose restore path you have not verified, missing rate-limit on external write, destructive bulk update without dry-run).
+Read [algedonic.md](../protocols/algedonic.md) immediately on detecting a SECURITY flaw (webhook accepting unauthenticated requests, credential exposure in workflow JSON or expressions, plaintext API key in HTTP node) or a DATA risk (irreversible workflow operation against production data or against data whose restore path you have not verified by restoring from it, missing rate-limit on external write, destructive bulk update without dry-run).
 
 # TEMPLATE DEPLOYMENT
 
