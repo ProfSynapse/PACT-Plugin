@@ -1433,9 +1433,28 @@ class TestProductionDbGuardScope:
         # Returns instead of raising SystemExit — the in-process branch.
         assert _refuse_production_db_under_pytest(None) is None
 
-    def test_an_explicit_db_path_is_never_refused(self, tmp_path):
-        """Non-vacuity: the exemption above must not be the ONLY reason it
-        returns. With a db_path present it returns before either check."""
+    def test_an_explicit_db_path_is_never_refused(self, tmp_path, monkeypatch):
+        """Non-vacuity: the db_path check must not be MASKED by the exemption.
+
+        Asserting this from an ordinary in-process test measures nothing. Both
+        early returns fire here — `db_path is not None` AND `pytest in
+        sys.modules` — so the call returns None whichever one is doing the
+        work, and it keeps returning None when the db_path check is deleted
+        outright. Verified by mutation: with that check removed the assertion
+        still passed, while the child-side spawn test in test_archive_pin.py
+        caught it. A control that cannot fail is not a control.
+
+        So the in-process exemption is SUPPRESSED first — pytest is hidden from
+        `sys.modules` and the inherited child signal is set, which is exactly
+        the state a spawned child is in. The db_path check is then the ONLY
+        thing that can prevent a refusal, and the assertion is coupled to it.
+        """
+        monkeypatch.delitem(sys.modules, "pytest", raising=False)
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "sentinel::test (call)")
+        assert "pytest" not in sys.modules, (
+            "precondition: the in-process exemption is still live, so this "
+            "test cannot show the db_path check is what prevents the refusal"
+        )
         assert _refuse_production_db_under_pytest(tmp_path / "x.db") is None
 
 
