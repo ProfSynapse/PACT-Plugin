@@ -1214,6 +1214,25 @@ def _keys_on_recoverability(line: str) -> bool:
     unit of meaning that exists independently of the example. Measured across
     every DATA-trigger line in every shipped agent body, the two agree
     everywhere, so the principled boundary costs nothing.
+
+    ⚠️ DO NOT DELETE THE CLAUSE SPLIT AS DEAD WEIGHT, and read this before
+    concluding that it is. The WORD-ANCHORING alone rejects the wording that
+    prompted this check; measured against that case, the clause split changes
+    NOTHING. It is kept as a SECOND, INDEPENDENT PATH to the same answer,
+    covering a class -- a recovery word and a verification word far apart and
+    unrelated -- that is ARGUED FOR BUT HAS NEVER BEEN EXHIBITED. That coverage
+    is SPECULATIVE, not demonstrated, and it is deliberately retained anyway
+    because its cost is measured at zero.
+
+    The reason that trade is worth taking is not this check specifically. Every
+    false result caught in this codebase's recent history was caught by a
+    REDUNDANT check disagreeing with a primary one rather than by any control:
+    a search flag that silently matched nothing, a database cursor already
+    consumed, a case-sensitivity flag off by one letter. In each case no control
+    could have caught it -- only two paths to the same answer disagreeing. And
+    in each case the redundant path was the one that looked like duplication.
+    A second path that has never fired is not evidence it is useless; it is the
+    only instrument that can catch the failure where the FIRST path is wrong.
     """
     return any(
         RECOVERY_PATTERN.search(clause) and VERIFICATION_PATTERN.search(clause)
