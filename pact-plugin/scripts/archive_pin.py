@@ -704,7 +704,8 @@ def archive_pin(index: int, db_path=None) -> dict:
             heading=heading, claude_md_path=claude_md_path,
         )
 
-    def _cli(args, **kwargs):
+    def _cli(args, *, _heading=heading, _block=block, _md=claude_md_path,
+             **kwargs):
         """Invoke the memory CLI, enriching any UNEVALUABLE with pin context.
 
         `_run_memory_cli` raises bare -- correctly, since it is a generic
@@ -722,15 +723,33 @@ def archive_pin(index: int, db_path=None) -> dict:
         missing CLI are the canonical CANNOT-TELL cases -- they are when the
         escape hatch runs -- so the hatch would have had no mechanical
         delete boundary in its own primary use case.
+
+        THE THREE DEFAULT ARGUMENTS ARE THE ENFORCEMENT, NOT DECORATION.
+        `_heading`, `_block` and `_md` capture their enclosing values at `def`
+        TIME instead of closing over the names. The ordering dependency between
+        this one definition site and its three binding sites is then checked by
+        the interpreter on every run: moving this `def` above any of them
+        raises NameError AT THE `def`. A closure defers that failure into the
+        `except` path below -- which runs only once something else has ALREADY
+        failed -- so the diagnostic would collapse to `internal error:
+        NameError` at precisely the moment the curator needs the delete
+        boundary. Keyword-only, and underscore-prefixed, so no caller supplies
+        them by accident and `**kwargs` still forwards the real arguments
+        untouched.
+
+        The handler reads the PARAMETERS, never the enclosing names. That is
+        load-bearing rather than stylistic: defaults nothing reads would still
+        satisfy the `def` while leaving the handler closing over the originals,
+        which restores the silent failure this shape exists to prevent.
         """
         try:
             return _run_memory_cli(args, **kwargs)
         except _Unevaluable as exc:
             raise _Unevaluable(
                 exc.reason,
-                heading=heading,
-                claude_md_path=claude_md_path,
-                delete_string=block,
+                heading=_heading,
+                claude_md_path=_md,
+                delete_string=_block,
             ) from exc
 
     # --- conjunct 1: save returned a memory_id -----------------------------
