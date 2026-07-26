@@ -1215,8 +1215,11 @@ def _keys_on_recoverability(line: str) -> bool:
     The second is ordinary database-engineering boilerplate a maintainer could
     add for reasons having nothing to do with this check, and its presence
     silently certifies a trigger keyed on deployment status. Note also that
-    PARENTHESES ARE NOT IN `CLAUSE_BOUNDARY`, so a parenthetical aside rides
-    inside its host clause and can supply the second token from there.
+    PARENTHESES ARE NOT IN `CLAUSE_BOUNDARY` AS IT CURRENTLY STANDS, so a
+    parenthetical aside rides inside its host clause and can supply the second
+    token from there -- and like the instance further down, that is a statement
+    about the constant's PRESENT VALUE: widen `CLAUSE_BOUNDARY` and this example
+    goes stale, while the adjacency point above is unaffected.
 
     THOSE WORDINGS ILLUSTRATE THE MECHANISM; THEY DO NOT SURVEY IT. Because the
     only thing established is adjacency, ANY clause pairing the two families
@@ -1259,11 +1262,15 @@ def _keys_on_recoverability(line: str) -> bool:
     Several false results here were caught by a REDUNDANT check disagreeing
     with a primary one rather than by any control: a search flag that silently
     matched nothing, a database cursor already consumed, a case-sensitivity
-    flag off by one letter. In each of those no control could have caught it --
-    only two paths to the same answer disagreeing. And in each of those the
-    redundant path was the one that looked like duplication.
-    A second path that has never fired is not evidence it is useless; it is the
-    only instrument that can catch the failure where the FIRST path is wrong.
+    flag off by one letter. In each of those THE CONTROLS THAT EXISTED did not
+    catch it -- only two paths to the same answer disagreeing did. And in each
+    of those the redundant path was the one that looked like duplication.
+
+    A second path that NO TEST YET EXERCISES is not evidence it is useless: the
+    instance above is a wording this split rejects and the anchoring accepts,
+    demonstrated but not pinned. And a control only excludes what it was BUILT
+    to exclude, so where the FIRST path is wrong in a way nobody anticipated,
+    disagreement between two paths is what surfaces it.
     """
     return any(
         RECOVERY_PATTERN.search(clause) and VERIFICATION_PATTERN.search(clause)
@@ -1333,9 +1340,14 @@ class TestDataTriggersKeyOnRecoverability:
     implied. `_names_destructive_operation` recognizes a fixed vocabulary, and
     a trigger that describes a destructive operation WITHOUT any of those words
     -- "schema change against production data" and "UPDATE without a WHERE
-    clause" are measured examples, and the second uses this file's own sentence
-    pattern -- is exempted from the recovery requirement rather than caught by
-    it. That gate exists to stop false positives on exposure-only triggers, so
+    clause" are measured examples -- is exempted from the recovery requirement
+    rather than caught by it. The second example differs from a wording the gate
+    DOES catch only in its VERB, since `delete` sits in DESTRUCTION_TOKENS above
+    and `update` does not, which is why reaching this gap needs no unusual
+    phrasing. That comparison is a statement about the CURRENT vocabulary: add
+    `update` to that tuple and the example goes stale while the exemption itself
+    stands. It replaces a claim about prose in another file, which could go
+    equally false and could not be checked from here. That gate exists to stop false positives on exposure-only triggers, so
     its errors run toward silence by construction. What this class DOES
     guarantee is the thing it was built for: reverting either body's DATA
     trigger to the wording that keyed on deployment status alone turns it RED,
