@@ -898,13 +898,26 @@ def archive_pin(index: int, db_path=None) -> dict:
     }
 
 
-def build_verdict(index: int, db_path=None) -> dict:
+def build_verdict(index: int, *, db_path) -> dict:
     """Run the archival and return a verdict dict — never raises.
 
     The single place where an unevaluable state becomes an UNEVALUABLE
     verdict, so `main` only has to serialize. Keeping the mapping here
     (rather than inline in `main`) is what lets tests exercise the
     degradation paths without going through argv and stdout.
+
+    `db_path` IS REQUIRED AND KEYWORD-ONLY. It used to default to None,
+    and None means the real store -- so the seam that exists to let tests
+    reach the degradation paths was also the seam that skipped the db-path
+    guard. The decision that made testing easy removed the isolation, and
+    it was silent: a caller that simply said nothing got production.
+
+    Required makes every caller state an answer; keyword-only makes them
+    state it BY NAME, so the answer is legible at the call site rather than
+    being a bare second positional. What it does NOT do is make the answer
+    correct -- `db_path=None` still satisfies the signature and still means
+    the real store. The mechanical protection is the guard in
+    `_run_memory_cli`; this parameter is what makes the choice visible.
     """
     try:
         return archive_pin(index, db_path=db_path)

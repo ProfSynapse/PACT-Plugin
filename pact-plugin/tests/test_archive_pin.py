@@ -18,6 +18,25 @@ Test strategy, stated because it is load-bearing:
   * The failure matrix stubs `_run_memory_cli`, because a real store cannot
     be made to fail on demand in the specific ways that matter.
   * Temp DBs throughout — no test touches the shared store.
+
+`db_path` IS REQUIRED AND KEYWORD-ONLY on `build_verdict`, so every call in
+this file states an answer. Two answers are legal and they mean different
+things:
+
+  * `db_path=str(tmp_path / ...)` — this call CAN reach a real save, and is
+    scoped to a temp store.
+  * `db_path=None` — this call provably never reaches a store, because the
+    enclosing test stubs `_run_memory_cli` (or `subprocess.run`) or
+    short-circuits before the spawn (bad index, unresolvable CLAUDE.md,
+    missing `_MEMORY_CLI`, a patched extractor). `None` still MEANS the
+    production store; what makes it safe here is that nothing consumes it.
+
+So `db_path=None` is a claim about the call site, not a shrug. If you delete
+the stub or the short-circuit above such a call, that claim becomes false and
+the call starts writing to the developer's real database — which is exactly
+the defect this parameter was made required to surface. The mechanical
+backstop is the guard in `_run_memory_cli`; this convention is what makes the
+choice reviewable.
 """
 
 import json
@@ -493,7 +512,7 @@ class TestStandaloneOnlyInvariant:
             return 0, json.dumps({"ok": True, "result": {"context": "x"}}), ""
 
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _spy)
-        archive_pin.build_verdict(0)
+        archive_pin.build_verdict(0, db_path=None)
 
         assert "save" in subcommands, (
             "no save was attempted — the spy never saw the create path, so "
@@ -874,7 +893,7 @@ class TestArchivePin_FailureMatrix:
                                    "message": "bad field"})
             ),
         )
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "NOT_ARCHIVED"
         assert verdict["memory_id"] is None
         assert verdict["heading"] == "First Pin"
@@ -893,7 +912,7 @@ class TestArchivePin_FailureMatrix:
                                    "message": "Memory 'x' not found"})
             ),
         )
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert "NOT_FOUND" in verdict["reason"]
 
     def test_containment_failure_is_not_archived(self, claude_md, monkeypatch):
@@ -915,7 +934,7 @@ class TestArchivePin_FailureMatrix:
             }), ""
 
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _stub)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "NOT_ARCHIVED"
         assert verdict["memory_id"] == "a" * 32, (
             "the id must still be reported so the orphan record is findable"
@@ -953,7 +972,7 @@ class TestArchivePin_FailureMatrix:
             }), ""
 
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _stub)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "ARCHIVED", (
             "a record wrapping the block in provenance is a GOOD archive"
         )
@@ -977,7 +996,7 @@ class TestArchivePin_FailureMatrix:
             )
 
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _stub)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert "c" * 32 in verdict["reason"]
         assert verdict["heading"] == "First Pin"
@@ -993,7 +1012,7 @@ class TestArchivePin_FailureMatrix:
         monkeypatch.setattr(
             archive_pin, "_run_memory_cli", lambda *a, **k: (0, stdout, "")
         )
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] != "ARCHIVED"
 
 
@@ -1004,25 +1023,25 @@ class TestArchivePin_Unevaluable:
         monkeypatch.setattr(
             archive_pin, "get_project_claude_md_path", lambda: None
         )
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert verdict["heading"] is None
 
     def test_no_pinned_section(self, claude_md):
         claude_md("# Project\n\n## Working Memory\n\n")
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
 
     def test_index_beyond_pin_count(self, claude_md):
         claude_md(_two_pin_file())
-        verdict = archive_pin.build_verdict(99)
+        verdict = archive_pin.build_verdict(99, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert "out of range" in verdict["reason"]
 
     def test_missing_memory_cli(self, claude_md, monkeypatch):
         claude_md(_two_pin_file())
         monkeypatch.setattr(archive_pin, "_MEMORY_CLI", Path("/nonexistent/cli.py"))
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert "not found" in verdict["reason"]
 
@@ -1034,7 +1053,7 @@ class TestArchivePin_Unevaluable:
             raise subprocess.TimeoutExpired(cmd="save", timeout=1)
 
         monkeypatch.setattr(subprocess, "run", _boom)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert "timed out" in verdict["reason"]
 
@@ -1045,7 +1064,7 @@ class TestArchivePin_Unevaluable:
             raise IOError("simulated")
 
         monkeypatch.setattr(Path, "read_text", _raise)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
 
     def test_lossy_extractor_is_caught_before_any_write(
@@ -1069,7 +1088,7 @@ class TestArchivePin_Unevaluable:
             archive_pin, "_run_memory_cli",
             lambda *a, **k: called.append(a) or (0, "", ""),
         )
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert "not verbatim" in verdict["reason"]
         assert called == [], "must not save when the block is not verbatim"

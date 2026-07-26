@@ -29,6 +29,15 @@ fall-through to reach the main checkout's file. A blanket "env dir has no
 CLAUDE.md -> refuse" rule would break that on every single invocation — a
 cardinal over-block. `test_same_repository_fallthrough_is_allowed` is the
 guard on that, and it is the more important half of this file.
+
+`db_path` IS REQUIRED AND KEYWORD-ONLY on `build_verdict`. Every bare
+`build_verdict` call in this file passes `db_path=None`, and every one of
+them is provably inert: the enclosing test either stubs `_run_memory_cli` /
+`subprocess.run`, or short-circuits before the spawn (a bad index, an
+unresolvable CLAUDE.md, a missing `_MEMORY_CLI`, a patched extractor). `None`
+still MEANS the production store — what makes it safe is that nothing
+consumes it. Delete the stub or the short-circuit above such a call and the
+claim silently becomes false.
 """
 
 import json
@@ -280,7 +289,7 @@ class TestSymlinkedClaudeMdAttribution:
             ), ""
 
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _spy)
-        archive_pin.build_verdict(0)
+        archive_pin.build_verdict(0, db_path=None)
 
         assert seen, "the memory CLI was never invoked — nothing was measured"
         assert Path(seen["cwd"]).name == "myproject", (
@@ -303,7 +312,7 @@ class TestVerdictCarriesTheResolvedPath:
         a = _make_project(isolated / "project_a", "PIN A")
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
         monkeypatch.chdir(a)
-        verdict = archive_pin.build_verdict(99)
+        verdict = archive_pin.build_verdict(99, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert verdict["claude_md_path"] is not None
         assert "project_a" in verdict["claude_md_path"]
@@ -314,7 +323,7 @@ class TestVerdictCarriesTheResolvedPath:
         empty = _make_project(isolated / "empty", None)
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(empty))
         monkeypatch.chdir(empty)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert verdict["claude_md_path"] is None, (
             "null means no file was resolved; inventing a path here would be "
@@ -415,7 +424,7 @@ class TestSyncSuppressionAndDeleteString:
                                       "message": "gone"})
 
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _stub)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert verdict["delete_string"] is not None
         assert "### PIN A" in verdict["delete_string"]
@@ -426,7 +435,7 @@ class TestSyncSuppressionAndDeleteString:
         a = _make_project(isolated / "project_a", "PIN A")
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
         monkeypatch.chdir(a)
-        verdict = archive_pin.build_verdict(99)
+        verdict = archive_pin.build_verdict(99, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert verdict["delete_string"] is None
 
@@ -604,7 +613,7 @@ class TestPostResolutionFailuresKeepPinContext:
             raise subprocess.TimeoutExpired(cmd="save", timeout=1)
 
         monkeypatch.setattr(subprocess, "run", _boom)
-        self._assert_full_context(archive_pin.build_verdict(0), "timeout",
+        self._assert_full_context(archive_pin.build_verdict(0, db_path=None), "timeout",
                                   "timed out")
 
     def test_cli_launch_failure_keeps_context(self, isolated, monkeypatch):
@@ -614,7 +623,7 @@ class TestPostResolutionFailuresKeepPinContext:
             raise OSError("cannot launch")
 
         monkeypatch.setattr(subprocess, "run", _boom)
-        self._assert_full_context(archive_pin.build_verdict(0), "launch",
+        self._assert_full_context(archive_pin.build_verdict(0, db_path=None), "launch",
                                   "could not launch")
 
     def test_missing_cli_keeps_context(self, isolated, monkeypatch):
@@ -622,7 +631,7 @@ class TestPostResolutionFailuresKeepPinContext:
         monkeypatch.setattr(
             archive_pin, "_MEMORY_CLI", Path("/nonexistent/cli.py")
         )
-        self._assert_full_context(archive_pin.build_verdict(0), "missing cli",
+        self._assert_full_context(archive_pin.build_verdict(0, db_path=None), "missing cli",
                                   "not found")
 
     def test_pre_resolution_failure_still_reports_less(
@@ -635,7 +644,7 @@ class TestPostResolutionFailuresKeepPinContext:
         ever started reporting a heading, the tests above would be passing
         for the wrong reason."""
         self._project(isolated, monkeypatch, "t4")
-        verdict = archive_pin.build_verdict(99)
+        verdict = archive_pin.build_verdict(99, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert verdict["heading"] is None
         assert verdict["delete_string"] is None
@@ -671,7 +680,7 @@ class TestDeliberateDeleteStringOmissions:
         monkeypatch.chdir(a)
         monkeypatch.setattr(archive_pin, "extract_pin_block",
                             lambda *args, **kw: "   \n  ")
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert "empty" in verdict["reason"]
         assert verdict["delete_string"] is None, (
@@ -691,7 +700,7 @@ class TestDeliberateDeleteStringOmissions:
             archive_pin, "extract_pin_block",
             lambda *args, **kw: "### Fabricated\nnot from the source",
         )
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert "not verbatim" in verdict["reason"]
         assert verdict["delete_string"] is None, (
