@@ -21,6 +21,7 @@ Test strategy, stated because it is load-bearing:
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -546,6 +547,170 @@ class TestProjectDirResolution:
         assert resolved.name == "myproject"
         assert plugin_root not in resolved.parents
         assert resolved != plugin_root
+
+
+class TestEnvPropagation_ExplicitCwdBeatsAmbient:
+    """WHICH project the child process is TOLD it is in.
+
+    `_run_memory_cli` hands the child an explicit CLAUDE_PROJECT_DIR derived
+    from the caller's `cwd`. It used `env.setdefault`, which is a no-op when
+    the variable is already set — so an AMBIENT value beat an EXPLICIT caller
+    argument. The fail direction was inverted.
+
+    This is a PRODUCTION property, not test hygiene. `resolve_claude_md`
+    deliberately permits a worktree fall-through: the env dir is a worktree
+    carrying no CLAUDE.md, so resolution lands on the MAIN repo's file. Under
+    `setdefault` the archive was then filed under the WORKTREE while the pin
+    lived in the MAIN repo — precisely the pin/archive disagreement
+    `project_dir_for` exists to prevent.
+
+    Both tests fire in EVERY regime. A trigger conditioned on the ambient
+    variable already naming a CLAUDE.md-bearing directory would fire only in
+    that one cell and sit green everywhere else, which is how a control stops
+    meaning anything without anyone noticing.
+    """
+
+    @staticmethod
+    def _init_repo_with_worktree(root):
+        """Create a REAL git repo and a REAL linked worktree under `root`.
+
+        Real rather than simulated on purpose: `resolve_claude_md` refuses a
+        cross-project fall-through by asking git whether the env dir and the
+        resolved base share a repository. Stubbing that seam would patch out
+        the very permissiveness that makes this defect reachable in
+        production, and the test would then prove nothing about it.
+        """
+        main = root / "mainrepo"
+        subprocess.run(["git", "init", "-q", str(main)],
+                       capture_output=True, text=True, check=True)
+
+        def _git(*args):
+            return subprocess.run(["git", "-C", str(main), *args],
+                                  capture_output=True, text=True, check=True)
+
+        _git("config", "user.email", "t@example.com")
+        _git("config", "user.name", "t")
+        (main / "seed.txt").write_text("seed\n", encoding="utf-8")
+        _git("add", "seed.txt")
+        _git("commit", "-qm", "seed")
+        worktree = root / "linked-worktree"
+        _git("worktree", "add", "-q", "-b", "probe", str(worktree))
+        return main, worktree
+
+    @staticmethod
+    def _spy_memory_cli_spawns(monkeypatch, context=""):
+        """Capture the memory-CLI spawns AT THE PROCESS BOUNDARY.
+
+        Only the CLI spawns are intercepted. Git probes are delegated to the
+        real `subprocess.run`, because `resolve_claude_md` asks git whether
+        two paths share a repository — stubbing that would defeat the
+        fall-through under test. The boundary is the right observation point:
+        it is the last place the parent controls before the child re-imports
+        and re-resolves everything for itself.
+        """
+        real_run = subprocess.run
+        calls = []
+
+        class _Proc:
+            def __init__(self, stdout):
+                self.returncode = 0
+                self.stdout = stdout
+                self.stderr = ""
+
+        def _fake_run(argv, **kwargs):
+            if not (argv and argv[0] == sys.executable):
+                return real_run(argv, **kwargs)
+            calls.append((list(argv), kwargs))
+            subcommand = argv[2] if len(argv) > 2 else ""
+            if subcommand == "save":
+                return _Proc(json.dumps(
+                    {"ok": True, "result": {"memory_id": "e" * 32}}
+                ))
+            return _Proc(json.dumps(
+                {"ok": True, "result": {"context": context}}
+            ))
+
+        monkeypatch.setattr(archive_pin.subprocess, "run", _fake_run)
+        return calls
+
+    def test_archive_is_filed_under_the_repo_whose_claude_md_was_read(
+        self, tmp_path, monkeypatch
+    ):
+        """The production case: worktree env dir, main-repo CLAUDE.md."""
+        main, worktree = self._init_repo_with_worktree(tmp_path)
+        claude_md_path = main / "CLAUDE.md"
+        claude_md_path.write_text(_two_pin_file(), encoding="utf-8")
+        monkeypatch.setattr(
+            archive_pin, "get_project_claude_md_path", lambda: claude_md_path
+        )
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(worktree))
+
+        # PRECONDITIONS, asserted separately and FIRST. A fixture that drifts
+        # out of the regime under test then fails with its own message,
+        # instead of presenting as a regression in the one load-bearing
+        # assertion below and inviting someone to "fix" that instead.
+        assert not (worktree / "CLAUDE.md").exists(), (
+            "fixture drift: the worktree must carry NO CLAUDE.md, or the "
+            "fall-through this test depends on never happens"
+        )
+        assert archive_pin._same_repository(worktree, main), (
+            "fixture drift: git does not consider the worktree part of the "
+            "main repo, so resolve_claude_md would REFUSE rather than fall "
+            "through, and this test would measure the refusal path"
+        )
+
+        calls = self._spy_memory_cli_spawns(
+            monkeypatch, context=claude_md_path.read_text(encoding="utf-8")
+        )
+        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+
+        assert verdict["outcome"] == "ARCHIVED", verdict
+        assert calls, (
+            "the memory CLI was never spawned — nothing was measured, and a "
+            "per-call assertion over an empty list passes vacuously"
+        )
+        for argv, kwargs in calls:
+            assert kwargs["env"]["CLAUDE_PROJECT_DIR"] == str(main), (
+                f"the child was told it is in {kwargs['env']['CLAUDE_PROJECT_DIR']!r}, "
+                f"but the CLAUDE.md actually read lives in {str(main)!r}. The "
+                f"ambient value (the worktree) beat the resolved base, so the "
+                f"archive files under a different project than the pin. "
+                f"argv={argv[2:4]}"
+            )
+            assert kwargs["cwd"] == str(main)
+
+    def test_explicit_cwd_overwrites_an_ambient_project_dir(
+        self, tmp_path, monkeypatch
+    ):
+        """The fail-direction, isolated from resolution entirely."""
+        decoy = tmp_path / "decoy"
+        decoy.mkdir()
+        intended = tmp_path / "intended"
+        intended.mkdir()
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(decoy))
+
+        # PRECONDITION FIRST: without a live ambient value this test cannot
+        # tell `setdefault` from assignment, and would pass under both.
+        assert os.environ.get("CLAUDE_PROJECT_DIR") == str(decoy), (
+            "precondition: the ambient decoy is not set, so this test cannot "
+            "distinguish setdefault from explicit assignment"
+        )
+
+        calls = self._spy_memory_cli_spawns(monkeypatch)
+        archive_pin._run_memory_cli(["get", "x" * 32], cwd=intended)
+
+        assert len(calls) == 1, (
+            f"expected exactly one CLI spawn, captured {len(calls)}"
+        )
+        env = calls[0][1]["env"]
+        assert env["CLAUDE_PROJECT_DIR"] == str(intended), (
+            "the ambient CLAUDE_PROJECT_DIR beat the caller's explicit cwd. "
+            "`env.setdefault` is a no-op when the variable is already set, "
+            "which inverts the fail direction: the general answer wins over "
+            "the specific one."
+        )
+        assert env["CLAUDE_PROJECT_DIR"] != str(decoy)
+        assert calls[0][1]["cwd"] == str(intended)
 
 
 @pytest.mark.requires_embedding_backend

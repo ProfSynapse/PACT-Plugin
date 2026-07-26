@@ -472,12 +472,31 @@ def _run_memory_cli(args, db_path=None, stdin_data=None, cwd=None):
 
     # Pin the project for the child process. CLAUDE_PROJECT_DIR is the memory
     # layer's PRIMARY detection strategy and is deterministic, unlike the git
-    # and CWD-walk fallbacks. An existing value is the platform's own
-    # statement of the project and is left alone; we only fill the gap.
+    # and CWD-walk fallbacks.
+    #
+    # An explicit `cwd` is the CALLER'S statement of which project owns this
+    # invocation, so it OVERWRITES any ambient value rather than deferring to
+    # it. This was `setdefault`, which is a no-op when the variable is already
+    # set -- so the ambient value won and the more specific answer lost to the
+    # more general one. The fail direction was inverted.
+    #
+    # That is a PRODUCTION defect, not a test concern. `project_dir_for` exists
+    # so the archive's project derives from the CLAUDE.md actually read, and
+    # `resolve_claude_md` deliberately PERMITS a worktree fall-through: the env
+    # dir is a worktree carrying no CLAUDE.md, so resolution lands on the main
+    # repo's file. Under `setdefault` that filed the archive under the WORKTREE
+    # while the pin lived in the MAIN repo -- exactly the pin/archive
+    # disagreement `project_dir_for` is there to prevent.
+    #
+    # When `cwd` is None this block does not run at all: `env` stays None, and
+    # `subprocess.run(env=None)` hands the child the parent environment
+    # VERBATIM. Nothing above applies to that path. It is not the safe case --
+    # it is the most ambient path in this function, and it resolves from
+    # whatever the invoking environment happens to be.
     env = None
     if cwd is not None:
         env = dict(os.environ)
-        env.setdefault("CLAUDE_PROJECT_DIR", str(cwd))
+        env["CLAUDE_PROJECT_DIR"] = str(cwd)
 
     try:
         proc = subprocess.run(
