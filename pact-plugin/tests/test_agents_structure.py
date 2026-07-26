@@ -1218,9 +1218,11 @@ def _keys_on_recoverability(line: str) -> bool:
     PARENTHESES ARE NOT IN `CLAUSE_BOUNDARY`, so a parenthetical aside rides
     inside its host clause and can supply the second token from there.
 
-    THOSE ARE EXAMPLES OF THE GAP, NOT ITS EXTENT. Nothing here bounds how far
-    it reaches: ordinary prose gets past it, and the wordings above record
-    where someone has looked rather than where the failures stop.
+    THOSE WORDINGS ILLUSTRATE THE MECHANISM; THEY DO NOT SURVEY IT. Because the
+    only thing established is adjacency, ANY clause pairing the two families
+    passes, whatever the words are about -- so the accepted set is as wide as
+    the set of clauses that happen to contain both, which is a fact about
+    English prose rather than about this predicate.
 
     WHY CLAUSE SCOPE RATHER THAN A CHARACTER WINDOW. A distance threshold would
     have been fitted to whichever counter-example was in hand; a clause is a
