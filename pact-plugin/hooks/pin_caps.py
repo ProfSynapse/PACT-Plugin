@@ -368,9 +368,18 @@ def check_stale_block(
 # Shared deny-reason templates. Plain instructional text aimed at the curator
 # (the LLM driving Edit/Write). Rendered verbatim into permissionDecisionReason
 # so the curator sees the next-step action.
+# DEMOTE-NOT-DELETE framing. The curator meeting this deny is at the cap and
+# is being told to remove something they previously judged worth keeping, so
+# the wording has to answer "what happens to it?" before they decide. Naming
+# the destination (long-term memory) rather than the act (evict) is the whole
+# point: /PACT:prune-memory archives the pin's content to pact-memory and
+# verifies it arrived BEFORE removing it, so the content survives the removal.
+# "Evict" described only the deletion half and read as loss.
 DENY_REASON_COUNT = (
     "Pin count cap reached ({count}/{cap}). "
-    "Run /PACT:prune-memory to evict an existing pin before adding."
+    "Run /PACT:prune-memory to demote a pin to long-term memory before "
+    "adding — demotion archives the pin to pact-memory first, so the "
+    "content is preserved rather than lost."
 )
 
 DENY_REASON_SIZE = (

@@ -349,7 +349,8 @@ class PACTMemory:
         self,
         memory: Dict[str, Any],
         files: Optional[List[str]] = None,
-        include_tracked: bool = True
+        include_tracked: bool = True,
+        sync_to_claude: bool = True
     ) -> str:
         """
         Save a memory to the database.
@@ -364,6 +365,13 @@ class PACTMemory:
                     lessons_learned, decisions, entities, active_tasks.
             files: Optional explicit file list to link.
             include_tracked: Include automatically tracked session files.
+            sync_to_claude: Whether to project this memory into CLAUDE.md's
+                Working Memory section. Default True — existing callers are
+                unaffected. Pass False when the projection would defeat the
+                caller's purpose: the pin-archival path removes a block from
+                CLAUDE.md, and syncing writes the same bytes back, so the pin
+                SLOT is freed while the file is not. Mirrors `search`'s
+                parameter of the same name.
 
         Returns:
             The ID of the saved memory.
@@ -413,11 +421,14 @@ class PACTMemory:
             )
 
         # Sync to CLAUDE.md working memory (outside db connection context)
-        # This is non-critical - failures are logged but don't fail the save
-        try:
-            sync_to_claude_md(memory, files_to_link if files_to_link else None, memory_id)
-        except Exception as e:
-            logger.warning(f"Failed to sync to CLAUDE.md: {e}")
+        # This is non-critical - failures are logged but don't fail the save.
+        # Gated on sync_to_claude (default True): callers that omit the
+        # parameter reach this call exactly as before.
+        if sync_to_claude:
+            try:
+                sync_to_claude_md(memory, files_to_link if files_to_link else None, memory_id)
+            except Exception as e:
+                logger.warning(f"Failed to sync to CLAUDE.md: {e}")
 
         return memory_id
 

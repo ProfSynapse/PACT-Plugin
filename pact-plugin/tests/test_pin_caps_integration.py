@@ -13,6 +13,7 @@ Covers:
 Risk tier: CRITICAL.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -403,12 +404,14 @@ class TestPruneMemoryCommand_Grammar:
     """/PACT:prune-memory contract assertions (cycle-8 commit 7).
 
     The prune flow that pin-memory.md previously embedded now lives in
-    a dedicated command. prune-memory.md describes a 4-step interactive
+    a dedicated command. prune-memory.md describes a 5-step interactive
     flow:
         1. Invoke check_pin_caps.py --status to get evictable_pins
         2. AskUserQuestion (paginated) on the list
-        3. Edit CLAUDE.md to remove the selected block
-        4. Report + commit
+        3. Archive the selected pin and verify it arrived; refuse the
+           eviction on anything short of a verified archive
+        4. Edit CLAUDE.md to remove the selected block
+        5. Report (+ journal event)
 
     Tests here pin the informational contract (CLI invocation shape,
     pagination structure, cross-references) so structural refactors
@@ -469,19 +472,148 @@ class TestPruneMemoryCommand_Grammar:
         workflow is discoverable from either direction."""
         assert "/PACT:pin-memory" in prune_memory_content
 
-    def test_no_shell_scaffolding_heredoc(self, prune_memory_content):
-        """Regression guard: prune-memory.md MUST NOT introduce the
-        shell-scaffolding surface that pin-memory.md shed in cycle-8.
-        The `check_pin_caps.py --status` invocation is pure (no body
-        input required) so no heredoc is needed."""
-        assert "<<'" not in prune_memory_content
-        assert '<<"' not in prune_memory_content
-        # One `bash` fence is allowed (the plain CLI invocation); it
-        # takes no stdin, so no heredoc form should appear.
-        heredoc_markers = prune_memory_content.count("<<")
-        assert heredoc_markers == 0, (
-            "prune-memory.md contains heredoc marker(s); the advisory "
-            "CLI reads no stdin, so heredoc forms should not appear here."
+    # Bash disables parameter expansion when ANY part of the heredoc
+    # delimiter word is quoted OR escaped -- single quotes, double quotes
+    # and a backslash are equivalent for this purpose.
+    #
+    # BOTH `<<`-guards are load-bearing and each was found by a different
+    # reviewer failing the other's case. `<<<` is a HERESTRING, a distinct
+    # operator, and it must not be reported as an unquoted heredoc:
+    #   (?<!<) stops the match starting on the SECOND `<` of `<<<`
+    #   (?!<)  stops it starting on the FIRST
+    # Drop either and `cat <<<$VAR` is flagged. Drop `\\` from the
+    # non-expanding set and `<<\EOF` -- which bash does NOT expand -- is
+    # flagged. Three independently-authored predicates each carried
+    # exactly one of these defects; this is the intersection.
+    #
+    # KNOWN RESIDUAL, deliberately not fixed: arithmetic left-shift inside
+    # `$(( ))` is flagged as an expanding heredoc -- `x=$((1<<3))` and
+    # `x=$((a<<b))` both match. It is an OVER-BLOCK, so it surfaces as a red
+    # test a human investigates rather than as a hole something slips
+    # through, and it is currently unreachable: this file contains no
+    # arithmetic. TWO FIXES WERE TRIED AND REJECTED, recorded so neither is
+    # re-attempted:
+    #   (?<![<0-9])  fixes `1<<3` but NOT `a<<b` -- half the case for real
+    #                added complexity.
+    #   excluding a preceding identifier character fixes both and BREAKS a
+    #                valid heredoc: `cat<<EOF` with no space is legal bash
+    #                (measured), so a letter may legitimately precede `<<`.
+    # A documented over-block on a construct that cannot currently occur is
+    # a better resting place than a more complex pattern with its own
+    # untested edges. This guard has already been wrong three times from
+    # exactly that instinct.
+    _DELIM_RE = re.compile(r"(?<!<)<<-?[ \t]*(?!<)(.)")
+    _NON_EXPANDING_LEAD = ("'", '"', "\\")
+
+    @staticmethod
+    def _expanding(text):
+        """Every heredoc operator in `text` whose delimiter is UNQUOTED."""
+        cls = TestPruneMemoryCommand_Grammar
+        return [
+            m.group(0) for m in cls._DELIM_RE.finditer(text)
+            if m.group(1) not in cls._NON_EXPANDING_LEAD
+        ]
+
+    # (form, expands?) -- `expands` measured against real bash, not reasoned.
+    _HEREDOC_FORMS = [
+        ("<<EOF", True), ("<<'EOF'", False), ('<<"EOF"', False),
+        ("<<-EOF", True), ("<<-'EOF'", False), ('<<-"EOF"', False),
+        ("<< EOF", True), ("<< 'EOF'", False), ('<< "EOF"', False),
+        ("<<   EOF", True), ("<<-  'EOF'", False), ("<<-\t'EOF'", False),
+        ("<<\\EOF", False), ("<<$VAR", True),
+        # Backslash-escaped delimiters, added because they LOOK unquoted at a
+        # glance and are the forms most likely to be got wrong by a future
+        # edit. All three measured non-expanding.
+        ("<< \\EOF", False), ("<<-  \\EOF", False), ("<<-\\EOF", False),
+    ]
+
+    def test_expanding_heredoc_predicate_matches_bash(self):
+        """The PREDICATE, tested as a pure function against a fixed table.
+
+        Split deliberately from the file scan below, because one regex was
+        being asked two different questions -- "is this form expanding?"
+        (a pure function) and "is the shipped file clean?" (a document
+        scan). Conflating them is why three successive revisions of this
+        guard each traded one error direction for another: it shipped with
+        holes (`<<-EOF`, `<< EOF`, `<<   EOF` all expand and were
+        permitted), was then corrected into an OVER-BLOCK that banned
+        `<<"EOF"` under a message calling it expanding when bash does not
+        expand it, and a scoped fix after that could pass while scanning
+        nothing.
+
+        `expands` in the table is MEASURED against real bash, not derived
+        from the regex -- deriving it would make this test agree with the
+        implementation by construction and assert nothing.
+        """
+        # A REQUIRED-SET over EVERY form, not a count and not a subset.
+        # Measured against five mutations; only this shape gets all five
+        # right (count: 2 wrong, 7-form subset: 1, count+subset: 1):
+        #   delete a listed row      -> caught (a count catches this too)
+        #   SWAP one form for another-> caught; A COUNT PASSES IT at 14
+        #                               while a form silently loses coverage
+        #   add a legitimate 15th    -> ALLOWED; a count wrongly fails it
+        #   empty table              -> caught
+        # A count conflates deletion with addition; a subset cannot see the
+        # deletion of a row outside it. Enumerating every form makes the
+        # table's contents the contract and leaves it free to grow.
+        #
+        # This literal is deliberately NOT derived from _HEREDOC_FORMS.
+        # `{f for f, _ in TABLE} - {f for f, _ in TABLE}` is empty by
+        # construction -- a self-referential guard that can never fail.
+        required = frozenset({
+            "<<EOF", "<<-EOF", "<< EOF", "<<   EOF", "<<$VAR",      # expanding
+            "<<'EOF'", '<<"EOF"', "<<-'EOF'", '<<-"EOF"',           # quoted
+            "<< 'EOF'", '<< "EOF"', "<<-  'EOF'", "<<-\t'EOF'",     # quoted + space/tab
+            "<<\\EOF", "<< \\EOF", "<<-  \\EOF", "<<-\\EOF",         # escaped
+        })
+        missing = required - {form for form, _ in self._HEREDOC_FORMS}
+        assert not missing, (
+            f"heredoc form table lost coverage of: {sorted(missing)}. Four "
+            "of the five expanding forms listed were real holes in a "
+            "shipped revision of this guard; `<<EOF` is the control the "
+            "original regex caught correctly. The quoted and escaped forms "
+            "pin cases a revision wrongly banned. Adding forms is free; "
+            "removing one means re-deriving why it stopped mattering."
+        )
+        for form, expands in self._HEREDOC_FORMS:
+            flagged = bool(self._expanding(f"cat {form}\npayload\nEOF\n"))
+            assert flagged == expands, (
+                f"{form!r}: bash expands={expands} but the guard "
+                f"{'flags' if flagged else 'permits'} it — "
+                + ("a HOLE (expanding form permitted)" if expands
+                   else "an OVER-BLOCK (safe quoted form banned)")
+            )
+
+    def test_shipped_file_has_no_expanding_heredoc(self, prune_memory_content):
+        """The SCAN. prune-memory.md's own fenced shell must be clean.
+
+        Reads the WHOLE document. There is deliberately no fence
+        extraction, and removing that component is the point rather than a
+        simplification: every prior defect in this guard lived in the part
+        trying to be precise about WHERE to look. It was a total `<<` ban,
+        then a holed regex, then a ```bash-scoped scan that passed while
+        scanning nothing when the fences were renamed. A component that
+        has been wrong three times and can fail SILENTLY is worth deleting,
+        not narrowing a fourth time.
+
+        ACCEPTED WART, so nobody 'fixes' it later: documenting the banned
+        form unquoted in this file's prose WILL fail this test. That is an
+        over-block -- a red test resolved in minutes by quoting the example
+        -- and it is the deliberate price of removing a failure mode that
+        reported success forever. Do not reintroduce fence-scoping to
+        soften it.
+        """
+        assert "<<'JSON'" in prune_memory_content, (
+            "the legitimate quoted heredoc is missing from prune-memory.md — "
+            "this guard's subject is gone, so a clean result below would mean "
+            "nothing. POSITIVE CONTROL: it proves the scan reached the real "
+            "surface, which merely asserting the file is non-empty would not."
+        )
+        bad = self._expanding(prune_memory_content)
+        assert bad == [], (
+            f"unquoted (expanding) heredoc delimiter(s) in prune-memory.md: "
+            f"{bad}. An unquoted delimiter re-enables shell expansion inside "
+            "the payload — quote it as <<'DELIM'."
         )
 
 

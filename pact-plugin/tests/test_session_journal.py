@@ -3405,6 +3405,20 @@ class TestValidateEventSchemaPerType:
             "feature": "handoff-artifact-durability",
             "paths": ["/tmp/wt/docs/preparation/handoff-artifact-durability.md"],
         },
+        # Required fields only — `reason` is optional (not obtainable on a
+        # bare Cancel), so it must NOT appear here: the missing-field test
+        # strips each sample key and expects rejection, which holds only for
+        # required ones.
+        "pin_prune_skipped": {
+            "outcome": "archive_refused",
+            "pin_count": 12,
+            "age_distribution": {"oldest": 60, "newest": 4, "median": 21},
+        },
+        "pin_pruned": {
+            "heading": "Coupling-via-substring-count",
+            "memory_id": "396c1c8bfd013ecab3bc1608ed813627",
+            "pin_count": 12,
+        },
     }
 
     def test_samples_mirror_required_fields_dict(self):
@@ -3858,6 +3872,131 @@ class TestValidateOptionalFieldTypes:
         from shared.session_journal import _OPTIONAL_FIELDS_BY_TYPE
 
         assert _OPTIONAL_FIELDS_BY_TYPE.get("session_start") == {"source": str}
+
+    def test_pin_pruned_requires_a_memory_id(self):
+        """`memory_id` is what makes the success claim CHECKABLE.
+
+        pin_caps_gate ALLOWS the eviction Edit by construction, so nothing
+        mechanically enforces that the archive ran — detectability is the
+        whole remaining control. An event that asserted "pruned" without an
+        id would be a success report with nothing behind it; with the id an
+        auditor can fetch the record and confirm.
+        """
+        from shared.session_journal import (
+            _REQUIRED_FIELDS_BY_TYPE,
+            _validate_event_schema,
+            make_event,
+        )
+
+        assert _REQUIRED_FIELDS_BY_TYPE["pin_pruned"]["memory_id"] is str
+        ok, reason = _validate_event_schema(
+            make_event("pin_pruned", heading="H", pin_count=12)
+        )
+        assert ok is False
+        assert "memory_id" in reason
+
+    def test_pin_pruned_cannot_be_emitted_for_an_unverified_eviction(self):
+        """A structural property the two schemas give us for free, and the
+        reason the escape-hatch eviction is filed under the SKIP event.
+
+        An UNEVALUABLE archive yields no memory_id, and `str` fields reject
+        empty and whitespace-only values — so there is no way to emit
+        pin_pruned for an eviction that was never archived. The schema
+        enforces the semantic rather than trusting the prose to remember it.
+        """
+        from shared.session_journal import _validate_event_schema, make_event
+
+        for unusable in ("", "   ", None):
+            ok, _ = _validate_event_schema(
+                make_event("pin_pruned", heading="H", memory_id=unusable,
+                           pin_count=12)
+            )
+            assert ok is False, (
+                f"memory_id={unusable!r} must not produce a valid pin_pruned "
+                f"— that would let an unverified eviction masquerade as an "
+                f"archived one"
+            )
+
+    def test_pin_pruned_carries_no_outcome_field(self):
+        """Deliberate asymmetry with pin_prune_skipped.
+
+        Only REQUIRED fields are validated. An `outcome` on pin_pruned would
+        be unvalidated, so it would sit in the audit trail looking
+        authoritative while guaranteed by nothing. The event's existence IS
+        its outcome.
+        """
+        from shared.session_journal import (
+            _OPTIONAL_FIELDS_BY_TYPE,
+            _REQUIRED_FIELDS_BY_TYPE,
+        )
+
+        assert "outcome" not in _REQUIRED_FIELDS_BY_TYPE["pin_pruned"]
+        assert "outcome" not in _OPTIONAL_FIELDS_BY_TYPE.get("pin_pruned", {})
+        assert "outcome" in _REQUIRED_FIELDS_BY_TYPE["pin_prune_skipped"], (
+            "the skip event still needs its outcome — this test pins the "
+            "asymmetry, not the absence of outcomes everywhere"
+        )
+
+    def test_pin_count_is_int_and_rejects_bool_on_both_pin_events(self):
+        """`bool` subclasses `int`, so an unquoted `true` in the --data JSON
+        would satisfy a naive isinstance check and land a nonsense count."""
+        from shared.session_journal import _validate_event_schema, make_event
+
+        ok, _ = _validate_event_schema(
+            make_event("pin_pruned", heading="H", memory_id="a" * 32,
+                       pin_count=True)
+        )
+        assert ok is False
+        ok, _ = _validate_event_schema(
+            make_event("pin_prune_skipped", outcome="cancelled",
+                       pin_count=True, age_distribution={})
+        )
+        assert ok is False
+
+    def test_pin_prune_skipped_reason_declared_optional(self):
+        """`reason` is optional on pin_prune_skipped, and that is a decision
+        rather than an oversight.
+
+        A bare Cancel elicits no reason. Requiring the field would force
+        either an extra prompt on every cancellation or a fabricated value —
+        and emitting a field we cannot populate is a success report with no
+        measurement behind it, the exact defect class this feature exists to
+        remove. Declaring it optional-with-a-type keeps the contract (a
+        non-string reason is still rejected) without demanding a value the
+        flow cannot supply.
+        """
+        from shared.session_journal import (
+            _OPTIONAL_FIELDS_BY_TYPE,
+            _REQUIRED_FIELDS_BY_TYPE,
+        )
+
+        assert _OPTIONAL_FIELDS_BY_TYPE.get("pin_prune_skipped") == {
+            "reason": str
+        }
+        assert "reason" not in _REQUIRED_FIELDS_BY_TYPE["pin_prune_skipped"]
+
+    def test_pin_prune_skipped_accepts_reason_and_rejects_wrong_type(self):
+        """Optional means absent-is-fine, present-must-be-typed."""
+        from shared.session_journal import _validate_event_schema, make_event
+
+        base = {
+            "outcome": "archive_refused",
+            "pin_count": 12,
+            "age_distribution": {"oldest": 60, "newest": 4, "median": 21},
+        }
+        ok, _ = _validate_event_schema(make_event("pin_prune_skipped", **base))
+        assert ok is True, "absent reason must validate"
+
+        ok, _ = _validate_event_schema(
+            make_event("pin_prune_skipped", **base,
+                       reason="archival refused: containment failed")
+        )
+        assert ok is True, "string reason must validate"
+
+        ok, _ = _validate_event_schema(
+            make_event("pin_prune_skipped", **base, reason=["a", "list"])
+        )
+        assert ok is False, "non-string reason must be rejected"
 
     def test_session_refreshed_optionals_declared(self):
         """session_refreshed declares the seven optional mid-flight fields.

@@ -27,6 +27,32 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 # Add pact-memory scripts to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'skills', 'pact-memory'))
 
+
+def pytest_configure(config):
+    """Register markers that DECLARE an external dependency.
+
+    A test whose pass depends on something outside the repo must say so.
+    An undeclared dependency does not fail as a named condition — it fails
+    as flakiness, in an environment nobody was watching, which is the same
+    "reports success while measuring nothing" defect read backwards.
+
+    These markers deliberately do NOT skip. The tests run everywhere by
+    default; the marker exists so a constrained environment can DESELECT
+    them explicitly (`-m 'not requires_embedding_backend'`) and so the
+    deselection appears in the pytest header rather than as an anonymous
+    skip. Skipping by default would hide the dependency inside the skip
+    count, where a reviewer reading "N skipped" cannot tell an intentional
+    environmental exclusion from a test quietly disabled to buy a green.
+    """
+    config.addinivalue_line(
+        "markers",
+        "requires_embedding_backend: exercises the real pact-memory CLI "
+        "save path, which spins the embedding backend and reads its model "
+        "from a local cache. On a COLD cache that read is a network "
+        "download — deselect in a sandboxed or offline environment.",
+    )
+
+
 @pytest.fixture
 def pact_context(tmp_path, monkeypatch):
     """
