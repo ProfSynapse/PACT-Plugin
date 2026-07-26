@@ -171,6 +171,22 @@ ARCHIVE_ENTITY_TYPE = "pact_memory_archive"
 # record and run no marker code, silently voiding the audit property.
 _ARCHIVE_SUBCOMMAND = "save"
 
+# Memory-CLI subcommands whose handler projects into CLAUDE.md, and which
+# therefore accept `--no-sync`. `_run_memory_cli` suppresses the projection on
+# these when the caller named no project (no `cwd`), because there is then no
+# target to project INTO and inheriting an ambient one would be a guess.
+#
+# NOT a general "commands that touch memory" list, and deliberately narrow:
+# `--no-sync` is declared on the `save` subparser ONLY, so passing it to a
+# subcommand that does not declare it is an argparse error -- the fix would
+# manufacture an over-block on `get`. `search` suppresses its own sync inside
+# its handler and takes no flag, so it does not belong here either.
+#
+# Kept honest by a test that reads the CLI's real parser and asserts this set
+# equals the subparsers actually declaring `--no-sync`. A future syncing
+# subcommand fails that test instead of silently missing the suppression.
+_SYNC_CAPABLE_SUBCOMMANDS = frozenset({"save"})
+
 
 def _load_hook_module(name: str):
     """Load a module from hooks/ by explicit file path.
@@ -508,15 +524,36 @@ def _run_memory_cli(args, db_path=None, stdin_data=None, cwd=None):
     # while the pin lived in the MAIN repo -- exactly the pin/archive
     # disagreement `project_dir_for` is there to prevent.
     #
-    # When `cwd` is None this block does not run at all: `env` stays None, and
-    # `subprocess.run(env=None)` hands the child the parent environment
-    # VERBATIM. Nothing above applies to that path. It is not the safe case --
-    # it is the most ambient path in this function, and it resolves from
-    # whatever the invoking environment happens to be.
-    env = None
+    # THE ENV IS NOW ALWAYS BUILT, and the `cwd is None` case is the reason.
+    # It used to leave `env` as None, and `subprocess.run(env=None)` hands the
+    # child the parent environment VERBATIM -- so the child resolved a
+    # CLAUDE.md from whatever ambient CLAUDE_PROJECT_DIR, git anchor or working
+    # directory happened to be in scope. Measured: with the variable unset and
+    # `cwd` omitted, the child wrote to the invoking repository's real
+    # CLAUDE.md. Every configuration of that branch reached outside the
+    # intended target; only the destination varied.
+    #
+    # NO TARGET IS NOT A LICENCE TO GUESS ONE. A caller that omits `cwd` has
+    # stated no project, so the ambient value is not a weaker answer to the
+    # same question -- it is an answer to a different one. The variable is
+    # therefore REMOVED rather than inherited, and the projection that would
+    # have consumed it is SUPPRESSED. An absent target is a SKIP, never a
+    # CREATE: nothing here invents a path, and nothing writes a CLAUDE.md that
+    # did not already exist.
+    #
+    # `--no-sync` is appended only for subcommands that accept it. It is
+    # declared on the `save` subparser alone, so adding it to a `get` would be
+    # an argparse error -- an over-block manufactured by the fix. The set is a
+    # named constant with a test pinning it against the CLI's real parser, so
+    # a future syncing subcommand fails that test rather than silently
+    # slipping past this branch.
+    env = dict(os.environ)
     if cwd is not None:
-        env = dict(os.environ)
         env["CLAUDE_PROJECT_DIR"] = str(cwd)
+    else:
+        env.pop("CLAUDE_PROJECT_DIR", None)
+        if args and args[0] in _SYNC_CAPABLE_SUBCOMMANDS and "--no-sync" not in args:
+            argv.append("--no-sync")
 
     try:
         proc = subprocess.run(

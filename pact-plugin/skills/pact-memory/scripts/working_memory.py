@@ -1049,10 +1049,33 @@ def _parse_working_memory_section(
     return before_section, WORKING_MEMORY_HEADER, after_section, existing_entries
 
 
+def _project_root_of(claude_md_path: Path) -> Path:
+    """
+    Return the project directory that owns `claude_md_path`.
+
+    CLAUDE.md lives at either `<project>/.claude/CLAUDE.md` (preferred) or
+    `<project>/CLAUDE.md` (legacy), so the root is one or two levels up
+    depending on which form the caller resolved.
+
+    Used only for an EXPLICIT target, to produce the same containment anchor
+    that `_resolve_display_claude_md_with_base` returns for a resolved one —
+    the directory captured before descending into `.claude`, never a
+    re-derivation from the leaf.
+
+    The two-layout knowledge is owned by `hooks/shared/claude_md_manager.py`
+    (`_DOT_CLAUDE_RELATIVE` / `_LEGACY_RELATIVE`); this module cannot import
+    from that package and vendors twins throughout, so this mirrors it. If a
+    THIRD location is ever supported, this must be swept with the others.
+    """
+    parent = claude_md_path.parent
+    return parent.parent if parent.name == ".claude" else parent
+
+
 def sync_to_claude_md(
     memory: Dict[str, Any],
     files: Optional[List[str]] = None,
-    memory_id: Optional[str] = None
+    memory_id: Optional[str] = None,
+    target: Optional[Path] = None
 ) -> bool:
     """
     Sync a memory entry to the Working Memory section of CLAUDE.md.
@@ -1064,15 +1087,67 @@ def sync_to_claude_md(
     exist or the sync fails for any reason, it logs a warning but doesn't
     raise an exception.
 
+    THE TARGET IS CALLER-SPECIFIABLE. Without `target` the destination is
+    resolved AMBIENTLY — from CLAUDE_PROJECT_DIR, then two git anchors, then
+    the working directory — and a caller who knows which file it means has no
+    way to say so. That is the root defect: not that the resolver is wrong,
+    but that there is no override, so a caller's knowledge cannot reach the
+    write. `target` is that override.
+
+    AN ABSENT TARGET IS A SKIP, and the guard below states it rather than
+    leaving it to be inferred. This matters because the obvious resolver to
+    compute a target with — `claude_md_manager.resolve_project_claude_md_path`
+    — is TOTAL: on a miss it returns a `"new_default"` path rather than None.
+    That is correct for a caller whose job is to create the file, and wrong
+    here, where the orchestrator owns the file's lifecycle.
+
+    MEASURED, because the stronger version of this warning is not true today
+    and repeating it would misdescribe the code: handed a path to a file that
+    does not exist, this function does NOT create it. The read precedes the
+    write, so the read raises and the degradation handler below returns False.
+    What it does do is take the sidecar lock first — leaving a `.CLAUDE.md.lock`
+    artifact in a directory it should never have touched — and report a warning
+    that reads like a real failure rather than a skip.
+
+    So the protection against creating is currently an ACCIDENT OF ORDERING,
+    not a contract: it holds only while the write path happens to read first.
+    A future change that tolerates a missing file — or writes before reading —
+    turns it into a create, and nothing would fail. The guard converts that
+    accident into a stated contract, which is the whole point of putting it
+    here rather than trusting the resolver to encode it.
+
+    So: compute the target AT THE CALLER, pass it here, and let the existence
+    check below decide.
+
     Args:
         memory: Memory dictionary with context, goal, decisions, lessons_learned, etc.
         files: Optional list of file paths associated with this memory.
         memory_id: Optional memory ID to include for database reference.
+        target: Explicit CLAUDE.md path to write. When omitted, the display
+            CLAUDE.md is resolved ambiently exactly as before, so existing
+            callers are unaffected. When given, it is used verbatim and is
+            never created if absent.
 
     Returns:
         True if sync succeeded, False otherwise.
     """
-    claude_md_path, project_root = _resolve_display_claude_md_with_base()
+    if target is not None:
+        claude_md_path = Path(target)
+        project_root = _project_root_of(claude_md_path)
+        # SEPARATE, EXPLICIT existence guard. Kept apart from resolution on
+        # purpose: an ambient resolve returns None when it finds nothing, so
+        # the skip rides along for free, but an explicit target arrives with no
+        # such promise. Writing it here means the contract holds for both
+        # paths, and holds even if a future caller computes the target with a
+        # total resolver.
+        if not claude_md_path.exists():
+            logger.debug(
+                "explicit sync target %s does not exist, skipping working "
+                "memory sync (this never creates CLAUDE.md)", claude_md_path
+            )
+            return False
+    else:
+        claude_md_path, project_root = _resolve_display_claude_md_with_base()
 
     if claude_md_path is None:
         logger.debug("CLAUDE.md not found, skipping working memory sync")

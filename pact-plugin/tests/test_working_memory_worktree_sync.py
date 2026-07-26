@@ -33,7 +33,11 @@ import pytest
 # scripts/ is a package; add skills/pact-memory so `scripts.*` imports resolve.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "skills", "pact-memory"))
 
-from scripts.working_memory import _resolve_display_claude_md_path, sync_to_claude_md
+from scripts.working_memory import (
+    _project_root_of,
+    _resolve_display_claude_md_path,
+    sync_to_claude_md,
+)
 from scripts.memory_api import PACTMemory
 
 
@@ -157,6 +161,159 @@ def _install_find_spy(monkeypatch):
 
     monkeypatch.setattr(wm, "_find_existing_claude_md", spy)
     return calls
+
+
+# ---------------------------------------------------------------------------
+# Explicit sync target — the caller-specifiable override
+# ---------------------------------------------------------------------------
+
+class TestExplicitSyncTarget:
+    """`sync_to_claude_md(target=...)` — the caller-specifiable override.
+
+    Without it the destination is resolved ambiently (CLAUDE_PROJECT_DIR, two
+    git anchors, then the working directory) and a caller who knows which file
+    it means has no way to say so. The root defect is not that the resolver is
+    wrong; it is that there is no override, so the caller's knowledge cannot
+    reach the write.
+
+    THE LOAD-BEARING PROPERTY IS THAT AN ABSENT TARGET SKIPS. The natural
+    resolver to compute a target with,
+    `claude_md_manager.resolve_project_claude_md_path`, is TOTAL — it returns a
+    "new_default" path rather than None on a miss. That is right for a caller
+    whose job is to create the file and wrong for the sync, where the
+    orchestrator owns the lifecycle.
+
+    MEASURED RATHER THAN ASSUMED, because the stronger claim is false today:
+    with the guard removed, an absent target does NOT produce a CLAUDE.md. The
+    read precedes the write, so it raises and the degradation handler returns
+    False. It does leave a `.CLAUDE.md.lock` sidecar in a directory the sync
+    should never have touched.
+
+    That makes the current protection an ACCIDENT OF ORDERING rather than a
+    contract — it holds only while the write path happens to read first. The
+    tests below pin the contract itself, so a future reordering fails here
+    instead of quietly becoming a create.
+    """
+
+    def test_explicit_target_is_written_and_the_ambient_one_is_not(
+        self, tmp_path, clean_env
+    ):
+        intended = tmp_path / "intended"
+        intended.mkdir()
+        (intended / "CLAUDE.md").write_text(
+            WORKING_MEMORY_SCAFFOLD.format(title="Intended"), encoding="utf-8"
+        )
+        decoy = tmp_path / "decoy"
+        decoy.mkdir()
+        decoy_md = decoy / "CLAUDE.md"
+        decoy_md.write_text(
+            WORKING_MEMORY_SCAFFOLD.format(title="Decoy"), encoding="utf-8"
+        )
+        # The ambient answer points at the decoy; the explicit target must win.
+        clean_env.setenv("CLAUDE_PROJECT_DIR", str(decoy))
+        decoy_before = decoy_md.read_bytes()
+
+        ok = sync_to_claude_md(
+            {"context": "ctx", "goal": "explicit target goal"},
+            memory_id="a" * 32,
+            target=intended / "CLAUDE.md",
+        )
+
+        assert ok is True
+        # POSITIVE: assert where it landed, not merely that the decoy is clean.
+        # "The other file is untouched" is equally consistent with the sync
+        # having silently skipped.
+        written = (intended / "CLAUDE.md").read_text(encoding="utf-8")
+        assert "explicit target goal" in written, (
+            "the entry did not land in the explicit target"
+        )
+        assert decoy_md.read_bytes() == decoy_before, (
+            "the ambient target was written despite an explicit one"
+        )
+
+    def test_absent_target_is_a_skip_and_touches_nothing(
+        self, tmp_path, clean_env
+    ):
+        """An absent target must SKIP — and skip without side effects.
+
+        The directory-empty assertion is the discriminating one. Removing the
+        guard still leaves `missing.exists()` False (the read raises first),
+        so a test asserting only "no CLAUDE.md was created" passes against the
+        unguarded code and measures nothing. What the unguarded path DOES
+        leave is a `.CLAUDE.md.lock` sidecar, which is why the assertion is on
+        the whole directory rather than on the one filename.
+        """
+        project = tmp_path / "empty-project"
+        project.mkdir()
+        missing = project / "CLAUDE.md"
+        assert not missing.exists(), "precondition: the target must be absent"
+
+        ok = sync_to_claude_md(
+            {"context": "ctx", "goal": "must not create"},
+            memory_id="b" * 32,
+            target=missing,
+        )
+
+        assert ok is False, "an absent target must report failure, not success"
+        assert not missing.exists(), (
+            "the sync CREATED a CLAUDE.md that did not exist — this moves the "
+            "file's lifecycle from the orchestrator to the memory layer"
+        )
+        assert not (project / ".claude").exists(), (
+            "the sync created a .claude/ directory for a file it must not make"
+        )
+        leftovers = sorted(p.name for p in project.iterdir())
+        assert leftovers == [], (
+            f"the sync left artifacts in a project it should never have "
+            f"touched: {leftovers}. A lock sidecar here means the guard was "
+            f"bypassed and the skip is being produced by the read failing "
+            f"rather than by the contract."
+        )
+
+    def test_omitting_target_keeps_the_ambient_behaviour(self, tmp_path, clean_env):
+        """Existing callers are unaffected — the parameter is additive."""
+        project = tmp_path / "ambient"
+        project.mkdir()
+        md = project / "CLAUDE.md"
+        md.write_text(
+            WORKING_MEMORY_SCAFFOLD.format(title="Ambient"), encoding="utf-8"
+        )
+        clean_env.setenv("CLAUDE_PROJECT_DIR", str(project))
+
+        ok = sync_to_claude_md(
+            {"context": "ctx", "goal": "ambient path still works"},
+            memory_id="c" * 32,
+        )
+
+        assert ok is True
+        assert "ambient path still works" in md.read_text(encoding="utf-8")
+
+    def test_dot_claude_target_resolves_the_project_root_for_containment(
+        self, tmp_path, clean_env
+    ):
+        """The containment anchor must be the PROJECT dir, not `.claude/`.
+
+        `_atomic_write_text` checks the target against this base, so deriving
+        it one level too deep would either break the write or make the check
+        vacuous.
+        """
+        project = tmp_path / "dotproj"
+        (project / ".claude").mkdir(parents=True)
+        md = project / ".claude" / "CLAUDE.md"
+        md.write_text(
+            WORKING_MEMORY_SCAFFOLD.format(title="Dot"), encoding="utf-8"
+        )
+
+        assert _project_root_of(md) == project
+        assert _project_root_of(project / "CLAUDE.md") == project
+
+        ok = sync_to_claude_md(
+            {"context": "ctx", "goal": "dot layout target"},
+            memory_id="d" * 32,
+            target=md,
+        )
+        assert ok is True
+        assert "dot layout target" in md.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

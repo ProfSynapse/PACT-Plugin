@@ -39,6 +39,7 @@ backstop is the guard in `_run_memory_cli`; this convention is what makes the
 choice reviewable.
 """
 
+import ast
 import json
 import os
 import subprocess
@@ -919,6 +920,181 @@ class TestProductionDbGuard:
         assert "--db-path" not in calls[0], (
             "a None db_path must not synthesize a --db-path argument"
         )
+
+
+class TestExplicitTargetBoundary:
+    """The no-`cwd` population — the one that reached OUTSIDE the sandbox.
+
+    `cwd` is an ordinary optional argument. When it was omitted the env block
+    never ran, `env` stayed None, and `subprocess.run(env=None)` handed the
+    child the parent environment VERBATIM — so the child resolved a CLAUDE.md
+    from whatever ambient variable, git anchor or working directory was in
+    scope. Measured before the fix: variable unset and `cwd` omitted, the
+    child wrote to the invoking repository's REAL CLAUDE.md. Three
+    configurations, two destinations, all of them outside the intended target.
+
+    The contract now: no target means the ambient value is REMOVED rather than
+    inherited, and the projection that would consume it is SUPPRESSED. Not a
+    guess, not a fallback — a skip.
+
+    THE TWO EXISTING LEGS MUST NOT MOVE. Both `archive_pin`'s save and get
+    calls already pass `cwd`, so they are in the closed population and this
+    change must leave them byte-identical. Their argv is pinned below: a shift
+    there is a REGRESSION, not an improvement, and would otherwise read as one.
+    """
+
+    @staticmethod
+    def _capture(monkeypatch):
+        real_run = subprocess.run
+        calls = []
+
+        class _Proc:
+            returncode = 0
+            stderr = ""
+            def __init__(self, stdout=""):
+                self.stdout = stdout
+
+        def _fake(argv, **kwargs):
+            if not (argv and argv[0] == sys.executable):
+                return real_run(argv, **kwargs)
+            calls.append((list(argv), kwargs))
+            return _Proc('{"ok": true, "result": {}}')
+
+        monkeypatch.setattr(archive_pin.subprocess, "run", _fake)
+        return calls
+
+    def test_no_cwd_strips_the_ambient_project_and_suppresses_the_sync(
+        self, tmp_path, monkeypatch
+    ):
+        decoy = tmp_path / "ambient"
+        decoy.mkdir()
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(decoy))
+        assert os.environ.get("CLAUDE_PROJECT_DIR") == str(decoy), (
+            "precondition: no ambient value is set, so this test cannot show "
+            "that one is removed"
+        )
+
+        calls = self._capture(monkeypatch)
+        archive_pin._run_memory_cli(
+            ["save", "--stdin"], db_path=str(tmp_path / "m.db"),
+            stdin_data="{}", cwd=None,
+        )
+
+        assert len(calls) == 1, f"expected one spawn, captured {len(calls)}"
+        argv, kwargs = calls[0]
+        assert kwargs["env"] is not None, (
+            "env is None, so the child inherits the parent environment "
+            "verbatim — the exact hole this closes"
+        )
+        assert "CLAUDE_PROJECT_DIR" not in kwargs["env"], (
+            "the ambient project survived into a call that named no project; "
+            "an absent target must not fall back to an ambient one"
+        )
+        assert "--no-sync" in argv, (
+            "the projection was not suppressed on a call with no target — it "
+            "would resolve a destination ambiently and write there"
+        )
+        assert kwargs["cwd"] is None
+
+    def test_no_sync_is_not_added_to_subcommands_that_reject_it(
+        self, tmp_path, monkeypatch
+    ):
+        """OVER-BLOCK CONTROL. `--no-sync` is declared on `save` only, so
+        appending it to a `get` is an argparse error — a failure the fix would
+        have manufactured."""
+        calls = self._capture(monkeypatch)
+        archive_pin._run_memory_cli(
+            ["get", "a" * 32], db_path=str(tmp_path / "m.db"), cwd=None
+        )
+        argv = calls[0][0]
+        assert "--no-sync" not in argv, (
+            f"--no-sync was appended to a subcommand that does not accept it: {argv[2:]}"
+        )
+
+    def test_sync_capable_set_matches_the_cli_parser(self):
+        """DRIFT DETECTOR, mechanical rather than conventional.
+
+        The suppression fires only for subcommands in
+        `_SYNC_CAPABLE_SUBCOMMANDS`. If a future subcommand gains a sync and a
+        `--no-sync` flag but is not added there, calls with no target silently
+        stop being suppressed — the leak returns with nothing failing.
+
+        So the constant is checked against the CLI's REAL parser rather than
+        against a second hand-written list, which would only ever contain what
+        someone already remembered.
+        """
+        cli_path = (
+            Path(archive_pin.__file__).resolve().parent.parent
+            / "skills" / "pact-memory" / "scripts" / "cli.py"
+        )
+        source = cli_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        # Which `<name>_parser.add_argument("--no-sync", ...)` calls exist.
+        declaring = set()
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "add_argument"):
+                continue
+            if not (node.args and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "--no-sync"):
+                continue
+            recv = node.func.value
+            assert isinstance(recv, ast.Name), (
+                f"unrecognised --no-sync receiver at line {node.lineno}; the "
+                "detector must be updated rather than the assertion relaxed"
+            )
+            declaring.add(recv.id.removesuffix("_parser"))
+
+        assert declaring, (
+            "no --no-sync declaration found in cli.py at all — the detector "
+            "found nothing to compare and would pass vacuously"
+        )
+        assert declaring == set(archive_pin._SYNC_CAPABLE_SUBCOMMANDS), (
+            f"cli.py declares --no-sync on {sorted(declaring)} but "
+            f"_SYNC_CAPABLE_SUBCOMMANDS is "
+            f"{sorted(archive_pin._SYNC_CAPABLE_SUBCOMMANDS)}. A subcommand "
+            f"that syncs but is missing from the constant loses the "
+            f"suppression on no-target calls."
+        )
+
+    def test_both_existing_legs_keep_their_argv_unchanged(
+        self, claude_md, monkeypatch, tmp_path
+    ):
+        """Both archive_pin legs pass `cwd`, so neither may shift.
+
+        The save leg carries `--no-sync` EXPLICITLY and must not gain a second
+        one; the get leg carries none and must not gain one at all.
+        """
+        content = _two_pin_file()
+        path = claude_md(content)
+        calls = []
+        real_run = archive_pin._run_memory_cli
+
+        def _spy(args, **kwargs):
+            calls.append(list(args))
+            if args[0] == "save":
+                return 0, json.dumps(
+                    {"ok": True, "result": {"memory_id": "f" * 32}}
+                ), ""
+            return 0, json.dumps({"ok": True, "result": {"context": content}}), ""
+
+        monkeypatch.setattr(archive_pin, "_run_memory_cli", _spy)
+        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+        assert verdict["outcome"] == "ARCHIVED", verdict
+        assert len(calls) == 2, f"expected save+get, got {calls}"
+
+        save_args, get_args = calls
+        assert save_args == ["save", "--stdin", "--no-sync"], (
+            f"the save leg's argv changed: {save_args}"
+        )
+        assert save_args.count("--no-sync") == 1, "double-injected --no-sync"
+        assert get_args[0] == "get" and "--no-sync" not in get_args, (
+            f"the get leg's argv changed: {get_args}"
+        )
+        assert path.exists()
+        assert real_run is not None
 
 
 class _CompletedStub:
