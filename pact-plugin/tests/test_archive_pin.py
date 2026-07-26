@@ -716,7 +716,14 @@ class TestEnvPropagation_ExplicitCwdBeatsAmbient:
         )
 
         calls = self._spy_memory_cli_spawns(monkeypatch)
-        archive_pin._run_memory_cli(["get", "x" * 32], cwd=intended)
+        # Scoped db_path, though the spy means no child is ever launched:
+        # this call enters the real `_run_memory_cli`, and naming a temp store
+        # keeps it correct under the production-DB guard rather than relying
+        # on the spy sitting downstream of it. None of the assertions below
+        # read db_path, so it cannot perturb the property under test.
+        archive_pin._run_memory_cli(
+            ["get", "x" * 32], db_path=str(tmp_path / "mem.db"), cwd=intended
+        )
 
         assert len(calls) == 1, (
             f"expected exactly one CLI spawn, captured {len(calls)}"
@@ -730,6 +737,195 @@ class TestEnvPropagation_ExplicitCwdBeatsAmbient:
         )
         assert env["CLAUDE_PROJECT_DIR"] != str(decoy)
         assert calls[0][1]["cwd"] == str(intended)
+
+
+class TestProductionDbGuard:
+    """The MECHANICAL closure for the production-database leak.
+
+    A required `db_path` makes the choice visible; it does not make it safe.
+    `None` still satisfies the signature and still means the real store, and
+    `""` is falsy so it takes the same branch as an omission. This class pins
+    the two guards that turn those into failures.
+
+    The guards sit on OPPOSITE SIDES of the process boundary and that split is
+    the design, not an accident:
+
+      * PARENT (`_run_memory_cli`) rejects falsy-BUT-PRESENT db_path. It sees
+        the caller's intent, so it can tell `""` from `None`.
+      * CHILD (`cli.py`) refuses the production store outright when no
+        --db-path arrived. It sees the actual spawn, so it catches routes that
+        never touch `archive_pin` at all -- including a raw
+        `subprocess.run([sys.executable, cli.py, ...])`.
+
+    Neither covers the other's cases. The parent guard cannot see a spawn that
+    bypasses it; the child guard cannot see intent that never crossed.
+
+    EVERY TEST HERE SANDBOXES `HOME`. That is not decoration: `config.py` binds
+    the database path from `Path.home()` AT IMPORT, so an in-process HOME
+    change is inert -- but a child re-imports, so HOME in the CHILD'S env does
+    redirect it. These tests exercise the exact production shape (no
+    --db-path) with zero production risk, which is only possible because the
+    boundary that makes the defect hard to guard is the same boundary that
+    makes it safe to test.
+    """
+
+    @staticmethod
+    def _spawn_cli(tmp_path, *, with_pytest_var, extra_argv=()):
+        """Run the memory CLI as the curator's production shape: no --db-path.
+
+        HOME points into tmp_path, so the child resolves a temp database even
+        on the branch that would otherwise select production.
+        """
+        cli = (
+            Path(archive_pin.__file__).resolve().parent.parent
+            / "skills" / "pact-memory" / "scripts" / "cli.py"
+        )
+        assert cli.exists(), f"CLI not found at {cli} — this test measures nothing"
+        home = tmp_path / "sandbox-home"
+        home.mkdir(exist_ok=True)
+        env = dict(os.environ)
+        env["HOME"] = str(home)
+        if with_pytest_var:
+            env["PYTEST_CURRENT_TEST"] = "sentinel::test (call)"
+        else:
+            env.pop("PYTEST_CURRENT_TEST", None)
+        return subprocess.run(
+            [sys.executable, str(cli), "get", "f" * 32, *extra_argv],
+            capture_output=True, text=True, timeout=120, env=env,
+        )
+
+    def test_child_refuses_the_production_db_when_spawned_under_pytest(
+        self, tmp_path
+    ):
+        proc = self._spawn_cli(tmp_path, with_pytest_var=True)
+        assert proc.returncode != 0, (
+            "the child exited 0 with no --db-path under pytest — it would "
+            "have used the production database"
+        )
+        assert "UNSCOPED_TEST_DB" in proc.stderr, (
+            f"guard did not fire; stderr={proc.stderr[:400]}"
+        )
+
+    def test_the_curator_production_path_is_not_blocked(self, tmp_path):
+        """OVER-BLOCK CONTROL, and the reason the gate exists.
+
+        `archive_pin --index N` (commands/prune-memory.md) passes no
+        --db-path, and /PACT:prune-memory keys its refuse-or-proceed decision
+        on that command. An ungated guard breaks it. This asserts the guard is
+        SILENT with the variable absent — the same spawn, one variable apart.
+        """
+        proc = self._spawn_cli(tmp_path, with_pytest_var=False)
+        assert "UNSCOPED_TEST_DB" not in proc.stderr, (
+            "the guard fired OUTSIDE pytest — this is the cardinal over-block: "
+            f"`archive_pin --index N` would stop working. stderr={proc.stderr[:400]}"
+        )
+
+    def test_an_explicit_db_path_is_accepted_under_pytest(self, tmp_path):
+        """The guard must block only the UNSCOPED case, not every spawn."""
+        proc = self._spawn_cli(
+            tmp_path, with_pytest_var=True,
+            extra_argv=("--db-path", str(tmp_path / "scoped.db")),
+        )
+        assert "UNSCOPED_TEST_DB" not in proc.stderr, (
+            f"guard fired despite an explicit --db-path; stderr={proc.stderr[:400]}"
+        )
+
+    @pytest.mark.parametrize("pass_cwd", [True, False])
+    def test_tripwire_the_child_actually_receives_pytest_current_test(
+        self, tmp_path, monkeypatch, pass_cwd
+    ):
+        """NON-OPTIONAL TRIPWIRE. The guard's fail direction is ALLOW.
+
+        The child-side guard works only because `_run_memory_cli` hands the
+        child a FULL copy of this process's environment. Hardening that to a
+        minimal allowlist is plausible, otherwise desirable, and would disable
+        the guard SILENTLY — every other test in this file would still pass,
+        because they assert on the guard's behaviour given the variable rather
+        than on the variable arriving.
+
+        So this asserts the delivery itself, on BOTH branches of the env
+        construction: `cwd` passed (env is a dict copy) and `cwd` omitted
+        (env stays None, so the child inherits verbatim).
+
+        It also records WHY the signal must be inherited rather than detected:
+        `"pytest" in sys.modules` is False in the child, measured here rather
+        than asserted in a comment. A future reader proposing an in-process
+        check can see it is not available.
+        """
+        probe = tmp_path / "probe.py"
+        probe.write_text(
+            "import os, sys, json\n"
+            "print(json.dumps({\n"
+            "    'seen': os.environ.get('PYTEST_CURRENT_TEST'),\n"
+            "    'pytest_importable_here': 'pytest' in sys.modules,\n"
+            "}))\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(archive_pin, "_MEMORY_CLI", probe)
+        rc, stdout, stderr = archive_pin._run_memory_cli(
+            [], db_path=None, cwd=(tmp_path if pass_cwd else None)
+        )
+        assert rc == 0, f"probe child failed: {stderr[:300]}"
+        report = json.loads(stdout)
+
+        assert report["seen"], (
+            "PYTEST_CURRENT_TEST did NOT reach the child. The child-side "
+            "production-DB guard in cli.py is therefore INERT, and its fail "
+            "direction is ALLOW — unscoped spawns will silently use the real "
+            "database. Most likely cause: _run_memory_cli stopped passing a "
+            "full env copy."
+        )
+        assert report["pytest_importable_here"] is False, (
+            "pytest IS visible in the child, so the guard could have used an "
+            "in-process check — revisit the forced-choice reasoning in "
+            "cli.py's _refuse_production_db_under_pytest docstring"
+        )
+
+    def test_parent_rejects_falsy_but_present_db_path(self, tmp_path):
+        """`db_path=""` is falsy, so without this it routes to production.
+
+        The real `_MEMORY_CLI` is left in place. Repointing it at a
+        non-existent file to prevent a spawn does not work here and is worth
+        recording: the existence check runs BEFORE this guard, so the call
+        raises `_Unevaluable` for the WRONG REASON and a test asserting only
+        on the exception TYPE would pass while measuring the missing-CLI path.
+        No spawn happens regardless, because the guard raises before argv is
+        built. Assert on the reason, not just the type.
+        """
+        with pytest.raises(archive_pin._Unevaluable) as excinfo:
+            archive_pin._run_memory_cli(["get", "x" * 32], db_path="", cwd=tmp_path)
+        assert "empty value" in str(excinfo.value.reason), (
+            f"raised for the wrong reason: {excinfo.value.reason!r}"
+        )
+
+    def test_parent_allows_none_so_non_spawning_paths_keep_working(
+        self, tmp_path, monkeypatch
+    ):
+        """None is the not-scoping sentinel, and must NOT be rejected here.
+
+        Six tests reach `_run_memory_cli` with `db_path=None` while stubbing
+        `subprocess.run` or `_MEMORY_CLI`; none can touch a store. Rejecting
+        plain falsiness rather than falsy-but-present would redden all six for
+        a hazard they do not have — and the cheap-looking repair would be to
+        weaken the guard.
+        """
+        calls = []
+        monkeypatch.setattr(
+            archive_pin.subprocess, "run",
+            lambda argv, **kw: calls.append(argv) or _CompletedStub(),
+        )
+        archive_pin._run_memory_cli(["get", "x" * 32], db_path=None, cwd=tmp_path)
+        assert calls, "the spawn never happened — this test proves nothing"
+        assert "--db-path" not in calls[0], (
+            "a None db_path must not synthesize a --db-path argument"
+        )
+
+
+class _CompletedStub:
+    """Minimal stand-in for CompletedProcess on a path that must not spawn."""
+    returncode = 0
+    stdout = '{"ok": true, "result": {}}'
+    stderr = ""
 
 
 @pytest.mark.requires_embedding_backend

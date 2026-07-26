@@ -466,6 +466,26 @@ def _run_memory_cli(args, db_path=None, stdin_data=None, cwd=None):
     if not _MEMORY_CLI.exists():
         raise _Unevaluable(f"memory CLI not found at {_MEMORY_CLI}")
 
+    # FALSY-BUT-PRESENT, rejected under pytest. The line below tests db_path
+    # for TRUTHINESS, so `db_path=""` takes the same branch as an omitted one
+    # and routes to production -- a required-parameter fix defeated without
+    # removing the parameter. A caller that names db_path and passes an empty
+    # value has stated an intention the truthiness test then discards.
+    #
+    # The predicate is `is not None and not db_path`, NOT plain falsiness.
+    # None is the "I am not scoping this call" sentinel and is legitimate on
+    # the paths that never spawn -- six tests reach here with db_path=None
+    # while stubbing subprocess.run or _MEMORY_CLI, and none of them can touch
+    # a store. Rejecting plain falsiness would redden all six for a hazard
+    # they do not have. A real spawn carrying None is caught at the process
+    # boundary instead, in the child, where the decision actually lands.
+    if os.environ.get("PYTEST_CURRENT_TEST") and db_path is not None and not db_path:
+        raise _Unevaluable(
+            "db_path was given as an empty value under pytest; it is falsy, "
+            "so the memory CLI would fall back to the PRODUCTION database. "
+            "Pass a real temp path, or None if this call cannot reach a store."
+        )
+
     argv = [sys.executable, str(_MEMORY_CLI), *args]
     if db_path:
         argv += ["--db-path", db_path]

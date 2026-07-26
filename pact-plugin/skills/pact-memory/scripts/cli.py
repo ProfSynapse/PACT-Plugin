@@ -70,6 +70,77 @@ def _error(error_type, message, exit_code=1, **extra) -> NoReturn:
     sys.exit(exit_code)
 
 
+def _refuse_production_db_under_pytest(db_path) -> None:
+    """Refuse the production store when a TEST PROCESS spawned us.
+
+    THE DEFECT THIS CLOSES. `--db-path` is how a test scopes its writes, and
+    omitting it silently selects the developer's real `memory.db`. A test that
+    forgets it does not fail -- it succeeds, against production. Requiring the
+    parameter upstream makes the choice visible but not safe: the value may
+    still be None, and an empty string is falsy, so it takes the same branch.
+    This is the mechanical half.
+
+    WHY AN ENVIRONMENT VARIABLE AND NOT `"pytest" in sys.modules`. This process
+    is a FRESH INTERPRETER: the parent runs pytest, we do not. Measured on both
+    branches of the caller's env construction -- `"pytest" in sys.modules` is
+    FALSE here, every time. So a child-side guard cannot detect pytest by
+    introspection and must key on something INHERITED. `PYTEST_CURRENT_TEST` is
+    the only standard signal that crosses the boundary. The choice is FORCED,
+    not preferred; an in-process check is not an available alternative.
+
+    WHY IT IS GATED, AND WHY THE GATE IS NOT OPTIONAL. `archive_pin --index N`
+    is the curator's documented production invocation and it passes NO
+    `--db-path` -- production SHOULD use the real store. An ungated refusal
+    would break that command outright, and it is the command
+    `/PACT:prune-memory` keys its refuse-or-proceed decision on. That is a
+    cardinal over-block on the one path whose purpose is not destroying
+    content. Outside pytest this function returns immediately.
+
+    DEPENDENCY WITH AN `ALLOW` FAIL DIRECTION -- the reason its tripwire test
+    is not optional. This guard works only because the spawning parent hands us
+    a FULL copy of its environment. Hardening that to a minimal allowlist is a
+    plausible and otherwise desirable change, and it would DISABLE this guard
+    silently while every test still passed. Nothing here can detect that; the
+    detector is the test asserting the child actually receives the variable.
+
+    SCOPE: SPAWNED CHILDREN ONLY, and the `sys.modules` check is what enforces
+    it. `main()` is also called IN-PROCESS by the CLI's own unit tests, which
+    patch `PACTMemory` and open no store at all -- and one of them exists
+    precisely to assert that an omitted `--db-path` yields `db_path=None`.
+    Firing there would refuse a contract the CLI is supposed to have. Because
+    an in-process caller DOES have pytest imported, that case is separable,
+    and the same fact that forces the env signal for children also identifies
+    them: `"pytest" not in sys.modules` means "I am a fresh interpreter".
+
+    This is the guard's specified reach, not a concession to those tests: the
+    design bounds it to subprocess spawns and records that the in-process
+    class is out of its range, covered upstream by `build_verdict`'s required
+    parameter and by the caller-side falsy-but-present rejection. RESIDUAL,
+    stated rather than implied: an in-process `main()` call with a real
+    `PACTMemory` and no `--db-path` would still reach the production store.
+    Nothing here catches that, and nothing currently does it.
+
+    BOUNDED GAP, stated rather than implied: pytest POPS `PYTEST_CURRENT_TEST`
+    between items, so it is absent during collection and around
+    session-scoped-fixture setup. A spawn from either of those is NOT covered.
+    """
+    if db_path is not None:
+        return
+    if "pytest" in sys.modules:
+        return          # in-process caller -- out of this guard's scope
+    current_test = os.environ.get("PYTEST_CURRENT_TEST")
+    if not current_test:
+        return
+    _error(
+        "UNSCOPED_TEST_DB",
+        "refusing to open the production memory database: this process was "
+        "spawned from a pytest run and no --db-path was given, so the write "
+        "would land in the developer's real store. Pass --db-path pointing at "
+        f"a temporary database. Spawned during: {current_test}",
+        exit_code=2,
+    )
+
+
 def _scrub(msg: str) -> str:
     """
     Replace the user's home directory with '~' in an error message.
@@ -483,6 +554,12 @@ def main(argv=None):
         _error("UNKNOWN_COMMAND", f"Unknown command: {args.command}")
 
     db_path = Path(args.db_path) if args.db_path else None
+
+    # Checked AFTER the falsy coercion above, deliberately: `--db-path ""`
+    # collapses to None there, so guarding the coerced value covers the empty
+    # string on the same branch as an omitted flag rather than needing a
+    # second predicate for it.
+    _refuse_production_db_under_pytest(db_path)
 
     try:
         handler(args, db_path=db_path)

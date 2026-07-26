@@ -36,7 +36,7 @@ from test_working_memory_concurrency_comprehensive import _seed_claude_md
 # Add pact-memory skill root to path so `from scripts.cli import ...` works
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'skills', 'pact-memory'))
 
-from scripts.cli import build_parser, cmd_save, cmd_search, cmd_list, cmd_get, cmd_status, cmd_setup, cmd_update, cmd_delete, main, _COMMANDS
+from scripts.cli import build_parser, cmd_save, cmd_search, cmd_list, cmd_get, cmd_status, cmd_setup, cmd_update, cmd_delete, main, _COMMANDS, _refuse_production_db_under_pytest
 from scripts.memory_api import PACTMemory
 
 
@@ -1401,6 +1401,43 @@ class TestCliOutputFormat:
 # ---------------------------------------------------------------------------
 # Error Handling
 # ---------------------------------------------------------------------------
+
+class TestProductionDbGuardScope:
+    """The production-DB guard is scoped to SPAWNED CHILDREN, deliberately.
+
+    `_refuse_production_db_under_pytest` refuses the real store when a test
+    process spawned the CLI with no `--db-path`. It must NOT fire for the
+    in-process `main()` calls this file makes: they patch `PACTMemory` and
+    open no store, and `test_main_db_path_none_when_not_specified` exists
+    precisely to assert that an omitted `--db-path` yields `db_path=None`.
+    A guard firing there would refuse a contract the CLI is meant to have.
+
+    The separation is available because the same fact that FORCES the env
+    signal for spawned children also identifies them: a child is a fresh
+    interpreter with no `pytest` in `sys.modules`.
+
+    This is pinned rather than left implicit because the ten in-process tests
+    below pass for this reason, and a maintainer who removed the `sys.modules`
+    check would see ten failures with no statement of why the check was there.
+
+    RESIDUAL, stated: an in-process `main()` call with a REAL `PACTMemory` and
+    no `--db-path` still reaches production. Nothing catches that; nothing
+    currently does it.
+    """
+
+    def test_in_process_callers_are_exempt(self):
+        assert "pytest" in sys.modules, (
+            "pytest is absent from this process, so this test cannot "
+            "distinguish the in-process case from the spawned-child case"
+        )
+        # Returns instead of raising SystemExit — the in-process branch.
+        assert _refuse_production_db_under_pytest(None) is None
+
+    def test_an_explicit_db_path_is_never_refused(self, tmp_path):
+        """Non-vacuity: the exemption above must not be the ONLY reason it
+        returns. With a db_path present it returns before either check."""
+        assert _refuse_production_db_under_pytest(tmp_path / "x.db") is None
+
 
 class TestCliErrorHandling:
     """Test error paths, exit codes, and the main() entry point."""
