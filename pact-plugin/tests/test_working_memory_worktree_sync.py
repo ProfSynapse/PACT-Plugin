@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "skills", "pact
 from scripts.working_memory import (
     _project_root_of,
     _resolve_display_claude_md_path,
+    sync_retrieved_to_claude_md,
     sync_to_claude_md,
 )
 from scripts.memory_api import PACTMemory
@@ -297,6 +298,144 @@ class TestAmbientBranchAbsentTarget:
             "explicit-absent warned; it is an ordinary caller condition that "
             "fires in normal use and must stay at debug"
         )
+
+
+class TestRetrievedSyncAbsentTarget:
+    """`sync_retrieved_to_claude_md` must skip an absent destination too.
+
+    The sibling of `sync_to_claude_md`, and the other write caller named in
+    `_resolve_display_claude_md_path`'s docstring. It had the same defect and
+    it was found INDEPENDENTLY by two reviewers on different routes — one by
+    enumerating the truth-conditions of the guarded function's claim, one by
+    asking which other callers take the same lock.
+
+    ITS GUARD IS SHAPED DIFFERENTLY FROM ITS SIBLING'S, ON PURPOSE. This
+    function takes no explicit target, so there is one route to a destination
+    and nothing to differentiate — the check follows the `is None` check and
+    the message is unconditionally about the ambient resolver. The asymmetry
+    between the two guards reflects a real asymmetry in the two signatures;
+    making them match would be tidiness, not correctness.
+
+    THE UNGUARDED FAILURE IS WORSE HERE THAN A STRAY SIDECAR. `file_lock`
+    creates the sidecar's parent directories, so an absent path several levels
+    deep materialises the entire chain before the read fails.
+    """
+
+    @staticmethod
+    def _force_total_resolver(monkeypatch, path):
+        import scripts.working_memory as wm
+        monkeypatch.setattr(
+            wm, "_resolve_display_claude_md_with_base",
+            lambda: (path, path.parent),
+        )
+
+    def test_absent_destination_is_a_skip_and_touches_nothing(
+        self, tmp_path, clean_env
+    ):
+        project = tmp_path / "retrieved-empty"
+        project.mkdir()
+        missing = project / "CLAUDE.md"
+        self._force_total_resolver(clean_env, missing)
+
+        ok = sync_retrieved_to_claude_md(
+            [{"context": "ctx", "goal": "must not write"}], "query",
+            memory_ids=["c" * 32],
+        )
+
+        assert ok is False
+        assert not missing.exists(), "the sync CREATED a CLAUDE.md"
+        leftovers = sorted(p.name for p in project.iterdir())
+        assert leftovers == [], (
+            f"artifacts left in a directory the sync should never have "
+            f"touched: {leftovers}. A `.CLAUDE.md.lock` here means the guard "
+            f"is absent and the skip is produced by the read failing."
+        )
+
+    def test_absent_parent_directories_are_not_created(
+        self, tmp_path, clean_env
+    ):
+        """The variant that makes this worse than a stray sidecar.
+
+        `file_lock` builds the sidecar's parents, so without the guard a
+        resolved path three levels deep materialises `a/`, `a/b/`, `a/b/c/`
+        and the lock file inside it — directories the caller never named, on a
+        path whose only job was to be read. Measured before the fix.
+        """
+        root = tmp_path / "retrieved-deep"
+        root.mkdir()
+        ghost = root / "a" / "b" / "c" / "CLAUDE.md"
+        self._force_total_resolver(clean_env, ghost)
+
+        ok = sync_retrieved_to_claude_md(
+            [{"context": "ctx", "goal": "must not mkdir"}], "query",
+            memory_ids=["d" * 32],
+        )
+
+        assert ok is False
+        created = sorted(str(p.relative_to(root)) for p in root.rglob("*"))
+        assert created == [], (
+            f"the sync created filesystem entries under a path it only had to "
+            f"read: {created}"
+        )
+
+    def test_live_control_the_harness_reaches_the_write_path(
+        self, tmp_path, clean_env
+    ):
+        """Without this, the two assertions above are about a broken harness.
+
+        NOTE the control asserts CONTENT, not an empty directory: a SUCCESSFUL
+        write leaves `.CLAUDE.md.lock` behind too, so an empty-directory
+        assertion is correct only on the absent arms.
+        """
+        project = tmp_path / "retrieved-present"
+        project.mkdir()
+        present = project / "CLAUDE.md"
+        present.write_text(
+            RETRIEVED_CONTEXT_SCAFFOLD.format(title="Retrieved Present"),
+            encoding="utf-8",
+        )
+        self._force_total_resolver(clean_env, present)
+
+        ok = sync_retrieved_to_claude_md(
+            [{"context": "ctx", "goal": "live control writes"}], "query",
+            memory_ids=["e" * 32],
+        )
+
+        assert ok is True, "the control did not write — the harness is broken"
+        assert "live control writes" in present.read_text(encoding="utf-8")
+
+    def test_absent_destination_warns_naming_both_causes(
+        self, tmp_path, clean_env, caplog
+    ):
+        """Assert the SPECIFIC message, never the level.
+
+        The generic degradation handler already warned on this path before the
+        guard existed, so a level-only assertion is true on both sides of the
+        fix and discriminates nothing.
+        """
+        project = tmp_path / "retrieved-levels"
+        project.mkdir()
+        missing = project / "CLAUDE.md"
+
+        with caplog.at_level(logging.DEBUG, logger="scripts.working_memory"):
+            self._force_total_resolver(clean_env, missing)
+            sync_retrieved_to_claude_md(
+                [{"context": "c", "goal": "g"}], "q", memory_ids=["f" * 32]
+            )
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings, "no warning on a should-never-fire path"
+        text = warnings[0].getMessage()
+        assert "retrieved context sync" in text, (
+            f"the warning does not identify which sync skipped: {text}"
+        )
+        assert "removed after it resolved" in text and "stopped returning" in text, (
+            f"the warning must name BOTH causes; got: {text}"
+        )
+        for accusation in ("bug", "must not", "invalid", "illegal"):
+            assert accusation not in text.lower(), (
+                f"the warning accuses rather than reports ({accusation!r}): {text}"
+            )
 
 
 class TestExplicitSyncTarget:

@@ -1406,6 +1406,36 @@ def sync_retrieved_to_claude_md(
         logger.debug("CLAUDE.md not found, skipping retrieved context sync")
         return False
 
+    # EXISTENCE GUARD. The `is None` check above is not sufficient: it covers a
+    # resolver that finds NOTHING, not a resolver that returns a path to a file
+    # that is not there. A TOTAL resolver never returns None, so it would pass
+    # straight through into the lock and the read.
+    #
+    # ONE ROUTE, ONE MESSAGE. Unlike `sync_to_claude_md` this function takes no
+    # explicit target, so there is no second way to arrive here and nothing to
+    # differentiate -- the cause is always the ambient resolver. Do not
+    # restructure it into a branch join to match its sibling: the asymmetry in
+    # the two guards reflects a real asymmetry in the two signatures.
+    #
+    # WITHOUT THIS, AN ABSENT PATH DOES NOT MERELY LEAVE A LOCK SIDECAR -- IT
+    # CREATES DIRECTORIES. `file_lock` makes the sidecar's parents, so a
+    # resolved path three levels deep materialises the whole chain before the
+    # read fails: `a/`, `a/b/`, `a/b/c/`, `a/b/c/.CLAUDE.md.lock`. Measured.
+    # That is a write to a location the caller never named, on a path whose
+    # only job was to be read.
+    #
+    # NAMES BOTH CAUSES, ASSERTS NEITHER: a file removed after it resolved is
+    # indistinguishable here from a resolver that stopped being partial, and
+    # the first is not a defect at all.
+    if not claude_md_path.exists():
+        logger.warning(
+            "resolved display CLAUDE.md %s does not exist, skipping retrieved "
+            "context sync (this never creates CLAUDE.md). Either the display "
+            "resolver stopped returning only existing paths, or the file was "
+            "removed after it resolved.", claude_md_path
+        )
+        return False
+
     try:
         # Serialize the FULL read-modify-write window under the shared sidecar
         # lock (see the "why lock the whole window" note above file_lock for the
