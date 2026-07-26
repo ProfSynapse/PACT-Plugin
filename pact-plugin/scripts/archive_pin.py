@@ -541,7 +541,7 @@ def _run_memory_cli(args, db_path=None, stdin_data=None, cwd=None):
 
     # FALSY-BUT-PRESENT, rejected under pytest. The line below tests db_path
     # for TRUTHINESS, so `db_path=""` takes the same branch as an omitted one
-    # and routes to production -- a required-parameter fix defeated without
+    # and routes to the live store -- a required-parameter fix defeated without
     # removing the parameter. A caller that names db_path and passes an empty
     # value has stated an intention the truthiness test then discards.
     #
@@ -555,7 +555,7 @@ def _run_memory_cli(args, db_path=None, stdin_data=None, cwd=None):
     if os.environ.get("PYTEST_CURRENT_TEST") and db_path is not None and not db_path:
         raise _Unevaluable(
             "db_path was given as an empty value under pytest; it is falsy, "
-            "so the memory CLI would fall back to the PRODUCTION database. "
+            "so the memory CLI would fall back to the LIVE database. "
             "Pass a real temp path, or None if this call cannot reach a store."
         )
 
@@ -1036,7 +1036,7 @@ def build_verdict(index: int, *, db_path) -> dict:
     and None means the real store -- so the seam that exists to let tests
     reach the degradation paths was also the seam that skipped the db-path
     guard. The decision that made testing easy removed the isolation, and
-    it was silent: a caller that simply said nothing got production.
+    it was silent: a caller that simply said nothing got the live store.
 
     Required makes every caller state an answer; keyword-only makes them
     state it BY NAME, so the answer is legible at the call site rather than

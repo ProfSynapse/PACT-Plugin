@@ -70,13 +70,13 @@ def _error(error_type, message, exit_code=1, **extra) -> NoReturn:
     sys.exit(exit_code)
 
 
-def _refuse_production_db_under_pytest(db_path) -> None:
-    """Refuse the production store when a TEST PROCESS spawned us.
+def _refuse_live_db_under_pytest(db_path) -> None:
+    """Refuse the live store when a TEST PROCESS spawned us.
 
     THE DEFECT THIS CLOSES. `--db-path` is how a test scopes its writes, and
     omitting it silently selects the developer's real `memory.db`. A test that
-    forgets it does not fail -- it succeeds, against production. Requiring the
-    parameter upstream makes the choice visible but not safe: the value may
+    forgets it does not fail -- it succeeds, against the live store. Requiring
+    the parameter upstream makes the choice visible but not safe: the value may
     still be None, and an empty string is falsy, so it takes the same branch.
     This is the mechanical half.
 
@@ -131,7 +131,7 @@ def _refuse_production_db_under_pytest(db_path) -> None:
     class is out of its range, covered upstream by `build_verdict`'s required
     parameter and by the caller-side falsy-but-present rejection. RESIDUAL,
     stated rather than implied: an in-process `main()` call with a real
-    `PACTMemory` and no `--db-path` would still reach the production store.
+    `PACTMemory` and no `--db-path` would still reach the live store.
     Nothing here catches that, and nothing currently does it.
 
     BOUNDED GAP, stated rather than implied: pytest POPS `PYTEST_CURRENT_TEST`
@@ -165,7 +165,7 @@ def _refuse_production_db_under_pytest(db_path) -> None:
     # branch says do NOT pass --db-path.
     _error(
         "UNSCOPED_TEST_DB",
-        "refusing to open the production memory database: PYTEST_CURRENT_TEST "
+        "refusing to open the live memory database: PYTEST_CURRENT_TEST "
         "is set in this process's environment and no --db-path was given, so "
         "a write would land in the real store. If this IS a test, pass "
         "--db-path pointing at a temporary database. If you are ARCHIVING A "
@@ -596,7 +596,7 @@ def main(argv=None):
     # collapses to None there, so guarding the coerced value covers the empty
     # string on the same branch as an omitted flag rather than needing a
     # second predicate for it.
-    _refuse_production_db_under_pytest(db_path)
+    _refuse_live_db_under_pytest(db_path)
 
     try:
         handler(args, db_path=db_path)

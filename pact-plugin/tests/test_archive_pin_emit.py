@@ -29,7 +29,7 @@ claim false without changing the call.
 ONE call in this file genuinely reaches the memory CLI:
 `test_null_when_the_pin_does_not_resolve`'s resolving control. It is scoped
 to a temp `db_path`. Before that scoping it ran with the default and wrote
-into the developer's PRODUCTION database, two rows per suite run, one per
+into the developer's LIVE database, two rows per suite run, one per
 parametrization. It must STAY reaching — it is a non-vacuity control, and a
 control that stops reaching stops controlling — so it is scoped, not stubbed.
 """
@@ -184,7 +184,7 @@ class TestDeleteStringEmitContract:
         The control REACHES A REAL SAVE — it is the one place in these three
         files where a bare `build_verdict` reached the memory CLI, and with
         `db_path` defaulting to None that save landed in the DEVELOPER'S
-        PRODUCTION DATABASE. Measured at two rows per suite run, one per
+        LIVE DATABASE. Measured at two rows per suite run, one per
         parametrization. The control has to stay reaching to be a control, so
         the fix is to SCOPE it, never to stub it.
         """

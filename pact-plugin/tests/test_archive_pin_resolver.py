@@ -35,7 +35,7 @@ guard on that, and it is the more important half of this file.
 them is provably inert: the enclosing test either stubs `_run_memory_cli` /
 `subprocess.run`, or short-circuits before the spawn (a bad index, an
 unresolvable CLAUDE.md, a missing `_MEMORY_CLI`, a patched extractor). `None`
-still MEANS the production store — what makes it safe is that nothing
+still MEANS the live store — what makes it safe is that nothing
 consumes it. Delete the stub or the short-circuit above such a call and the
 claim silently becomes false.
 """

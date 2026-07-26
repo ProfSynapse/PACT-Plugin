@@ -29,7 +29,7 @@ things:
     enclosing test stubs `_run_memory_cli` (or `subprocess.run`) or
     short-circuits before the spawn (bad index, unresolvable CLAUDE.md,
     missing `_MEMORY_CLI`, a patched extractor). `None` still MEANS the
-    production store; what makes it safe here is that nothing consumes it.
+    live store; what makes it safe here is that nothing consumes it.
 
 So `db_path=None` is a claim about the call site, not a shrug. If you delete
 the stub or the short-circuit above such a call, that claim becomes false and
@@ -720,7 +720,7 @@ class TestEnvPropagation_ExplicitCwdBeatsAmbient:
         calls = self._spy_memory_cli_spawns(monkeypatch)
         # Scoped db_path, though the spy means no child is ever launched:
         # this call enters the real `_run_memory_cli`, and naming a temp store
-        # keeps it correct under the production-DB guard rather than relying
+        # keeps it correct under the live-DB guard rather than relying
         # on the spy sitting downstream of it. None of the assertions below
         # read db_path, so it cannot perturb the property under test.
         archive_pin._run_memory_cli(
@@ -850,8 +850,8 @@ class TestArchiveRecordPredicate:
         con.close()
 
 
-class TestProductionDbGuard:
-    """The MECHANICAL closure for the production-database leak.
+class TestLiveDbGuard:
+    """The MECHANICAL closure for the live-database leak.
 
     A required `db_path` makes the choice visible; it does not make it safe.
     `None` still satisfies the signature and still means the real store, and
@@ -863,7 +863,7 @@ class TestProductionDbGuard:
 
       * PARENT (`_run_memory_cli`) rejects falsy-BUT-PRESENT db_path. It sees
         the caller's intent, so it can tell `""` from `None`.
-      * CHILD (`cli.py`) refuses the production store outright when no
+      * CHILD (`cli.py`) refuses the live store outright when no
         --db-path arrived. It sees the actual spawn, so it catches routes that
         never touch `archive_pin` at all -- including a raw
         `subprocess.run([sys.executable, cli.py, ...])`.
@@ -875,9 +875,9 @@ class TestProductionDbGuard:
     the database path from `Path.home()` AT IMPORT, so an in-process HOME
     change is inert -- but a child re-imports, so HOME in the CHILD'S env does
     redirect it. These tests exercise the exact production shape (no
-    --db-path) with zero production risk, which is only possible because the
-    boundary that makes the defect hard to guard is the same boundary that
-    makes it safe to test.
+    --db-path) with zero risk to the live store, which is only possible
+    because the boundary that makes the defect hard to guard is the same
+    boundary that makes it safe to test.
     """
 
     @staticmethod
@@ -885,7 +885,7 @@ class TestProductionDbGuard:
         """Run the memory CLI as the curator's production shape: no --db-path.
 
         HOME points into tmp_path, so the child resolves a temp database even
-        on the branch that would otherwise select production.
+        on the branch that would otherwise select the live store.
         """
         cli = (
             Path(archive_pin.__file__).resolve().parent.parent
@@ -905,13 +905,13 @@ class TestProductionDbGuard:
             capture_output=True, text=True, timeout=120, env=env,
         )
 
-    def test_child_refuses_the_production_db_when_spawned_under_pytest(
+    def test_child_refuses_the_live_db_when_spawned_under_pytest(
         self, tmp_path
     ):
         proc = self._spawn_cli(tmp_path, with_pytest_var=True)
         assert proc.returncode != 0, (
             "the child exited 0 with no --db-path under pytest — it would "
-            "have used the production database"
+            "have used the live database"
         )
         assert "UNSCOPED_TEST_DB" in proc.stderr, (
             f"guard did not fire; stderr={proc.stderr[:400]}"
@@ -1027,7 +1027,7 @@ class TestProductionDbGuard:
 
         assert report["seen"], (
             "PYTEST_CURRENT_TEST did NOT reach the child. The child-side "
-            "production-DB guard in cli.py is therefore INERT, and its fail "
+            "live-DB guard in cli.py is therefore INERT, and its fail "
             "direction is ALLOW — unscoped spawns will silently use the real "
             "database. Most likely cause: _run_memory_cli stopped passing a "
             "full env copy."
@@ -1035,11 +1035,11 @@ class TestProductionDbGuard:
         assert report["pytest_importable_here"] is False, (
             "pytest IS visible in the child, so the guard could have used an "
             "in-process check — revisit the forced-choice reasoning in "
-            "cli.py's _refuse_production_db_under_pytest docstring"
+            "cli.py's _refuse_live_db_under_pytest docstring"
         )
 
     def test_parent_rejects_falsy_but_present_db_path(self, tmp_path):
-        """`db_path=""` is falsy, so without this it routes to production.
+        """`db_path=""` is falsy, so without this it routes to the live store.
 
         The real `_MEMORY_CLI` is left in place. Repointing it at a
         non-existent file to prevent a spawn does not work here and is worth

@@ -36,7 +36,7 @@ from test_working_memory_concurrency_comprehensive import _seed_claude_md
 # Add pact-memory skill root to path so `from scripts.cli import ...` works
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'skills', 'pact-memory'))
 
-from scripts.cli import build_parser, cmd_save, cmd_search, cmd_list, cmd_get, cmd_status, cmd_setup, cmd_update, cmd_delete, main, _COMMANDS, _refuse_production_db_under_pytest
+from scripts.cli import build_parser, cmd_save, cmd_search, cmd_list, cmd_get, cmd_status, cmd_setup, cmd_update, cmd_delete, main, _COMMANDS, _refuse_live_db_under_pytest
 from scripts.memory_api import PACTMemory
 
 
@@ -1402,10 +1402,10 @@ class TestCliOutputFormat:
 # Error Handling
 # ---------------------------------------------------------------------------
 
-class TestProductionDbGuardScope:
-    """The production-DB guard is scoped to SPAWNED CHILDREN, deliberately.
+class TestLiveDbGuardScope:
+    """The live-DB guard is scoped to SPAWNED CHILDREN, deliberately.
 
-    `_refuse_production_db_under_pytest` refuses the real store when a test
+    `_refuse_live_db_under_pytest` refuses the real store when a test
     process spawned the CLI with no `--db-path`. It must NOT fire for the
     in-process `main()` calls this file makes: they patch `PACTMemory` and
     open no store, and `test_main_db_path_none_when_not_specified` exists
@@ -1421,7 +1421,7 @@ class TestProductionDbGuardScope:
     check would see ten failures with no statement of why the check was there.
 
     RESIDUAL, stated: an in-process `main()` call with a REAL `PACTMemory` and
-    no `--db-path` still reaches production. Nothing catches that; nothing
+    no `--db-path` still reaches the live store. Nothing catches that; nothing
     currently does it.
     """
 
@@ -1431,7 +1431,7 @@ class TestProductionDbGuardScope:
             "distinguish the in-process case from the spawned-child case"
         )
         # Returns instead of raising SystemExit — the in-process branch.
-        assert _refuse_production_db_under_pytest(None) is None
+        assert _refuse_live_db_under_pytest(None) is None
 
     def test_an_explicit_db_path_is_never_refused(self, tmp_path, monkeypatch):
         """Non-vacuity: the db_path check must not be MASKED by the exemption.
@@ -1455,7 +1455,7 @@ class TestProductionDbGuardScope:
             "precondition: the in-process exemption is still live, so this "
             "test cannot show the db_path check is what prevents the refusal"
         )
-        assert _refuse_production_db_under_pytest(tmp_path / "x.db") is None
+        assert _refuse_live_db_under_pytest(tmp_path / "x.db") is None
 
 
 class TestCliErrorHandling:
