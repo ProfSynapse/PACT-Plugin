@@ -42,6 +42,7 @@ choice reviewable.
 import ast
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -738,6 +739,115 @@ class TestEnvPropagation_ExplicitCwdBeatsAmbient:
         )
         assert env["CLAUDE_PROJECT_DIR"] != str(decoy)
         assert calls[0][1]["cwd"] == str(intended)
+
+
+class TestArchiveRecordPredicate:
+    """The marker predicate, in code rather than reconstructed from prose.
+
+    Every prior audit hand-rolled this match, and the version people reach for
+    first is a substring test over the serialised blob. That is not equivalent:
+    it also matches a record that merely MENTIONS the marker. On a live store
+    the substring form returned 19 where the type-anchored form returned 18,
+    and the extra row was a memory ABOUT the marker — a document describing the
+    audit joining the population it was counting.
+    """
+
+    def test_matches_an_entity_carrying_the_marker_as_a_type(self):
+        entities = [{"name": "x", "type": archive_pin.ARCHIVE_ENTITY_TYPE}]
+        assert archive_pin.is_archive_record(entities) is True
+        assert archive_pin.is_archive_record(json.dumps(entities)) is True, (
+            "the stored form is a JSON string; a predicate that only accepts "
+            "decoded lists forces every caller to decode first"
+        )
+
+    def test_does_not_match_a_record_that_merely_mentions_the_marker(self):
+        """THE DISCRIMINATING CASE — this is the false positive measured live."""
+        mentions = [{
+            "name": f"note about {archive_pin.ARCHIVE_ENTITY_TYPE}",
+            "type": "observation",
+        }]
+        blob = json.dumps(mentions)
+        assert archive_pin.ARCHIVE_ENTITY_TYPE in blob, (
+            "fixture does not contain the marker at all — the substring form "
+            "would not match either, so this proves nothing"
+        )
+        assert archive_pin.is_archive_record(mentions) is False
+        assert archive_pin.is_archive_record(blob) is False
+
+    @pytest.mark.parametrize("bad", [
+        None, "", "not json", "{}", '"a string"', "[1, 2, 3]", '["text"]', 42,
+    ])
+    def test_is_total_and_never_raises(self, bad):
+        """An audit that dies on one malformed row reports nothing."""
+        assert archive_pin.is_archive_record(bad) is False
+
+    def test_sql_predicate_agrees_with_the_python_one(self, tmp_path):
+        db = tmp_path / "probe.db"
+        con = sqlite3.connect(str(db))
+        con.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, entities TEXT)")
+        rows = [
+            ("carrier", [{"name": "n", "type": archive_pin.ARCHIVE_ENTITY_TYPE}]),
+            ("mentions", [{"name": f"about {archive_pin.ARCHIVE_ENTITY_TYPE}",
+                           "type": "observation"}]),
+            # A BARE STRING member. Real stores hold these — 63 among 14092 on
+            # the live one — and they are what breaks the naive spelling.
+            ("has_text_member", ["a bare string", {"name": "n", "type": "other"}]),
+        ]
+        for rid, ents in rows:
+            con.execute("INSERT INTO memories VALUES (?, ?)", (rid, json.dumps(ents)))
+        con.commit()
+
+        got = con.execute(
+            archive_pin.ARCHIVE_RECORD_COUNT_SQL,
+            (archive_pin.ARCHIVE_ENTITY_TYPE,),
+        ).fetchone()[0]
+        expected = sum(
+            1 for _, ents in rows if archive_pin.is_archive_record(ents)
+        )
+        assert expected == 1, "fixture drift: exactly one row should carry the marker"
+        assert got == expected, (
+            f"SQL predicate counted {got}, Python predicate {expected}"
+        )
+        con.close()
+
+    def test_the_naive_sql_spellings_raise_on_a_text_member(self, tmp_path):
+        """PIN AGAINST 'SIMPLIFICATION'. Both obvious forms fail on real data.
+
+        `json_extract` on a bare string raises `malformed JSON` and kills the
+        whole query. The natural defence — `json_type(j.value) = 'object'` —
+        raises IDENTICALLY, because `json_type` re-parses the value, so the
+        guard throws before the AND can short-circuit. Only `j.type`, the
+        column `json_each` already computed, filters without re-parsing.
+
+        Without this test, someone tidies the WHERE clause, every fixture here
+        happens to hold only objects, and the query dies on the first real
+        store it meets.
+        """
+        db = tmp_path / "naive.db"
+        con = sqlite3.connect(str(db))
+        con.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, entities TEXT)")
+        con.execute(
+            "INSERT INTO memories VALUES (?, ?)",
+            ("has_text_member", json.dumps(["a bare string"])),
+        )
+        con.commit()
+
+        for label, where in (
+            ("json_extract alone", "json_extract(j.value, '$.type') = ?"),
+            ("json_type guard", "json_type(j.value) = 'object' "
+                                "AND json_extract(j.value, '$.type') = ?"),
+        ):
+            sql = ("SELECT COUNT(DISTINCT m.id) FROM memories m, "
+                   f"json_each(m.entities) j WHERE {where}")
+            with pytest.raises(sqlite3.OperationalError, match="malformed JSON"):
+                con.execute(sql, (archive_pin.ARCHIVE_ENTITY_TYPE,)).fetchone()
+
+        # The shipped spelling survives the same row.
+        assert con.execute(
+            archive_pin.ARCHIVE_RECORD_COUNT_SQL,
+            (archive_pin.ARCHIVE_ENTITY_TYPE,),
+        ).fetchone()[0] == 0
+        con.close()
 
 
 class TestProductionDbGuard:

@@ -166,6 +166,58 @@ _CLI_TIMEOUT_SECONDS = 120
 # generally; it identifies the ones written after it ships.
 ARCHIVE_ENTITY_TYPE = "pact_memory_archive"
 
+
+def is_archive_record(entities) -> bool:
+    """True if `entities` carries ARCHIVE_ENTITY_TYPE as an entity TYPE.
+
+    THE PREDICATE IN CODE, so an audit does not have to reconstruct it from
+    prose. Every prior use of this marker hand-rolled the match at the call
+    site, and the hand-rolled version people reach for first is a SUBSTRING
+    test over the serialised blob -- which also matches a record that merely
+    MENTIONS the marker in a name or a note. Measured on a live store: the
+    substring form returned 19 where this returns 18, and the extra row was a
+    memory ABOUT the marker. A document describing the audit joined the
+    population the audit was counting.
+
+    Accepts the stored JSON string or an already-decoded list.
+
+    TOTAL BY DESIGN: anything unparseable, or shaped unexpectedly, is False
+    rather than an exception. An audit that dies on one malformed row reports
+    nothing; one that skips it reports a floor -- and a floor is what this
+    marker yields anyway, per the scope note above.
+    """
+    if isinstance(entities, (str, bytes)):
+        try:
+            entities = json.loads(entities)
+        except (ValueError, TypeError):
+            return False
+    if not isinstance(entities, list):
+        return False
+    return any(
+        isinstance(item, dict) and item.get("type") == ARCHIVE_ENTITY_TYPE
+        for item in entities
+    )
+
+
+# The same predicate for callers querying the store directly. Bind
+# ARCHIVE_ENTITY_TYPE as the single parameter.
+#
+# ⚠️ `j.type = 'object'` IS LOAD-BEARING AND THE OBVIOUS GUARD DOES NOT WORK.
+# Entity members are not uniformly objects -- a live store held 63 JSON strings
+# among 14092 objects -- and `json_extract` on a bare string raises
+# "malformed JSON", failing the whole query rather than skipping the row.
+#
+# The natural defence, `json_type(j.value) = 'object' AND json_extract(...)`,
+# RAISES IDENTICALLY: `json_type` RE-PARSES the value, so the guard itself
+# throws before the AND can short-circuit. `j.type` is the column `json_each`
+# already computed while walking the array, so it costs no second parse and is
+# the only spelling that filters rather than raising. Verified against a real
+# store on sqlite 3.54.0.
+ARCHIVE_RECORD_COUNT_SQL = (
+    "SELECT COUNT(DISTINCT m.id) FROM memories m, json_each(m.entities) j "
+    "WHERE j.type = 'object' AND json_extract(j.value, '$.type') = ?"
+)
+
 # The memory CLI subcommand archival is permitted to use. See the STANDALONE
 # invariant on `_build_record` / `archive_pin`: an `update` would create no new
 # record and run no marker code, silently voiding the audit property.
