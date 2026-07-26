@@ -183,8 +183,13 @@ _ARCHIVE_SUBCOMMAND = "save"
 # its handler and takes no flag, so it does not belong here either.
 #
 # Kept honest by a test that reads the CLI's real parser and asserts this set
-# equals the subparsers actually declaring `--no-sync`. A future syncing
-# subcommand fails that test instead of silently missing the suppression.
+# equals the subparsers actually DECLARING `--no-sync`. Note what that does and
+# does not catch: a subcommand that declares the flag and is missing from this
+# set fails the test, but a subcommand that GAINS A SYNC WITHOUT DECLARING THE
+# FLAG is invisible to it -- the detector compares against declarers, so a
+# non-declarer is outside the population it examines. Closing that would need a
+# different predicate (which handlers project into CLAUDE.md), which the parser
+# does not expose.
 _SYNC_CAPABLE_SUBCOMMANDS = frozenset({"save"})
 
 
@@ -544,9 +549,8 @@ def _run_memory_cli(args, db_path=None, stdin_data=None, cwd=None):
     # `--no-sync` is appended only for subcommands that accept it. It is
     # declared on the `save` subparser alone, so adding it to a `get` would be
     # an argparse error -- an over-block manufactured by the fix. The set is a
-    # named constant with a test pinning it against the CLI's real parser, so
-    # a future syncing subcommand fails that test rather than silently
-    # slipping past this branch.
+    # named constant pinned against the CLI's real parser by a test; see
+    # `_SYNC_CAPABLE_SUBCOMMANDS` for what that test does and does not catch.
     env = dict(os.environ)
     if cwd is not None:
         env["CLAUDE_PROJECT_DIR"] = str(cwd)

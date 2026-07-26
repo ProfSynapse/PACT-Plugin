@@ -81,12 +81,26 @@ def _refuse_production_db_under_pytest(db_path) -> None:
     This is the mechanical half.
 
     WHY AN ENVIRONMENT VARIABLE AND NOT `"pytest" in sys.modules`. This process
-    is a FRESH INTERPRETER: the parent runs pytest, we do not. Measured on both
-    branches of the caller's env construction -- `"pytest" in sys.modules` is
-    FALSE here, every time. So a child-side guard cannot detect pytest by
-    introspection and must key on something INHERITED. `PYTEST_CURRENT_TEST` is
-    the only standard signal that crosses the boundary. The choice is FORCED,
-    not preferred; an in-process check is not an available alternative.
+    is a FRESH INTERPRETER: the parent runs pytest, we do not. So a child-side
+    guard cannot detect pytest by introspection and must key on something
+    INHERITED. `PYTEST_CURRENT_TEST` is the only standard signal that crosses
+    the boundary. The choice is FORCED, not preferred; an in-process check is
+    not an available alternative.
+
+    THE CONDITION THAT MAKES THAT TRUE, stated so it can be checked rather than
+    trusted: `pytest` stays out of this interpreter's `sys.modules` SO LONG AS
+    NO MODULE AUTO-IMPORTED AT STARTUP TRANSITIVELY REACHES IT. That is a
+    property of the environment's IMPORT GRAPH -- `sitecustomize`, `usercustomize`,
+    a `.pth` file, anything on `PYTHONPATH` that runs at startup -- and this
+    function cannot verify it. Measurements confirm it holds today; they cannot
+    establish it holds always, and an earlier wording here claimed the stronger
+    thing.
+
+    ⚠️ THE FAIL DIRECTION IS ALLOW, AND THE INSTRUMENT IS BLIND TO IT. A startup
+    module whose import closure reaches pytest would take the early return in
+    EVERY spawned child, disabling this guard everywhere at once. A spawn census
+    would look byte-identical, because a census counts spawns and cannot see
+    refusals that did not happen. Nothing here detects its own exemption.
 
     WHY IT IS GATED, AND WHY THE GATE IS NOT OPTIONAL. `archive_pin --index N`
     is the curator's documented production invocation and it passes NO
