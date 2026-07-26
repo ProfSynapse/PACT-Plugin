@@ -856,6 +856,19 @@ def archive_pin(index: int, db_path=None) -> dict:
     if not memory_id:
         # A definite failure of the save itself: the store was reachable and
         # said no. NOT_ARCHIVED, not UNEVALUABLE.
+        #
+        # ONE STATED EXCEPTION TO THAT CRITERION. The child-side guard in
+        # cli.py refuses BEFORE opening any store, so "reachable and said no"
+        # does not describe it -- yet it lands here, deliberately. UNEVALUABLE
+        # buys the escape hatch (print the pin, permit manual removal), which
+        # exists so a curator with a broken CLI is not TRAPPED; this refusal
+        # has a one-line fix, so offering hand-deletion would be more
+        # destructive than the refusal it replaced. The routing follows the
+        # DISPOSITION, not the label.
+        #
+        # ⚠️ So this criterion is narrower than it reads. Any future logic that
+        # keys on it PROGRAMMATICALLY -- "NOT_ARCHIVED implies the store
+        # answered" -- is wrong for this one cause. Read the reason string.
         return {
             "outcome": "NOT_ARCHIVED",
             "heading": heading,
