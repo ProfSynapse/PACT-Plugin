@@ -18,9 +18,31 @@ Test strategy, stated because it is load-bearing:
   * The failure matrix stubs `_run_memory_cli`, because a real store cannot
     be made to fail on demand in the specific ways that matter.
   * Temp DBs throughout — no test touches the shared store.
+
+`db_path` IS REQUIRED AND KEYWORD-ONLY on `build_verdict`, so every call in
+this file states an answer. Two answers are legal and they mean different
+things:
+
+  * `db_path=str(tmp_path / ...)` — this call CAN reach a real save, and is
+    scoped to a temp store.
+  * `db_path=None` — this call provably never reaches a store, because the
+    enclosing test stubs `_run_memory_cli` (or `subprocess.run`) or
+    short-circuits before the spawn (bad index, unresolvable CLAUDE.md,
+    missing `_MEMORY_CLI`, a patched extractor). `None` still MEANS the
+    live store; what makes it safe here is that nothing consumes it.
+
+So `db_path=None` is a claim about the call site, not a shrug. If you delete
+the stub or the short-circuit above such a call, that claim becomes false and
+the call starts writing to the developer's real database — which is exactly
+the defect this parameter was made required to surface. The mechanical
+backstop is the guard in `_run_memory_cli`; this convention is what makes the
+choice reviewable.
 """
 
+import ast
 import json
+import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -492,7 +514,7 @@ class TestStandaloneOnlyInvariant:
             return 0, json.dumps({"ok": True, "result": {"context": "x"}}), ""
 
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _spy)
-        archive_pin.build_verdict(0)
+        archive_pin.build_verdict(0, db_path=None)
 
         assert "save" in subcommands, (
             "no save was attempted — the spy never saw the create path, so "
@@ -546,6 +568,696 @@ class TestProjectDirResolution:
         assert resolved.name == "myproject"
         assert plugin_root not in resolved.parents
         assert resolved != plugin_root
+
+
+class TestEnvPropagation_ExplicitCwdBeatsAmbient:
+    """WHICH project the child process is TOLD it is in.
+
+    `_run_memory_cli` hands the child an explicit CLAUDE_PROJECT_DIR derived
+    from the caller's `cwd`. It used `env.setdefault`, which is a no-op when
+    the variable is already set — so an AMBIENT value beat an EXPLICIT caller
+    argument. The fail direction was inverted.
+
+    This is a PRODUCTION property, not test hygiene. `resolve_claude_md`
+    deliberately permits a worktree fall-through: the env dir is a worktree
+    carrying no CLAUDE.md, so resolution lands on the MAIN repo's file. Under
+    `setdefault` the archive was then filed under the WORKTREE while the pin
+    lived in the MAIN repo — precisely the pin/archive disagreement
+    `project_dir_for` exists to prevent.
+
+    Both tests fire in EVERY regime. A trigger conditioned on the ambient
+    variable already naming a CLAUDE.md-bearing directory would fire only in
+    that one cell and sit green everywhere else, which is how a control stops
+    meaning anything without anyone noticing.
+    """
+
+    @staticmethod
+    def _init_repo_with_worktree(root):
+        """Create a REAL git repo and a REAL linked worktree under `root`.
+
+        Real rather than simulated on purpose: `resolve_claude_md` refuses a
+        cross-project fall-through by asking git whether the env dir and the
+        resolved base share a repository. Stubbing that seam would patch out
+        the very permissiveness that makes this defect reachable in
+        production, and the test would then prove nothing about it.
+        """
+        main = root / "mainrepo"
+        subprocess.run(["git", "init", "-q", str(main)],
+                       capture_output=True, text=True, check=True)
+
+        def _git(*args):
+            return subprocess.run(["git", "-C", str(main), *args],
+                                  capture_output=True, text=True, check=True)
+
+        _git("config", "user.email", "t@example.com")
+        _git("config", "user.name", "t")
+        (main / "seed.txt").write_text("seed\n", encoding="utf-8")
+        _git("add", "seed.txt")
+        _git("commit", "-qm", "seed")
+        worktree = root / "linked-worktree"
+        _git("worktree", "add", "-q", "-b", "probe", str(worktree))
+        return main, worktree
+
+    @staticmethod
+    def _spy_memory_cli_spawns(monkeypatch, context=""):
+        """Capture the memory-CLI spawns AT THE PROCESS BOUNDARY.
+
+        Only the CLI spawns are intercepted. Git probes are delegated to the
+        real `subprocess.run`, because `resolve_claude_md` asks git whether
+        two paths share a repository — stubbing that would defeat the
+        fall-through under test. The boundary is the right observation point:
+        it is the last place the parent controls before the child re-imports
+        and re-resolves everything for itself.
+        """
+        real_run = subprocess.run
+        calls = []
+
+        class _Proc:
+            def __init__(self, stdout):
+                self.returncode = 0
+                self.stdout = stdout
+                self.stderr = ""
+
+        def _fake_run(argv, **kwargs):
+            if not (argv and argv[0] == sys.executable):
+                return real_run(argv, **kwargs)
+            calls.append((list(argv), kwargs))
+            subcommand = argv[2] if len(argv) > 2 else ""
+            if subcommand == "save":
+                return _Proc(json.dumps(
+                    {"ok": True, "result": {"memory_id": "e" * 32}}
+                ))
+            return _Proc(json.dumps(
+                {"ok": True, "result": {"context": context}}
+            ))
+
+        monkeypatch.setattr(archive_pin.subprocess, "run", _fake_run)
+        return calls
+
+    def test_archive_is_filed_under_the_repo_whose_claude_md_was_read(
+        self, tmp_path, monkeypatch
+    ):
+        """The production case: worktree env dir, main-repo CLAUDE.md."""
+        main, worktree = self._init_repo_with_worktree(tmp_path)
+        claude_md_path = main / "CLAUDE.md"
+        claude_md_path.write_text(_two_pin_file(), encoding="utf-8")
+        monkeypatch.setattr(
+            archive_pin, "get_project_claude_md_path", lambda: claude_md_path
+        )
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(worktree))
+
+        # PRECONDITIONS, asserted separately and FIRST. A fixture that drifts
+        # out of the regime under test then fails with its own message,
+        # instead of presenting as a regression in the one load-bearing
+        # assertion below and inviting someone to "fix" that instead.
+        assert not (worktree / "CLAUDE.md").exists(), (
+            "fixture drift: the worktree must carry NO CLAUDE.md, or the "
+            "fall-through this test depends on never happens"
+        )
+        assert archive_pin._same_repository(worktree, main), (
+            "fixture drift: git does not consider the worktree part of the "
+            "main repo, so resolve_claude_md would REFUSE rather than fall "
+            "through, and this test would measure the refusal path"
+        )
+
+        calls = self._spy_memory_cli_spawns(
+            monkeypatch, context=claude_md_path.read_text(encoding="utf-8")
+        )
+        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+
+        assert verdict["outcome"] == "ARCHIVED", verdict
+        assert calls, (
+            "the memory CLI was never spawned — nothing was measured, and a "
+            "per-call assertion over an empty list passes vacuously"
+        )
+        for argv, kwargs in calls:
+            assert kwargs["env"]["CLAUDE_PROJECT_DIR"] == str(main), (
+                f"the child was told it is in {kwargs['env']['CLAUDE_PROJECT_DIR']!r}, "
+                f"but the CLAUDE.md actually read lives in {str(main)!r}. The "
+                f"ambient value (the worktree) beat the resolved base, so the "
+                f"archive files under a different project than the pin. "
+                f"argv={argv[2:4]}"
+            )
+            assert kwargs["cwd"] == str(main)
+
+    def test_explicit_cwd_overwrites_an_ambient_project_dir(
+        self, tmp_path, monkeypatch
+    ):
+        """The fail-direction, isolated from resolution entirely."""
+        decoy = tmp_path / "decoy"
+        decoy.mkdir()
+        intended = tmp_path / "intended"
+        intended.mkdir()
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(decoy))
+
+        # PRECONDITION FIRST: without a live ambient value this test cannot
+        # tell `setdefault` from assignment, and would pass under both.
+        assert os.environ.get("CLAUDE_PROJECT_DIR") == str(decoy), (
+            "precondition: the ambient decoy is not set, so this test cannot "
+            "distinguish setdefault from explicit assignment"
+        )
+
+        calls = self._spy_memory_cli_spawns(monkeypatch)
+        # Scoped db_path, though the spy means no child is ever launched:
+        # this call enters the real `_run_memory_cli`, and naming a temp store
+        # keeps it correct under the live-DB guard rather than relying
+        # on the spy sitting downstream of it. None of the assertions below
+        # read db_path, so it cannot perturb the property under test.
+        archive_pin._run_memory_cli(
+            ["get", "x" * 32], db_path=str(tmp_path / "mem.db"), cwd=intended
+        )
+
+        assert len(calls) == 1, (
+            f"expected exactly one CLI spawn, captured {len(calls)}"
+        )
+        env = calls[0][1]["env"]
+        assert env["CLAUDE_PROJECT_DIR"] == str(intended), (
+            "the ambient CLAUDE_PROJECT_DIR beat the caller's explicit cwd. "
+            "`env.setdefault` is a no-op when the variable is already set, "
+            "which inverts the fail direction: the general answer wins over "
+            "the specific one."
+        )
+        assert env["CLAUDE_PROJECT_DIR"] != str(decoy)
+        assert calls[0][1]["cwd"] == str(intended)
+
+
+class TestArchiveRecordPredicate:
+    """The marker predicate, in code rather than reconstructed from prose.
+
+    Every prior audit hand-rolled this match, and the version people reach for
+    first is a substring test over the serialised blob. That is not equivalent:
+    it also matches a record that merely MENTIONS the marker. On a live store
+    the substring form returned 19 where the type-anchored form returned 18,
+    and the extra row was a memory ABOUT the marker — a document describing the
+    audit joining the population it was counting.
+    """
+
+    def test_matches_an_entity_carrying_the_marker_as_a_type(self):
+        entities = [{"name": "x", "type": archive_pin.ARCHIVE_ENTITY_TYPE}]
+        assert archive_pin.is_archive_record(entities) is True
+        assert archive_pin.is_archive_record(json.dumps(entities)) is True, (
+            "the stored form is a JSON string; a predicate that only accepts "
+            "decoded lists forces every caller to decode first"
+        )
+
+    def test_does_not_match_a_record_that_merely_mentions_the_marker(self):
+        """THE DISCRIMINATING CASE — this is the false positive measured live."""
+        mentions = [{
+            "name": f"note about {archive_pin.ARCHIVE_ENTITY_TYPE}",
+            "type": "observation",
+        }]
+        blob = json.dumps(mentions)
+        assert archive_pin.ARCHIVE_ENTITY_TYPE in blob, (
+            "fixture does not contain the marker at all — the substring form "
+            "would not match either, so this proves nothing"
+        )
+        assert archive_pin.is_archive_record(mentions) is False
+        assert archive_pin.is_archive_record(blob) is False
+
+    @pytest.mark.parametrize("bad", [
+        None, "", "not json", "{}", '"a string"', "[1, 2, 3]", '["text"]', 42,
+    ])
+    def test_is_total_and_never_raises(self, bad):
+        """An audit that dies on one malformed row reports nothing."""
+        assert archive_pin.is_archive_record(bad) is False
+
+    def test_sql_predicate_agrees_with_the_python_one(self, tmp_path):
+        db = tmp_path / "probe.db"
+        con = sqlite3.connect(str(db))
+        con.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, entities TEXT)")
+        rows = [
+            ("carrier", [{"name": "n", "type": archive_pin.ARCHIVE_ENTITY_TYPE}]),
+            ("mentions", [{"name": f"about {archive_pin.ARCHIVE_ENTITY_TYPE}",
+                           "type": "observation"}]),
+            # A BARE STRING member. Real stores hold these — 63 among 14092 on
+            # the live one — and they are what breaks the naive spelling.
+            ("has_text_member", ["a bare string", {"name": "n", "type": "other"}]),
+        ]
+        for rid, ents in rows:
+            con.execute("INSERT INTO memories VALUES (?, ?)", (rid, json.dumps(ents)))
+        con.commit()
+
+        got = con.execute(
+            archive_pin.ARCHIVE_RECORD_COUNT_SQL,
+            (archive_pin.ARCHIVE_ENTITY_TYPE,),
+        ).fetchone()[0]
+        expected = sum(
+            1 for _, ents in rows if archive_pin.is_archive_record(ents)
+        )
+        assert expected == 1, "fixture drift: exactly one row should carry the marker"
+        assert got == expected, (
+            f"SQL predicate counted {got}, Python predicate {expected}"
+        )
+        con.close()
+
+    def test_the_naive_sql_spellings_raise_on_a_text_member(self, tmp_path):
+        """PIN AGAINST 'SIMPLIFICATION'. Both obvious forms fail on real data.
+
+        `json_extract` on a bare string raises `malformed JSON` and kills the
+        whole query. The natural defence — `json_type(j.value) = 'object'` —
+        raises IDENTICALLY, because `json_type` re-parses the value, so the
+        guard throws before the AND can short-circuit. Only `j.type`, the
+        column `json_each` already computed, filters without re-parsing.
+
+        Without this test, someone tidies the WHERE clause, every fixture here
+        happens to hold only objects, and the query dies on the first real
+        store it meets.
+        """
+        db = tmp_path / "naive.db"
+        con = sqlite3.connect(str(db))
+        con.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, entities TEXT)")
+        con.execute(
+            "INSERT INTO memories VALUES (?, ?)",
+            ("has_text_member", json.dumps(["a bare string"])),
+        )
+        con.commit()
+
+        for label, where in (
+            ("json_extract alone", "json_extract(j.value, '$.type') = ?"),
+            ("json_type guard", "json_type(j.value) = 'object' "
+                                "AND json_extract(j.value, '$.type') = ?"),
+        ):
+            sql = ("SELECT COUNT(DISTINCT m.id) FROM memories m, "
+                   f"json_each(m.entities) j WHERE {where}")
+            with pytest.raises(sqlite3.OperationalError, match="malformed JSON"):
+                con.execute(sql, (archive_pin.ARCHIVE_ENTITY_TYPE,)).fetchone()
+
+        # The shipped spelling survives the same row.
+        assert con.execute(
+            archive_pin.ARCHIVE_RECORD_COUNT_SQL,
+            (archive_pin.ARCHIVE_ENTITY_TYPE,),
+        ).fetchone()[0] == 0
+        con.close()
+
+
+class TestLiveDbGuard:
+    """The MECHANICAL closure for the live-database leak.
+
+    A required `db_path` makes the choice visible; it does not make it safe.
+    `None` still satisfies the signature and still means the real store, and
+    `""` is falsy so it takes the same branch as an omission. This class pins
+    the two guards that turn those into failures.
+
+    The guards sit on OPPOSITE SIDES of the process boundary and that split is
+    the design, not an accident:
+
+      * PARENT (`_run_memory_cli`) rejects falsy-BUT-PRESENT db_path. It sees
+        the caller's intent, so it can tell `""` from `None`.
+      * CHILD (`cli.py`) refuses the live store outright when no
+        --db-path arrived. It sees the actual spawn, so it catches routes that
+        never touch `archive_pin` at all -- including a raw
+        `subprocess.run([sys.executable, cli.py, ...])`.
+
+    Neither covers the other's cases. The parent guard cannot see a spawn that
+    bypasses it; the child guard cannot see intent that never crossed.
+
+    EVERY TEST HERE SANDBOXES `HOME`. That is not decoration: `config.py` binds
+    the database path from `Path.home()` AT IMPORT, so an in-process HOME
+    change is inert -- but a child re-imports, so HOME in the CHILD'S env does
+    redirect it. These tests exercise the exact production shape (no
+    --db-path) with zero risk to the live store, which is only possible
+    because the boundary that makes the defect hard to guard is the same
+    boundary that makes it safe to test.
+    """
+
+    @staticmethod
+    def _spawn_cli(tmp_path, *, with_pytest_var, extra_argv=()):
+        """Run the memory CLI as the curator's production shape: no --db-path.
+
+        HOME points into tmp_path, so the child resolves a temp database even
+        on the branch that would otherwise select the live store.
+        """
+        cli = (
+            Path(archive_pin.__file__).resolve().parent.parent
+            / "skills" / "pact-memory" / "scripts" / "cli.py"
+        )
+        assert cli.exists(), f"CLI not found at {cli} — this test measures nothing"
+        home = tmp_path / "sandbox-home"
+        home.mkdir(exist_ok=True)
+        env = dict(os.environ)
+        env["HOME"] = str(home)
+        if with_pytest_var:
+            env["PYTEST_CURRENT_TEST"] = "sentinel::test (call)"
+        else:
+            env.pop("PYTEST_CURRENT_TEST", None)
+        return subprocess.run(
+            [sys.executable, str(cli), "get", "f" * 32, *extra_argv],
+            capture_output=True, text=True, timeout=120, env=env,
+        )
+
+    def test_child_refuses_the_live_db_when_spawned_under_pytest(
+        self, tmp_path
+    ):
+        proc = self._spawn_cli(tmp_path, with_pytest_var=True)
+        assert proc.returncode != 0, (
+            "the child exited 0 with no --db-path under pytest — it would "
+            "have used the live database"
+        )
+        assert "UNSCOPED_TEST_DB" in proc.stderr, (
+            f"guard did not fire; stderr={proc.stderr[:400]}"
+        )
+
+    def test_refusal_states_the_observation_and_not_an_inference(self, tmp_path):
+        """The guard sees a VARIABLE; it does not see a pytest run.
+
+        Those come apart — an exported or inherited PYTEST_CURRENT_TEST reaches
+        a plain shell with no test anywhere — and that is exactly the case a
+        curator hits. Asserting the inference makes the message false precisely
+        when someone is relying on it to understand what happened.
+        """
+        proc = self._spawn_cli(tmp_path, with_pytest_var=True)
+        stderr = proc.stderr
+        assert "PYTEST_CURRENT_TEST" in stderr, (
+            "the refusal does not name the variable it keyed on, so the "
+            f"reader cannot check or clear it: {stderr[:400]}"
+        )
+        assert "spawned from a pytest run" not in stderr, (
+            "the refusal asserts it was spawned from a pytest run — an "
+            "inference the guard cannot make and which is false when the "
+            f"variable was exported or inherited: {stderr[:400]}"
+        )
+
+    def test_refusal_does_not_advise_a_curator_to_scope_the_archive(
+        self, tmp_path
+    ):
+        """THE REMEDY IS AUDIENCE-SPECIFIC AND THE ANSWERS ARE OPPOSITE.
+
+        For a test, `--db-path` is right. For a curator archiving a pin it is
+        destructive: the archive lands in a throwaway database, the verdict
+        reports success, and the pin becomes eligible for deletion with its
+        only copy in a file about to be discarded. A correct guard with the
+        wrong remedy can destroy exactly what the guard protected.
+
+        So the message must carry BOTH branches and must tell the curator NOT
+        to pass --db-path. A message offering only the test remedy passes a
+        bare "mentions --db-path" check, which is why this asserts the
+        curator's branch specifically.
+        """
+        stderr = self._spawn_cli(tmp_path, with_pytest_var=True).stderr
+        assert "do NOT pass --db-path" in stderr, (
+            "the refusal does not warn a curator away from --db-path; "
+            "followed literally its advice archives the pin into a throwaway "
+            f"database and marks it deletion-eligible: {stderr[:400]}"
+        )
+        assert "unset PYTEST_CURRENT_TEST" in stderr, (
+            f"the refusal never states the fix that preserves the pin: {stderr[:400]}"
+        )
+
+    def test_the_curator_production_path_is_not_blocked(self, tmp_path):
+        """OVER-BLOCK CONTROL, and the reason the gate exists.
+
+        `archive_pin --index N` (commands/prune-memory.md) passes no
+        --db-path, and /PACT:prune-memory keys its refuse-or-proceed decision
+        on that command. An ungated guard breaks it. This asserts the guard is
+        SILENT with the variable absent — the same spawn, one variable apart.
+        """
+        proc = self._spawn_cli(tmp_path, with_pytest_var=False)
+        assert "UNSCOPED_TEST_DB" not in proc.stderr, (
+            "the guard fired OUTSIDE pytest — this is the cardinal over-block: "
+            f"`archive_pin --index N` would stop working. stderr={proc.stderr[:400]}"
+        )
+
+    def test_an_explicit_db_path_is_accepted_under_pytest(self, tmp_path):
+        """The guard must block only the UNSCOPED case, not every spawn."""
+        proc = self._spawn_cli(
+            tmp_path, with_pytest_var=True,
+            extra_argv=("--db-path", str(tmp_path / "scoped.db")),
+        )
+        assert "UNSCOPED_TEST_DB" not in proc.stderr, (
+            f"guard fired despite an explicit --db-path; stderr={proc.stderr[:400]}"
+        )
+
+    @pytest.mark.parametrize("pass_cwd", [True, False])
+    def test_tripwire_the_child_actually_receives_pytest_current_test(
+        self, tmp_path, monkeypatch, pass_cwd
+    ):
+        """NON-OPTIONAL TRIPWIRE. The guard's fail direction is ALLOW.
+
+        The child-side guard works only because `_run_memory_cli` hands the
+        child a FULL copy of this process's environment. Hardening that to a
+        minimal allowlist is plausible, otherwise desirable, and would disable
+        the guard SILENTLY — every other test in this file would still pass,
+        because they assert on the guard's behaviour given the variable rather
+        than on the variable arriving.
+
+        So this asserts the delivery itself, on BOTH branches of the env
+        construction: `cwd` passed (env is a dict copy) and `cwd` omitted
+        (env stays None, so the child inherits verbatim).
+
+        It also records WHY the signal must be inherited rather than detected:
+        `"pytest" in sys.modules` is False in the child, measured here rather
+        than asserted in a comment. A future reader proposing an in-process
+        check can see it is not available.
+        """
+        probe = tmp_path / "probe.py"
+        probe.write_text(
+            "import os, sys, json\n"
+            "print(json.dumps({\n"
+            "    'seen': os.environ.get('PYTEST_CURRENT_TEST'),\n"
+            "    'pytest_importable_here': 'pytest' in sys.modules,\n"
+            "}))\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(archive_pin, "_MEMORY_CLI", probe)
+        rc, stdout, stderr = archive_pin._run_memory_cli(
+            [], db_path=None, cwd=(tmp_path if pass_cwd else None)
+        )
+        assert rc == 0, f"probe child failed: {stderr[:300]}"
+        report = json.loads(stdout)
+
+        assert report["seen"], (
+            "PYTEST_CURRENT_TEST did NOT reach the child. The child-side "
+            "live-DB guard in cli.py is therefore INERT, and its fail "
+            "direction is ALLOW — unscoped spawns will silently use the real "
+            "database. Most likely cause: _run_memory_cli stopped passing a "
+            "full env copy."
+        )
+        assert report["pytest_importable_here"] is False, (
+            "pytest IS visible in the child, so the guard could have used an "
+            "in-process check — revisit the forced-choice reasoning in "
+            "cli.py's _refuse_live_db_under_pytest docstring"
+        )
+
+    def test_parent_rejects_falsy_but_present_db_path(self, tmp_path):
+        """`db_path=""` is falsy, so without this it routes to the live store.
+
+        The real `_MEMORY_CLI` is left in place. Repointing it at a
+        non-existent file to prevent a spawn does not work here and is worth
+        recording: the existence check runs BEFORE this guard, so the call
+        raises `_Unevaluable` for the WRONG REASON and a test asserting only
+        on the exception TYPE would pass while measuring the missing-CLI path.
+        No spawn happens regardless, because the guard raises before argv is
+        built. Assert on the reason, not just the type.
+        """
+        with pytest.raises(archive_pin._Unevaluable) as excinfo:
+            archive_pin._run_memory_cli(["get", "x" * 32], db_path="", cwd=tmp_path)
+        assert "empty value" in str(excinfo.value.reason), (
+            f"raised for the wrong reason: {excinfo.value.reason!r}"
+        )
+
+    def test_parent_allows_none_so_non_spawning_paths_keep_working(
+        self, tmp_path, monkeypatch
+    ):
+        """None is the not-scoping sentinel, and must NOT be rejected here.
+
+        Six tests reach `_run_memory_cli` with `db_path=None` while stubbing
+        `subprocess.run` or `_MEMORY_CLI`; none can touch a store. Rejecting
+        plain falsiness rather than falsy-but-present would redden all six for
+        a hazard they do not have — and the cheap-looking repair would be to
+        weaken the guard.
+        """
+        calls = []
+        monkeypatch.setattr(
+            archive_pin.subprocess, "run",
+            lambda argv, **kw: calls.append(argv) or _CompletedStub(),
+        )
+        archive_pin._run_memory_cli(["get", "x" * 32], db_path=None, cwd=tmp_path)
+        assert calls, "the spawn never happened — this test proves nothing"
+        assert "--db-path" not in calls[0], (
+            "a None db_path must not synthesize a --db-path argument"
+        )
+
+
+class TestExplicitTargetBoundary:
+    """The no-`cwd` population — the one that reached OUTSIDE the sandbox.
+
+    `cwd` is an ordinary optional argument. When it was omitted the env block
+    never ran, `env` stayed None, and `subprocess.run(env=None)` handed the
+    child the parent environment VERBATIM — so the child resolved a CLAUDE.md
+    from whatever ambient variable, git anchor or working directory was in
+    scope. Measured before the fix: variable unset and `cwd` omitted, the
+    child wrote to the invoking repository's REAL CLAUDE.md. Three
+    configurations, two destinations, all of them outside the intended target.
+
+    The contract now: no target means the ambient value is REMOVED rather than
+    inherited, and the projection that would consume it is SUPPRESSED. Not a
+    guess, not a fallback — a skip.
+
+    THE TWO EXISTING LEGS MUST NOT MOVE. Both `archive_pin`'s save and get
+    calls already pass `cwd`, so they are in the closed population and this
+    change must leave them byte-identical. Their argv is pinned below: a shift
+    there is a REGRESSION, not an improvement, and would otherwise read as one.
+    """
+
+    @staticmethod
+    def _capture(monkeypatch):
+        real_run = subprocess.run
+        calls = []
+
+        class _Proc:
+            returncode = 0
+            stderr = ""
+            def __init__(self, stdout=""):
+                self.stdout = stdout
+
+        def _fake(argv, **kwargs):
+            if not (argv and argv[0] == sys.executable):
+                return real_run(argv, **kwargs)
+            calls.append((list(argv), kwargs))
+            return _Proc('{"ok": true, "result": {}}')
+
+        monkeypatch.setattr(archive_pin.subprocess, "run", _fake)
+        return calls
+
+    def test_no_cwd_strips_the_ambient_project_and_suppresses_the_sync(
+        self, tmp_path, monkeypatch
+    ):
+        decoy = tmp_path / "ambient"
+        decoy.mkdir()
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(decoy))
+        assert os.environ.get("CLAUDE_PROJECT_DIR") == str(decoy), (
+            "precondition: no ambient value is set, so this test cannot show "
+            "that one is removed"
+        )
+
+        calls = self._capture(monkeypatch)
+        archive_pin._run_memory_cli(
+            ["save", "--stdin"], db_path=str(tmp_path / "m.db"),
+            stdin_data="{}", cwd=None,
+        )
+
+        assert len(calls) == 1, f"expected one spawn, captured {len(calls)}"
+        argv, kwargs = calls[0]
+        assert kwargs["env"] is not None, (
+            "env is None, so the child inherits the parent environment "
+            "verbatim — the exact hole this closes"
+        )
+        assert "CLAUDE_PROJECT_DIR" not in kwargs["env"], (
+            "the ambient project survived into a call that named no project; "
+            "an absent target must not fall back to an ambient one"
+        )
+        assert "--no-sync" in argv, (
+            "the projection was not suppressed on a call with no target — it "
+            "would resolve a destination ambiently and write there"
+        )
+        assert kwargs["cwd"] is None
+
+    def test_no_sync_is_not_added_to_subcommands_that_reject_it(
+        self, tmp_path, monkeypatch
+    ):
+        """OVER-BLOCK CONTROL. `--no-sync` is declared on `save` only, so
+        appending it to a `get` is an argparse error — a failure the fix would
+        have manufactured."""
+        calls = self._capture(monkeypatch)
+        archive_pin._run_memory_cli(
+            ["get", "a" * 32], db_path=str(tmp_path / "m.db"), cwd=None
+        )
+        argv = calls[0][0]
+        assert "--no-sync" not in argv, (
+            f"--no-sync was appended to a subcommand that does not accept it: {argv[2:]}"
+        )
+
+    def test_sync_capable_set_matches_the_cli_parser(self):
+        """DRIFT DETECTOR, mechanical rather than conventional.
+
+        The suppression fires only for subcommands in
+        `_SYNC_CAPABLE_SUBCOMMANDS`. If a future subcommand gains a sync and a
+        `--no-sync` flag but is not added there, calls with no target silently
+        stop being suppressed — the leak returns with nothing failing.
+
+        So the constant is checked against the CLI's REAL parser rather than
+        against a second hand-written list, which would only ever contain what
+        someone already remembered.
+        """
+        cli_path = (
+            Path(archive_pin.__file__).resolve().parent.parent
+            / "skills" / "pact-memory" / "scripts" / "cli.py"
+        )
+        source = cli_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        # Which `<name>_parser.add_argument("--no-sync", ...)` calls exist.
+        declaring = set()
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "add_argument"):
+                continue
+            if not (node.args and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "--no-sync"):
+                continue
+            recv = node.func.value
+            assert isinstance(recv, ast.Name), (
+                f"unrecognised --no-sync receiver at line {node.lineno}; the "
+                "detector must be updated rather than the assertion relaxed"
+            )
+            declaring.add(recv.id.removesuffix("_parser"))
+
+        assert declaring, (
+            "no --no-sync declaration found in cli.py at all — the detector "
+            "found nothing to compare and would pass vacuously"
+        )
+        assert declaring == set(archive_pin._SYNC_CAPABLE_SUBCOMMANDS), (
+            f"cli.py declares --no-sync on {sorted(declaring)} but "
+            f"_SYNC_CAPABLE_SUBCOMMANDS is "
+            f"{sorted(archive_pin._SYNC_CAPABLE_SUBCOMMANDS)}. A subcommand "
+            f"that syncs but is missing from the constant loses the "
+            f"suppression on no-target calls."
+        )
+
+    def test_both_existing_legs_keep_their_argv_unchanged(
+        self, claude_md, monkeypatch, tmp_path
+    ):
+        """Both archive_pin legs pass `cwd`, so neither may shift.
+
+        The save leg carries `--no-sync` EXPLICITLY and must not gain a second
+        one; the get leg carries none and must not gain one at all.
+        """
+        content = _two_pin_file()
+        path = claude_md(content)
+        calls = []
+        real_run = archive_pin._run_memory_cli
+
+        def _spy(args, **kwargs):
+            calls.append(list(args))
+            if args[0] == "save":
+                return 0, json.dumps(
+                    {"ok": True, "result": {"memory_id": "f" * 32}}
+                ), ""
+            return 0, json.dumps({"ok": True, "result": {"context": content}}), ""
+
+        monkeypatch.setattr(archive_pin, "_run_memory_cli", _spy)
+        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+        assert verdict["outcome"] == "ARCHIVED", verdict
+        assert len(calls) == 2, f"expected save+get, got {calls}"
+
+        save_args, get_args = calls
+        assert save_args == ["save", "--stdin", "--no-sync"], (
+            f"the save leg's argv changed: {save_args}"
+        )
+        assert save_args.count("--no-sync") == 1, "double-injected --no-sync"
+        assert get_args[0] == "get" and "--no-sync" not in get_args, (
+            f"the get leg's argv changed: {get_args}"
+        )
+        assert path.exists()
+        assert real_run is not None
+
+
+class _CompletedStub:
+    """Minimal stand-in for CompletedProcess on a path that must not spawn."""
+    returncode = 0
+    stdout = '{"ok": true, "result": {}}'
+    stderr = ""
 
 
 @pytest.mark.requires_embedding_backend
@@ -709,7 +1421,7 @@ class TestArchivePin_FailureMatrix:
                                    "message": "bad field"})
             ),
         )
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "NOT_ARCHIVED"
         assert verdict["memory_id"] is None
         assert verdict["heading"] == "First Pin"
@@ -728,7 +1440,7 @@ class TestArchivePin_FailureMatrix:
                                    "message": "Memory 'x' not found"})
             ),
         )
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert "NOT_FOUND" in verdict["reason"]
 
     def test_containment_failure_is_not_archived(self, claude_md, monkeypatch):
@@ -750,7 +1462,7 @@ class TestArchivePin_FailureMatrix:
             }), ""
 
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _stub)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "NOT_ARCHIVED"
         assert verdict["memory_id"] == "a" * 32, (
             "the id must still be reported so the orphan record is findable"
@@ -788,7 +1500,7 @@ class TestArchivePin_FailureMatrix:
             }), ""
 
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _stub)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "ARCHIVED", (
             "a record wrapping the block in provenance is a GOOD archive"
         )
@@ -812,7 +1524,7 @@ class TestArchivePin_FailureMatrix:
             )
 
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _stub)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert "c" * 32 in verdict["reason"]
         assert verdict["heading"] == "First Pin"
@@ -828,7 +1540,7 @@ class TestArchivePin_FailureMatrix:
         monkeypatch.setattr(
             archive_pin, "_run_memory_cli", lambda *a, **k: (0, stdout, "")
         )
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] != "ARCHIVED"
 
 
@@ -839,25 +1551,25 @@ class TestArchivePin_Unevaluable:
         monkeypatch.setattr(
             archive_pin, "get_project_claude_md_path", lambda: None
         )
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert verdict["heading"] is None
 
     def test_no_pinned_section(self, claude_md):
         claude_md("# Project\n\n## Working Memory\n\n")
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
 
     def test_index_beyond_pin_count(self, claude_md):
         claude_md(_two_pin_file())
-        verdict = archive_pin.build_verdict(99)
+        verdict = archive_pin.build_verdict(99, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert "out of range" in verdict["reason"]
 
     def test_missing_memory_cli(self, claude_md, monkeypatch):
         claude_md(_two_pin_file())
         monkeypatch.setattr(archive_pin, "_MEMORY_CLI", Path("/nonexistent/cli.py"))
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert "not found" in verdict["reason"]
 
@@ -869,7 +1581,7 @@ class TestArchivePin_Unevaluable:
             raise subprocess.TimeoutExpired(cmd="save", timeout=1)
 
         monkeypatch.setattr(subprocess, "run", _boom)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert "timed out" in verdict["reason"]
 
@@ -880,7 +1592,7 @@ class TestArchivePin_Unevaluable:
             raise IOError("simulated")
 
         monkeypatch.setattr(Path, "read_text", _raise)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
 
     def test_lossy_extractor_is_caught_before_any_write(
@@ -904,7 +1616,7 @@ class TestArchivePin_Unevaluable:
             archive_pin, "_run_memory_cli",
             lambda *a, **k: called.append(a) or (0, "", ""),
         )
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
         assert verdict["outcome"] == "UNEVALUABLE"
         assert "not verbatim" in verdict["reason"]
         assert called == [], "must not save when the block is not verbatim"

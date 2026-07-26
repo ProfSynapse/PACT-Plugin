@@ -166,10 +166,83 @@ _CLI_TIMEOUT_SECONDS = 120
 # generally; it identifies the ones written after it ships.
 ARCHIVE_ENTITY_TYPE = "pact_memory_archive"
 
+
+def is_archive_record(entities) -> bool:
+    """True if `entities` carries ARCHIVE_ENTITY_TYPE as an entity TYPE.
+
+    THE PREDICATE IN CODE, so an audit does not have to reconstruct it from
+    prose. Every prior use of this marker hand-rolled the match at the call
+    site, and the hand-rolled version people reach for first is a SUBSTRING
+    test over the serialised blob -- which also matches a record that merely
+    MENTIONS the marker in a name or a note. Measured on a live store: the
+    substring form returned 19 where this returns 18, and the extra row was a
+    memory ABOUT the marker. A document describing the audit joined the
+    population the audit was counting.
+
+    Accepts the stored JSON string or an already-decoded list.
+
+    TOTAL BY DESIGN: anything unparseable, or shaped unexpectedly, is False
+    rather than an exception. An audit that dies on one malformed row reports
+    nothing; one that skips it reports a floor -- and a floor is what this
+    marker yields anyway, per the scope note above.
+    """
+    if isinstance(entities, (str, bytes)):
+        try:
+            entities = json.loads(entities)
+        except (ValueError, TypeError):
+            return False
+    if not isinstance(entities, list):
+        return False
+    return any(
+        isinstance(item, dict) and item.get("type") == ARCHIVE_ENTITY_TYPE
+        for item in entities
+    )
+
+
+# The same predicate for callers querying the store directly. Bind
+# ARCHIVE_ENTITY_TYPE as the single parameter.
+#
+# ⚠️ `j.type = 'object'` IS LOAD-BEARING AND THE OBVIOUS GUARD DOES NOT WORK.
+# Entity members are not uniformly objects -- a live store held 63 JSON strings
+# among 14092 objects -- and `json_extract` on a bare string raises
+# "malformed JSON", failing the whole query rather than skipping the row.
+#
+# The natural defence, `json_type(j.value) = 'object' AND json_extract(...)`,
+# RAISES IDENTICALLY: `json_type` RE-PARSES the value, so the guard itself
+# throws before the AND can short-circuit. `j.type` is the column `json_each`
+# already computed while walking the array, so it costs no second parse and is
+# the only spelling that filters rather than raising. Verified against a real
+# store on sqlite 3.54.0.
+ARCHIVE_RECORD_COUNT_SQL = (
+    "SELECT COUNT(DISTINCT m.id) FROM memories m, json_each(m.entities) j "
+    "WHERE j.type = 'object' AND json_extract(j.value, '$.type') = ?"
+)
+
 # The memory CLI subcommand archival is permitted to use. See the STANDALONE
 # invariant on `_build_record` / `archive_pin`: an `update` would create no new
 # record and run no marker code, silently voiding the audit property.
 _ARCHIVE_SUBCOMMAND = "save"
+
+# Memory-CLI subcommands whose handler projects into CLAUDE.md, and which
+# therefore accept `--no-sync`. `_run_memory_cli` suppresses the projection on
+# these when the caller named no project (no `cwd`), because there is then no
+# target to project INTO and inheriting an ambient one would be a guess.
+#
+# NOT a general "commands that touch memory" list, and deliberately narrow:
+# `--no-sync` is declared on the `save` subparser ONLY, so passing it to a
+# subcommand that does not declare it is an argparse error -- the fix would
+# manufacture an over-block on `get`. `search` suppresses its own sync inside
+# its handler and takes no flag, so it does not belong here either.
+#
+# Kept honest by a test that reads the CLI's real parser and asserts this set
+# equals the subparsers actually DECLARING `--no-sync`. Note what that does and
+# does not catch: a subcommand that declares the flag and is missing from this
+# set fails the test, but a subcommand that GAINS A SYNC WITHOUT DECLARING THE
+# FLAG is invisible to it -- the detector compares against declarers, so a
+# non-declarer is outside the population it examines. Closing that would need a
+# different predicate (which handlers project into CLAUDE.md), which the parser
+# does not expose.
+_SYNC_CAPABLE_SUBCOMMANDS = frozenset({"save"})
 
 
 def _load_hook_module(name: str):
@@ -466,18 +539,77 @@ def _run_memory_cli(args, db_path=None, stdin_data=None, cwd=None):
     if not _MEMORY_CLI.exists():
         raise _Unevaluable(f"memory CLI not found at {_MEMORY_CLI}")
 
+    # FALSY-BUT-PRESENT, rejected under pytest. The line below tests db_path
+    # for TRUTHINESS, so `db_path=""` takes the same branch as an omitted one
+    # and routes to the live store -- a required-parameter fix defeated without
+    # removing the parameter. A caller that names db_path and passes an empty
+    # value has stated an intention the truthiness test then discards.
+    #
+    # The predicate is `is not None and not db_path`, NOT plain falsiness.
+    # None is the "I am not scoping this call" sentinel and is legitimate on
+    # the paths that never spawn -- six tests reach here with db_path=None
+    # while stubbing subprocess.run or _MEMORY_CLI, and none of them can touch
+    # a store. Rejecting plain falsiness would redden all six for a hazard
+    # they do not have. A real spawn carrying None is caught at the process
+    # boundary instead, in the child, where the decision actually lands.
+    if os.environ.get("PYTEST_CURRENT_TEST") and db_path is not None and not db_path:
+        raise _Unevaluable(
+            "db_path was given as an empty value under pytest; it is falsy, "
+            "so the memory CLI would fall back to the LIVE database. "
+            "Pass a real temp path, or None if this call cannot reach a store."
+        )
+
     argv = [sys.executable, str(_MEMORY_CLI), *args]
     if db_path:
         argv += ["--db-path", db_path]
 
     # Pin the project for the child process. CLAUDE_PROJECT_DIR is the memory
     # layer's PRIMARY detection strategy and is deterministic, unlike the git
-    # and CWD-walk fallbacks. An existing value is the platform's own
-    # statement of the project and is left alone; we only fill the gap.
-    env = None
+    # and CWD-walk fallbacks.
+    #
+    # An explicit `cwd` is the CALLER'S statement of which project owns this
+    # invocation, so it OVERWRITES any ambient value rather than deferring to
+    # it. This was `setdefault`, which is a no-op when the variable is already
+    # set -- so the ambient value won and the more specific answer lost to the
+    # more general one. The fail direction was inverted.
+    #
+    # That is a PRODUCTION defect, not a test concern. `project_dir_for` exists
+    # so the archive's project derives from the CLAUDE.md actually read, and
+    # `resolve_claude_md` deliberately PERMITS a worktree fall-through: the env
+    # dir is a worktree carrying no CLAUDE.md, so resolution lands on the main
+    # repo's file. Under `setdefault` that filed the archive under the WORKTREE
+    # while the pin lived in the MAIN repo -- exactly the pin/archive
+    # disagreement `project_dir_for` is there to prevent.
+    #
+    # THE ENV IS NOW ALWAYS BUILT, and the `cwd is None` case is the reason.
+    # It used to leave `env` as None, and `subprocess.run(env=None)` hands the
+    # child the parent environment VERBATIM -- so the child resolved a
+    # CLAUDE.md from whatever ambient CLAUDE_PROJECT_DIR, git anchor or working
+    # directory happened to be in scope. Measured: with the variable unset and
+    # `cwd` omitted, the child wrote to the invoking repository's real
+    # CLAUDE.md. Every configuration of that branch reached outside the
+    # intended target; only the destination varied.
+    #
+    # NO TARGET IS NOT A LICENCE TO GUESS ONE. A caller that omits `cwd` has
+    # stated no project, so the ambient value is not a weaker answer to the
+    # same question -- it is an answer to a different one. The variable is
+    # therefore REMOVED rather than inherited, and the projection that would
+    # have consumed it is SUPPRESSED. An absent target is a SKIP, never a
+    # CREATE: nothing here invents a path, and nothing writes a CLAUDE.md that
+    # did not already exist.
+    #
+    # `--no-sync` is appended only for subcommands that accept it. It is
+    # declared on the `save` subparser alone, so adding it to a `get` would be
+    # an argparse error -- an over-block manufactured by the fix. The set is a
+    # named constant pinned against the CLI's real parser by a test; see
+    # `_SYNC_CAPABLE_SUBCOMMANDS` for what that test does and does not catch.
+    env = dict(os.environ)
     if cwd is not None:
-        env = dict(os.environ)
-        env.setdefault("CLAUDE_PROJECT_DIR", str(cwd))
+        env["CLAUDE_PROJECT_DIR"] = str(cwd)
+    else:
+        env.pop("CLAUDE_PROJECT_DIR", None)
+        if args and args[0] in _SYNC_CAPABLE_SUBCOMMANDS and "--no-sync" not in args:
+            argv.append("--no-sync")
 
     try:
         proc = subprocess.run(
@@ -704,7 +836,8 @@ def archive_pin(index: int, db_path=None) -> dict:
             heading=heading, claude_md_path=claude_md_path,
         )
 
-    def _cli(args, **kwargs):
+    def _cli(args, *, _heading=heading, _block=block, _md=claude_md_path,
+             **kwargs):
         """Invoke the memory CLI, enriching any UNEVALUABLE with pin context.
 
         `_run_memory_cli` raises bare -- correctly, since it is a generic
@@ -722,15 +855,33 @@ def archive_pin(index: int, db_path=None) -> dict:
         missing CLI are the canonical CANNOT-TELL cases -- they are when the
         escape hatch runs -- so the hatch would have had no mechanical
         delete boundary in its own primary use case.
+
+        THE THREE DEFAULT ARGUMENTS ARE THE ENFORCEMENT, NOT DECORATION.
+        `_heading`, `_block` and `_md` capture their enclosing values at `def`
+        TIME instead of closing over the names. The ordering dependency between
+        this one definition site and its three binding sites is then checked by
+        the interpreter on every run: moving this `def` above any of them
+        raises NameError AT THE `def`. A closure defers that failure into the
+        `except` path below -- which runs only once something else has ALREADY
+        failed -- so the diagnostic would collapse to `internal error:
+        NameError` at precisely the moment the curator needs the delete
+        boundary. Keyword-only, and underscore-prefixed, so no caller supplies
+        them by accident and `**kwargs` still forwards the real arguments
+        untouched.
+
+        The handler reads the PARAMETERS, never the enclosing names. That is
+        load-bearing rather than stylistic: defaults nothing reads would still
+        satisfy the `def` while leaving the handler closing over the originals,
+        which restores the silent failure this shape exists to prevent.
         """
         try:
             return _run_memory_cli(args, **kwargs)
         except _Unevaluable as exc:
             raise _Unevaluable(
                 exc.reason,
-                heading=heading,
-                claude_md_path=claude_md_path,
-                delete_string=block,
+                heading=_heading,
+                claude_md_path=_md,
+                delete_string=_block,
             ) from exc
 
     # --- conjunct 1: save returned a memory_id -----------------------------
@@ -757,6 +908,19 @@ def archive_pin(index: int, db_path=None) -> dict:
     if not memory_id:
         # A definite failure of the save itself: the store was reachable and
         # said no. NOT_ARCHIVED, not UNEVALUABLE.
+        #
+        # ONE STATED EXCEPTION TO THAT CRITERION. The child-side guard in
+        # cli.py refuses BEFORE opening any store, so "reachable and said no"
+        # does not describe it -- yet it lands here, deliberately. UNEVALUABLE
+        # buys the escape hatch (print the pin, permit manual removal), which
+        # exists so a curator with a broken CLI is not TRAPPED; this refusal
+        # has a one-line fix, so offering hand-deletion would be more
+        # destructive than the refusal it replaced. The routing follows the
+        # DISPOSITION, not the label.
+        #
+        # ⚠️ So this criterion is narrower than it reads. Any future logic that
+        # keys on it PROGRAMMATICALLY -- "NOT_ARCHIVED implies the store
+        # answered" -- is wrong for this one cause. Read the reason string.
         return {
             "outcome": "NOT_ARCHIVED",
             "heading": heading,
@@ -860,13 +1024,26 @@ def archive_pin(index: int, db_path=None) -> dict:
     }
 
 
-def build_verdict(index: int, db_path=None) -> dict:
+def build_verdict(index: int, *, db_path) -> dict:
     """Run the archival and return a verdict dict — never raises.
 
     The single place where an unevaluable state becomes an UNEVALUABLE
     verdict, so `main` only has to serialize. Keeping the mapping here
     (rather than inline in `main`) is what lets tests exercise the
     degradation paths without going through argv and stdout.
+
+    `db_path` IS REQUIRED AND KEYWORD-ONLY. It used to default to None,
+    and None means the real store -- so the seam that exists to let tests
+    reach the degradation paths was also the seam that skipped the db-path
+    guard. The decision that made testing easy removed the isolation, and
+    it was silent: a caller that simply said nothing got the live store.
+
+    Required makes every caller state an answer; keyword-only makes them
+    state it BY NAME, so the answer is legible at the call site rather than
+    being a bare second positional. What it does NOT do is make the answer
+    correct -- `db_path=None` still satisfies the signature and still means
+    the real store. The mechanical protection is the guard in
+    `_run_memory_cli`; this parameter is what makes the choice visible.
     """
     try:
         return archive_pin(index, db_path=db_path)

@@ -21,6 +21,7 @@ session; every test here builds an isolated synthetic repo under tmp_path and
 never touches real session state.
 """
 
+import logging
 import os
 import re
 import subprocess
@@ -33,7 +34,12 @@ import pytest
 # scripts/ is a package; add skills/pact-memory so `scripts.*` imports resolve.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "skills", "pact-memory"))
 
-from scripts.working_memory import _resolve_display_claude_md_path, sync_to_claude_md
+from scripts.working_memory import (
+    _project_root_of,
+    _resolve_display_claude_md_path,
+    sync_retrieved_to_claude_md,
+    sync_to_claude_md,
+)
 from scripts.memory_api import PACTMemory
 
 
@@ -157,6 +163,512 @@ def _install_find_spy(monkeypatch):
 
     monkeypatch.setattr(wm, "_find_existing_claude_md", spy)
     return calls
+
+
+# ---------------------------------------------------------------------------
+# Explicit sync target — the caller-specifiable override
+# ---------------------------------------------------------------------------
+
+class TestAmbientBranchAbsentTarget:
+    """The AMBIENT branch must skip an absent destination too.
+
+    The existence guard originally sat inside the explicit-target branch, on
+    the reasoning that the ambient resolver returns None when it finds nothing
+    so that skip rode along free. True — but it is a property of the RESOLVER,
+    not of `sync_to_claude_md`, and a TOTAL resolver never returns None. So the
+    arrangement failed in precisely the case its own comment claimed to cover:
+    a resolver made total, which is the named hazard this whole parameter
+    exists to defend against.
+
+    THE DISCRIMINATING OBSERVABLE IS THE LOCK SIDECAR, NOT THE ABSENT FILE.
+    Unguarded, the sync still does not CREATE the CLAUDE.md — the read precedes
+    the write, so it raises and degrades to False. So `assert not
+    md.exists()` passes against the broken code and measures nothing. What the
+    unguarded path leaves behind is `.CLAUDE.md.lock`, in a directory the sync
+    should never have touched. These assert the directory is ENTIRELY EMPTY.
+    """
+
+    @staticmethod
+    def _force_total_resolver(monkeypatch, path):
+        """Make the ambient resolver TOTAL — the plan's named hazard, verbatim.
+
+        A total resolver hands back a path for a file that does not exist
+        instead of returning None. Patched on `scripts.working_memory` because
+        that is the module object `sync_to_claude_md` resolves the name
+        through; patching the defining module would not rebind the caller.
+        """
+        import scripts.working_memory as wm
+        monkeypatch.setattr(
+            wm, "_resolve_display_claude_md_with_base",
+            lambda: (path, path.parent),
+        )
+
+    def test_ambient_absent_destination_is_a_skip_and_touches_nothing(
+        self, tmp_path, clean_env
+    ):
+        project = tmp_path / "ambient-empty"
+        project.mkdir()
+        missing = project / "CLAUDE.md"
+        self._force_total_resolver(clean_env, missing)
+
+        ok = sync_to_claude_md(
+            {"context": "ctx", "goal": "ambient must not write"},
+            memory_id="e" * 32,
+        )
+
+        assert ok is False, "an absent ambient destination must report failure"
+        assert not missing.exists(), "the sync CREATED a CLAUDE.md"
+        leftovers = sorted(p.name for p in project.iterdir())
+        assert leftovers == [], (
+            f"the sync left artifacts in a directory it should never have "
+            f"touched: {leftovers}. A `.CLAUDE.md.lock` here means the guard "
+            f"did not cover the ambient branch and the skip is being produced "
+            f"by the read failing rather than by the contract."
+        )
+
+    def test_live_control_the_harness_reaches_the_write_path(
+        self, tmp_path, clean_env
+    ):
+        """Without this, the assertions above pass against a broken harness.
+
+        Same total resolver, same call — but the file EXISTS. If the sync does
+        not write here, then 'nothing was written' above is evidence about the
+        harness rather than about the guard.
+        """
+        project = tmp_path / "ambient-present"
+        project.mkdir()
+        present = project / "CLAUDE.md"
+        present.write_text(
+            WORKING_MEMORY_SCAFFOLD.format(title="Ambient Present"),
+            encoding="utf-8",
+        )
+        self._force_total_resolver(clean_env, present)
+
+        ok = sync_to_claude_md(
+            {"context": "ctx", "goal": "live control writes"},
+            memory_id="f" * 32,
+        )
+
+        assert ok is True, "the control did not write — the harness is broken"
+        assert "live control writes" in present.read_text(encoding="utf-8")
+
+    def test_ambient_absent_warns_while_explicit_absent_stays_quiet(
+        self, tmp_path, clean_env, caplog
+    ):
+        """The two absent cases are reported differently, on purpose.
+
+        Ambient-absent is unreachable on the normal path — a resolver that
+        finds nothing returns None, which the `is None` check absorbs — so an
+        arm that fires here is signal. Explicit-absent is an ordinary caller
+        condition and fires in normal use.
+
+        The warning must NAME both causes and ASSERT neither: a file removed
+        between resolution and the check is indistinguishable here and is not
+        a defect. The level says "look at this"; the text must not say "this
+        is a bug."
+        """
+        project = tmp_path / "levels"
+        project.mkdir()
+        missing = project / "CLAUDE.md"
+
+        with caplog.at_level(logging.DEBUG, logger="scripts.working_memory"):
+            self._force_total_resolver(clean_env, missing)
+            sync_to_claude_md({"context": "c", "goal": "g"}, memory_id="a" * 32)
+        ambient = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert ambient, (
+            "ambient-absent did not warn — a resolver that quietly went total "
+            "would be indistinguishable from an ordinary skip"
+        )
+        text = ambient[0].getMessage()
+        assert "removed after it resolved" in text and "stopped returning" in text, (
+            f"the warning must name BOTH causes; got: {text}"
+        )
+        for accusation in ("bug", "must not", "invalid", "illegal"):
+            assert accusation not in text.lower(), (
+                f"the warning accuses rather than reports ({accusation!r}): {text}"
+            )
+
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="scripts.working_memory"):
+            sync_to_claude_md(
+                {"context": "c", "goal": "g"}, memory_id="b" * 32,
+                target=missing,
+            )
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING], (
+            "explicit-absent warned; it is an ordinary caller condition that "
+            "fires in normal use and must stay at debug"
+        )
+
+
+class TestRetrievedSyncAbsentTarget:
+    """`sync_retrieved_to_claude_md` must skip an absent destination too.
+
+    The sibling of `sync_to_claude_md`, and the other write caller named in
+    `_resolve_display_claude_md_path`'s docstring. It had the same defect and
+    it was found INDEPENDENTLY by two reviewers on different routes — one by
+    enumerating the truth-conditions of the guarded function's claim, one by
+    asking which other callers take the same lock.
+
+    ITS GUARD IS SHAPED DIFFERENTLY FROM ITS SIBLING'S, ON PURPOSE. This
+    function takes no explicit target, so there is one route to a destination
+    and nothing to differentiate — the check follows the `is None` check and
+    the message is unconditionally about the ambient resolver. The asymmetry
+    between the two guards reflects a real asymmetry in the two signatures;
+    making them match would be tidiness, not correctness.
+
+    THE UNGUARDED FAILURE IS WORSE HERE THAN A STRAY SIDECAR. `file_lock`
+    creates the sidecar's parent directories, so an absent path several levels
+    deep materialises the entire chain before the read fails.
+    """
+
+    @staticmethod
+    def _force_total_resolver(monkeypatch, path):
+        import scripts.working_memory as wm
+        monkeypatch.setattr(
+            wm, "_resolve_display_claude_md_with_base",
+            lambda: (path, path.parent),
+        )
+
+    def test_absent_destination_is_a_skip_and_touches_nothing(
+        self, tmp_path, clean_env
+    ):
+        project = tmp_path / "retrieved-empty"
+        project.mkdir()
+        missing = project / "CLAUDE.md"
+        self._force_total_resolver(clean_env, missing)
+
+        ok = sync_retrieved_to_claude_md(
+            [{"context": "ctx", "goal": "must not write"}], "query",
+            memory_ids=["c" * 32],
+        )
+
+        assert ok is False
+        assert not missing.exists(), "the sync CREATED a CLAUDE.md"
+        leftovers = sorted(p.name for p in project.iterdir())
+        assert leftovers == [], (
+            f"artifacts left in a directory the sync should never have "
+            f"touched: {leftovers}. A `.CLAUDE.md.lock` here means the guard "
+            f"is absent and the skip is produced by the read failing."
+        )
+
+    def test_absent_parent_directories_are_not_created(
+        self, tmp_path, clean_env
+    ):
+        """The variant that makes this worse than a stray sidecar.
+
+        `file_lock` builds the sidecar's parents, so without the guard a
+        resolved path three levels deep materialises `a/`, `a/b/`, `a/b/c/`
+        and the lock file inside it — directories the caller never named, on a
+        path whose only job was to be read. Measured before the fix.
+        """
+        root = tmp_path / "retrieved-deep"
+        root.mkdir()
+        ghost = root / "a" / "b" / "c" / "CLAUDE.md"
+        self._force_total_resolver(clean_env, ghost)
+
+        ok = sync_retrieved_to_claude_md(
+            [{"context": "ctx", "goal": "must not mkdir"}], "query",
+            memory_ids=["d" * 32],
+        )
+
+        assert ok is False
+        created = sorted(str(p.relative_to(root)) for p in root.rglob("*"))
+        assert created == [], (
+            f"the sync created filesystem entries under a path it only had to "
+            f"read: {created}"
+        )
+
+    def test_live_control_the_harness_reaches_the_write_path(
+        self, tmp_path, clean_env
+    ):
+        """Without this, the two assertions above are about a broken harness.
+
+        NOTE the control asserts CONTENT, not an empty directory: a SUCCESSFUL
+        write leaves `.CLAUDE.md.lock` behind too, so an empty-directory
+        assertion is correct only on the absent arms.
+        """
+        project = tmp_path / "retrieved-present"
+        project.mkdir()
+        present = project / "CLAUDE.md"
+        present.write_text(
+            RETRIEVED_CONTEXT_SCAFFOLD.format(title="Retrieved Present"),
+            encoding="utf-8",
+        )
+        self._force_total_resolver(clean_env, present)
+
+        ok = sync_retrieved_to_claude_md(
+            [{"context": "ctx", "goal": "live control writes"}], "query",
+            memory_ids=["e" * 32],
+        )
+
+        assert ok is True, "the control did not write — the harness is broken"
+        assert "live control writes" in present.read_text(encoding="utf-8")
+
+    def test_absent_destination_warns_naming_both_causes(
+        self, tmp_path, clean_env, caplog
+    ):
+        """Assert the SPECIFIC message, never the level.
+
+        The generic degradation handler already warned on this path before the
+        guard existed, so a level-only assertion is true on both sides of the
+        fix and discriminates nothing.
+        """
+        project = tmp_path / "retrieved-levels"
+        project.mkdir()
+        missing = project / "CLAUDE.md"
+
+        with caplog.at_level(logging.DEBUG, logger="scripts.working_memory"):
+            self._force_total_resolver(clean_env, missing)
+            sync_retrieved_to_claude_md(
+                [{"context": "c", "goal": "g"}], "q", memory_ids=["f" * 32]
+            )
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings, "no warning on a should-never-fire path"
+        text = warnings[0].getMessage()
+        assert "retrieved context sync" in text, (
+            f"the warning does not identify which sync skipped: {text}"
+        )
+        assert "removed after it resolved" in text and "stopped returning" in text, (
+            f"the warning must name BOTH causes; got: {text}"
+        )
+        for accusation in ("bug", "must not", "invalid", "illegal"):
+            assert accusation not in text.lower(), (
+                f"the warning accuses rather than reports ({accusation!r}): {text}"
+            )
+
+
+class TestBothWriteCallersAgreeOnAbsentDestinations:
+    """DIFFERENTIAL: both write callers, one injected condition, compared.
+
+    `sync_to_claude_md` and `sync_retrieved_to_claude_md` are the two write
+    callers named in `_resolve_display_claude_md_path`'s docstring. Asserting
+    them separately records two facts that happen to match; asserting them
+    together records the INVARIANT — every write caller skips an absent
+    destination without touching the filesystem. A third one added later has
+    an obvious place to be registered, and a divergence between them fails
+    here rather than being noticed by whoever looks second.
+
+    THIS CATCHES DIVERGENCE. It does NOT catch a guard misplaced in BOTH
+    functions the same way — measured, not assumed. That failure is covered by
+    `test_resolver_returning_none_does_not_reach_the_guard` below, which is a
+    different arm for a different reason. Keep both.
+    """
+
+    @staticmethod
+    def _drivers():
+        """(name, callable) for every write caller that syncs to CLAUDE.md."""
+        return [
+            ("sync_to_claude_md", lambda: sync_to_claude_md(
+                {"context": "ctx", "goal": "differential"}, memory_id="a" * 32)),
+            ("sync_retrieved_to_claude_md", lambda: sync_retrieved_to_claude_md(
+                [{"context": "ctx", "goal": "differential"}], "query",
+                memory_ids=["b" * 32])),
+        ]
+
+    @pytest.mark.parametrize("layout", ["flat", "absent-parents"])
+    def test_no_write_caller_touches_the_filesystem(
+        self, tmp_path, clean_env, layout
+    ):
+        import scripts.working_memory as wm
+
+        observations = {}
+        for name, drive in self._drivers():
+            root = tmp_path / f"{layout}-{name}"
+            root.mkdir()
+            ghost = (root / "CLAUDE.md" if layout == "flat"
+                     else root / "a" / "b" / "c" / "CLAUDE.md")
+            clean_env.setattr(
+                wm, "_resolve_display_claude_md_with_base",
+                lambda g=ghost: (g, g.parent),
+            )
+            returned = drive()
+            # tuple, not list: these are compared as a set below to detect
+            # divergence between callers, and a list is unhashable.
+            created = tuple(sorted(str(p.relative_to(root)) for p in root.rglob("*")))
+            observations[name] = (returned, created)
+
+        assert len(observations) == len(self._drivers()), "a driver was skipped"
+        for name, (returned, created) in observations.items():
+            assert returned is False, f"{name} reported success on an absent destination"
+            assert created == (), (
+                f"{name} created filesystem entries under a path it only had to "
+                f"read: {list(created)}"
+            )
+        distinct = set(observations.values())
+        assert len(distinct) == 1, (
+            f"the write callers DIVERGED under one condition: {observations}. "
+            f"Both must skip an absent destination identically."
+        )
+
+    def test_resolver_returning_none_does_not_reach_the_guard(
+        self, tmp_path, clean_env
+    ):
+        """PLACEMENT pin — the guard must sit BELOW the `is None` check.
+
+        Above it, `None.exists()` raises AttributeError, and the raise is
+        outside the degradation `try` so it propagates to the caller. Measured:
+        with the guard relocated above the join, every one of the 319
+        memory-layer tests still passed, because nothing drove this path on the
+        retrieved caller. This is that arm.
+        """
+        import scripts.working_memory as wm
+        clean_env.setattr(
+            wm, "_resolve_display_claude_md_with_base", lambda: (None, None)
+        )
+        for name, drive in self._drivers():
+            assert drive() is False, (
+                f"{name} did not skip cleanly when the resolver found nothing"
+            )
+
+
+class TestExplicitSyncTarget:
+    """`sync_to_claude_md(target=...)` — the caller-specifiable override.
+
+    Without it the destination is resolved ambiently (CLAUDE_PROJECT_DIR, two
+    git anchors, then the working directory) and a caller who knows which file
+    it means has no way to say so. The root defect is not that the resolver is
+    wrong; it is that there is no override, so the caller's knowledge cannot
+    reach the write.
+
+    THE LOAD-BEARING PROPERTY IS THAT AN ABSENT TARGET SKIPS. The natural
+    resolver to compute a target with,
+    `claude_md_manager.resolve_project_claude_md_path`, is TOTAL — it returns a
+    "new_default" path rather than None on a miss. That is right for a caller
+    whose job is to create the file and wrong for the sync, where the
+    orchestrator owns the lifecycle.
+
+    MEASURED RATHER THAN ASSUMED, because the stronger claim is false today:
+    with the guard removed, an absent target does NOT produce a CLAUDE.md. The
+    read precedes the write, so it raises and the degradation handler returns
+    False. It does leave a `.CLAUDE.md.lock` sidecar in a directory the sync
+    should never have touched.
+
+    That makes the current protection an ACCIDENT OF ORDERING rather than a
+    contract — it holds only while the write path happens to read first. The
+    tests below pin the contract itself, so a future reordering fails here
+    instead of quietly becoming a create.
+    """
+
+    def test_explicit_target_is_written_and_the_ambient_one_is_not(
+        self, tmp_path, clean_env
+    ):
+        intended = tmp_path / "intended"
+        intended.mkdir()
+        (intended / "CLAUDE.md").write_text(
+            WORKING_MEMORY_SCAFFOLD.format(title="Intended"), encoding="utf-8"
+        )
+        decoy = tmp_path / "decoy"
+        decoy.mkdir()
+        decoy_md = decoy / "CLAUDE.md"
+        decoy_md.write_text(
+            WORKING_MEMORY_SCAFFOLD.format(title="Decoy"), encoding="utf-8"
+        )
+        # The ambient answer points at the decoy; the explicit target must win.
+        clean_env.setenv("CLAUDE_PROJECT_DIR", str(decoy))
+        decoy_before = decoy_md.read_bytes()
+
+        ok = sync_to_claude_md(
+            {"context": "ctx", "goal": "explicit target goal"},
+            memory_id="a" * 32,
+            target=intended / "CLAUDE.md",
+        )
+
+        assert ok is True
+        # POSITIVE: assert where it landed, not merely that the decoy is clean.
+        # "The other file is untouched" is equally consistent with the sync
+        # having silently skipped.
+        written = (intended / "CLAUDE.md").read_text(encoding="utf-8")
+        assert "explicit target goal" in written, (
+            "the entry did not land in the explicit target"
+        )
+        assert decoy_md.read_bytes() == decoy_before, (
+            "the ambient target was written despite an explicit one"
+        )
+
+    def test_absent_target_is_a_skip_and_touches_nothing(
+        self, tmp_path, clean_env
+    ):
+        """An absent target must SKIP — and skip without side effects.
+
+        The directory-empty assertion is the discriminating one. Removing the
+        guard still leaves `missing.exists()` False (the read raises first),
+        so a test asserting only "no CLAUDE.md was created" passes against the
+        unguarded code and measures nothing. What the unguarded path DOES
+        leave is a `.CLAUDE.md.lock` sidecar, which is why the assertion is on
+        the whole directory rather than on the one filename.
+        """
+        project = tmp_path / "empty-project"
+        project.mkdir()
+        missing = project / "CLAUDE.md"
+        assert not missing.exists(), "precondition: the target must be absent"
+
+        ok = sync_to_claude_md(
+            {"context": "ctx", "goal": "must not create"},
+            memory_id="b" * 32,
+            target=missing,
+        )
+
+        assert ok is False, "an absent target must report failure, not success"
+        assert not missing.exists(), (
+            "the sync CREATED a CLAUDE.md that did not exist — this moves the "
+            "file's lifecycle from the orchestrator to the memory layer"
+        )
+        assert not (project / ".claude").exists(), (
+            "the sync created a .claude/ directory for a file it must not make"
+        )
+        leftovers = sorted(p.name for p in project.iterdir())
+        assert leftovers == [], (
+            f"the sync left artifacts in a project it should never have "
+            f"touched: {leftovers}. A lock sidecar here means the guard was "
+            f"bypassed and the skip is being produced by the read failing "
+            f"rather than by the contract."
+        )
+
+    def test_omitting_target_keeps_the_ambient_behaviour(self, tmp_path, clean_env):
+        """Existing callers are unaffected — the parameter is additive."""
+        project = tmp_path / "ambient"
+        project.mkdir()
+        md = project / "CLAUDE.md"
+        md.write_text(
+            WORKING_MEMORY_SCAFFOLD.format(title="Ambient"), encoding="utf-8"
+        )
+        clean_env.setenv("CLAUDE_PROJECT_DIR", str(project))
+
+        ok = sync_to_claude_md(
+            {"context": "ctx", "goal": "ambient path still works"},
+            memory_id="c" * 32,
+        )
+
+        assert ok is True
+        assert "ambient path still works" in md.read_text(encoding="utf-8")
+
+    def test_dot_claude_target_resolves_the_project_root_for_containment(
+        self, tmp_path, clean_env
+    ):
+        """The containment anchor must be the PROJECT dir, not `.claude/`.
+
+        `_atomic_write_text` checks the target against this base, so deriving
+        it one level too deep would either break the write or make the check
+        vacuous.
+        """
+        project = tmp_path / "dotproj"
+        (project / ".claude").mkdir(parents=True)
+        md = project / ".claude" / "CLAUDE.md"
+        md.write_text(
+            WORKING_MEMORY_SCAFFOLD.format(title="Dot"), encoding="utf-8"
+        )
+
+        assert _project_root_of(md) == project
+        assert _project_root_of(project / "CLAUDE.md") == project
+
+        ok = sync_to_claude_md(
+            {"context": "ctx", "goal": "dot layout target"},
+            memory_id="d" * 32,
+            target=md,
+        )
+        assert ok is True
+        assert "dot layout target" in md.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

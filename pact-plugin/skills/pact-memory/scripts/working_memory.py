@@ -497,6 +497,22 @@ def extract_managed_region(content: str) -> Optional[Tuple[str, int]]:
     """
     Extract the PACT-managed region from CLAUDE.md content.
 
+    ⚠️ THIS TWIN IS DELIBERATELY NOT BYTE-IDENTICAL, AND IS NOT DRIFT-GATED.
+    Its siblings (`file_lock`, `_atomic_write_text`) are pinned byte-for-byte;
+    this one cannot be, because two differences here are LOCAL CONVENTIONS
+    rather than divergence:
+
+      * `Optional[Tuple[str, int]]` here vs `tuple[str, int] | None` there
+      * `_MANAGED_START_MARKER` here vs `MANAGED_START_MARKER` there
+        (this module private-prefixes what that one exports)
+
+    The executable logic is otherwise identical. Do NOT "fix" either side
+    toward the other and do NOT add a byte-identity gate: it would go red on
+    arrival, on choices someone made, and a gate that is red on arrival gets
+    deleted rather than investigated. A NORMALISED gate — mapping the constant
+    names and the annotation syntax before comparing — is the real remedy and
+    is deliberately deferred rather than invented here.
+
     Twin of hooks/shared/claude_md_manager.extract_managed_region — kept
     local because skills/pact-memory/scripts/ cannot import from hooks/shared/.
 
@@ -1049,10 +1065,33 @@ def _parse_working_memory_section(
     return before_section, WORKING_MEMORY_HEADER, after_section, existing_entries
 
 
+def _project_root_of(claude_md_path: Path) -> Path:
+    """
+    Return the project directory that owns `claude_md_path`.
+
+    CLAUDE.md lives at either `<project>/.claude/CLAUDE.md` (preferred) or
+    `<project>/CLAUDE.md` (legacy), so the root is one or two levels up
+    depending on which form the caller resolved.
+
+    Used only for an EXPLICIT target, to produce the same containment anchor
+    that `_resolve_display_claude_md_with_base` returns for a resolved one —
+    the directory captured before descending into `.claude`, never a
+    re-derivation from the leaf.
+
+    The two-layout knowledge is owned by `hooks/shared/claude_md_manager.py`
+    (`_DOT_CLAUDE_RELATIVE` / `_LEGACY_RELATIVE`); this module cannot import
+    from that package and vendors twins throughout, so this mirrors it. If a
+    THIRD location is ever supported, this must be swept with the others.
+    """
+    parent = claude_md_path.parent
+    return parent.parent if parent.name == ".claude" else parent
+
+
 def sync_to_claude_md(
     memory: Dict[str, Any],
     files: Optional[List[str]] = None,
-    memory_id: Optional[str] = None
+    memory_id: Optional[str] = None,
+    target: Optional[Path] = None
 ) -> bool:
     """
     Sync a memory entry to the Working Memory section of CLAUDE.md.
@@ -1064,18 +1103,116 @@ def sync_to_claude_md(
     exist or the sync fails for any reason, it logs a warning but doesn't
     raise an exception.
 
+    THE TARGET IS CALLER-SPECIFIABLE. Without `target` the destination is
+    resolved AMBIENTLY — from CLAUDE_PROJECT_DIR, then two git anchors, then
+    the working directory — and a caller who knows which file it means has no
+    way to say so. That is the root defect: not that the resolver is wrong,
+    but that there is no override, so a caller's knowledge cannot reach the
+    write. `target` is that override.
+
+    AN ABSENT DESTINATION IS A SKIP — on EITHER branch, explicit or ambient.
+    The guard below the branch join states it rather than leaving it to be
+    inferred. This matters because the obvious resolver to compute a target
+    with — `claude_md_manager.resolve_project_claude_md_path` — is TOTAL: on a
+    miss it returns a `"new_default"` path rather than None. That is correct
+    for a caller whose job is to create the file, and wrong here, where the
+    orchestrator owns the file's lifecycle.
+
+    The guard covered only the explicit branch when it was first written, on
+    the reasoning that the ambient resolver returns None when it finds nothing
+    so that skip rode along free. That is true, but it is a property of the
+    RESOLVER rather than of this function — and a TOTAL resolver never returns
+    None, so the arrangement failed in exactly the case it was supposed to
+    cover. Below the join it depends on nobody else's promise.
+
+    MEASURED, because the stronger version of this warning is not true today
+    and repeating it would misdescribe the code: handed a path to a file that
+    does not exist, this function does NOT create it. The read precedes the
+    write, so the read raises and the degradation handler below returns False.
+    What it does do is take the sidecar lock first — leaving a `.CLAUDE.md.lock`
+    artifact in a directory it should never have touched — and report a warning
+    that reads like a real failure rather than a skip.
+
+    So the protection against creating is currently an ACCIDENT OF ORDERING,
+    not a contract: it holds only while the write path happens to read first.
+    A future change that tolerates a missing file — or writes before reading —
+    turns it into a create, and nothing would fail. The guard converts that
+    accident into a stated contract, which is the whole point of putting it
+    here rather than trusting the resolver to encode it.
+
+    So: compute the target AT THE CALLER, pass it here, and let the existence
+    check below decide.
+
     Args:
         memory: Memory dictionary with context, goal, decisions, lessons_learned, etc.
         files: Optional list of file paths associated with this memory.
         memory_id: Optional memory ID to include for database reference.
+        target: Explicit CLAUDE.md path to write. When omitted, the display
+            CLAUDE.md is resolved ambiently exactly as before, so existing
+            callers are unaffected. When given, it is used verbatim and is
+            never created if absent.
 
     Returns:
         True if sync succeeded, False otherwise.
     """
-    claude_md_path, project_root = _resolve_display_claude_md_with_base()
+    if target is not None:
+        claude_md_path = Path(target)
+        project_root = _project_root_of(claude_md_path)
+    else:
+        claude_md_path, project_root = _resolve_display_claude_md_with_base()
 
     if claude_md_path is None:
         logger.debug("CLAUDE.md not found, skipping working memory sync")
+        return False
+
+    # EXISTENCE GUARD, BELOW THE JOIN SO IT COVERS BOTH BRANCHES.
+    #
+    # It used to sit inside the explicit-target branch, on the reasoning that
+    # an ambient resolve returns None when it finds nothing so that skip rides
+    # along for free. That reasoning is TRUE, and it is a property of
+    # `_resolve_display_claude_md_with_base` -- NOT of this function. The
+    # comment then claimed the contract therefore held for both paths, which
+    # did not follow: a TOTAL resolver never returns None, so the `is None`
+    # check above would not fire and nothing else stood between it and the
+    # write. The claim was exactly inverted against the hazard it named.
+    #
+    # Down here the guard depends on no other function's promise.
+    #
+    # THE TWO WAYS TO ARRIVE ARE DIFFERENT IN KIND, so they are reported
+    # differently rather than collapsed into one message:
+    #
+    #   explicit + absent -- ORDINARY. A caller named a project whose CLAUDE.md
+    #     does not exist yet. Expected, benign, fires in normal use: debug.
+    #
+    #   ambient + absent -- SHOULD NOT HAPPEN. The resolver is documented to
+    #     return only existing paths, and a resolver that finds nothing returns
+    #     None, which the check above already absorbed. So this arm is
+    #     unreachable on the normal path, and an unreachable arm that fires is
+    #     signal rather than noise: warning.
+    #
+    # A single undifferentiated check would make a resolver that quietly went
+    # total indistinguishable from an ordinary skip, at debug level -- the same
+    # two-unrelated-causes-on-one-check problem that costs you the control.
+    #
+    # THE WARNING NAMES BOTH CAUSES AND ASSERTS NEITHER. A file removed between
+    # resolution and this line produces an identical observation and is not a
+    # defect at all; the two are indistinguishable here. The level says "look
+    # at this", the text must not say "this is a bug."
+    #
+    # NEITHER ARM CREATES. That is the contract: an absent target is a skip.
+    if not claude_md_path.exists():
+        if target is not None:
+            logger.debug(
+                "explicit sync target %s does not exist, skipping working "
+                "memory sync (this never creates CLAUDE.md)", claude_md_path
+            )
+        else:
+            logger.warning(
+                "resolved display CLAUDE.md %s does not exist, skipping "
+                "working memory sync (this never creates CLAUDE.md). Either "
+                "the display resolver stopped returning only existing paths, "
+                "or the file was removed after it resolved.", claude_md_path
+            )
         return False
 
     try:
@@ -1283,6 +1420,36 @@ def sync_retrieved_to_claude_md(
 
     if claude_md_path is None:
         logger.debug("CLAUDE.md not found, skipping retrieved context sync")
+        return False
+
+    # EXISTENCE GUARD. The `is None` check above is not sufficient: it covers a
+    # resolver that finds NOTHING, not a resolver that returns a path to a file
+    # that is not there. A TOTAL resolver never returns None, so it would pass
+    # straight through into the lock and the read.
+    #
+    # ONE ROUTE, ONE MESSAGE. Unlike `sync_to_claude_md` this function takes no
+    # explicit target, so there is no second way to arrive here and nothing to
+    # differentiate -- the cause is always the ambient resolver. Do not
+    # restructure it into a branch join to match its sibling: the asymmetry in
+    # the two guards reflects a real asymmetry in the two signatures.
+    #
+    # WITHOUT THIS, AN ABSENT PATH DOES NOT MERELY LEAVE A LOCK SIDECAR -- IT
+    # CREATES DIRECTORIES. `file_lock` makes the sidecar's parents, so a
+    # resolved path three levels deep materialises the whole chain before the
+    # read fails: `a/`, `a/b/`, `a/b/c/`, `a/b/c/.CLAUDE.md.lock`. Measured.
+    # That is a write to a location the caller never named, on a path whose
+    # only job was to be read.
+    #
+    # NAMES BOTH CAUSES, ASSERTS NEITHER: a file removed after it resolved is
+    # indistinguishable here from a resolver that stopped being partial, and
+    # the first is not a defect at all.
+    if not claude_md_path.exists():
+        logger.warning(
+            "resolved display CLAUDE.md %s does not exist, skipping retrieved "
+            "context sync (this never creates CLAUDE.md). Either the display "
+            "resolver stopped returning only existing paths, or the file was "
+            "removed after it resolved.", claude_md_path
+        )
         return False
 
     try:

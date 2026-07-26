@@ -13,9 +13,11 @@ Tests cover:
 9. _estimate_tokens twin copy equivalence (staleness.py vs working_memory.py)
 """
 
+import ast
 import inspect
 import os
 import sys
+import tempfile
 import textwrap
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1533,3 +1535,108 @@ class TestAtomicWriteTwinCopyDrift:
             f"canonical body:\n{canonical_body}\n\n"
             f"twin body:\n{twin_body}"
         )
+
+
+class TestContainmentErrorTwinCopyDrift:
+    """Drift detection for the ContainmentError twin.
+
+    `working_memory` vendors this from `hooks/shared/claude_md_manager` for the
+    same reason as its siblings — skills/ cannot import from hooks/shared/ —
+    and it is the exception the containment check raises, so the two copies
+    disagreeing means the hook and skill paths signal a containment failure
+    differently.
+
+    IT IS GATED ON AST EQUALITY, NOT BYTE EQUALITY, and that is not a
+    weakening. The two copies are already not byte-identical: each docstring
+    points at the other, which is exactly the divergence the sibling gates
+    permit by stripping docstrings before comparing. A byte gate here would go
+    red on day one, and a gate that is red on arrival gets deleted rather than
+    investigated.
+    """
+
+    @staticmethod
+    def _executable_shape(obj) -> str:
+        """AST dump of the definition with any leading docstring removed."""
+        node = ast.parse(textwrap.dedent(inspect.getsource(obj))).body[0]
+        if (node.body and isinstance(node.body[0], ast.Expr)
+                and isinstance(node.body[0].value, ast.Constant)):
+            node.body = node.body[1:]
+        return ast.dump(node)
+
+    def test_containment_error_shapes_are_identical(self):
+        from shared.claude_md_manager import ContainmentError as canonical
+        from working_memory import ContainmentError as twin
+
+        assert self._executable_shape(canonical) == self._executable_shape(twin), (
+            "ContainmentError twin drift between "
+            "hooks/shared/claude_md_manager.py and "
+            "skills/pact-memory/scripts/working_memory.py — the containment "
+            "failure signal must stay identical across the copies; update "
+            "both in the SAME commit."
+        )
+
+    def test_the_gate_can_tell_the_shapes_apart(self):
+        """NON-VACUITY. An AST comparison that returns equal for everything
+        would pass the assertion above forever."""
+        from working_memory import ContainmentError as twin
+        from working_memory import _project_root_of as unrelated
+
+        assert self._executable_shape(twin) != self._executable_shape(unrelated), (
+            "the shape extractor cannot distinguish two different definitions, "
+            "so the drift assertion above proves nothing"
+        )
+
+
+class TestProjectRootLayoutKnowledgeDrift:
+    """`_project_root_of` duplicates LAYOUT KNOWLEDGE, not a function body.
+
+    Its siblings above are twin-copied implementations, compared against their
+    originals. This one has no original to compare with: it is the INVERSE of
+    `claude_md_manager.resolve_project_claude_md_path` (path -> root rather
+    than root -> path), so no copy of it exists to diverge from. What it
+    duplicates is the two-layout rule — that CLAUDE.md lives at
+    `<project>/.claude/CLAUDE.md` or `<project>/CLAUDE.md` — whose SSOT is
+    `_DOT_CLAUDE_RELATIVE` / `_LEGACY_RELATIVE`.
+
+    SO IT IS PINNED AGAINST THE CONSTANTS RATHER THAN AGAINST A TWIN, and the
+    difference matters: measured, renaming the SSOT constant breaks 21 tests
+    elsewhere in the tree and ZERO in the memory layer. The knowledge is fully
+    decoupled, so a third supported location — or a rename — diverges here in
+    silence. `archive_pin.project_dir_for` carries the same rule and the same
+    exposure.
+    """
+
+    def test_inverts_the_canonical_resolver_for_both_layouts(self):
+        from shared.claude_md_manager import (
+            _DOT_CLAUDE_RELATIVE,
+            _LEGACY_RELATIVE,
+            resolve_project_claude_md_path,
+        )
+        from working_memory import _project_root_of
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            # Legacy layout: seed the file the SSOT constant names.
+            legacy_root = root / "legacy"
+            (legacy_root).mkdir()
+            (legacy_root / _LEGACY_RELATIVE).write_text("x", encoding="utf-8")
+            resolved, source = resolve_project_claude_md_path(legacy_root)
+            assert source == "legacy", f"fixture drift: got source={source!r}"
+            assert _project_root_of(resolved) == legacy_root, (
+                "_project_root_of does not invert the canonical resolver for "
+                f"the legacy layout named by _LEGACY_RELATIVE ({_LEGACY_RELATIVE!r})"
+            )
+
+            # Dot layout.
+            dot_root = root / "dot"
+            (dot_root / _DOT_CLAUDE_RELATIVE).parent.mkdir(parents=True)
+            (dot_root / _DOT_CLAUDE_RELATIVE).write_text("x", encoding="utf-8")
+            resolved, source = resolve_project_claude_md_path(dot_root)
+            assert source == "dot_claude", f"fixture drift: got source={source!r}"
+            assert _project_root_of(resolved) == dot_root, (
+                "_project_root_of does not invert the canonical resolver for "
+                f"the dot layout named by _DOT_CLAUDE_RELATIVE "
+                f"({_DOT_CLAUDE_RELATIVE!r}) — a third supported location or a "
+                f"rename of that constant diverges here silently"
+            )

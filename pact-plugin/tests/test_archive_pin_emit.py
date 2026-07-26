@@ -19,6 +19,19 @@ may claim the stronger property.
 The error directions are not symmetric. A false ARCHIVED destroys content
 (CLAUDE.md is gitignored, so there is no git fallback); a false refusal
 costs an over-block and loses nothing. Tests weight accordingly.
+
+`db_path` IS REQUIRED AND KEYWORD-ONLY on `build_verdict`. `db_path=None`
+here always means "this call provably never reaches a store" — the enclosing
+test stubs `_run_memory_cli` or short-circuits before the spawn. It is a
+claim about the call site, and deleting the stub above such a call makes the
+claim false without changing the call.
+
+ONE call in this file genuinely reaches the memory CLI:
+`test_null_when_the_pin_does_not_resolve`'s resolving control. It is scoped
+to a temp `db_path`. Before that scoping it ran with the default and wrote
+into the developer's LIVE database, two rows per suite run, one per
+parametrization. It must STAY reaching — it is a non-vacuity control, and a
+control that stops reaching stops controlling — so it is scoped, not stubbed.
 """
 
 import json
@@ -104,7 +117,7 @@ class TestDeleteStringEmitContract:
         block = _expected_block(content, 0)
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _ok_stub(block))
 
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
 
         # Non-vacuity: prove the arm was actually taken. Without this the
         # assertion below passes on any outcome that happens to carry a key.
@@ -126,7 +139,7 @@ class TestDeleteStringEmitContract:
             ),
         )
 
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
 
         assert verdict["outcome"] == "NOT_ARCHIVED"
         assert verdict["memory_id"] is None, "the archive must have failed"
@@ -147,7 +160,7 @@ class TestDeleteStringEmitContract:
             )
 
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _refetch_fails)
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
 
         assert verdict["outcome"] == "UNEVALUABLE"
         # heading non-null is what PROVES the pin resolved before the failure
@@ -155,7 +168,9 @@ class TestDeleteStringEmitContract:
         assert verdict["delete_string"] == _expected_block(content, 0)
 
     @pytest.mark.parametrize("bad_index", [99, -1])
-    def test_null_when_the_pin_does_not_resolve(self, claude_md, bad_index):
+    def test_null_when_the_pin_does_not_resolve(
+        self, claude_md, bad_index, tmp_path
+    ):
         """THE DISCRIMINATING ROW.
 
         If `delete_string` were merely "the block we happened to compute",
@@ -165,11 +180,18 @@ class TestDeleteStringEmitContract:
         NON-VACUITY CONTROL IS LOAD-BEARING: a test asserting only `is None`
         passes trivially if the field is ALWAYS None. The resolving control
         below is what makes the null meaningful.
+
+        The control REACHES A REAL SAVE — it is the one place in these three
+        files where a bare `build_verdict` reached the memory CLI, and with
+        `db_path` defaulting to None that save landed in the DEVELOPER'S
+        LIVE DATABASE. Measured at two rows per suite run, one per
+        parametrization. The control has to stay reaching to be a control, so
+        the fix is to SCOPE it, never to stub it.
         """
         content = _two_pin_file()
         claude_md(content)
 
-        unresolved = archive_pin.build_verdict(bad_index)
+        unresolved = archive_pin.build_verdict(bad_index, db_path=None)
         assert unresolved["outcome"] == "UNEVALUABLE"
         assert unresolved["heading"] is None
         assert unresolved["delete_string"] is None
@@ -177,7 +199,9 @@ class TestDeleteStringEmitContract:
         # CONTROL: the same file, a resolving index, must be NON-null.
         # Without this the assertion above cannot distinguish "null because
         # the pin did not resolve" from "null always".
-        resolving = archive_pin.build_verdict(0)
+        resolving = archive_pin.build_verdict(
+            0, db_path=str(tmp_path / "mem.db")
+        )
         assert resolving["delete_string"] is not None, (
             "delete_string is null even on a RESOLVING pin — the null above "
             "proves nothing"
@@ -191,7 +215,7 @@ class TestDeleteStringEmitContract:
         `verdict["delete_string"]` must not raise KeyError.
         """
         claude_md(_two_pin_file())
-        verdict = archive_pin.build_verdict(99)
+        verdict = archive_pin.build_verdict(99, db_path=None)
         assert "delete_string" in verdict
         assert "claude_md_path" in verdict
 
@@ -212,7 +236,7 @@ class TestDeleteStringEmitContract:
         block = _expected_block(content, 1)
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _ok_stub(block))
 
-        verdict = archive_pin.build_verdict(1)
+        verdict = archive_pin.build_verdict(1, db_path=None)
 
         assert verdict["delete_string"] == block
         assert verdict["delete_string"] != verdict["heading"]
@@ -233,7 +257,7 @@ class TestDeleteStringEmitContract:
         block = _expected_block(content, 0)
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _ok_stub(block))
 
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
 
         assert verdict["claude_md_path"] == str(path)
         on_disk = Path(verdict["claude_md_path"]).read_text(encoding="utf-8")
@@ -258,7 +282,7 @@ class TestDeleteStringEmitContract:
         block = _expected_block(content, 0)
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _ok_stub(block))
 
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
 
         assert verdict["delete_string"].endswith("\n\n"), (
             "the block was stripped in transit; consecutive spans no longer "
@@ -301,7 +325,7 @@ class TestDeleteStringUniqueness:
 
         claude_md(content)
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _ok_stub(block))
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
 
         assert verdict["outcome"] == "ARCHIVED_DELETE_UNSAFE"
         assert verdict["memory_id"] == "a" * 32, (
@@ -317,7 +341,7 @@ class TestDeleteStringUniqueness:
         block = _expected_block(content, 0)
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _ok_stub(block))
 
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
 
         assert verdict["outcome"] == "ARCHIVED"
         assert verdict["occurrences"] == 1
@@ -352,7 +376,7 @@ class TestDeleteStringUniqueness:
         monkeypatch.setattr(
             archive_pin, "_run_memory_cli", _writer_removes_the_pin
         )
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
 
         assert verdict["outcome"] == "ARCHIVED_DELETE_UNSAFE"
         assert verdict["occurrences"] == 0
@@ -380,7 +404,7 @@ class TestDeleteStringUniqueness:
         block = _expected_block(content, 0)
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _ok_stub(block))
 
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
 
         assert verdict["outcome"] == "ARCHIVED"
         assert "locations" not in verdict
@@ -396,7 +420,7 @@ class TestDeleteStringUniqueness:
         claude_md(content)
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _ok_stub(block))
 
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
 
         assert len(verdict["locations"]) == verdict["occurrences"]
         for offset in verdict["locations"]:
@@ -469,7 +493,7 @@ class TestStartEdgeDoesNotOrphanTheDateComment:
         claude_md(content)
         block = _expected_block(content, 0)
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _ok_stub(block))
-        verdict = archive_pin.build_verdict(0)
+        verdict = archive_pin.build_verdict(0, db_path=None)
 
         after = content.replace(verdict["delete_string"], "", 1)
         pins = archive_pin.parse_pins(_pinned_body(after))
@@ -519,7 +543,7 @@ class TestSyncSuppressionSeam:
             ), ""
 
         monkeypatch.setattr(archive_pin, "_run_memory_cli", _record)
-        archive_pin.build_verdict(0)
+        archive_pin.build_verdict(0, db_path=None)
 
         save_calls = [a for a in seen if a and a[0] == "save"]
         assert len(save_calls) == 1, "expected exactly one save call"

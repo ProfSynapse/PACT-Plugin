@@ -9,6 +9,7 @@ Tests cover:
 5. Skills reference exists
 6. Agent body contains expected sections
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -1136,6 +1137,388 @@ class TestAgentAlgedonicTriggersInline:
                 f"{f.name}: missing HALT/ALERT mention. Agents should know "
                 f"the two algedonic signal levels they can emit."
             )
+
+
+# Bodies whose DATA-tier trigger is keyed on RECOVERABILITY. Deliberately not
+# every agent: see TestDataTriggersKeyOnRecoverability for why
+# pact-devops-engineer.md is excluded.
+RECOVERABILITY_KEYED_AGENTS = ("pact-database-engineer", "pact-n8n")
+
+# A line states a DATA-tier trigger if it carries one of these markers. The
+# forms are conventional in the agent bodies: a `**HALT DATA**` bullet, and the
+# `Read algedonic.md ...` line naming "a DATA risk" or "a DATA-integrity threat".
+DATA_TRIGGER_MARKERS = ("HALT DATA", "DATA risk", "DATA-integrity")
+
+# The property, expressed as two token families that must BOTH appear IN THE SAME
+# CLAUSE. "rollback" is deliberately ABSENT from the recovery family: the
+# pre-re-key wording already said "destructive operation without rollback", so
+# accepting it would make this detector pass on the very text it exists to reject.
+#
+# WORD-ANCHORED, and that anchoring is the load-bearing half. A bare substring
+# test counts "recover" inside "unrecoverable", which is how a trigger reading
+# "...verify with the user before anything unrecoverable" was CERTIFIED as
+# recoverability-keyed while keying on deployment status alone. `\b` refuses the
+# match because "unrecoverable" has a word character before "recover".
+RECOVERY_PATTERN = re.compile(r"\b(?:restor\w*|recover\w*|backup\w*)\b", re.IGNORECASE)
+VERIFICATION_PATTERN = re.compile(r"\bverif\w*", re.IGNORECASE)
+
+# Clause scope: a comma, semicolon, period, or spaced dash. Used INSTEAD of a
+# character-distance window, so the boundary is a unit of meaning rather than a
+# number fitted to whichever counter-example happened to be in hand.
+CLAUSE_BOUNDARY = re.compile(r"[.;,]|\s--\s|—")
+
+# Only a trigger about DESTROYING or irreversibly changing data owes a recovery
+# criterion. A DATA trigger can legitimately be about EXPOSURE instead -- PII in
+# build artifacts, sensitive data in container layers -- and demanding a restore
+# path there would be nonsense. Without this gate the check below states a
+# property that is merely ACCIDENTALLY true of the in-scope bodies, and the first
+# exposure-only DATA bullet added to either would redden it on correct text.
+DESTRUCTION_TOKENS = (
+    "delete", "drop", "truncate", "destructive", "irreversible", "corrupt",
+    "overwrite",
+)
+
+
+def _is_data_trigger(line: str) -> bool:
+    """True if `line` states a DATA-tier algedonic trigger."""
+    return any(marker in line for marker in DATA_TRIGGER_MARKERS)
+
+
+def _names_destructive_operation(line: str) -> bool:
+    """True if `line` describes destroying or irreversibly changing data."""
+    lowered = line.lower()
+    return any(token in lowered for token in DESTRUCTION_TOKENS)
+
+
+def _keys_on_recoverability(line: str) -> bool:
+    """True if one CLAUSE of `line` names a recovery criterion AND requires it
+    be verified.
+
+    Both halves are load-bearing. A recovery noun alone ("missing backup") says
+    a backup is absent, not that its restorability was ever established;
+    requiring the verification token is what makes UNKNOWN fail CLOSED into the
+    trigger rather than out of it.
+
+    ⚠️ WHAT THIS MEASURES IS SAME-CLAUSE ADJACENCY, NOT CO-REFERENCE, and the
+    name of the thing matters more than the comfort of the name. Requiring the
+    two tokens to share a clause makes it harder for unrelated words to combine
+    into a false certificate, but NOTHING HERE ESTABLISHES THAT THE TWO TOKENS
+    ARE ABOUT THE SAME DATA. Any clause carrying one of each satisfies this,
+    whatever they refer to. Two accepted wordings, deliberately different in
+    shape so the gap reads as a class rather than an edge case:
+
+        "...PII stored unencrypted -- verify with the user before you restore
+        anything"
+        "...PII stored unencrypted -- always verify your rollback and restore
+        procedure with the team lead"
+
+    The second is ordinary database-engineering boilerplate a maintainer could
+    add for reasons having nothing to do with this check, and its presence
+    silently certifies a trigger keyed on deployment status. Note also that
+    PARENTHESES ARE NOT IN `CLAUSE_BOUNDARY` AS IT CURRENTLY STANDS, so a
+    parenthetical aside rides inside its host clause and can supply the second
+    token from there -- and like the instance further down, that is a statement
+    about the constant's PRESENT VALUE: widen `CLAUSE_BOUNDARY` and this example
+    goes stale, while the adjacency point above is unaffected.
+
+    THOSE WORDINGS ILLUSTRATE THE MECHANISM; THEY DO NOT SURVEY IT. Because the
+    only thing established is adjacency, ANY clause pairing the two families
+    passes, whatever the words are about -- so the accepted set is as wide as
+    the set of clauses that happen to contain both, which is a fact about
+    English prose rather than about this predicate.
+
+    WHY CLAUSE SCOPE RATHER THAN A CHARACTER WINDOW. A distance threshold would
+    have been fitted to whichever counter-example was in hand; a clause is a
+    unit of meaning that exists independently of the example. Across the
+    DATA-trigger lines PRESENT WHEN THIS WAS WRITTEN, clause scope and a
+    character window agreed everywhere, so the split cost nothing measurable.
+    That is a census rather than an invariant: a body added or a trigger
+    reworded can separate them, and nothing reddens when it does. RE-MEASURE
+    RATHER THAN TRUST IT.
+
+    ⚠️ DO NOT DELETE THE CLAUSE SPLIT AS DEAD WEIGHT, and read this before
+    concluding that it is. The word-anchoring alone rejects the wording that
+    FIRST prompted this check, so measured against that one case the split
+    changes nothing -- which is the observation that makes it look removable.
+
+    IT IS NOT REMOVABLE. THE SPLIT REJECTS A SHAPE THE ANCHORING ACCEPTS: a
+    genuine recovery token and a genuine verification token in DIFFERENT
+    clauses, each unrelated to the other and to the trigger. Anchoring asks
+    only whether both tokens appear somewhere in the line and passes; the split
+    asks whether they share a clause and refuses. Delete the split and every
+    line of that shape becomes a silent false certificate.
+
+    An instance, SUBORDINATE TO THE SHAPE ABOVE -- if a later widening of
+    `RECOVERY_PATTERN` or `CLAUSE_BOUNDARY` changes this example's verdict, the
+    SHAPE is still the claim and the example is merely stale:
+
+        "- **HALT DATA**: DROP TABLE on production data, PII stored
+        unencrypted; the nightly backup runs at 02:00, and you should verify
+        the migration plan with the DBA"
+
+    "backup" lands in one clause and "verify" in the next.
+
+    The reason that trade is worth taking is not this check specifically.
+    Several false results here were caught by a REDUNDANT check disagreeing
+    with a primary one rather than by any control: a search flag that silently
+    matched nothing, a database cursor already consumed, a case-sensitivity
+    flag off by one letter. In each of those THE CONTROLS THAT EXISTED did not
+    catch it -- only two paths to the same answer disagreeing did. And in each
+    of those the redundant path was the one that looked like duplication.
+
+    A second path that NO TEST YET EXERCISES is not evidence it is useless: the
+    instance above is a wording this split rejects and the anchoring accepts,
+    demonstrated but not pinned. And a control only excludes what it was BUILT
+    to exclude, so where the FIRST path is wrong in a way nobody anticipated,
+    disagreement between two paths is what surfaces it.
+    """
+    return any(
+        RECOVERY_PATTERN.search(clause) and VERIFICATION_PATTERN.search(clause)
+        for clause in CLAUSE_BOUNDARY.split(line)
+    )
+
+
+# The DATA-trigger wordings as they read BEFORE the re-key, kept verbatim as
+# literal fixtures. They are the non-vacuity control: the detector must RECOGNIZE
+# each as a DATA trigger and REJECT it. Feeding them in as literals rather than
+# reverting the working tree keeps the control available on every run, including
+# runs where the tree is mid-edit.
+PRE_REKEY_DATA_TRIGGERS = (
+    "- **HALT DATA**: DELETE without WHERE clause, DROP TABLE on production "
+    "data, PII stored unencrypted, foreign key violations risking data integrity",
+
+    "Read [algedonic.md](../protocols/algedonic.md) immediately on detecting a "
+    "DATA-integrity threat (destructive operation without rollback, schema "
+    "violation, foreign-key breach, PII exposure in unencrypted columns or "
+    "logs) or any irreversible change to production data flowing from a "
+    "migration or query you are authoring.",
+
+    "- **HALT DATA**: Workflow could corrupt or delete production data, PII "
+    "handled without encryption",
+
+    "Read [algedonic.md](../protocols/algedonic.md) immediately on detecting a "
+    "SECURITY flaw (webhook accepting unauthenticated requests, credential "
+    "exposure in workflow JSON or expressions, plaintext API key in HTTP node) "
+    "or a DATA risk (irreversible workflow operation against production data, "
+    "missing rate-limit on external write, destructive bulk update without "
+    "dry-run).",
+)
+
+
+class TestDataTriggersKeyOnRecoverability:
+    """A DATA-tier trigger must hand the agent a RECOVERABILITY criterion,
+    not only a deployment-status one.
+
+    THE DEFECT THIS CLOSES. `algedonic.md` states the DATA tier
+    consequence-neutrally -- "PII exposure, data corruption risk, integrity
+    violation". A body that glosses that tier as "production data" ALONE
+    substitutes deployment status for the property that actually matters, and
+    it misleads in BOTH directions: an agent working on an irreplaceable store
+    that nobody calls "production" reads the trigger as not applying, while an
+    agent working on production data with a tested restore path treats a HALT
+    as automatic. Deployment status is not what makes an operation
+    unrecoverable.
+
+    WHAT IS PINNED IS THE PROPERTY, NOT THE PROSE. Any wording naming a
+    recovery criterion and requiring it be VERIFIED satisfies this. A verbatim
+    pin would redden on every innocent rewrite and would teach maintainers to
+    bump a string instead of thinking about the trigger.
+
+    THIS DOES NOT REQUIRE "production data" TO SURVIVE. A body that drops the
+    phrase entirely and keys purely on recoverability still passes -- that is a
+    correct trigger, and a detector that reddened on it would be worse than no
+    detector.
+
+    SCOPE, and why it is not every agent. `pact-devops-engineer.md` is
+    deliberately excluded: for a devops agent a production deployment is a
+    genuine domain concept, and its sibling clauses ("destructive infra change
+    without rollback", "missing backup before migration") already carry the
+    recoverability criterion, so deployment status is not the sole
+    discriminator there. Forcing uniformity would make that body worse.
+
+    ⚠️ THE DESTRUCTION GATE'S FAIL DIRECTION IS EXEMPT, stated rather than
+    implied. `_names_destructive_operation` recognizes a fixed vocabulary, and
+    a trigger that describes a destructive operation WITHOUT any of those words
+    -- "schema change against production data" and "UPDATE without a WHERE
+    clause" are measured examples -- is exempted from the recovery requirement
+    rather than caught by it. The second example differs from a wording the gate
+    DOES catch only in its VERB, since `delete` sits in DESTRUCTION_TOKENS above
+    and `update` does not, which is why reaching this gap needs no unusual
+    phrasing. That comparison is a statement about the CURRENT vocabulary: add
+    `update` to that tuple and the example goes stale while the exemption itself
+    stands. It replaces a claim about prose in another file, which could go
+    equally false and could not be checked from here. That gate exists to stop false positives on exposure-only triggers, so
+    its errors run toward silence by construction. What this class DOES
+    guarantee is the thing it was built for: reverting either body's DATA
+    trigger to the wording that keyed on deployment status alone turns it RED,
+    verified per-file rather than only in combination. Widening the vocabulary
+    to chase the gap would trade a bounded silence for unbounded false positives
+    on correct bodies, which is the worse failure for a detector nobody is
+    watching.
+
+    HOW FAR THE SILENCE EXTENDS. A STRUCTURAL PROPERTY OF THE ASSERT CHAIN,
+    true regardless of what any body contains: an escaping trigger stays silent
+    ONLY while at least one SIBLING DATA trigger in the SAME FILE still
+    classifies destructive. Once none does, `assert triggers` or `assert
+    destructive` fires. So A FILE CANNOT GO FULLY DARK WITHOUT FAILING, and the
+    bound is PER-FILE rather than per-site.
+
+    WHAT THAT COSTS DEPENDS ON A COUNT, AND A COUNT IS NOT A PROPERTY -- stated
+    separately because the two are true in different ways and the sentence that
+    joined them lent the second the first one's authority. Each body in scope
+    CURRENTLY carries TWO DATA-trigger sites, so one of the two may silently
+    revert while the other holds the check up: a half-dark file rather than a
+    dark one. That figure is a function of the site count. Add a third site and
+    the arithmetic changes; remove one and the floor moves. RE-COUNT BEFORE
+    RELYING ON THE "ONE OF TWO" FIGURE -- it describes today's two bodies, not
+    the mechanism.
+
+    ⚠️ A REFORMAT CAN DISARM THIS WITHOUT CHANGING A WORD OF MEANING, and it is
+    the likeliest way the guard dies, because it requires no bad intent. Expand
+    a `- **HALT DATA**:` bullet into a marker line plus sub-bullets and the
+    marker line keeps the marker but loses every destruction token, while the
+    sub-bullets carry no marker and are not triggers at all. Do that while
+    KEEPING the correct recoverability wording and everything stays green, with
+    no signal that the bullet is now unwatched -- then a later edit reverts the
+    wording from that state and also stays green. Routine markdown housekeeping
+    today, silent removal of the guard tomorrow. If you reformat a DATA trigger,
+    re-read this class and confirm the marker line still carries the criterion.
+    """
+
+    def test_data_triggers_name_a_verified_recovery_criterion(self):
+        """The live bodies satisfy the property."""
+        for name in RECOVERABILITY_KEYED_AGENTS:
+            path = AGENTS_DIR / f"{name}.md"
+            triggers = [
+                line for line in path.read_text(encoding="utf-8").splitlines()
+                if _is_data_trigger(line)
+            ]
+            assert triggers, (
+                f"{name}.md: no DATA-tier trigger line found at all. Either the "
+                f"body lost its DATA trigger, or the marker convention changed "
+                f"and DATA_TRIGGER_MARKERS no longer matches it -- in which case "
+                f"this whole check has been silently measuring nothing."
+            )
+            destructive = [ln for ln in triggers if _names_destructive_operation(ln)]
+            assert destructive, (
+                f"{name}.md: DATA triggers exist but none describes destroying or "
+                f"irreversibly changing data, so the requirement below is exempt "
+                f"everywhere and this check is measuring nothing."
+            )
+            for line in destructive:
+                assert _keys_on_recoverability(line), (
+                    f"{name}.md: a DATA-tier trigger about destroying or "
+                    f"irreversibly changing data names no VERIFIED recovery "
+                    f"criterion, so it keys on deployment status alone. An agent "
+                    f"holding irreplaceable data that nobody calls 'production' "
+                    f"will read this as not applying to them. Name a recovery "
+                    f"criterion and require it be verified, so an unverified "
+                    f"restore path still fires the HALT. Offending line: {line!r}"
+                )
+
+    def test_detector_rejects_the_pre_rekey_wordings(self):
+        """NON-VACUITY. The detector must reject the wordings it replaced.
+
+        Each fixture is asserted to be IN SCOPE on BOTH gates first -- recognized
+        as a DATA trigger, and recognized as describing a destructive operation.
+        A fixture failing either gate would be "rejected" for the wrong reason:
+        it would be exempt rather than caught, and the control would prove
+        nothing about a revert it is supposed to stop.
+        """
+        for wording in PRE_REKEY_DATA_TRIGGERS:
+            assert _is_data_trigger(wording), (
+                f"control fixture is not recognized as a DATA trigger, so its "
+                f"rejection below would be vacuous: {wording!r}"
+            )
+            assert _names_destructive_operation(wording), (
+                f"control fixture is not recognized as describing a destructive "
+                f"operation, so the recovery requirement would EXEMPT it rather "
+                f"than catch it, and its rejection below would be vacuous: "
+                f"{wording!r}"
+            )
+            assert not _keys_on_recoverability(wording), (
+                f"the detector ACCEPTS a pre-re-key wording that keys on "
+                f"deployment status alone. It would not catch a revert, which "
+                f"is the only thing it exists to catch: {wording!r}"
+            )
+
+    def test_detector_does_not_certify_a_deployment_keyed_trigger(self):
+        """A FALSE GREEN ON A TRUE NEGATIVE IS NOT A SILENCE.
+
+        The destruction gate's exemption licenses the detector to MISS a bad
+        trigger it cannot classify. It does not license the detector to
+        AFFIRMATIVELY CERTIFY one. This wording keys on deployment status alone
+        and was certified as recoverability-keyed, because a substring test
+        found "recover" inside "unrecoverable" and paired it with an unrelated
+        "verify" from a different clause.
+
+        Both halves of the repair are exercised here: word-anchoring refuses
+        "recover" inside "unrecoverable", and clause scope refuses to pair
+        tokens across a boundary.
+        """
+        certified_but_deployment_keyed = (
+            "- **HALT DATA**: DELETE without WHERE clause, DROP TABLE on "
+            "production data, PII stored unencrypted -- verify with the user "
+            "before anything unrecoverable"
+        )
+        assert _is_data_trigger(certified_but_deployment_keyed)
+        assert _names_destructive_operation(certified_but_deployment_keyed), (
+            "fixture is not classified destructive, so the recovery requirement "
+            "would EXEMPT it and this control would prove nothing"
+        )
+        assert not _keys_on_recoverability(certified_but_deployment_keyed), (
+            "the detector CERTIFIES a trigger that keys on deployment status "
+            "alone. Missing a bad trigger is the ruled-acceptable failure; "
+            "green-lighting one is not."
+        )
+
+    def test_recovery_token_is_word_anchored(self):
+        """The specific mechanism, pinned apart from the wording it defeats.
+
+        "unrecoverable" must not supply a recovery token. Kept separate from the
+        test above so a regression names the CAUSE rather than only the symptom.
+        """
+        assert not RECOVERY_PATTERN.search("anything unrecoverable")
+        assert RECOVERY_PATTERN.search("a verified restore path")
+        assert RECOVERY_PATTERN.search("recoverable within an hour"), (
+            "word-anchoring must reject 'unrecoverable' WITHOUT also rejecting "
+            "legitimate recovery vocabulary that merely shares a stem"
+        )
+
+    def test_exposure_only_data_triggers_are_exempt(self):
+        """A DATA trigger about EXPOSURE owes no recovery criterion.
+
+        This exemption is not hypothetical. `pact-devops-engineer.md` carries
+        exactly this shape -- a DATA trigger about PII in build artifacts and
+        sensitive data in container layers, where a restore path is a category
+        error. Without the destruction gate, the requirement would state a
+        property that is only ACCIDENTALLY true of the in-scope bodies, and the
+        first exposure-only DATA bullet added to either would redden a correct
+        body.
+        """
+        exposure_only = (
+            "- **HALT DATA**: PII in build artifacts, sensitive data exposed "
+            "through container layers"
+        )
+        assert _is_data_trigger(exposure_only)
+        assert not _names_destructive_operation(exposure_only)
+        assert not _keys_on_recoverability(exposure_only), (
+            "fixture accidentally satisfies the recovery predicate, so it "
+            "cannot demonstrate that the destruction gate is what exempts it"
+        )
+
+    def test_rollback_alone_does_not_satisfy_the_predicate(self):
+        """The recovery family excludes 'rollback' on purpose.
+
+        One pre-re-key wording already said "destructive operation without
+        rollback". Had the family accepted that token, the detector would have
+        passed on unmodified deployment-keyed text -- non-vacuous-looking and
+        wrong. This pins the exclusion so a later widening of RECOVERY_PATTERN
+        has to confront it.
+        """
+        assert not _keys_on_recoverability(
+            "- **HALT DATA**: destructive operation without rollback"
+        )
 
 
 class TestNoVestigialAgentTeamsProtocolSection:
