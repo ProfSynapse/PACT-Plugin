@@ -1201,36 +1201,65 @@ def _keys_on_recoverability(line: str) -> bool:
 
     ⚠️ WHAT THIS MEASURES IS SAME-CLAUSE ADJACENCY, NOT CO-REFERENCE, and the
     name of the thing matters more than the comfort of the name. Requiring the
-    two tokens to share a clause makes it much harder for unrelated words to
-    combine into a false certificate, but nothing here establishes that they are
-    about the SAME data. A trigger reading "...PII stored unencrypted -- verify
-    with the user before you restore anything" puts a genuine recovery word and
-    a genuine verification word in one clause while keying on deployment status,
-    and IT IS ACCEPTED. That residual is measured, not theoretical, and it is
-    the honest boundary of this check.
+    two tokens to share a clause makes it harder for unrelated words to combine
+    into a false certificate, but NOTHING HERE ESTABLISHES THAT THE TWO TOKENS
+    ARE ABOUT THE SAME DATA. Any clause carrying one of each satisfies this,
+    whatever they refer to. Two accepted wordings, deliberately different in
+    shape so the gap reads as a class rather than an edge case:
+
+        "...PII stored unencrypted -- verify with the user before you restore
+        anything"
+        "...PII stored unencrypted -- always verify your rollback and restore
+        procedure with the team lead"
+
+    The second is ordinary database-engineering boilerplate a maintainer could
+    add for reasons having nothing to do with this check, and its presence
+    silently certifies a trigger keyed on deployment status. Note also that
+    PARENTHESES ARE NOT IN `CLAUSE_BOUNDARY`, so a parenthetical aside rides
+    inside its host clause and can supply the second token from there.
+
+    THOSE ARE EXAMPLES OF THE GAP, NOT ITS EXTENT. Nothing here bounds how far
+    it reaches: ordinary prose gets past it, and the wordings above record
+    where someone has looked rather than where the failures stop.
 
     WHY CLAUSE SCOPE RATHER THAN A CHARACTER WINDOW. A distance threshold would
     have been fitted to whichever counter-example was in hand; a clause is a
-    unit of meaning that exists independently of the example. Measured across
-    every DATA-trigger line in every shipped agent body, the two agree
-    everywhere, so the principled boundary costs nothing.
+    unit of meaning that exists independently of the example. Across the
+    DATA-trigger lines PRESENT WHEN THIS WAS WRITTEN, clause scope and a
+    character window agreed everywhere, so the split cost nothing measurable.
+    That is a census rather than an invariant: a body added or a trigger
+    reworded can separate them, and nothing reddens when it does. RE-MEASURE
+    RATHER THAN TRUST IT.
 
     ⚠️ DO NOT DELETE THE CLAUSE SPLIT AS DEAD WEIGHT, and read this before
-    concluding that it is. The WORD-ANCHORING alone rejects the wording that
-    prompted this check; measured against that case, the clause split changes
-    NOTHING. It is kept as a SECOND, INDEPENDENT PATH to the same answer,
-    covering a class -- a recovery word and a verification word far apart and
-    unrelated -- that is ARGUED FOR BUT HAS NEVER BEEN EXHIBITED. That coverage
-    is SPECULATIVE, not demonstrated, and it is deliberately retained anyway
-    because its cost is measured at zero.
+    concluding that it is. The word-anchoring alone rejects the wording that
+    FIRST prompted this check, so measured against that one case the split
+    changes nothing -- which is the observation that makes it look removable.
 
-    The reason that trade is worth taking is not this check specifically. Every
-    false result caught in this codebase's recent history was caught by a
-    REDUNDANT check disagreeing with a primary one rather than by any control:
-    a search flag that silently matched nothing, a database cursor already
-    consumed, a case-sensitivity flag off by one letter. In each case no control
-    could have caught it -- only two paths to the same answer disagreeing. And
-    in each case the redundant path was the one that looked like duplication.
+    IT IS NOT REMOVABLE. THE SPLIT REJECTS A SHAPE THE ANCHORING ACCEPTS: a
+    genuine recovery token and a genuine verification token in DIFFERENT
+    clauses, each unrelated to the other and to the trigger. Anchoring asks
+    only whether both tokens appear somewhere in the line and passes; the split
+    asks whether they share a clause and refuses. Delete the split and every
+    line of that shape becomes a silent false certificate.
+
+    An instance, SUBORDINATE TO THE SHAPE ABOVE -- if a later widening of
+    `RECOVERY_PATTERN` or `CLAUSE_BOUNDARY` changes this example's verdict, the
+    SHAPE is still the claim and the example is merely stale:
+
+        "- **HALT DATA**: DROP TABLE on production data, PII stored
+        unencrypted; the nightly backup runs at 02:00, and you should verify
+        the migration plan with the DBA"
+
+    "backup" lands in one clause and "verify" in the next.
+
+    The reason that trade is worth taking is not this check specifically.
+    Several false results here were caught by a REDUNDANT check disagreeing
+    with a primary one rather than by any control: a search flag that silently
+    matched nothing, a database cursor already consumed, a case-sensitivity
+    flag off by one letter. In each of those no control could have caught it --
+    only two paths to the same answer disagreeing. And in each of those the
+    redundant path was the one that looked like duplication.
     A second path that has never fired is not evidence it is useless; it is the
     only instrument that can catch the failure where the FIRST path is wrong.
     """
@@ -1313,14 +1342,22 @@ class TestDataTriggersKeyOnRecoverability:
     on correct bodies, which is the worse failure for a detector nobody is
     watching.
 
-    HOW FAR THE SILENCE EXTENDS, MEASURED RATHER THAN ASSUMED. An escaping
-    trigger stays silent ONLY while at least one SIBLING DATA trigger in the
-    SAME FILE still classifies destructive. Once none does, `assert triggers` or
-    `assert destructive` fires and the file reddens, so A FILE CANNOT GO FULLY
-    DARK WITHOUT FAILING. The bound is therefore PER-FILE, not per-site -- and
-    since each body in scope carries exactly TWO DATA-trigger sites, ONE OF THE
-    TWO MAY SILENTLY REVERT WHILE THE OTHER HOLDS THE CHECK UP. That is the
-    precise exposure: not a dark file, a half-dark one.
+    HOW FAR THE SILENCE EXTENDS. A STRUCTURAL PROPERTY OF THE ASSERT CHAIN,
+    true regardless of what any body contains: an escaping trigger stays silent
+    ONLY while at least one SIBLING DATA trigger in the SAME FILE still
+    classifies destructive. Once none does, `assert triggers` or `assert
+    destructive` fires. So A FILE CANNOT GO FULLY DARK WITHOUT FAILING, and the
+    bound is PER-FILE rather than per-site.
+
+    WHAT THAT COSTS DEPENDS ON A COUNT, AND A COUNT IS NOT A PROPERTY -- stated
+    separately because the two are true in different ways and the sentence that
+    joined them lent the second the first one's authority. Each body in scope
+    CURRENTLY carries TWO DATA-trigger sites, so one of the two may silently
+    revert while the other holds the check up: a half-dark file rather than a
+    dark one. That figure is a function of the site count. Add a third site and
+    the arithmetic changes; remove one and the floor moves. RE-COUNT BEFORE
+    RELYING ON THE "ONE OF TWO" FIGURE -- it describes today's two bodies, not
+    the mechanism.
 
     ⚠️ A REFORMAT CAN DISARM THIS WITHOUT CHANGING A WORD OF MEANING, and it is
     the likeliest way the guard dies, because it requires no bad intent. Expand
