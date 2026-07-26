@@ -21,6 +21,7 @@ session; every test here builds an isolated synthetic repo under tmp_path and
 never touches real session state.
 """
 
+import logging
 import os
 import re
 import subprocess
@@ -166,6 +167,137 @@ def _install_find_spy(monkeypatch):
 # ---------------------------------------------------------------------------
 # Explicit sync target — the caller-specifiable override
 # ---------------------------------------------------------------------------
+
+class TestAmbientBranchAbsentTarget:
+    """The AMBIENT branch must skip an absent destination too.
+
+    The existence guard originally sat inside the explicit-target branch, on
+    the reasoning that the ambient resolver returns None when it finds nothing
+    so that skip rode along free. True — but it is a property of the RESOLVER,
+    not of `sync_to_claude_md`, and a TOTAL resolver never returns None. So the
+    arrangement failed in precisely the case its own comment claimed to cover:
+    a resolver made total, which is the named hazard this whole parameter
+    exists to defend against.
+
+    THE DISCRIMINATING OBSERVABLE IS THE LOCK SIDECAR, NOT THE ABSENT FILE.
+    Unguarded, the sync still does not CREATE the CLAUDE.md — the read precedes
+    the write, so it raises and degrades to False. So `assert not
+    md.exists()` passes against the broken code and measures nothing. What the
+    unguarded path leaves behind is `.CLAUDE.md.lock`, in a directory the sync
+    should never have touched. These assert the directory is ENTIRELY EMPTY.
+    """
+
+    @staticmethod
+    def _force_total_resolver(monkeypatch, path):
+        """Make the ambient resolver TOTAL — the plan's named hazard, verbatim.
+
+        A total resolver hands back a path for a file that does not exist
+        instead of returning None. Patched on `scripts.working_memory` because
+        that is the module object `sync_to_claude_md` resolves the name
+        through; patching the defining module would not rebind the caller.
+        """
+        import scripts.working_memory as wm
+        monkeypatch.setattr(
+            wm, "_resolve_display_claude_md_with_base",
+            lambda: (path, path.parent),
+        )
+
+    def test_ambient_absent_destination_is_a_skip_and_touches_nothing(
+        self, tmp_path, clean_env
+    ):
+        project = tmp_path / "ambient-empty"
+        project.mkdir()
+        missing = project / "CLAUDE.md"
+        self._force_total_resolver(clean_env, missing)
+
+        ok = sync_to_claude_md(
+            {"context": "ctx", "goal": "ambient must not write"},
+            memory_id="e" * 32,
+        )
+
+        assert ok is False, "an absent ambient destination must report failure"
+        assert not missing.exists(), "the sync CREATED a CLAUDE.md"
+        leftovers = sorted(p.name for p in project.iterdir())
+        assert leftovers == [], (
+            f"the sync left artifacts in a directory it should never have "
+            f"touched: {leftovers}. A `.CLAUDE.md.lock` here means the guard "
+            f"did not cover the ambient branch and the skip is being produced "
+            f"by the read failing rather than by the contract."
+        )
+
+    def test_live_control_the_harness_reaches_the_write_path(
+        self, tmp_path, clean_env
+    ):
+        """Without this, the assertions above pass against a broken harness.
+
+        Same total resolver, same call — but the file EXISTS. If the sync does
+        not write here, then 'nothing was written' above is evidence about the
+        harness rather than about the guard.
+        """
+        project = tmp_path / "ambient-present"
+        project.mkdir()
+        present = project / "CLAUDE.md"
+        present.write_text(
+            WORKING_MEMORY_SCAFFOLD.format(title="Ambient Present"),
+            encoding="utf-8",
+        )
+        self._force_total_resolver(clean_env, present)
+
+        ok = sync_to_claude_md(
+            {"context": "ctx", "goal": "live control writes"},
+            memory_id="f" * 32,
+        )
+
+        assert ok is True, "the control did not write — the harness is broken"
+        assert "live control writes" in present.read_text(encoding="utf-8")
+
+    def test_ambient_absent_warns_while_explicit_absent_stays_quiet(
+        self, tmp_path, clean_env, caplog
+    ):
+        """The two absent cases are reported differently, on purpose.
+
+        Ambient-absent is unreachable on the normal path — a resolver that
+        finds nothing returns None, which the `is None` check absorbs — so an
+        arm that fires here is signal. Explicit-absent is an ordinary caller
+        condition and fires in normal use.
+
+        The warning must NAME both causes and ASSERT neither: a file removed
+        between resolution and the check is indistinguishable here and is not
+        a defect. The level says "look at this"; the text must not say "this
+        is a bug."
+        """
+        project = tmp_path / "levels"
+        project.mkdir()
+        missing = project / "CLAUDE.md"
+
+        with caplog.at_level(logging.DEBUG, logger="scripts.working_memory"):
+            self._force_total_resolver(clean_env, missing)
+            sync_to_claude_md({"context": "c", "goal": "g"}, memory_id="a" * 32)
+        ambient = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert ambient, (
+            "ambient-absent did not warn — a resolver that quietly went total "
+            "would be indistinguishable from an ordinary skip"
+        )
+        text = ambient[0].getMessage()
+        assert "removed after it resolved" in text and "stopped returning" in text, (
+            f"the warning must name BOTH causes; got: {text}"
+        )
+        for accusation in ("bug", "must not", "invalid", "illegal"):
+            assert accusation not in text.lower(), (
+                f"the warning accuses rather than reports ({accusation!r}): {text}"
+            )
+
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="scripts.working_memory"):
+            sync_to_claude_md(
+                {"context": "c", "goal": "g"}, memory_id="b" * 32,
+                target=missing,
+            )
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING], (
+            "explicit-absent warned; it is an ordinary caller condition that "
+            "fires in normal use and must stay at debug"
+        )
+
 
 class TestExplicitSyncTarget:
     """`sync_to_claude_md(target=...)` — the caller-specifiable override.

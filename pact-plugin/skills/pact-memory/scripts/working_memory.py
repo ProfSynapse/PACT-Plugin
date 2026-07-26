@@ -1094,12 +1094,20 @@ def sync_to_claude_md(
     but that there is no override, so a caller's knowledge cannot reach the
     write. `target` is that override.
 
-    AN ABSENT TARGET IS A SKIP, and the guard below states it rather than
-    leaving it to be inferred. This matters because the obvious resolver to
-    compute a target with — `claude_md_manager.resolve_project_claude_md_path`
-    — is TOTAL: on a miss it returns a `"new_default"` path rather than None.
-    That is correct for a caller whose job is to create the file, and wrong
-    here, where the orchestrator owns the file's lifecycle.
+    AN ABSENT DESTINATION IS A SKIP — on EITHER branch, explicit or ambient.
+    The guard below the branch join states it rather than leaving it to be
+    inferred. This matters because the obvious resolver to compute a target
+    with — `claude_md_manager.resolve_project_claude_md_path` — is TOTAL: on a
+    miss it returns a `"new_default"` path rather than None. That is correct
+    for a caller whose job is to create the file, and wrong here, where the
+    orchestrator owns the file's lifecycle.
+
+    The guard covered only the explicit branch when it was first written, on
+    the reasoning that the ambient resolver returns None when it finds nothing
+    so that skip rode along free. That is true, but it is a property of the
+    RESOLVER rather than of this function — and a TOTAL resolver never returns
+    None, so the arrangement failed in exactly the case it was supposed to
+    cover. Below the join it depends on nobody else's promise.
 
     MEASURED, because the stronger version of this warning is not true today
     and repeating it would misdescribe the code: handed a path to a file that
@@ -1134,23 +1142,61 @@ def sync_to_claude_md(
     if target is not None:
         claude_md_path = Path(target)
         project_root = _project_root_of(claude_md_path)
-        # SEPARATE, EXPLICIT existence guard. Kept apart from resolution on
-        # purpose: an ambient resolve returns None when it finds nothing, so
-        # the skip rides along for free, but an explicit target arrives with no
-        # such promise. Writing it here means the contract holds for both
-        # paths, and holds even if a future caller computes the target with a
-        # total resolver.
-        if not claude_md_path.exists():
-            logger.debug(
-                "explicit sync target %s does not exist, skipping working "
-                "memory sync (this never creates CLAUDE.md)", claude_md_path
-            )
-            return False
     else:
         claude_md_path, project_root = _resolve_display_claude_md_with_base()
 
     if claude_md_path is None:
         logger.debug("CLAUDE.md not found, skipping working memory sync")
+        return False
+
+    # EXISTENCE GUARD, BELOW THE JOIN SO IT COVERS BOTH BRANCHES.
+    #
+    # It used to sit inside the explicit-target branch, on the reasoning that
+    # an ambient resolve returns None when it finds nothing so that skip rides
+    # along for free. That reasoning is TRUE, and it is a property of
+    # `_resolve_display_claude_md_with_base` -- NOT of this function. The
+    # comment then claimed the contract therefore held for both paths, which
+    # did not follow: a TOTAL resolver never returns None, so the `is None`
+    # check above would not fire and nothing else stood between it and the
+    # write. The claim was exactly inverted against the hazard it named.
+    #
+    # Down here the guard depends on no other function's promise.
+    #
+    # THE TWO WAYS TO ARRIVE ARE DIFFERENT IN KIND, so they are reported
+    # differently rather than collapsed into one message:
+    #
+    #   explicit + absent -- ORDINARY. A caller named a project whose CLAUDE.md
+    #     does not exist yet. Expected, benign, fires in normal use: debug.
+    #
+    #   ambient + absent -- SHOULD NOT HAPPEN. The resolver is documented to
+    #     return only existing paths, and a resolver that finds nothing returns
+    #     None, which the check above already absorbed. So this arm is
+    #     unreachable on the normal path, and an unreachable arm that fires is
+    #     signal rather than noise: warning.
+    #
+    # A single undifferentiated check would make a resolver that quietly went
+    # total indistinguishable from an ordinary skip, at debug level -- the same
+    # two-unrelated-causes-on-one-check problem that costs you the control.
+    #
+    # THE WARNING NAMES BOTH CAUSES AND ASSERTS NEITHER. A file removed between
+    # resolution and this line produces an identical observation and is not a
+    # defect at all; the two are indistinguishable here. The level says "look
+    # at this", the text must not say "this is a bug."
+    #
+    # NEITHER ARM CREATES. That is the contract: an absent target is a skip.
+    if not claude_md_path.exists():
+        if target is not None:
+            logger.debug(
+                "explicit sync target %s does not exist, skipping working "
+                "memory sync (this never creates CLAUDE.md)", claude_md_path
+            )
+        else:
+            logger.warning(
+                "resolved display CLAUDE.md %s does not exist, skipping "
+                "working memory sync (this never creates CLAUDE.md). Either "
+                "the display resolver stopped returning only existing paths, "
+                "or the file was removed after it resolved.", claude_md_path
+            )
         return False
 
     try:
