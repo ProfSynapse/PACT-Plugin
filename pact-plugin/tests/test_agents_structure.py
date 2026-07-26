@@ -1138,6 +1138,226 @@ class TestAgentAlgedonicTriggersInline:
             )
 
 
+# Bodies whose DATA-tier trigger is keyed on RECOVERABILITY. Deliberately not
+# every agent: see TestDataTriggersKeyOnRecoverability for why
+# pact-devops-engineer.md is excluded.
+RECOVERABILITY_KEYED_AGENTS = ("pact-database-engineer", "pact-n8n")
+
+# A line states a DATA-tier trigger if it carries one of these markers. The
+# forms are conventional in the agent bodies: a `**HALT DATA**` bullet, and the
+# `Read algedonic.md ...` line naming "a DATA risk" or "a DATA-integrity threat".
+DATA_TRIGGER_MARKERS = ("HALT DATA", "DATA risk", "DATA-integrity")
+
+# The property, expressed as two token families that must BOTH appear.
+# "rollback" is deliberately ABSENT from the recovery family: the pre-re-key
+# wording already said "destructive operation without rollback", so accepting it
+# would make this detector pass on the very text it exists to reject.
+RECOVERY_TOKENS = ("restore", "recover", "backup")
+VERIFICATION_TOKENS = ("verif",)
+
+# Only a trigger about DESTROYING or irreversibly changing data owes a recovery
+# criterion. A DATA trigger can legitimately be about EXPOSURE instead -- PII in
+# build artifacts, sensitive data in container layers -- and demanding a restore
+# path there would be nonsense. Without this gate the check below states a
+# property that is merely ACCIDENTALLY true of the in-scope bodies, and the first
+# exposure-only DATA bullet added to either would redden it on correct text.
+DESTRUCTION_TOKENS = (
+    "delete", "drop", "truncate", "destructive", "irreversible", "corrupt",
+    "overwrite",
+)
+
+
+def _is_data_trigger(line: str) -> bool:
+    """True if `line` states a DATA-tier algedonic trigger."""
+    return any(marker in line for marker in DATA_TRIGGER_MARKERS)
+
+
+def _names_destructive_operation(line: str) -> bool:
+    """True if `line` describes destroying or irreversibly changing data."""
+    lowered = line.lower()
+    return any(token in lowered for token in DESTRUCTION_TOKENS)
+
+
+def _keys_on_recoverability(line: str) -> bool:
+    """True if `line` names a recovery criterion AND requires it be verified.
+
+    Both halves are load-bearing. A recovery noun alone ("missing backup") says
+    a backup is absent, not that its restorability was ever established;
+    requiring the verification token is what makes UNKNOWN fail CLOSED into the
+    trigger rather than out of it.
+    """
+    lowered = line.lower()
+    return (
+        any(token in lowered for token in RECOVERY_TOKENS)
+        and any(token in lowered for token in VERIFICATION_TOKENS)
+    )
+
+
+# The DATA-trigger wordings as they read BEFORE the re-key, kept verbatim as
+# literal fixtures. They are the non-vacuity control: the detector must RECOGNIZE
+# each as a DATA trigger and REJECT it. Feeding them in as literals rather than
+# reverting the working tree keeps the control available on every run, including
+# runs where the tree is mid-edit.
+PRE_REKEY_DATA_TRIGGERS = (
+    "- **HALT DATA**: DELETE without WHERE clause, DROP TABLE on production "
+    "data, PII stored unencrypted, foreign key violations risking data integrity",
+
+    "Read [algedonic.md](../protocols/algedonic.md) immediately on detecting a "
+    "DATA-integrity threat (destructive operation without rollback, schema "
+    "violation, foreign-key breach, PII exposure in unencrypted columns or "
+    "logs) or any irreversible change to production data flowing from a "
+    "migration or query you are authoring.",
+
+    "- **HALT DATA**: Workflow could corrupt or delete production data, PII "
+    "handled without encryption",
+
+    "Read [algedonic.md](../protocols/algedonic.md) immediately on detecting a "
+    "SECURITY flaw (webhook accepting unauthenticated requests, credential "
+    "exposure in workflow JSON or expressions, plaintext API key in HTTP node) "
+    "or a DATA risk (irreversible workflow operation against production data, "
+    "missing rate-limit on external write, destructive bulk update without "
+    "dry-run).",
+)
+
+
+class TestDataTriggersKeyOnRecoverability:
+    """A DATA-tier trigger must hand the agent a RECOVERABILITY criterion,
+    not only a deployment-status one.
+
+    THE DEFECT THIS CLOSES. `algedonic.md` states the DATA tier
+    consequence-neutrally -- "PII exposure, data corruption risk, integrity
+    violation". A body that glosses that tier as "production data" ALONE
+    substitutes deployment status for the property that actually matters, and
+    it misleads in BOTH directions: an agent working on an irreplaceable store
+    that nobody calls "production" reads the trigger as not applying, while an
+    agent working on production data with a tested restore path treats a HALT
+    as automatic. Deployment status is not what makes an operation
+    unrecoverable.
+
+    WHAT IS PINNED IS THE PROPERTY, NOT THE PROSE. Any wording naming a
+    recovery criterion and requiring it be VERIFIED satisfies this. A verbatim
+    pin would redden on every innocent rewrite and would teach maintainers to
+    bump a string instead of thinking about the trigger.
+
+    THIS DOES NOT REQUIRE "production data" TO SURVIVE. A body that drops the
+    phrase entirely and keys purely on recoverability still passes -- that is a
+    correct trigger, and a detector that reddened on it would be worse than no
+    detector.
+
+    SCOPE, and why it is not every agent. `pact-devops-engineer.md` is
+    deliberately excluded: for a devops agent a production deployment is a
+    genuine domain concept, and its sibling clauses ("destructive infra change
+    without rollback", "missing backup before migration") already carry the
+    recoverability criterion, so deployment status is not the sole
+    discriminator there. Forcing uniformity would make that body worse.
+
+    ⚠️ THE DESTRUCTION GATE'S FAIL DIRECTION IS EXEMPT, stated rather than
+    implied. `_names_destructive_operation` recognizes a fixed vocabulary, and
+    a trigger that describes a destructive operation WITHOUT any of those words
+    -- "schema change against production data" is a measured example -- is
+    exempted from the recovery requirement rather than caught by it. That gate
+    exists to stop false positives on exposure-only triggers, so its errors run
+    toward silence by construction. What this class DOES guarantee is the thing
+    it was built for: reverting either body's DATA trigger to the wording that
+    keyed on deployment status alone turns it RED, verified per-file rather than
+    only in combination. Widening the vocabulary to chase the gap would trade a
+    bounded silence for unbounded false positives on correct bodies, which is
+    the worse failure for a detector nobody is watching.
+    """
+
+    def test_data_triggers_name_a_verified_recovery_criterion(self):
+        """The live bodies satisfy the property."""
+        for name in RECOVERABILITY_KEYED_AGENTS:
+            path = AGENTS_DIR / f"{name}.md"
+            triggers = [
+                line for line in path.read_text(encoding="utf-8").splitlines()
+                if _is_data_trigger(line)
+            ]
+            assert triggers, (
+                f"{name}.md: no DATA-tier trigger line found at all. Either the "
+                f"body lost its DATA trigger, or the marker convention changed "
+                f"and DATA_TRIGGER_MARKERS no longer matches it -- in which case "
+                f"this whole check has been silently measuring nothing."
+            )
+            destructive = [ln for ln in triggers if _names_destructive_operation(ln)]
+            assert destructive, (
+                f"{name}.md: DATA triggers exist but none describes destroying or "
+                f"irreversibly changing data, so the requirement below is exempt "
+                f"everywhere and this check is measuring nothing."
+            )
+            for line in destructive:
+                assert _keys_on_recoverability(line), (
+                    f"{name}.md: a DATA-tier trigger about destroying or "
+                    f"irreversibly changing data names no VERIFIED recovery "
+                    f"criterion, so it keys on deployment status alone. An agent "
+                    f"holding irreplaceable data that nobody calls 'production' "
+                    f"will read this as not applying to them. Name a recovery "
+                    f"criterion and require it be verified, so an unverified "
+                    f"restore path still fires the HALT. Offending line: {line!r}"
+                )
+
+    def test_detector_rejects_the_pre_rekey_wordings(self):
+        """NON-VACUITY. The detector must reject the wordings it replaced.
+
+        Each fixture is asserted to be IN SCOPE on BOTH gates first -- recognized
+        as a DATA trigger, and recognized as describing a destructive operation.
+        A fixture failing either gate would be "rejected" for the wrong reason:
+        it would be exempt rather than caught, and the control would prove
+        nothing about a revert it is supposed to stop.
+        """
+        for wording in PRE_REKEY_DATA_TRIGGERS:
+            assert _is_data_trigger(wording), (
+                f"control fixture is not recognized as a DATA trigger, so its "
+                f"rejection below would be vacuous: {wording!r}"
+            )
+            assert _names_destructive_operation(wording), (
+                f"control fixture is not recognized as describing a destructive "
+                f"operation, so the recovery requirement would EXEMPT it rather "
+                f"than catch it, and its rejection below would be vacuous: "
+                f"{wording!r}"
+            )
+            assert not _keys_on_recoverability(wording), (
+                f"the detector ACCEPTS a pre-re-key wording that keys on "
+                f"deployment status alone. It would not catch a revert, which "
+                f"is the only thing it exists to catch: {wording!r}"
+            )
+
+    def test_exposure_only_data_triggers_are_exempt(self):
+        """A DATA trigger about EXPOSURE owes no recovery criterion.
+
+        This exemption is not hypothetical. `pact-devops-engineer.md` carries
+        exactly this shape -- a DATA trigger about PII in build artifacts and
+        sensitive data in container layers, where a restore path is a category
+        error. Without the destruction gate, the requirement would state a
+        property that is only ACCIDENTALLY true of the in-scope bodies, and the
+        first exposure-only DATA bullet added to either would redden a correct
+        body.
+        """
+        exposure_only = (
+            "- **HALT DATA**: PII in build artifacts, sensitive data exposed "
+            "through container layers"
+        )
+        assert _is_data_trigger(exposure_only)
+        assert not _names_destructive_operation(exposure_only)
+        assert not _keys_on_recoverability(exposure_only), (
+            "fixture accidentally satisfies the recovery predicate, so it "
+            "cannot demonstrate that the destruction gate is what exempts it"
+        )
+
+    def test_rollback_alone_does_not_satisfy_the_predicate(self):
+        """The recovery family excludes 'rollback' on purpose.
+
+        One pre-re-key wording already said "destructive operation without
+        rollback". Had the family accepted that token, the detector would have
+        passed on unmodified deployment-keyed text -- non-vacuous-looking and
+        wrong. This pins the exclusion so a later widening of RECOVERY_TOKENS
+        has to confront it.
+        """
+        assert not _keys_on_recoverability(
+            "- **HALT DATA**: destructive operation without rollback"
+        )
+
+
 class TestNoVestigialAgentTeamsProtocolSection:
     """Post-#366 the `# AGENT TEAMS PROTOCOL` lazy-load pointer block is
     gone. The protocol is delivered via frontmatter eager-load instead.
