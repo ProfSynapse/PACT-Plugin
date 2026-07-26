@@ -438,6 +438,90 @@ class TestRetrievedSyncAbsentTarget:
             )
 
 
+class TestBothWriteCallersAgreeOnAbsentDestinations:
+    """DIFFERENTIAL: both write callers, one injected condition, compared.
+
+    `sync_to_claude_md` and `sync_retrieved_to_claude_md` are the two write
+    callers named in `_resolve_display_claude_md_path`'s docstring. Asserting
+    them separately records two facts that happen to match; asserting them
+    together records the INVARIANT — every write caller skips an absent
+    destination without touching the filesystem. A third one added later has
+    an obvious place to be registered, and a divergence between them fails
+    here rather than being noticed by whoever looks second.
+
+    THIS CATCHES DIVERGENCE. It does NOT catch a guard misplaced in BOTH
+    functions the same way — measured, not assumed. That failure is covered by
+    `test_resolver_returning_none_does_not_reach_the_guard` below, which is a
+    different arm for a different reason. Keep both.
+    """
+
+    @staticmethod
+    def _drivers():
+        """(name, callable) for every write caller that syncs to CLAUDE.md."""
+        return [
+            ("sync_to_claude_md", lambda: sync_to_claude_md(
+                {"context": "ctx", "goal": "differential"}, memory_id="a" * 32)),
+            ("sync_retrieved_to_claude_md", lambda: sync_retrieved_to_claude_md(
+                [{"context": "ctx", "goal": "differential"}], "query",
+                memory_ids=["b" * 32])),
+        ]
+
+    @pytest.mark.parametrize("layout", ["flat", "absent-parents"])
+    def test_no_write_caller_touches_the_filesystem(
+        self, tmp_path, clean_env, layout
+    ):
+        import scripts.working_memory as wm
+
+        observations = {}
+        for name, drive in self._drivers():
+            root = tmp_path / f"{layout}-{name}"
+            root.mkdir()
+            ghost = (root / "CLAUDE.md" if layout == "flat"
+                     else root / "a" / "b" / "c" / "CLAUDE.md")
+            clean_env.setattr(
+                wm, "_resolve_display_claude_md_with_base",
+                lambda g=ghost: (g, g.parent),
+            )
+            returned = drive()
+            # tuple, not list: these are compared as a set below to detect
+            # divergence between callers, and a list is unhashable.
+            created = tuple(sorted(str(p.relative_to(root)) for p in root.rglob("*")))
+            observations[name] = (returned, created)
+
+        assert len(observations) == len(self._drivers()), "a driver was skipped"
+        for name, (returned, created) in observations.items():
+            assert returned is False, f"{name} reported success on an absent destination"
+            assert created == (), (
+                f"{name} created filesystem entries under a path it only had to "
+                f"read: {list(created)}"
+            )
+        distinct = set(observations.values())
+        assert len(distinct) == 1, (
+            f"the write callers DIVERGED under one condition: {observations}. "
+            f"Both must skip an absent destination identically."
+        )
+
+    def test_resolver_returning_none_does_not_reach_the_guard(
+        self, tmp_path, clean_env
+    ):
+        """PLACEMENT pin — the guard must sit BELOW the `is None` check.
+
+        Above it, `None.exists()` raises AttributeError, and the raise is
+        outside the degradation `try` so it propagates to the caller. Measured:
+        with the guard relocated above the join, every one of the 319
+        memory-layer tests still passed, because nothing drove this path on the
+        retrieved caller. This is that arm.
+        """
+        import scripts.working_memory as wm
+        clean_env.setattr(
+            wm, "_resolve_display_claude_md_with_base", lambda: (None, None)
+        )
+        for name, drive in self._drivers():
+            assert drive() is False, (
+                f"{name} did not skip cleanly when the resolver found nothing"
+            )
+
+
 class TestExplicitSyncTarget:
     """`sync_to_claude_md(target=...)` — the caller-specifiable override.
 
