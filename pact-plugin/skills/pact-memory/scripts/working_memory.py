@@ -497,6 +497,22 @@ def extract_managed_region(content: str) -> Optional[Tuple[str, int]]:
     """
     Extract the PACT-managed region from CLAUDE.md content.
 
+    ⚠️ THIS TWIN IS DELIBERATELY NOT BYTE-IDENTICAL, AND IS NOT DRIFT-GATED.
+    Its siblings (`file_lock`, `_atomic_write_text`) are pinned byte-for-byte;
+    this one cannot be, because two differences here are LOCAL CONVENTIONS
+    rather than divergence:
+
+      * `Optional[Tuple[str, int]]` here vs `tuple[str, int] | None` there
+      * `_MANAGED_START_MARKER` here vs `MANAGED_START_MARKER` there
+        (this module private-prefixes what that one exports)
+
+    The executable logic is otherwise identical. Do NOT "fix" either side
+    toward the other and do NOT add a byte-identity gate: it would go red on
+    arrival, on choices someone made, and a gate that is red on arrival gets
+    deleted rather than investigated. A NORMALISED gate — mapping the constant
+    names and the annotation syntax before comparing — is the real remedy and
+    is deliberately deferred rather than invented here.
+
     Twin of hooks/shared/claude_md_manager.extract_managed_region — kept
     local because skills/pact-memory/scripts/ cannot import from hooks/shared/.
 
