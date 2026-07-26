@@ -131,12 +131,35 @@ def _refuse_production_db_under_pytest(db_path) -> None:
     current_test = os.environ.get("PYTEST_CURRENT_TEST")
     if not current_test:
         return
+    # THE MESSAGE STATES THE OBSERVATION, NOT AN INFERENCE FROM IT. The guard
+    # sees an environment variable; it does NOT see a pytest run. Those come
+    # apart -- an exported or inherited PYTEST_CURRENT_TEST reaches a plain
+    # shell with no test anywhere -- and an earlier wording asserted the
+    # inference ("this process was spawned from a pytest run"), which is
+    # simply false in exactly the case a curator hits.
+    #
+    # IT NAMES THE VARIABLE, so the reader can check and clear it. A refusal
+    # that will not say what it keyed on cannot be self-diagnosed.
+    #
+    # ⚠️ THE REMEDY IS AUDIENCE-SPECIFIC AND THE TWO ANSWERS ARE OPPOSITE.
+    # For a test, --db-path is right. For a CURATOR archiving a pin, it is
+    # actively destructive: the archive would land in a throwaway database,
+    # the verdict would report success, and the pin would become eligible for
+    # deletion with its only copy in a file about to be discarded. An earlier
+    # wording gave the test answer to both. A correct guard with the wrong
+    # remedy can destroy exactly what the guard protected, so the curator's
+    # branch says do NOT pass --db-path.
     _error(
         "UNSCOPED_TEST_DB",
-        "refusing to open the production memory database: this process was "
-        "spawned from a pytest run and no --db-path was given, so the write "
-        "would land in the developer's real store. Pass --db-path pointing at "
-        f"a temporary database. Spawned during: {current_test}",
+        "refusing to open the production memory database: PYTEST_CURRENT_TEST "
+        "is set in this process's environment and no --db-path was given, so "
+        "a write would land in the real store. If this IS a test, pass "
+        "--db-path pointing at a temporary database. If you are ARCHIVING A "
+        "PIN and meant to use the real store, do NOT pass --db-path -- that "
+        "would archive into a throwaway database and make the pin eligible "
+        "for deletion; instead unset PYTEST_CURRENT_TEST and run again (it is "
+        "set here without a test in progress, most likely exported or "
+        f"inherited from a parent shell). PYTEST_CURRENT_TEST={current_test}",
         exit_code=2,
     )
 

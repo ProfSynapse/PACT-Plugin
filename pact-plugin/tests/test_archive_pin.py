@@ -807,6 +807,52 @@ class TestProductionDbGuard:
             f"guard did not fire; stderr={proc.stderr[:400]}"
         )
 
+    def test_refusal_states_the_observation_and_not_an_inference(self, tmp_path):
+        """The guard sees a VARIABLE; it does not see a pytest run.
+
+        Those come apart — an exported or inherited PYTEST_CURRENT_TEST reaches
+        a plain shell with no test anywhere — and that is exactly the case a
+        curator hits. Asserting the inference makes the message false precisely
+        when someone is relying on it to understand what happened.
+        """
+        proc = self._spawn_cli(tmp_path, with_pytest_var=True)
+        stderr = proc.stderr
+        assert "PYTEST_CURRENT_TEST" in stderr, (
+            "the refusal does not name the variable it keyed on, so the "
+            f"reader cannot check or clear it: {stderr[:400]}"
+        )
+        assert "spawned from a pytest run" not in stderr, (
+            "the refusal asserts it was spawned from a pytest run — an "
+            "inference the guard cannot make and which is false when the "
+            f"variable was exported or inherited: {stderr[:400]}"
+        )
+
+    def test_refusal_does_not_advise_a_curator_to_scope_the_archive(
+        self, tmp_path
+    ):
+        """THE REMEDY IS AUDIENCE-SPECIFIC AND THE ANSWERS ARE OPPOSITE.
+
+        For a test, `--db-path` is right. For a curator archiving a pin it is
+        destructive: the archive lands in a throwaway database, the verdict
+        reports success, and the pin becomes eligible for deletion with its
+        only copy in a file about to be discarded. A correct guard with the
+        wrong remedy can destroy exactly what the guard protected.
+
+        So the message must carry BOTH branches and must tell the curator NOT
+        to pass --db-path. A message offering only the test remedy passes a
+        bare "mentions --db-path" check, which is why this asserts the
+        curator's branch specifically.
+        """
+        stderr = self._spawn_cli(tmp_path, with_pytest_var=True).stderr
+        assert "do NOT pass --db-path" in stderr, (
+            "the refusal does not warn a curator away from --db-path; "
+            "followed literally its advice archives the pin into a throwaway "
+            f"database and marks it deletion-eligible: {stderr[:400]}"
+        )
+        assert "unset PYTEST_CURRENT_TEST" in stderr, (
+            f"the refusal never states the fix that preserves the pin: {stderr[:400]}"
+        )
+
     def test_the_curator_production_path_is_not_blocked(self, tmp_path):
         """OVER-BLOCK CONTROL, and the reason the gate exists.
 
