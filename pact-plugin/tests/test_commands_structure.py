@@ -31,7 +31,42 @@ COMMANDS_DIR = Path(__file__).parent.parent / "commands"
 # prefix was required when the second tier went away, but it silently widened
 # the anchor from loop-scoped to file-wide. This constant restores the
 # predecessor's coverage envelope.
+#
+# BRITTLENESS, stated so a future red is not mistaken for a bug: this pins the
+# pseudocode line AND its two-space indent, so a behaviourally-identical reflow
+# of the loop turns the pins red. That is intended — on an LLM-loaded surface
+# the loop's SHAPE is the instruction — but if you loosen it back to the bare
+# call form you reopen the hole described above. Change the surfaces and this
+# constant together. 55 bytes, and it occurs exactly once in each of
+# pause.md, refresh.md and wrap-up.md; a future edit that breaks that identity
+# breaks the pins, which is the point.
 SHUTDOWN_LOOP_CALL = 'For each active teammate:\n  TaskStop("{teammate_name}")'
+
+# ---------------------------------------------------------------------------
+# KNOWN LIMITS of the shutdown pins below — the SET, in one place, because a
+# named limit is a different object from an unknown hole and the difference is
+# only legible when they are listed together. Each is deliberate and each
+# fails in a direction we chose; none is a TODO.
+#
+#   1. _asserts_deprecation false-positives on a NOMINALISED denial
+#      ("deprecation is not planned"): it recognises the adjective, not the
+#      nominalisation. Fails CLOSED — a visible red on a rephrasing, rather
+#      than a silent miss. Widening the denial pattern would start admitting
+#      the assertions the pin exists to catch.
+#
+#   2. _section_by_heading cannot exclude a heading DEEPER than its anchor: a
+#      #### subsection nested inside the section, carrying a TaskStop,
+#      satisfies the assertion even when the section's own call is gone.
+#
+#   3. test_no_undeclared_teammate_stopping_command scans for the call form
+#      "TaskStop(" WITH the paren, so a command instructing a stop in prose
+#      only — a bare `TaskStop` — is invisible to it. NOT widened on purpose:
+#      bare-word matching flags every cross-reference (orchestrate.md names
+#      TaskStop solely to point at imPACT), and a scan that cries wolf gets
+#      relaxed. Same trade as limit 1.
+#
+# All three verified by execution, not inferred from reading.
+# ---------------------------------------------------------------------------
 
 EXPECTED_COMMANDS = {
     "bootstrap",
@@ -1498,6 +1533,14 @@ def test_no_undeclared_teammate_stopping_command():
     is undeclared stays invisible — the evidence for that omission is exactly
     the text that is absent. The role table makes it a visible authoring
     decision; it does not make it detectable.
+
+    KNOWN LIMIT (limit 3 in the set at the top of this file), measured: the
+    scan matches the CALL FORM "TaskStop(" with its paren, so a command that
+    instructs a stop in prose alone — a bare `TaskStop` — is not seen. Left
+    narrow deliberately: widening to the bare word flags every
+    cross-reference, and orchestrate.md carries one solely to point at
+    imPACT. A scan that cries wolf gets relaxed, and a relaxed scan detects
+    nothing.
     """
     declared = {relpath for relpath, _ in TERMINATION_SKELETON_SURFACES}
     found = [
