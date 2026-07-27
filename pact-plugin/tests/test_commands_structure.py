@@ -18,6 +18,50 @@ from helpers import parse_frontmatter
 
 COMMANDS_DIR = Path(__file__).parent.parent / "commands"
 
+# The shutdown loop's call AS IT APPEARS INSIDE THE FENCED BLOCK.
+#
+# Anchoring on the bare call form instead is satisfied by the PROSE sentence
+# that introduces the loop on each of these surfaces, which carries the
+# identical literal. Measured: with a bare-call anchor, deleting pause.md's
+# and refresh.md's ENTIRE loop body produced 0 failures across the 207-test
+# structural set, while the same deletion on wrap-up.md (which names the call
+# once) fired 3 pins — so the green was the prose copy absorbing the edit,
+# not a dead pin. The predecessor anchor, `then: TaskStop("{teammate_name}")`,
+# occurred only inside the loop and DID catch this; dropping the `then: `
+# prefix was required when the second tier went away, but it silently widened
+# the anchor from loop-scoped to file-wide. This constant restores the
+# predecessor's coverage envelope.
+#
+# BRITTLENESS, stated so a future red is not mistaken for a bug: this pins the
+# pseudocode line AND its two-space indent, so a behaviourally-identical reflow
+# of the loop turns the pins red. That is intended — on an LLM-loaded surface
+# the loop's SHAPE is the instruction — but if you loosen it back to the bare
+# call form you reopen the hole described above. Change the surfaces and this
+# constant together. 55 bytes, and it occurs exactly once in each of
+# pause.md, refresh.md and wrap-up.md; a future edit that breaks that identity
+# breaks the pins, which is the point.
+SHUTDOWN_LOOP_CALL = 'For each active teammate:\n  TaskStop("{teammate_name}")'
+
+# ---------------------------------------------------------------------------
+# KNOWN LIMITS of the shutdown pins below — the SET, in one place, because a
+# named limit is a different object from an unknown hole and the difference is
+# only legible when they are listed together. Each is deliberate and each
+# fails in a direction we chose; none is a TODO.
+#
+#   1. _section_by_heading cannot exclude a heading DEEPER than its anchor: a
+#      #### subsection nested inside the section, carrying a TaskStop,
+#      satisfies the assertion even when the section's own call is gone.
+#
+#   2. test_no_undeclared_teammate_stopping_command scans for the call form
+#      "TaskStop(" WITH the paren, so a command instructing a stop in prose
+#      only — a bare `TaskStop` — is invisible to it. NOT widened on purpose:
+#      bare-word matching flags every cross-reference (orchestrate.md names
+#      TaskStop solely to point at imPACT), and a scan that cries wolf gets
+#      relaxed.
+#
+# Both verified by execution, not inferred from reading.
+# ---------------------------------------------------------------------------
+
 EXPECTED_COMMANDS = {
     "bootstrap",
     "comPACT",
@@ -122,6 +166,28 @@ class TestAskUserQuestionOptions:
     def test_wrapup_pause_invokes_pause_command(self, wrapup_content):
         """Pause option should invoke /PACT:pause."""
         assert "/PACT:pause" in wrapup_content
+
+    def test_wrapup_taskstop_confined_to_end_session_branch(self, wrapup_content):
+        """The continue branch must keep teammates alive, and the pause branch
+        delegates to /PACT:pause which already stops them — a second loop there
+        would duplicate it. Only the terminal branch stops teammates."""
+        section = wrapup_content.split("Session Decision")[1]
+        yes = section.find('**"Yes, continue"**')
+        pause = section.find('**"Pause work for now"**')
+        end = section.find('**"No, end session"**')
+        assert -1 not in (yes, pause, end) and yes < pause < end, (
+            "step 8's three options must be present in continue/pause/end order"
+        )
+        assert SHUTDOWN_LOOP_CALL in section[end:], (
+            "the end-session branch must carry the shutdown loop. Anchored on "
+            "the LOOP form because the end-session slice contains five prose "
+            "mentions of TaskStop against one real call, so a bare-word "
+            "assertion stays green with the loop deleted. The two negative "
+            "legs below stay on the bare word on purpose — for leak detection "
+            "over-sensitivity is the safe direction."
+        )
+        assert "TaskStop" not in section[yes:pause], "TaskStop leaked into the continue branch"
+        assert "TaskStop" not in section[pause:end], "TaskStop leaked into the pause branch"
 
     # --- peer-review.md step 6 ---
 
@@ -1090,29 +1156,17 @@ class TestPauseShutdownStructure:
     def pause_text(self):
         return (COMMANDS_DIR / "pause.md").read_text(encoding="utf-8")
 
-    def test_taskstop_guarantee_tier_present(self, pause_text):
-        """Detects: silent regression to single-tier shutdown. Dropping the
-        TaskStop line from the per-teammate loop reverts pause to the
-        cooperative-only request, which does not by itself terminate the
-        teammate's pane/process — panes would survive every pause."""
-        assert 'then: TaskStop("{teammate_name}")' in pause_text
+    def test_taskstop_present_in_loop(self, pause_text):
+        """Detects: the shutdown loop losing its only call. The loop is now
+        one line, so dropping TaskStop does not fall back to a graceful
+        request — it leaves pause with no termination step at all, and
+        teammates would survive every pause. The anchor lost its `then: `
+        prefix along with the second tier that prefix sequenced.
 
-    def test_graceful_request_precedes_taskstop(self, pause_text):
-        """Detects: tier inversion. TaskStop issued before the graceful
-        shutdown_request reaps teammates before they can save agent memory
-        and approve — the cooperative tier must come first. Both anchor
-        literals occur exactly once in pause.md, so first-occurrence
-        index comparison encodes the loop ordering."""
-        request = pause_text.index('"type": "shutdown_request"')
-        stop = pause_text.index('then: TaskStop("{teammate_name}")')
-        assert request < stop
-
-    def test_cooperative_only_rationale_present(self, pause_text):
-        """Detects: loss of the rationale that makes the guarantee tier
-        non-optional. Without the cooperative-only statement, a future
-        editor can plausibly judge the TaskStop line redundant and remove
-        it as cleanup."""
-        assert "cooperative-only" in pause_text
+        Anchored on the LOOP form: pause.md names the call in the prose
+        sentence introducing the loop as well as in the loop itself, so a
+        bare-call anchor stays green when the loop body is deleted."""
+        assert SHUTDOWN_LOOP_CALL in pause_text
 
     def test_expected_post_state_note_present(self, pause_text):
         """Detects: removal of the post-state expectation. A lead-only
@@ -1135,42 +1189,191 @@ class TestPauseShutdownStructure:
         assert "already-stopped success" in pause_text
 
 
-# Per-surface stable anchors for the shutdown termination-primitive skeleton.
-# Every listed surface carries the uniform 'cooperative-only' statement
-# (refresh.md's rationale clause is harmonized to the shared skeleton
-# sentence); refresh.md additionally pins its two-tier loop/tier tokens as
-# secondary structural anchors. Presence-only assertions — occurrence counts
-# and surrounding prose are not pinned. Any LLM-loaded surface that instructs
-# or reasons about teammate shutdown qualifies for a row here.
-TERMINATION_SKELETON_SURFACES = [
-    ("commands/pause.md", ("cooperative-only",)),
-    ("commands/refresh.md", ("cooperative-only", "then: TaskStop", "guarantee tier")),
-    ("commands/imPACT.md", ("cooperative-only",)),
-    ("skills/pact-agent-teams/SKILL.md", ("cooperative-only",)),
-    ("agents/pact-orchestrator.md", ("cooperative-only",)),
+# The termination skeleton is THREE statements, not one, because they carry
+# three different kinds of warrant and a single sentence cannot bound them
+# separately:
+#   A — why the loops send no graceful request. DOCUMENTARY: a claim about
+#       our own files (no loop read the response, so a reject could not take
+#       effect; approving buys no flush). Needs no empirical bound.
+#   B — what the primitives were measured to do. EMPIRICAL, so its bound is
+#       welded inline — which is what the two tokens pinned per row below
+#       actually anchor.
+#   C — the deviation notice. RELATIONAL to platform documentation, which
+#       describes a cooperative flow and names no TaskStop for it.
+# Presence-only assertions — occurrence counts and surrounding prose are not
+# pinned.
+#
+# Only B is pinned. A and C are deliberately unpinned prose — pinning a
+# rationale freezes wording that should be free to improve, and the tokens
+# below are chosen to anchor the claim that can go WRONG, not every claim
+# that matters. Dropping A or C is a review catch, not a test catch.
+#
+# Role-declared membership. A surface earns a row by its ROLE — it instructs or
+# reasons about teammate shutdown — NOT by whether it currently contains the
+# words. Deriving membership from CONTENT is what let the prior sweep miss a
+# file whose count was already zero: a presence assertion is vacuous on a file
+# with no text to assert over, so content-derived membership can never reach
+# the file it most needs to.
+#
+# Two groups, because NO SINGLE PREDICATE COVERS BOTH and saying so is the
+# point. A command-flow predicate cannot reach a skill or an agent body; a
+# "reasons about shutdown" predicate cannot be evaluated mechanically at all.
+# The second group is therefore an EXPLICIT, JUSTIFIED EXCEPTION LIST — not
+# derivation, and not an unexplained hand-list.
+
+# Group 1 — lifecycle commands whose flow stops teammates. Cross-checked in the
+# additive direction by test_no_undeclared_teammate_stopping_command below.
+TERMINATION_COMMAND_SURFACES = [
+    "commands/pause.md",
+    "commands/refresh.md",
+    "commands/wrap-up.md",
 ]
 
+# Group 2 — surfaces that REASON about shutdown without running a loop. Each
+# row states why no command-flow predicate reaches it.
+#   imPACT.md            — a command, but terminates ONE unrecoverable agent;
+#                          not a session-terminating flow, so deliberately NOT
+#                          in SESSION_TERMINATING_FLOWS below.
+#   pact-agent-teams     — a skill: the teammate-side receiving protocol.
+#   pact-orchestrator.md — an agent body: lead-side guidance.
+TERMINATION_REASONING_SURFACES = [
+    "commands/imPACT.md",
+    "skills/pact-agent-teams/SKILL.md",
+    "agents/pact-orchestrator.md",
+]
 
-class TestShutdownTerminationSkeletonAcrossSurfaces:
-    """The shutdown termination rule spans multiple LLM-loaded surfaces.
+TERMINATION_SKELETON_SURFACES = (
+    TERMINATION_COMMAND_SURFACES + TERMINATION_REASONING_SURFACES
+)
 
-    Detects: single-surface drift. An edit that removes the rule from one
-    surface while the others keep it silently forks the team's understanding
-    of whether shutdown_request alone terminates a teammate (it does not —
-    TaskStop is the termination primitive).
+
+GRACEFUL_REQUEST_CALL_FORM = '"type": "shutdown_request"'
+
+
+@pytest.mark.parametrize("relpath", TERMINATION_COMMAND_SURFACES)
+def test_no_graceful_request_in_shutdown_loops(relpath):
+    """Detects RE-ADDITION of the graceful tier to a shutdown loop.
+
+    Direction matters: a presence pin defends existing text against deletion
+    and cannot fire on omission. After a deliberate REMOVAL the drift vector
+    inverts to re-addition, which only an absence assertion catches.
+
+    Targets the CALL FORM, not the word: prose on these surfaces legitimately
+    names `shutdown_request` when explaining why none is sent, so a bare
+    "shutdown_request" not-in-text pin would fail on correct text.
     """
-
-    @pytest.mark.parametrize(
-        ("relpath", "tokens"),
-        TERMINATION_SKELETON_SURFACES,
-        ids=[relpath for relpath, _ in TERMINATION_SKELETON_SURFACES],
+    text = (COMMANDS_DIR.parent / relpath).read_text(encoding="utf-8")
+    # Non-vacuity control: the fixture must be live and the file must be the
+    # one we think it is. Without this, a bad path or an empty read passes.
+    assert 'TaskStop("{teammate_name}")' in text, (
+        f"non-vacuity control failed: {relpath} does not contain the shutdown "
+        f"loop's TaskStop call — the fixture is wrong, so the absence "
+        f"assertion below would pass vacuously"
     )
-    def test_surface_carries_termination_skeleton(self, relpath, tokens):
-        text = (COMMANDS_DIR.parent / relpath).read_text(encoding="utf-8")
-        for token in tokens:
-            assert token in text, (
-                f"{relpath} lost the shutdown termination-skeleton anchor "
-                f"{token!r}. Every surface that instructs teammate shutdown "
-                f"must state (or embody) the two-tier rule: shutdown_request "
-                f"is cooperative-only; TaskStop is the termination primitive."
-            )
+    assert GRACEFUL_REQUEST_CALL_FORM not in text, (
+        f"{relpath} re-introduced a graceful shutdown_request into its "
+        f"shutdown loop. The request was removed deliberately: no loop read "
+        f"the response, so a teammate's reject could not take effect, and "
+        f"approving buys no flush."
+    )
+
+
+# A deprecation word is permitted ONLY inside a denial. Polarity, not presence:
+# the rule is semantic ("no surface may ASSERT deprecation"), so a substring
+# test is the wrong instrument — every denial contains the word.
+# Surfaces carrying BLOCK C's foreclosure. imPACT.md is deliberately absent:
+# its wording carries no deprecation clause, so requiring one would invent
+# content.
+# The issue's requested predicate, made concrete: for each lifecycle command
+# whose flow terminates teammate participation, the TERMINAL section carries a
+# real TaskStop call. SECTION-SCOPED, so a TaskStop elsewhere in the file
+# cannot satisfy it. This is the assertion shape a presence pin cannot express:
+# it fails on a file that SHOULD carry the instruction and does not — the
+# direction the prior guard was structurally blind to.
+SESSION_TERMINATING_FLOWS = {
+    "commands/pause.md":   "### 6. Shut Down Teammates",
+    "commands/refresh.md": "### 5. SHUTDOWN teammates",
+    "commands/wrap-up.md": "### Teammate shutdown — end-session branch only",
+}
+
+
+def _section_by_heading(text, heading):
+    """Body of `heading`, ending at the next heading of the SAME OR SHALLOWER
+    depth.
+
+    Depth-aware on purpose. The three commands do not agree on heading level:
+    pause.md and refresh.md put their steps at `###` under a `## Steps`
+    parent, while wrap-up.md puts its steps at `##`. A hard-coded "slice to
+    the next `## `" would therefore run to end-of-file on two of the three,
+    swallowing the following step and letting a TaskStop anywhere downstream
+    satisfy the assertion. Section-scoping is the entire point of this test,
+    so the slice has to actually scope.
+
+    Residual, stated rather than hidden — and stated as the mechanism that
+    actually holds, because a residual naming the wrong cause is worse than
+    none: the slice terminates on headings at the anchor's depth OR SHALLOWER,
+    so a later `## ` step correctly ends it even when the anchor is the last
+    section in the file. What it cannot exclude is a heading DEEPER than the
+    anchor. A `#### ` subsection nested inside this section, carrying a
+    TaskStop, satisfies the assertion even if the section's own call is gone.
+    Verified by execution in both directions.
+    """
+    idx = text.find(heading)
+    assert idx != -1, f"section heading not found: {heading!r}"
+    depth = len(heading) - len(heading.lstrip("#"))
+    body_start = idx + len(heading)
+    nxt = re.search(rf"^#{{1,{depth}}} ", text[body_start:], re.M)
+    return text[body_start:] if nxt is None else text[body_start:body_start + nxt.start()]
+
+
+@pytest.mark.parametrize(
+    ("relpath", "heading"),
+    sorted(SESSION_TERMINATING_FLOWS.items()),
+    ids=sorted(SESSION_TERMINATING_FLOWS),
+)
+def test_terminal_flow_carries_taskstop(relpath, heading):
+    text = (COMMANDS_DIR.parent / relpath).read_text(encoding="utf-8")
+    section = _section_by_heading(text, heading)
+    assert SHUTDOWN_LOOP_CALL in section, (
+        f"{relpath}'s terminal flow ({heading}) does not call TaskStop. A "
+        f"lifecycle command that ends teammate participation must stop them; "
+        f"reporting that they will stop is not stopping them."
+    )
+
+
+def test_no_undeclared_teammate_stopping_command():
+    """Detects the omission shape in the ADDITIVE direction: a command that
+    instructs TaskStop but carries no row in the role table. A presence pin can
+    only fail on deletion; this fails on an undeclared addition, which is how
+    wrap-up.md was missed.
+
+    IRREDUCIBLE RESIDUAL: a command that SHOULD stop teammates, does not, and
+    is undeclared stays invisible — the evidence for that omission is exactly
+    the text that is absent. The role table makes it a visible authoring
+    decision; it does not make it detectable.
+
+    KNOWN LIMIT (limit 2 in the set at the top of this file), measured: the
+    scan matches the CALL FORM "TaskStop(" with its paren, so a command that
+    instructs a stop in prose alone — a bare `TaskStop` — is not seen. Left
+    narrow deliberately: widening to the bare word flags every
+    cross-reference, and orchestrate.md carries one solely to point at
+    imPACT. A scan that cries wolf gets relaxed, and a relaxed scan detects
+    nothing.
+    """
+    declared = set(TERMINATION_SKELETON_SURFACES)
+    found = [
+        f"commands/{p.name}"
+        for p in sorted(COMMANDS_DIR.glob("*.md"))
+        if "TaskStop(" in p.read_text(encoding="utf-8")
+    ]
+    # Non-vacuity control: an empty scan would make the assertion below pass
+    # for free.
+    assert found, "non-vacuity control failed: no command contains TaskStop("
+    undeclared = sorted(set(found) - declared)
+    assert not undeclared, (
+        f"{undeclared} instruct TaskStop but are not declared in "
+        f"TERMINATION_SKELETON_SURFACES. Add a row — and decide explicitly "
+        f"whether the file also belongs in SESSION_TERMINATING_FLOWS "
+        f"(it does if its flow ends teammate participation; imPACT.md does "
+        f"not, because it terminates one unrecoverable agent)."
+    )

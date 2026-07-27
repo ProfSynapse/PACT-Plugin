@@ -173,7 +173,7 @@ When your work is done, you store the HANDOFF and remain `in_progress`. **You do
   file has been read and any mid-turn directives are reconciled into the
   deliverable (the HANDOFF notify in Step 2 must carry the drain report).
 
-If ANY precondition is unmet, KEEP WORKING. Do not write `metadata.handoff` to "reserve a spot" or "draft the handoff while tests run." The handoff metadata write is a commitment that the work IS done, NOT a wrap-up artifact you build in parallel with finishing. Phase 2 enforcement (schema field, hook validation, lead-side independent verification) is tracked separately as deferred work.
+If ANY precondition is unmet, KEEP WORKING. Do not write `metadata.handoff` to "reserve a spot" or "draft the handoff while tests run." The handoff metadata write is a commitment that the work IS done, NOT a wrap-up artifact you build in parallel with finishing.
 
 > **Ordering invariant** (audit anchor): the three steps below MUST execute in the order Step 1 → Step 2 → Step 3 — `metadata.handoff` write FIRST, then notify SendMessage to team-lead, then `intentional_wait` SET. This ordering is load-bearing for the team-lead's [Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition): the lead must wait for teammate's wake-signal SendMessage before treating the raw `cat ~/.claude/tasks/.../{taskId}.json | jq .metadata.handoff` read as authoritative, but the SendMessage is only safe to send AFTER the metadata write has landed on disk. Reversing Step 1 and Step 2 produces false-empty raw reads on the lead side that have triggered false-positive HANDOFF rejection cycles. Reversing Step 2 and Step 3 (idle before SendMessage) silently strands the lead — they will never see the wake-signal because you went idle without sending it. Editors of this skill: do NOT re-order these steps.
 
@@ -520,9 +520,9 @@ When you receive a `shutdown_request`:
 | Idle, consultant with no active questions, or domain no longer relevant | Approve |
 | Mid-task, awaiting response, or remediation may need your input | Reject with reason |
 
-> **Save learnings incrementally**: under guarantee-tier shutdown flows the lead may follow the graceful request with an immediate `TaskStop`, so you can be reaped before ever seeing the request. Save domain learnings to your agent memory as you work and treat any turn as possibly your last; approving a `shutdown_request` is a courtesy, not your save trigger.
+> **Save learnings incrementally**: PACT's shutdown flows call `TaskStop` directly and send no request first, so you can be stopped with no warning at all. Save domain learnings to your agent memory as you work and treat any turn as possibly your last; approving a `shutdown_request` is a courtesy, not your save trigger.
 
-`shutdown_request` is cooperative-only. Empirically, on the tmux backend an approved `shutdown_response` does not terminate the teammate's pane/process — approval authorizes termination but does not perform it. On the in-process backend, `shutdown_response` semantics are unprobed: platform documentation claims approval terminates the process, but this is unverified in either direction. `TaskStop` is the termination primitive; any flow that requires a teammate actually gone MUST follow the graceful request with `TaskStop` (or verify pane/process death).
+**No PACT flow sends you a `shutdown_request`.** If one arrives anyway — the platform may deliver one, or a lead may send one at a user's request — reply as the table directs.
 
 ## Completion Integrity (SACROSANCT)
 
