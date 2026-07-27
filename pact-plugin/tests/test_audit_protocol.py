@@ -464,9 +464,15 @@ class TestStructuralVerificationDiscipline:
         extract pair — including Concurrent Audit (edited by #502) and State
         Recovery (re-extracted by #505) — must be in sync with its SSOT region.
         This test fails deterministically if any future edit to pact-protocols.md
-        or any extract file desyncs the pair without bumping the script's
-        line-ranges, or if the cascade-delta rule is violated when inserting
-        content into the SSOT.
+        or any extract file desyncs the pair.
+
+        Inserting content into the SSOT carries no separate bookkeeping
+        obligation. The script anchors each section by its H2 heading text plus
+        the next H2 heading as the end sentinel, NOT by line numbers, precisely
+        so that adding or removing lines cannot shift a region out from under
+        it. What this gate checks is byte-identity between an extract and its
+        SSOT region; an edit to one half that is not mirrored into the other is
+        the only way to break it.
         """
         import subprocess
 
