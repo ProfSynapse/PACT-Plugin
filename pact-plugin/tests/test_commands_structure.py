@@ -123,6 +123,23 @@ class TestAskUserQuestionOptions:
         """Pause option should invoke /PACT:pause."""
         assert "/PACT:pause" in wrapup_content
 
+    def test_wrapup_taskstop_confined_to_end_session_branch(self, wrapup_content):
+        """The continue branch must keep teammates alive, and the pause branch
+        delegates to /PACT:pause which already stops them — a second loop there
+        would duplicate it. Only the terminal branch stops teammates."""
+        section = wrapup_content.split("Session Decision")[1]
+        yes = section.find('**"Yes, continue"**')
+        pause = section.find('**"Pause work for now"**')
+        end = section.find('**"No, end session"**')
+        assert -1 not in (yes, pause, end) and yes < pause < end, (
+            "step 8's three options must be present in continue/pause/end order"
+        )
+        assert "TaskStop" in section[end:], (
+            "the end-session branch must carry the shutdown loop"
+        )
+        assert "TaskStop" not in section[yes:pause], "TaskStop leaked into the continue branch"
+        assert "TaskStop" not in section[pause:end], "TaskStop leaked into the pause branch"
+
     # --- peer-review.md step 6 ---
 
     def test_peer_review_has_three_merge_options(self, peer_review_content):
@@ -1090,29 +1107,28 @@ class TestPauseShutdownStructure:
     def pause_text(self):
         return (COMMANDS_DIR / "pause.md").read_text(encoding="utf-8")
 
-    def test_taskstop_guarantee_tier_present(self, pause_text):
-        """Detects: silent regression to single-tier shutdown. Dropping the
-        TaskStop line from the per-teammate loop reverts pause to the
-        cooperative-only request, which does not by itself terminate the
-        teammate's pane/process — panes would survive every pause."""
-        assert 'then: TaskStop("{teammate_name}")' in pause_text
+    def test_taskstop_present_in_loop(self, pause_text):
+        """Detects: the shutdown loop losing its only call. The loop is now
+        one line, so dropping TaskStop does not fall back to a graceful
+        request — it leaves pause with no termination step at all, and
+        teammates would survive every pause. The anchor lost its `then: `
+        prefix along with the second tier that prefix sequenced."""
+        assert 'TaskStop("{teammate_name}")' in pause_text
 
-    def test_graceful_request_precedes_taskstop(self, pause_text):
-        """Detects: tier inversion. TaskStop issued before the graceful
-        shutdown_request reaps teammates before they can save agent memory
-        and approve — the cooperative tier must come first. Both anchor
-        literals occur exactly once in pause.md, so first-occurrence
-        index comparison encodes the loop ordering."""
-        request = pause_text.index('"type": "shutdown_request"')
-        stop = pause_text.index('then: TaskStop("{teammate_name}")')
-        assert request < stop
+    def test_observation_shaped_claim_present(self, pause_text):
+        """Detects two drifts at once: a claim losing its bound, and a claim
+        hardening back into a semantics assertion.
 
-    def test_cooperative_only_rationale_present(self, pause_text):
-        """Detects: loss of the rationale that makes the guarantee tier
-        non-optional. Without the cooperative-only statement, a future
-        editor can plausibly judge the TaskStop line redundant and remove
-        it as cleanup."""
-        assert "cooperative-only" in pause_text
+        The pair is deliberate. `observed not to terminate` is what was seen;
+        `n=1 pane` is how much was seen. Compressing the pair to the claim
+        alone leaves a bounded observation reading as a general fact — and
+        the predecessor token, `cooperative-only`, asserted exactly that: that
+        the request is cooperative BY DESIGN, which the primary record
+        declined to assert, calling platform-bug-vs-intended open. Pinning
+        both halves means the claim cannot drift back into a semantics
+        without changing the words."""
+        assert "observed not to terminate" in pause_text
+        assert "n=1 pane" in pause_text
 
     def test_expected_post_state_note_present(self, pause_text):
         """Detects: removal of the post-state expectation. A lead-only
@@ -1135,29 +1151,77 @@ class TestPauseShutdownStructure:
         assert "already-stopped success" in pause_text
 
 
-# Per-surface stable anchors for the shutdown termination-primitive skeleton.
-# Every listed surface carries the uniform 'cooperative-only' statement
-# (refresh.md's rationale clause is harmonized to the shared skeleton
-# sentence); refresh.md additionally pins its two-tier loop/tier tokens as
-# secondary structural anchors. Presence-only assertions — occurrence counts
-# and surrounding prose are not pinned. Any LLM-loaded surface that instructs
-# or reasons about teammate shutdown qualifies for a row here.
-TERMINATION_SKELETON_SURFACES = [
-    ("commands/pause.md", ("cooperative-only",)),
-    ("commands/refresh.md", ("cooperative-only", "then: TaskStop", "guarantee tier")),
-    ("commands/imPACT.md", ("cooperative-only",)),
-    ("skills/pact-agent-teams/SKILL.md", ("cooperative-only",)),
-    ("agents/pact-orchestrator.md", ("cooperative-only",)),
+# The termination skeleton is THREE statements, not one, because they carry
+# three different kinds of warrant and a single sentence cannot bound them
+# separately:
+#   A — why the loops send no graceful request. DOCUMENTARY: a claim about
+#       our own files (no loop read the response, so a reject could not take
+#       effect; approving buys no flush). Needs no empirical bound.
+#   B — what the primitives were measured to do. EMPIRICAL, so its bound is
+#       welded inline — which is what the two tokens pinned per row below
+#       actually anchor.
+#   C — the deviation notice. RELATIONAL to platform documentation, which
+#       describes a cooperative flow and names no TaskStop for it.
+# Presence-only assertions — occurrence counts and surrounding prose are not
+# pinned.
+#
+# Only B is pinned. A and C are deliberately unpinned prose — pinning a
+# rationale freezes wording that should be free to improve, and the tokens
+# below are chosen to anchor the claim that can go WRONG, not every claim
+# that matters. Dropping A or C is a review catch, not a test catch.
+#
+# Role-declared membership. A surface earns a row by its ROLE — it instructs or
+# reasons about teammate shutdown — NOT by whether it currently contains the
+# words. Deriving membership from CONTENT is what let the prior sweep miss a
+# file whose count was already zero: a presence assertion is vacuous on a file
+# with no text to assert over, so content-derived membership can never reach
+# the file it most needs to.
+#
+# Two groups, because NO SINGLE PREDICATE COVERS BOTH and saying so is the
+# point. A command-flow predicate cannot reach a skill or an agent body; a
+# "reasons about shutdown" predicate cannot be evaluated mechanically at all.
+# The second group is therefore an EXPLICIT, JUSTIFIED EXCEPTION LIST — not
+# derivation, and not an unexplained hand-list.
+
+# Group 1 — lifecycle commands whose flow stops teammates. Cross-checked in the
+# additive direction by test_no_undeclared_teammate_stopping_command below.
+TERMINATION_COMMAND_SURFACES = [
+    ("commands/pause.md",   ("observed not to terminate", "n=1 pane", 'TaskStop("{teammate_name}")')),
+    ("commands/refresh.md", ("observed not to terminate", "n=1 pane", 'TaskStop("{teammate_name}")')),
+    ("commands/wrap-up.md", ("observed not to terminate", "n=1 pane", 'TaskStop("{teammate_name}")')),
 ]
+
+# Group 2 — surfaces that REASON about shutdown without running a loop. Each
+# row states why no command-flow predicate reaches it.
+#   imPACT.md            — a command, but terminates ONE unrecoverable agent;
+#                          not a session-terminating flow, so deliberately NOT
+#                          in SESSION_TERMINATING_FLOWS below.
+#   pact-agent-teams     — a skill: the teammate-side receiving protocol.
+#   pact-orchestrator.md — an agent body: lead-side guidance.
+TERMINATION_REASONING_SURFACES = [
+    ("commands/imPACT.md",               ("observed not to terminate", "n=1 pane")),
+    ("skills/pact-agent-teams/SKILL.md", ("observed not to terminate", "n=1 pane")),
+    ("agents/pact-orchestrator.md",      ("observed not to terminate", "n=1 pane")),
+]
+
+TERMINATION_SKELETON_SURFACES = (
+    TERMINATION_COMMAND_SURFACES + TERMINATION_REASONING_SURFACES
+)
 
 
 class TestShutdownTerminationSkeletonAcrossSurfaces:
     """The shutdown termination rule spans multiple LLM-loaded surfaces.
 
-    Detects: single-surface drift. An edit that removes the rule from one
-    surface while the others keep it silently forks the team's understanding
-    of whether shutdown_request alone terminates a teammate (it does not —
-    TaskStop is the termination primitive).
+    Detects: single-surface drift. An edit that drops the rule from one
+    surface while the others keep it silently forks the team's account of
+    what the primitives were measured to do.
+
+    This is a CONSISTENCY guarantee and not a soundness one, and the
+    distinction is load-bearing: these surfaces descend from one authoring
+    decision, so agreement between them is not corroboration. What keeps
+    the shared wording honest is that it carries its own bound inline —
+    which is why each row pins the claim AND the bound, and neither token
+    is sufficient alone.
     """
 
     @pytest.mark.parametrize(
@@ -1170,7 +1234,261 @@ class TestShutdownTerminationSkeletonAcrossSurfaces:
         for token in tokens:
             assert token in text, (
                 f"{relpath} lost the shutdown termination-skeleton anchor "
-                f"{token!r}. Every surface that instructs teammate shutdown "
-                f"must state (or embody) the two-tier rule: shutdown_request "
-                f"is cooperative-only; TaskStop is the termination primitive."
+                f"{token!r}. Every surface that instructs or reasons about "
+                f"teammate shutdown must carry the measured claim WITH its "
+                f"bound — an approved shutdown_response was observed not to "
+                f"terminate a tmux teammate, n=1 pane — and every surface "
+                f"that runs a loop must also carry the TaskStop call. A claim "
+                f"restored without its bound is the drift this pin exists to "
+                f"catch."
             )
+
+
+GRACEFUL_REQUEST_CALL_FORM = '"type": "shutdown_request"'
+
+
+@pytest.mark.parametrize("relpath", [r for r, _ in TERMINATION_COMMAND_SURFACES])
+def test_no_graceful_request_in_shutdown_loops(relpath):
+    """Detects RE-ADDITION of the graceful tier to a shutdown loop.
+
+    Direction matters: a presence pin defends existing text against deletion
+    and cannot fire on omission. After a deliberate REMOVAL the drift vector
+    inverts to re-addition, which only an absence assertion catches.
+
+    Targets the CALL FORM, not the word: prose on these surfaces legitimately
+    names `shutdown_request` when explaining why none is sent, so a bare
+    "shutdown_request" not-in-text pin would fail on correct text.
+    """
+    text = (COMMANDS_DIR.parent / relpath).read_text(encoding="utf-8")
+    # Non-vacuity control: the fixture must be live and the file must be the
+    # one we think it is. Without this, a bad path or an empty read passes.
+    assert 'TaskStop("{teammate_name}")' in text, (
+        f"non-vacuity control failed: {relpath} does not contain the shutdown "
+        f"loop's TaskStop call — the fixture is wrong, so the absence "
+        f"assertion below would pass vacuously"
+    )
+    assert GRACEFUL_REQUEST_CALL_FORM not in text, (
+        f"{relpath} re-introduced a graceful shutdown_request into its "
+        f"shutdown loop. The request was removed deliberately: no loop read "
+        f"the response, so a teammate's reject could not take effect, and "
+        f"approving buys no flush. If this is intentional, the removal "
+        f"rationale on all six termination surfaces must change with it."
+    )
+
+
+RETIRED_SEMANTICS_TOKEN = "cooperative-only"
+
+
+@pytest.mark.parametrize("relpath", [r for r, _ in TERMINATION_SKELETON_SURFACES])
+def test_retired_semantics_token_absent(relpath):
+    """Detects RE-ADDITION of the retired semantics claim.
+
+    Same direction rule as test_no_graceful_request_in_shutdown_loops: this
+    token was REMOVED, so the drift vector is re-addition, which a presence
+    pin cannot see. `cooperative-only` asserts the request is cooperative BY
+    DESIGN — a semantics the primary record explicitly declined to assert,
+    calling platform-bug-vs-intended open.
+    """
+    text = (COMMANDS_DIR.parent / relpath).read_text(encoding="utf-8")
+    assert "observed not to terminate" in text, (
+        f"non-vacuity control failed: {relpath} does not carry the "
+        f"replacement claim, so the absence assertion below is vacuous"
+    )
+    assert RETIRED_SEMANTICS_TOKEN not in text, (
+        f"{relpath} re-introduced {RETIRED_SEMANTICS_TOKEN!r}. It asserts a "
+        f"semantics the primary record declined to assert. If that semantics "
+        f"has since been MEASURED, this pin comes out with the measurement "
+        f"cited — not because the word reads better."
+    )
+
+
+# A deprecation word is permitted ONLY inside a denial. Polarity, not presence:
+# the rule is semantic ("no surface may ASSERT deprecation"), so a substring
+# test is the wrong instrument — every denial contains the word.
+_DEPRECATION_DENIAL = re.compile(r"\bnot\s+(?:\w+\s+){0,2}deprecated\b")
+_DEPRECATION_WORD = re.compile(r"deprecat\w*")
+
+# Surfaces carrying BLOCK C's foreclosure. imPACT.md is deliberately absent:
+# its wording carries no deprecation clause, so requiring one would invent
+# content.
+DEPRECATION_DENIAL_SURFACES = [
+    "commands/pause.md",
+    "commands/refresh.md",
+    "commands/wrap-up.md",
+    "skills/pact-agent-teams/SKILL.md",
+    "agents/pact-orchestrator.md",
+]
+
+
+def _asserts_deprecation(line):
+    """True iff a deprecation word appears OUTSIDE a denial.
+
+    The `{0,2}` window admits "not deprecated", "not formally deprecated",
+    "not yet formally deprecated". A naive `"not deprecated" not in line`
+    exclusion FALSE-POSITIVES on the second of those, and it also misses a
+    line that denies once and asserts again ("not deprecated for status
+    messages, but deprecated for shutdown"). Per-occurrence polarity catches
+    both.
+
+    KNOWN LIMIT, measured: the denial pattern recognises denials of the
+    ADJECTIVE "deprecated" only. A nominalised denial — "shutdown_request
+    deprecation is not planned" — has no "not ... deprecated" span, so the
+    word reads as an assertion and the line is flagged. That is a false
+    positive on correct text. It is left in deliberately: this pin fails
+    CLOSED, so the cost is a visible red on a rephrasing rather than a silent
+    miss, and widening the denial pattern to cover nominalisations would
+    start admitting the assertions it exists to catch.
+    """
+    low = line.lower()
+    denials = [m.span() for m in _DEPRECATION_DENIAL.finditer(low)]
+    return any(
+        not any(s <= m.start() and m.end() <= e for s, e in denials)
+        for m in _DEPRECATION_WORD.finditer(low)
+    )
+
+
+def test_no_surface_asserts_deprecation():
+    """Detects the compression drift: a future editor shortening the deviation
+    notice into a bare "shutdown_request is deprecated". It is not — no
+    changelog notice (v2.1.203-218), the "(legacy)" heading covers the
+    structured-JSON-over-SendMessage pattern (plan_approval_request sits under
+    it too), and a successor is documented only for STATUS messages, none for
+    shutdown.
+
+    LINE-SCOPED, not file-scoped: "deprecat" appears legitimately in six
+    shipped files for unrelated reasons (variety_score None-tolerance, API
+    versioning, an n8n error code). Scoping to lines that also mention
+    shutdown_request keeps the pin green on all of those.
+    """
+    seen_token = False
+    offenders = []
+    for relpath, _ in TERMINATION_SKELETON_SURFACES:
+        text = (COMMANDS_DIR.parent / relpath).read_text(encoding="utf-8")
+        for n, line in enumerate(text.splitlines(), 1):
+            if "shutdown_request" not in line:
+                continue
+            seen_token = True
+            if _asserts_deprecation(line):
+                offenders.append(f"{relpath}:{n}")
+    # Non-vacuity control: if no line anywhere mentions the token, the scan is
+    # broken and the clean result below means nothing.
+    assert seen_token, (
+        "non-vacuity control failed: no line across the termination surfaces "
+        "mentions shutdown_request — the scan is not seeing the corpus"
+    )
+    assert not offenders, (
+        f"shutdown_request asserted as deprecated at {offenders}. It is not "
+        f"deprecated — it is labelled legacy, and the platform instructs leads "
+        f"not to originate one unless asked. Say that instead. If it HAS since "
+        f"been deprecated, this pin comes out with the changelog entry cited."
+    )
+
+
+@pytest.mark.parametrize("relpath", DEPRECATION_DENIAL_SURFACES)
+def test_deprecation_denial_survives(relpath):
+    """The other direction, which the negative pin cannot see: BLOCK C's
+    foreclosure being DELETED rather than inverted.
+
+    With the clause gone there is no deprecation word left, so the negative
+    pin above goes quietly green on a surface that now implies deprecation by
+    omission — "legacy" plus "don't originate unless asked" reads as deprecated
+    to anyone who does not know better, which is exactly the inference the
+    denial exists to block.
+    """
+    text = (COMMANDS_DIR.parent / relpath).read_text(encoding="utf-8")
+    assert "shutdown_request" in text, (
+        f"non-vacuity control failed: {relpath} no longer mentions "
+        f"shutdown_request, so the denial assertion below is vacuous"
+    )
+    assert _DEPRECATION_DENIAL.search(text.lower()), (
+        f"{relpath} lost BLOCK C's deprecation denial. Without it, 'labelled "
+        f"legacy' and the don't-originate instruction read as deprecation by "
+        f"implication. The denial is required content, not optional hedging."
+    )
+
+
+# The issue's requested predicate, made concrete: for each lifecycle command
+# whose flow terminates teammate participation, the TERMINAL section carries a
+# real TaskStop call. SECTION-SCOPED, so a TaskStop elsewhere in the file
+# cannot satisfy it. This is the assertion shape a presence pin cannot express:
+# it fails on a file that SHOULD carry the instruction and does not — the
+# direction the prior guard was structurally blind to.
+SESSION_TERMINATING_FLOWS = {
+    "commands/pause.md":   "### 6. Shut Down Teammates",
+    "commands/refresh.md": "### 5. SHUTDOWN teammates",
+    "commands/wrap-up.md": "### Teammate shutdown — end-session branch only",
+}
+
+
+def _section_by_heading(text, heading):
+    """Body of `heading`, ending at the next heading of the SAME OR SHALLOWER
+    depth.
+
+    Depth-aware on purpose. The three commands do not agree on heading level:
+    pause.md and refresh.md put their steps at `###` under a `## Steps`
+    parent, while wrap-up.md puts its steps at `##`. A hard-coded "slice to
+    the next `## `" would therefore run to end-of-file on two of the three,
+    swallowing the following step and letting a TaskStop anywhere downstream
+    satisfy the assertion. Section-scoping is the entire point of this test,
+    so the slice has to actually scope.
+
+    Residual, stated rather than hidden — and stated as the mechanism that
+    actually holds, because a residual naming the wrong cause is worse than
+    none: the slice terminates on headings at the anchor's depth OR SHALLOWER,
+    so a later `## ` step correctly ends it even when the anchor is the last
+    section in the file. What it cannot exclude is a heading DEEPER than the
+    anchor. A `#### ` subsection nested inside this section, carrying a
+    TaskStop, satisfies the assertion even if the section's own call is gone.
+    Verified by execution in both directions.
+    """
+    idx = text.find(heading)
+    assert idx != -1, f"section heading not found: {heading!r}"
+    depth = len(heading) - len(heading.lstrip("#"))
+    body_start = idx + len(heading)
+    nxt = re.search(rf"^#{{1,{depth}}} ", text[body_start:], re.M)
+    return text[body_start:] if nxt is None else text[body_start:body_start + nxt.start()]
+
+
+@pytest.mark.parametrize(
+    ("relpath", "heading"),
+    sorted(SESSION_TERMINATING_FLOWS.items()),
+    ids=sorted(SESSION_TERMINATING_FLOWS),
+)
+def test_terminal_flow_carries_taskstop(relpath, heading):
+    text = (COMMANDS_DIR.parent / relpath).read_text(encoding="utf-8")
+    section = _section_by_heading(text, heading)
+    assert 'TaskStop("{teammate_name}")' in section, (
+        f"{relpath}'s terminal flow ({heading}) does not call TaskStop. A "
+        f"lifecycle command that ends teammate participation must stop them; "
+        f"reporting that they will stop is not stopping them."
+    )
+
+
+def test_no_undeclared_teammate_stopping_command():
+    """Detects the omission shape in the ADDITIVE direction: a command that
+    instructs TaskStop but carries no row in the role table. A presence pin can
+    only fail on deletion; this fails on an undeclared addition, which is how
+    wrap-up.md was missed.
+
+    IRREDUCIBLE RESIDUAL: a command that SHOULD stop teammates, does not, and
+    is undeclared stays invisible — the evidence for that omission is exactly
+    the text that is absent. The role table makes it a visible authoring
+    decision; it does not make it detectable.
+    """
+    declared = {relpath for relpath, _ in TERMINATION_SKELETON_SURFACES}
+    found = [
+        f"commands/{p.name}"
+        for p in sorted(COMMANDS_DIR.glob("*.md"))
+        if "TaskStop(" in p.read_text(encoding="utf-8")
+    ]
+    # Non-vacuity control: an empty scan would make the assertion below pass
+    # for free.
+    assert found, "non-vacuity control failed: no command contains TaskStop("
+    undeclared = sorted(set(found) - declared)
+    assert not undeclared, (
+        f"{undeclared} instruct TaskStop but are not declared in "
+        f"TERMINATION_SKELETON_SURFACES. Add a row — and decide explicitly "
+        f"whether the file also belongs in SESSION_TERMINATING_FLOWS "
+        f"(it does if its flow ends teammate participation; imPACT.md does "
+        f"not, because it terminates one unrecoverable agent)."
+    )

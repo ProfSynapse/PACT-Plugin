@@ -520,9 +520,13 @@ When you receive a `shutdown_request`:
 | Idle, consultant with no active questions, or domain no longer relevant | Approve |
 | Mid-task, awaiting response, or remediation may need your input | Reject with reason |
 
-> **Save learnings incrementally**: under guarantee-tier shutdown flows the lead may follow the graceful request with an immediate `TaskStop`, so you can be reaped before ever seeing the request. Save domain learnings to your agent memory as you work and treat any turn as possibly your last; approving a `shutdown_request` is a courtesy, not your save trigger.
+> **Save learnings incrementally**: PACT's shutdown flows call `TaskStop` directly and send no request first, so you can be stopped with no warning at all. Save domain learnings to your agent memory as you work and treat any turn as possibly your last; approving a `shutdown_request` is a courtesy, not your save trigger.
 
-`shutdown_request` is cooperative-only. Empirically, on the tmux backend an approved `shutdown_response` does not terminate the teammate's pane/process — approval authorizes termination but does not perform it. On the in-process backend, `shutdown_response` semantics are unprobed: platform documentation claims approval terminates the process, but this is unverified in either direction. `TaskStop` is the termination primitive; any flow that requires a teammate actually gone MUST follow the graceful request with `TaskStop` (or verify pane/process death).
+`TaskStop` is the termination primitive, and PACT's shutdown flows call it directly. **No PACT flow sends you a `shutdown_request`** — it was removed from every shutdown loop because no loop read the response, so the reject option above could not take effect in one, and approving buys no flush.
+
+What was measured, and its bound: on the tmux backend an approved `shutdown_response` was **observed not to terminate** the teammate's pane/process — n=1 pane, 2026-07-12, plugin 4.6.0 / CC 2.1.207 — and whether that is a platform bug or intended behaviour is unresolved. On the in-process backend, `shutdown_response` semantics are **unprobed**: platform documentation claims approval terminates the process, but this is unverified in either direction. `TaskStop` was measured to remove the roster entry and end reachability in-process (n=1, 2026-07-26, CC 2.1.219) and to reap pane and process on tmux (n=1, same run). Against a mid-turn teammate `TaskStop` is unmeasured on both backends.
+
+This is a deliberate PACT-layer deviation: the platform documents a cooperative flow — request, approve, exit — and documents no `TaskStop` for shutdown. `shutdown_request` is not deprecated; the platform labels the structured-request pattern legacy and instructs leads not to originate one unless asked. **The response protocol above is still live** — the platform may deliver a request, and a lead may send one ad hoc at a user's request, which is precisely the platform's sanctioned case. Reply as the table directs when one arrives.
 
 ## Completion Integrity (SACROSANCT)
 

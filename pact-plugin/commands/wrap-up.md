@@ -194,6 +194,29 @@ Audit and optionally clean up Task state:
 ## 8. Session Decision
 
 Use `AskUserQuestion` with these exact options:
-- **"Yes, continue"** (description: "Keep team alive, ready for next task") → On selection: Report "Ready for next task."
-- **"Pause work for now"** (description: "Save session knowledge and pause — resume later") → On selection: invoke `/PACT:pause`
-- **"No, end session"** (description: "Natural cleanup — platform reaps processes, 30-day TTL cleans directories (recommended)") → On selection: Report "Session complete. Teammate processes will be terminated when this session ends. Team and task directories (`~/.claude/teams/`, `~/.claude/tasks/`) are reaped automatically after 30 days by TTL cleanup."
+- **"Yes, continue"** (description: "Keep team alive, ready for next task") → On selection: Report "Ready for next task." Teammates stay alive — do NOT stop them on this branch.
+- **"Pause work for now"** (description: "Save session knowledge and pause — resume later") → On selection: invoke `/PACT:pause`. That command owns the teammate shutdown — do NOT stop teammates here; a second loop on this branch would duplicate what `/PACT:pause` already does.
+- **"No, end session"** (description: "Stop teammates now, then close out — PACT's 30-day TTL cleans directories (recommended)") → On selection: run the teammate-shutdown loop below, then report.
+
+### Teammate shutdown — end-session branch only
+
+Run this **only** on the end-session branch. Shut down each active teammate **by name**, staggered 1 teammate per turn (rate-limit discipline — 1 op per teammate).
+
+```
+For each active teammate:
+  TaskStop("{teammate_name}")
+```
+
+Treat a `TaskStop` not-found / already-exited error as already-stopped success and CONTINUE the loop — never abort mid-iteration; an abort strands later teammates unstopped.
+
+The secretary is included in the loop. On the normal path, step 5's drain-confirmation already established that its consolidation completed, so stopping it here loses nothing. **If step 5 took its cannot-confirm branch — which warns rather than halts — that guarantee does not hold**: the secretary may still be mid-harvest, and `TaskStop` is unconditional. Stop it LAST in the loop, and say so in the report, so an undrained journal is visible rather than silent.
+
+**Why no graceful request** (documentary, not empirical): a `shutdown_request` was removed from every PACT shutdown loop because no loop ever read the response — the stop followed unconditionally, so a teammate's reject could not take effect — and approving buys no flush, since teammates are instructed to save learnings incrementally rather than at shutdown.
+
+**What was measured, and its bound**: on the tmux backend an approved `shutdown_response` was **observed not to terminate** the teammate's pane/process — n=1 pane, 2026-07-12, plugin 4.6.0 / CC 2.1.207, platform-bug-vs-intended unresolved. On the in-process backend `shutdown_response` semantics are **unprobed**. `TaskStop` was measured to remove the roster entry and end reachability in-process (n=1, 2026-07-26, CC 2.1.219) and to reap pane and process on tmux (n=1, same run). Against a **mid-turn** teammate `TaskStop` is **unmeasured on both backends** — wrap-up will stop mid-turn teammates, which carries no *additional* risk, on an axis that was already unmeasured. It is not risk-free.
+
+**Deviation notice**: the platform documents a cooperative shutdown flow — request, approve, exit — and documents no `TaskStop` for it. PACT deviates deliberately, on the measurement above. `shutdown_request` is not deprecated; the platform labels the structured-request pattern legacy and instructs leads not to originate one unless asked, so a flow that sends none is conformant on that point. The request remains available as a protocol capability — see the Shutdown section of the pact-agent-teams skill — but no PACT flow originates one.
+
+EXPECTED post-state: each stop removes that member's roster entry — the config FILE and the team IDENTITY survive; a lead-only roster is the correct post-shutdown state, not corruption. Do NOT delete the team.
+
+Then report: "Session complete. All teammates stopped. Team and task directories (`~/.claude/teams/`, `~/.claude/tasks/`) are reaped after 30 days by PACT's own `session_end` hook — this is a plugin behaviour that runs when the hook runs, not a platform guarantee."
