@@ -12,6 +12,8 @@ Used by:
 - setup_memory.py: Directory creation (PACT_MEMORY_DIR)
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 # Base directory for all PACT memory data

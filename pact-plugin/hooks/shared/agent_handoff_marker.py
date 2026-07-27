@@ -266,11 +266,21 @@ def _resolve_marker_target(
     # and mkdir(exist_ok=True) silently follows an existing symlink.
     # Re-resolve both paths and verify marker_dir is still contained within
     # the base. commonpath (not str.startswith — defeats the /teams/foo vs
-    # /teams/foobar prefix-collision) is the robust containment test; chosen
-    # over Path.is_relative_to because pyproject pins requires-python >=3.7
-    # and is_relative_to is 3.9+. On breach OR any resolution error: fail-open
-    # emit (return None) WITHOUT writing a marker at the escaped path —
-    # consistent with the is_symlink() pre-check's fail-open posture.
+    # /teams/foobar prefix-collision) is the robust containment test, and that
+    # prefix-collision reason is the ONLY reason it is preferred here.
+    # This was previously also justified as commonpath over Path.is_relative_to
+    # "because pyproject pins requires-python >=3.7 and is_relative_to is 3.9+".
+    # That argument is INVALID and is recorded here so it is not re-derived.
+    # pyproject does declare >=3.7, but nothing on the install path consults
+    # requires-python, so the declaration is inert; the ENFORCED floor is 3.9
+    # (the CI lint target and the 3.9 AST gate), and the oldest interpreter a
+    # consumer plausibly runs the hooks under is 3.9.6. is_relative_to is
+    # therefore available at the operative floor and rejects the prefix
+    # collision too, so either primitive would be correct -- the choice is not
+    # load-bearing and only the stated reason was wrong.
+    # On breach OR any resolution error: fail-open emit (return None) WITHOUT
+    # writing a marker at the escaped path — consistent with the is_symlink()
+    # pre-check's fail-open posture.
     try:
         real_marker = os.path.realpath(marker_dir)
         real_base = os.path.realpath(base)

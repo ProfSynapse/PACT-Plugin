@@ -11,6 +11,8 @@ Used by:
 - memory_api.py: Generates embeddings when saving memories
 """
 
+from __future__ import annotations
+
 import logging
 import threading
 from typing import Any, Dict, List, Optional

@@ -13,6 +13,8 @@ Used by:
 - memory_api.py: High-level search() method
 """
 
+from __future__ import annotations
+
 import logging
 import struct
 from typing import Any, Dict, List, Optional, Set, Tuple

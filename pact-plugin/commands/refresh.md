@@ -117,15 +117,16 @@ The timestamp (`ts`) is set automatically by the journal writer and becomes the 
 
 ### 5. SHUTDOWN teammates
 
-Shut down each active teammate **by name**, staggered 1 teammate per turn — the stagger counts ops, and request + stop = 2 ops (rate-limit discipline): graceful `shutdown_request` first, then `TaskStop(name)` as the guarantee tier — `shutdown_request` is cooperative-only (empirically, on the tmux backend an approved `shutdown_response` does not terminate the teammate's pane/process); `TaskStop` is authoritative.
+Shut down each active teammate **by name**, staggered 1 teammate per turn. `TaskStop("{teammate_name}")` is the termination primitive and the only call this loop makes: do NOT send a `shutdown_request` first.
 
 ```
 For each active teammate:
-  SendMessage(to="{teammate_name}", message={"type": "shutdown_request", "reason": "Context refresh — checkpoint written, resuming after /compact"})
-  then: TaskStop("{teammate_name}")
+  TaskStop("{teammate_name}")
 ```
 
-EXPECTED post-state: each stop removes that member's roster entry — the config FILE and the team IDENTITY survive; a lead-only roster is the correct post-refresh state, not corruption. Do NOT add synchronous send-confirmation (message delivery lands asynchronously) — verify by a disk re-read of the team config, or simply proceed. Do NOT delete the team.
+Treat a `TaskStop` not-found / already-exited error as already-stopped success and CONTINUE the loop — never abort mid-iteration; an abort strands later teammates unstopped.
+
+EXPECTED post-state: each stop removes that member's roster entry — the config FILE and the team IDENTITY survive; a lead-only roster is the correct post-refresh state, not corruption. Do NOT add a synchronous confirmation step — verify by a disk re-read of the team config, or simply proceed. Do NOT delete the team.
 
 ### 6. STANDBY
 

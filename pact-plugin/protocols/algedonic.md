@@ -183,7 +183,7 @@ To stop all in-progress teammates (HALT, shutdown, or any other team-lead-to-man
 
 Each message lands at the teammate's next idle boundary (see [Algedonic-Signal Latency Caveat](pact-communication-charter.md#algedonic-signal-latency-caveat)). For immediate halt of in-flight teammate work, escalate to user for manual interrupt — `SendMessage` cannot interrupt a mid-turn teammate.
 
-Use the same iterate-by-name pattern for any other team-lead-to-many signal (graceful shutdown via `shutdown_request`, `plan_approval_request`, plain-text announcements). There is no broadcast addressing mode.
+Use the same iterate-by-name pattern for any other team-lead-to-many signal (`plan_approval_request`, plain-text announcements, or a `shutdown_request` on the rare occasion a user asks for one — PACT's own flows send none). There is no broadcast addressing mode.
 
 ### User Response Options
 

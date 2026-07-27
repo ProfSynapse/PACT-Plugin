@@ -407,7 +407,7 @@ Exceptions:
 - rePACT sub-scope specialists shut down after their nested cycle (orchestrator relays handoff details to subsequent sub-scopes)
 - comPACT specialists shut down when user chooses "Pause work for now"
 
-`shutdown_request` is cooperative-only — empirically, on the tmux backend an approved `shutdown_response` does not terminate the teammate's pane/process. `TaskStop("{teammate_name}")` is the authoritative termination primitive (reaps the pane/process and removes the roster entry; the team config file and team identity survive): any flow that requires a teammate actually gone MUST follow the graceful request with `TaskStop`.
+`TaskStop("{teammate_name}")` is the termination primitive and PACT's shutdown flows call it directly, sending no `shutdown_request` first. `TaskStop` reaps the pane/process and removes the roster entry; the team config file and team identity survive.
 
 **Inter-teammate messages always go individually by name.** `SendMessage` requires a specific `to=` recipient — there is no broadcast addressing mode. To reach multiple teammates (HALT, shutdown, plan approval, structured protocol messages, plain-text announcements), iterate over the relevant teammates and send one `SendMessage` per recipient. Use the Lead-Side HALT Fan-Out idiom below as the canonical pattern.
 
@@ -425,7 +425,7 @@ To stop all in-progress teammates (HALT, shutdown, or any other team-lead-to-man
 
 Each message lands at the teammate's next idle boundary. For immediate halt of in-flight teammate work, escalate to user for manual interrupt — `SendMessage` cannot interrupt a mid-turn teammate.
 
-Use the same iterate-by-name pattern for any other team-lead-to-many signal (graceful shutdown via `shutdown_request`, `plan_approval_request`, plain-text announcements). There is no broadcast addressing mode.
+Use the same iterate-by-name pattern for any other team-lead-to-many signal (`plan_approval_request`, plain-text announcements, or a `shutdown_request` on the rare occasion a user asks for one — PACT's own flows send none). There is no broadcast addressing mode.
 
 ### Agent Task Tracking
 

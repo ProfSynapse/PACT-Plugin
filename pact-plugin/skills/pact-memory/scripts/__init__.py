@@ -13,6 +13,8 @@ Complete package for the PACT Memory skill including:
 - Setup: Auto-initialization and model download
 """
 
+from __future__ import annotations
+
 # Database layer
 from .database import (
     # Connection management

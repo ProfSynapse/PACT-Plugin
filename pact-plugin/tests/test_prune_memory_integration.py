@@ -6,7 +6,10 @@ Risk tier: HIGH. These tests exercise the full evict-retry loop that
 curators will run when the count cap fires:
   1. Curator attempts to add a 13th pin → pin_caps_gate DENIES (count cap).
   2. Curator runs `check_pin_caps --status` → JSON lists 12 evictable pins.
-  3. Curator simulates prune-memory.md's Step 3: Edit removing one pin.
+  3. Curator simulates prune-memory.md's Step 4: Edit removing one pin.
+     (Step 3, the archive-and-verify gate that must pass before that Edit
+     is emitted, is exercised separately — this round-trip covers the
+     gate/CLI interlock, not the archival path.)
      → pin_caps_gate ALLOWS (post < pre → net-worse=False).
   4. Curator retries the original add → pin_caps_gate ALLOWS (under cap now).
 
@@ -136,20 +139,46 @@ class TestMockCuratorRoundTrip:
         assert "Pin count cap" in result
 
     def test_cli_status_lists_all_evictable_pins(self, curator_env):
-        """Step 2: CLI --status returns the evictable-pin list."""
+        """Step 2: CLI --status returns the evictable-pin list.
+
+        The key set is asserted as an EXACT equality and the contract has
+        GROWN: `age_days` and `overdue` joined the original five when the
+        additive age signal landed, because the eviction ordering needs a
+        signal that actually fires (the marker-based `stale` flag does not
+        fire on the canonical pin format).
+
+        Kept as `==` rather than relaxed to a subset check when it grew.
+        prune-memory.md instructs curators to parse these entries BY NAME,
+        so a field that silently vanishes breaks the command just as badly
+        as one that silently appears, and a subset check can only see the
+        second. Widening the expected set records the new contract;
+        loosening the operator would have discarded the property.
+        """
         curator_env["reset_state"](n_pins=12)
         rc, payload = curator_env["call_cli"](["--status"])
         assert rc == 0
         assert payload["allowed"] is True
         assert len(payload["evictable_pins"]) == 12
-        # Each entry has the documented shape.
+        # Each entry has the documented shape. Kept as an EXACT set rather
+        # than a subset check: prune-memory.md tells curators to parse these
+        # entries by name, so an unannounced field addition or rename in the
+        # CLI contract should fail here rather than surface as a curator
+        # reading a key that is no longer there. `age_days` / `overdue` are
+        # the additive age signal the eviction ordering keys on.
         for entry in payload["evictable_pins"]:
             assert set(entry.keys()) == {
-                "index", "heading", "chars", "stale", "override"
+                "index", "heading", "chars", "stale", "override",
+                "age_days", "overdue",
             }
             assert isinstance(entry["index"], int)
             assert isinstance(entry["heading"], str)
             assert not entry["heading"].startswith("### ")  # Stripped per CLI.
+            # Dated fixture pins, so both age fields are populated here. The
+            # unknown-age third state (both null) is covered where the age
+            # computation itself is tested; what matters for the prune flow
+            # is that `overdue` is never a bare False standing in for null.
+            assert isinstance(entry["age_days"], int)
+            assert isinstance(entry["overdue"], bool)
 
     def test_prune_edit_allowed_when_count_decreases(self, curator_env):
         """Step 3: Edit removing one pin block is ALLOWED.
@@ -329,14 +358,152 @@ class TestPruneMemoryProseContract:
         )
         return path.read_text(encoding="utf-8")
 
-    def test_has_four_step_process(self, prune_md):
-        """Spec is structured as four steps. A step deletion would
-        silently amputate the workflow."""
-        step_headings = re.findall(r"^### Step \d+", prune_md, re.MULTILINE)
-        assert len(step_headings) == 4, (
-            f"prune-memory.md should have exactly 4 steps, found "
-            f"{len(step_headings)}: {step_headings}"
+    def test_has_all_required_steps(self, prune_md):
+        """Spec is a named step sequence, and a step deletion would
+        silently amputate the workflow.
+
+        This guard's STATED purpose has always been deletion-detection.
+        It previously spelled that as `len(step_headings) == 4`, which
+        is both stricter and weaker than the intent: stricter because it
+        rejects a justified ADDITION, and weaker because a count cannot
+        say WHICH step vanished — swapping two steps for two others
+        passes it. Pinning the steps BY NAME is strictly better
+        deletion-detection, so the rewrite is a correction to the
+        assertion rather than a relaxation of the guard.
+
+        The floor permits justified addition — an archive-and-verify
+        step was added when eviction became archive-gated — while any
+        rename or removal of a named step still fails.
+        """
+        headings = re.findall(r"^### Step \d+ — (.+)$", prune_md, re.MULTILINE)
+        assert headings, (
+            "no '### Step N — ' headings found in prune-memory.md — this "
+            "guard cannot verify a sequence it cannot locate. Re-aim the "
+            "pattern rather than deleting this line. NOTE this is a "
+            "DIAGNOSTIC, not a vacuity guard: measured, an empty match set "
+            "already fails every assertion below (the bijection finds no "
+            "match for the first required name, and the floor fails at 0 "
+            "of 5). It exists so the failure names the real cause — a "
+            "broken pattern — instead of surfacing as a confusing report "
+            "that every required step is missing."
         )
+        # BIJECTION, not `any(required in h for h in headings)`. Matching
+        # each required name against ANY heading lets ONE heading satisfy
+        # TWO requirements, so folding a step into a sibling's title --
+        # "### Step 3 — Archive the selected pin and Report" while renaming
+        # step 5 -- DELETES a step and still passes, with the >= 5 floor met
+        # by whatever filler remains. Measured: `any()` passes that
+        # mutation, this does not. Consuming each match makes "every
+        # required step exists as its OWN heading" the actual assertion,
+        # which is what the docstring above has always claimed.
+        remaining = list(headings)
+        for required in ("Read the evictable-pin list", "Ask the curator",
+                         "Archive the selected pin", "Remove the selected pin",
+                         "Report"):
+            match = next((h for h in remaining if required in h), None)
+            assert match is not None, (
+                f"prune-memory.md missing required step {required!r} as a "
+                f"distinct heading; unconsumed headings: {remaining} "
+                f"(all headings: {headings})"
+            )
+            remaining.remove(match)
+        assert len(headings) >= 5, (
+            f"prune-memory.md should have at least 5 steps, found "
+            f"{len(headings)}: {headings}"
+        )
+
+    def test_decision_prompt_frames_removal_as_demotion(self, prune_md):
+        """The AskUserQuestion prompt is the DECISION SURFACE — the one
+        sentence the curator reads at the moment they choose to give up a
+        pin — so it is where the demotion framing has to hold. Prose
+        elsewhere in the file explaining that demotion preserves content
+        does not reach a curator who reads only the prompt.
+
+        SCOPED TO THE PROMPT TEXT, deliberately. A file-wide ban on
+        'evict' is impossible and would be wrong: `evictable_pins` is the
+        CLI's field name, and 'eviction' is the accurate technical term
+        in the instructions addressed to the executing agent. The word is
+        only misleading where it describes the CONSEQUENCE to the curator,
+        which is this one line.
+
+        The negative arm is what makes this non-vacuous: a positive-only
+        check passes on a prompt reading 'Demote or evict?'.
+        """
+        prompts = re.findall(r'^\s*question:\s*"([^"]*)"', prune_md, re.MULTILINE)
+        # Guard the guard: if the AskUserQuestion block is ever restructured
+        # so no prompt is extractable, this test must fail loudly rather
+        # than pass over an empty list.
+        assert prompts, (
+            "no AskUserQuestion `question:` line found in prune-memory.md — "
+            "this guard cannot verify a decision surface it cannot locate"
+        )
+        for prompt in prompts:
+            assert re.search(r"demote", prompt, re.IGNORECASE), (
+                f"decision prompt {prompt!r} does not frame the action as "
+                "demotion; AC-B3 requires the curator-facing wording to say "
+                "the content is preserved, not removed"
+            )
+            for banned in ("evict", "delete"):
+                assert banned not in prompt.lower(), (
+                    f"decision prompt {prompt!r} contains {banned!r}; the "
+                    "prompt describes the consequence to the curator and "
+                    "must not imply the pin is discarded"
+                )
+
+    def test_step_4_consumes_the_handle_and_derives_no_boundary(self, prune_md):
+        """Step 4 removes an emitted string; it must NOT restate the span rule.
+
+        The span rule lived in BOTH `archive_pin.py` and this prose, and the
+        two diverged: the prose kept an end-boundary the script had already
+        corrected, so the destroy range was a superset of the archive range
+        and the excess was a RETAINED pin's date comment. The fix was to
+        delete the second copy, not to correct it — a corrected copy is still
+        a copy, and the copy is the drift mechanism.
+
+        So after the deletion, any reappearance of span-derivation vocabulary
+        in Step 4 IS the defect returning, which is why the negative arm is
+        the point of this test.
+
+        POSITIVE AND NEGATIVE ARMS ARE COUPLED HERE DELIBERATELY — DO NOT
+        SPLIT THEM. A bare `not in` assertion passes trivially over an empty
+        string: delete Step 4, restructure the file, or let the section
+        extraction miss, and it goes green forever. A negative assertion has
+        no natural non-vacuity arm, because absence is exactly what it seeks
+        — it cannot distinguish "the bad thing is gone" from "nothing is
+        here". The positive arm is what establishes the surface exists, so
+        the negative one means something. Split across two tests, the
+        positive reads as trivially true, someone deletes it, and the
+        negative silently becomes decoration.
+        """
+        section = re.search(
+            r"^### Step 4 — .*?(?=^### Step \d+ — )", prune_md,
+            re.MULTILINE | re.DOTALL)
+        assert section, (
+            "Step 4 section not found in prune-memory.md — the extraction is "
+            "broken or the step was removed. Re-aim rather than deleting: "
+            "without this, the negative assertions below pass over an empty "
+            "string and this guard silently protects nothing."
+        )
+        body = section.group(0)
+
+        # POSITIVE: the step consumes the emitted handle at the resolved path.
+        for required in ("delete_string", "claude_md_path"):
+            assert required in body, (
+                f"Step 4 no longer references {required!r}. It must remove the "
+                "string the verdict emitted, at the path the verdict reports — "
+                "not a boundary it works out for itself."
+            )
+
+        # NEGATIVE: and it derives no boundary of its own.
+        for banned in ("span start", "date comment line", "next `### ` heading",
+                       "preserving surrounding blank lines"):
+            assert banned not in body, (
+                f"Step 4 restates the span rule ({banned!r}). That is a SECOND "
+                "copy of a rule the archiver already owns, and the two diverged "
+                "once already — the prose kept an end-boundary the script had "
+                "corrected, destroying a retained pin's date comment. Remove "
+                "the restatement; the emitted handle is the boundary."
+            )
 
     def test_references_advisory_cli(self, prune_md):
         """Step 1 must point curators at check_pin_caps --status."""
@@ -350,6 +517,45 @@ class TestPruneMemoryProseContract:
             assert field in prune_md, (
                 f"prune-memory.md missing evictable_pins field {field!r}"
             )
+
+    def test_json_example_honors_the_three_state_age_contract(self, prune_md):
+        """The RULE and the EXAMPLE are two independent claims and can
+        disagree — this pins the example, because the example is the one
+        that gets copied.
+
+        prune-memory.md states that `age_days: null` is a third state and
+        is NOT `overdue: false`; `check_pin_caps.py` emits
+        `None if age_days is None else ...`, so the pairing the example
+        showed is one the code never produces. Found by `coder-prose`, and
+        verified by OBSERVATION rather than by reading the ternary: a
+        `--status` run over a CLAUDE.md with one dated and one undated pin
+        returned `age_days=2397, overdue=True` and `age_days=None,
+        overdue=None`. The dated pin is the positive control — an all-null
+        result would have meant a broken harness rather than a finding.
+
+        WHY THE EXAMPLE AND NOT THE RULE. The failure mode is a curator
+        COPYING the example, so the misleading artifact is the example
+        itself; adjacent prose is more likely to be skimmed than a JSON
+        block is to be mis-transcribed. A curator reasoning from
+        `overdue: false` treats an undated pin as not-overdue, silently
+        exempting the pin most likely to have sat longest — which is the
+        failure the third state exists to prevent.
+        """
+        pairs = re.findall(
+            r'"age_days":\s*(null|\d+),\s*"overdue":\s*(null|true|false)',
+            prune_md,
+        )
+        assert pairs, (
+            "no age_days/overdue pair found in prune-memory.md's JSON "
+            "example — this guard cannot check an example it cannot locate"
+        )
+        for age, overdue in pairs:
+            if age == "null":
+                assert overdue == "null", (
+                    f'example pairs "age_days": null with "overdue": '
+                    f"{overdue} — the code emits null; an unknown age is "
+                    "not the same as not-overdue"
+                )
 
     def test_declares_pagination_rule(self, prune_md):
         """Pagination (3-per-page + Show more, last page + Cancel) must

@@ -28,9 +28,22 @@ JSON output contract (stdout):
     "slot_status": "Pin slots: N/12 used, <N> chars remaining on largest pin",
     "evictable_pins": [
       {"index": int, "heading": str, "chars": int,
-       "stale": bool, "override": bool}, ...
+       "stale": bool, "override": bool,
+       "age_days": int|null, "overdue": bool|null}, ...
     ]
   }
+
+`age_days` / `overdue` are an ADDITIVE age signal. They are deliberately
+NOT named `stale` and do NOT replace it: `stale` means "a STALE marker has
+been written into the body" (marker-based, set by staleness.py), whereas
+`overdue` means "this pin is old". Two distinct facts under one name is
+what made the existing signal confusing, so they stay separate columns.
+
+Both are THREE-STATE, not two. A pin whose date comment is absent or
+unparseable reports `age_days: null` AND `overdue: null` — "unknown", never
+`overdue: false`. Rendering unknown as not-overdue would silently exempt
+exactly the pins whose provenance we cannot establish, which is the
+unevaluable-collapsed-into-valid failure this subsystem exists to avoid.
 
 Exit codes:
   0 — normal (status query or fail-open degradation)
@@ -57,10 +70,14 @@ Used by:
   - Test files: tests/test_check_pin_caps.py (advisory-path coverage)
 """
 
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import json
+import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Load pin_caps and staleness from hooks/ via importlib spec-loading.
@@ -108,24 +125,114 @@ parse_pins = _pin_caps.parse_pins
 _parse_pinned_section = _staleness._parse_pinned_section
 get_project_claude_md_path = _staleness.get_project_claude_md_path
 
+# Age-threshold source. staleness.py owns PINNED_STALENESS_DAYS; this module
+# reads it rather than declaring its own, so "overdue" and the SessionStart
+# stale-block directive can never drift to different thresholds. Do NOT
+# introduce a second constant here.
+PINNED_STALENESS_DAYS = _staleness.PINNED_STALENESS_DAYS
 
-def _build_evictable_pins(pins):
+# Date extraction from a parsed Pin.date_comment. The comment's own shape is
+# already validated upstream by pin_caps._DATE_COMMENT_RE / OVERRIDE_COMMENT_RE
+# (`<!-- pinned: ... -->`, optionally carrying a trailing clause); these two
+# patterns only pull the dates back out of a comment that already matched.
+#
+# Both are `search`, not `fullmatch`, because the comment legitimately carries
+# trailing content after the date — a size-override rationale
+# (`, pin-size-override: ...`) or a re-confirmation clause
+# (`, reconfirmed: YYYY-MM-DD because ...`). The upstream pattern is `[^>]+?`,
+# so that trailing content parses with no regex change anywhere.
+_PINNED_DATE_RE = re.compile(r"pinned:\s*(\d{4}-\d{2}-\d{2})", re.IGNORECASE)
+_RECONFIRMED_DATE_RE = re.compile(
+    r"reconfirmed:\s*(\d{4}-\d{2}-\d{2})", re.IGNORECASE
+)
+
+
+def _parse_iso_date(value):
+    """Parse a YYYY-MM-DD string to a UTC-midnight datetime, or None.
+
+    None on any unparseable value (a structurally well-formed but invalid
+    date such as 2026-13-45 raises ValueError and lands here too). Mirrors
+    staleness.detect_stale_entries' UTC-midnight convention so the two age
+    computations cannot disagree about what a calendar date means.
+    """
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+def _pin_age_days(date_comment, now=None):
+    """Return the pin's age in whole days, or None when it cannot be known.
+
+    Reads the `<!-- pinned: ... -->` comment that parse_pins already captured
+    on the Pin. RE-CONFIRMATION RESETS THE CLOCK: when a `reconfirmed:` date
+    is present the age computes from THAT date, because the curator has
+    re-attested the pin more recently than they first wrote it. That is the
+    entire behavioural point of the re-confirmation grammar — without the
+    reset, re-confirming a pin would change nothing observable.
+
+    Returns None (not 0, and not a negative sentinel) when there is no date
+    comment or no parseable date in it. None is a genuine third state meaning
+    "unknown", and callers MUST NOT collapse it into "not overdue".
+
+    A future-dated pin yields a NEGATIVE age. That is reported as-is rather
+    than clamped to 0: a negative value is a visible data anomaly, whereas
+    clamping would render a malformed date as a freshly-pinned one.
+
+    Args:
+        date_comment: Pin.date_comment, or None.
+        now: Injectable clock for tests. Defaults to the current UTC time.
+    """
+    if not date_comment:
+        return None
+
+    # Re-confirmation wins over the original pinned date when present.
+    match = _RECONFIRMED_DATE_RE.search(date_comment)
+    if match is None:
+        match = _PINNED_DATE_RE.search(date_comment)
+    if match is None:
+        return None
+
+    pinned_at = _parse_iso_date(match.group(1))
+    if pinned_at is None:
+        return None
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+    return (now - pinned_at).days
+
+
+def _build_evictable_pins(pins, now=None):
     """Transform parsed pins into the evictable_pins JSON shape.
 
     Order is presentation order (top-to-bottom in CLAUDE.md). Caller
-    (prune-memory.md) paginates 4-at-a-time into AskUserQuestion options.
+    (prune-memory.md) paginates 3 candidate pins per AskUserQuestion call,
+    plus a 4th navigation option ("Show more" / "Cancel"). The 4-option
+    ceiling is an AskUserQuestion schema cap, so the page size is 3 rather
+    than 4 -- the nav slot is not free.
+
+    `age_days` / `overdue` are additive (D7) and carry a third state: both
+    are null when the pin's date cannot be established. `overdue` is NEVER
+    false-by-default — a pin we cannot date is unknown, not fresh.
+
+    Args:
+        pins: Parsed Pin list.
+        now: Injectable clock, threaded to _pin_age_days for tests.
     """
     evictable = []
     for idx, pin in enumerate(pins):
         heading_text = pin.heading
         if heading_text.startswith("### "):
             heading_text = heading_text[4:]
+        age_days = _pin_age_days(pin.date_comment, now=now)
         evictable.append({
             "index": idx,
             "heading": heading_text,
             "chars": pin.body_chars,
             "stale": pin.is_stale,
             "override": pin.override_rationale is not None,
+            "age_days": age_days,
+            "overdue": None if age_days is None else age_days >= PINNED_STALENESS_DAYS,
         })
     return evictable
 

@@ -36,7 +36,7 @@ from test_working_memory_concurrency_comprehensive import _seed_claude_md
 # Add pact-memory skill root to path so `from scripts.cli import ...` works
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'skills', 'pact-memory'))
 
-from scripts.cli import build_parser, cmd_save, cmd_search, cmd_list, cmd_get, cmd_status, cmd_setup, cmd_update, cmd_delete, main, _COMMANDS
+from scripts.cli import build_parser, cmd_save, cmd_search, cmd_list, cmd_get, cmd_status, cmd_setup, cmd_update, cmd_delete, main, _COMMANDS, _refuse_live_db_under_pytest
 from scripts.memory_api import PACTMemory
 
 
@@ -1402,6 +1402,62 @@ class TestCliOutputFormat:
 # Error Handling
 # ---------------------------------------------------------------------------
 
+class TestLiveDbGuardScope:
+    """The live-DB guard is scoped to SPAWNED CHILDREN, deliberately.
+
+    `_refuse_live_db_under_pytest` refuses the real store when a test
+    process spawned the CLI with no `--db-path`. It must NOT fire for the
+    in-process `main()` calls this file makes: they patch `PACTMemory` and
+    open no store, and `test_main_db_path_none_when_not_specified` exists
+    precisely to assert that an omitted `--db-path` yields `db_path=None`.
+    A guard firing there would refuse a contract the CLI is meant to have.
+
+    The separation is available because the same fact that FORCES the env
+    signal for spawned children also identifies them: a child is a fresh
+    interpreter with no `pytest` in `sys.modules`.
+
+    This is pinned rather than left implicit because the ten in-process tests
+    below pass for this reason, and a maintainer who removed the `sys.modules`
+    check would see ten failures with no statement of why the check was there.
+
+    RESIDUAL, stated: an in-process `main()` call with a REAL `PACTMemory` and
+    no `--db-path` still reaches the live store. Nothing catches that; nothing
+    currently does it.
+    """
+
+    def test_in_process_callers_are_exempt(self):
+        assert "pytest" in sys.modules, (
+            "pytest is absent from this process, so this test cannot "
+            "distinguish the in-process case from the spawned-child case"
+        )
+        # Returns instead of raising SystemExit — the in-process branch.
+        assert _refuse_live_db_under_pytest(None) is None
+
+    def test_an_explicit_db_path_is_never_refused(self, tmp_path, monkeypatch):
+        """Non-vacuity: the db_path check must not be MASKED by the exemption.
+
+        Asserting this from an ordinary in-process test measures nothing. Both
+        early returns fire here — `db_path is not None` AND `pytest in
+        sys.modules` — so the call returns None whichever one is doing the
+        work, and it keeps returning None when the db_path check is deleted
+        outright. Verified by mutation: with that check removed the assertion
+        still passed, while the child-side spawn test in test_archive_pin.py
+        caught it. A control that cannot fail is not a control.
+
+        So the in-process exemption is SUPPRESSED first — pytest is hidden from
+        `sys.modules` and the inherited child signal is set, which is exactly
+        the state a spawned child is in. The db_path check is then the ONLY
+        thing that can prevent a refusal, and the assertion is coupled to it.
+        """
+        monkeypatch.delitem(sys.modules, "pytest", raising=False)
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "sentinel::test (call)")
+        assert "pytest" not in sys.modules, (
+            "precondition: the in-process exemption is still live, so this "
+            "test cannot show the db_path check is what prevents the refusal"
+        )
+        assert _refuse_live_db_under_pytest(tmp_path / "x.db") is None
+
+
 class TestCliErrorHandling:
     """Test error paths, exit codes, and the main() entry point."""
 
@@ -2481,3 +2537,138 @@ class TestCliHelpOutput:
         captured = capsys.readouterr()
         assert "--limit" in captured.out
         assert "query" in captured.out.lower()
+
+
+# ---------------------------------------------------------------------------
+# save(sync_to_claude=...) — the Working Memory projection, made optional
+# ---------------------------------------------------------------------------
+
+
+class TestSaveSyncSuppression:
+    """`save()` gained `sync_to_claude`, completing a half-built symmetry.
+
+    `search()` has carried this parameter all along and the CLI's search path
+    already passes False; `save()` never got it and called the sync
+    unconditionally. That asymmetry is why the pin-archival path could not
+    avoid writing the archived block straight back into the CLAUDE.md it was
+    removing it from — freeing the pin SLOT while leaving the bytes.
+
+    THE DEFAULT DIRECTION IS THE ONE THAT MATTERS HERE. Suppressing the sync
+    for a caller that did not ask is the damaging failure: it presents as a
+    projection quietly not appearing, which nobody notices. So the default
+    path is tested by asserting the sync ACTUALLY FIRES, not merely that the
+    save returned an id.
+    """
+
+    def _spy(self, monkeypatch):
+        calls = []
+        import scripts.memory_api as memory_api
+        monkeypatch.setattr(
+            memory_api, "sync_to_claude_md",
+            lambda *a, **k: calls.append((a, k)),
+        )
+        return calls
+
+    def test_default_still_syncs(self, tmp_path, monkeypatch):
+        """A caller that omits the parameter must be byte-identical to before."""
+        calls = self._spy(monkeypatch)
+        memory = PACTMemory(db_path=tmp_path / "d.db")
+        memory_id = memory.save(make_cli_memory_dict())
+        assert memory_id, "save must still return an id"
+        assert memory.get(memory_id) is not None, (
+            "save must still persist — otherwise the sync assertion below is "
+            "measuring a crash rather than a default"
+        )
+        assert len(calls) == 1, (
+            "the default path MUST still sync; silently suppressing it for "
+            "every existing caller is the damaging direction of this change"
+        )
+
+    def test_explicit_true_syncs(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        memory = PACTMemory(db_path=tmp_path / "d.db")
+        memory.save(make_cli_memory_dict(), sync_to_claude=True)
+        assert len(calls) == 1
+
+    def test_false_suppresses(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        memory = PACTMemory(db_path=tmp_path / "d.db")
+        memory_id = memory.save(make_cli_memory_dict(), sync_to_claude=False)
+        assert memory.get(memory_id) is not None, (
+            "the save must PERSIST — a crashed save also produces zero sync "
+            "calls, and the two are indistinguishable without this assertion"
+        )
+        assert calls == [], "sync_to_claude=False must not project"
+
+    def test_signature_mirrors_search(self):
+        """The parameter exists on both, with the same name and default."""
+        import inspect
+        save_p = inspect.signature(PACTMemory.save).parameters
+        search_p = inspect.signature(PACTMemory.search).parameters
+        assert "sync_to_claude" in save_p
+        assert save_p["sync_to_claude"].default is True
+        assert search_p["sync_to_claude"].default is True
+
+    def test_claude_md_untouched_when_suppressed(self, tmp_path):
+        """End-to-end against the REAL file the autouse fixture seeded.
+
+        Byte-identity rather than a content check: it fails if ANYTHING
+        writes, including a writer nobody has thought of, whereas a check for
+        one specific string only fails for the writer you already suspected.
+        """
+        # The autouse fixture seeds the PREFERRED layout, .claude/CLAUDE.md,
+        # not the legacy sibling — asserted rather than assumed, because a
+        # wrong path here would make every byte comparison below vacuous.
+        claude_md = tmp_path / ".claude" / "CLAUDE.md"
+        assert claude_md.exists(), "isolation fixture must have seeded a file"
+
+        before = claude_md.read_bytes()
+        memory = PACTMemory(db_path=tmp_path / "s.db")
+        memory_id = memory.save(make_cli_memory_dict(), sync_to_claude=False)
+        assert memory.get(memory_id) is not None
+        assert claude_md.read_bytes() == before, (
+            "suppressed save wrote to CLAUDE.md"
+        )
+
+        # CONTROL: the unsuppressed path MUST change the file, or the
+        # assertion above passes for a harness that cannot detect a write.
+        memory.save(make_cli_memory_dict(), sync_to_claude=True)
+        assert claude_md.read_bytes() != before, (
+            "the unsuppressed control did not write — this test cannot "
+            "distinguish suppression from an inert sync"
+        )
+
+
+class TestCliNoSyncFlag:
+    """`--no-sync` on the save subcommand, threading to the parameter."""
+
+    def test_flag_parses_and_defaults_false(self):
+        parser = build_parser()
+        assert parser.parse_args(["save", "{}"]).no_sync is False
+        assert parser.parse_args(["save", "{}", "--no-sync"]).no_sync is True
+
+    def test_flag_threads_to_the_api(self, tmp_path, monkeypatch):
+        seen = {}
+
+        def _capture(self, memory, files=None, include_tracked=True,
+                     sync_to_claude=True):
+            seen["sync_to_claude"] = sync_to_claude
+            return "a" * 32
+
+        monkeypatch.setattr(PACTMemory, "save", _capture)
+        parser = build_parser()
+
+        with pytest.raises(SystemExit):
+            cmd_save(parser.parse_args(
+                ["save", json.dumps(make_cli_memory_dict()), "--no-sync"]
+            ), db_path=str(tmp_path / "x.db"))
+        assert seen["sync_to_claude"] is False
+
+        seen.clear()
+        with pytest.raises(SystemExit):
+            cmd_save(parser.parse_args(
+                ["save", json.dumps(make_cli_memory_dict())]
+            ), db_path=str(tmp_path / "x.db"))
+        assert seen["sync_to_claude"] is True, (
+            "omitting --no-sync must reach the API as True, not as absent"
+        )

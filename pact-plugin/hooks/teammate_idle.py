@@ -3,23 +3,23 @@
 Location: pact-plugin/hooks/teammate_idle.py
 Summary: TeammateIdle hook — resource-management for zombie teammates.
          Tracks consecutive idle events for teammates whose task is
-         completed; at threshold N=3 suggests shutdown, at N=5 requests
-         shutdown via shutdown_request.
+         completed; at threshold N=3 suggests shutdown, at N=5 advises the
+         team-lead to `TaskStop` the teammate.
 Used by: hooks.json TeammateIdle hook
 
 # livelock-safe: threshold-escalation, not a nag. Message emissions
 # transition only at the IDLE_SUGGEST_THRESHOLD and IDLE_FORCE_THRESHOLD
-# boundaries — not every idle tick. Above IDLE_FORCE_THRESHOLD a
-# shutdown_request is re-emitted per tick until the team-lead processes it and
-# the platform terminates the agent (safety is protocol-level, not a
-# structural cap). Exits deterministically on every code path. Does NOT
-# consume intentional_wait.
+# boundaries — not every idle tick. Above IDLE_FORCE_THRESHOLD the stop
+# advisory is re-emitted per tick until the team-lead processes it and the
+# teammate is stopped (safety is protocol-level, not a structural cap).
+# Exits deterministically on every code path. Does NOT consume
+# intentional_wait.
 
 Idle cleanup: Track consecutive idle events for completed agents. After 3,
-suggest shutdown. After 5, request shutdown via shutdown_request.
+suggest shutdown. After 5, advise the team-lead to `TaskStop` the teammate.
 
 Input: JSON from stdin with teammate_name, team_name
-Output: JSON with systemMessage (shutdown suggestion / force request)
+Output: JSON with systemMessage (shutdown suggestion / stop advisory)
 """
 
 from __future__ import annotations
@@ -220,7 +220,8 @@ def check_idle_cleanup(
     Returns:
         Tuple of (message, should_force_shutdown):
         - message: systemMessage text or None
-        - should_force_shutdown: True if shutdown_request should be sent
+        - should_force_shutdown: True if the team-lead should be advised to
+          `TaskStop` this teammate
     """
     task = find_teammate_task(tasks, teammate_name)
 
@@ -271,7 +272,7 @@ def check_idle_cleanup(
     if current >= IDLE_FORCE_THRESHOLD:
         return (
             f"Teammate '{teammate_name}' has been idle for {current} consecutive "
-            f"events with no new work. Sending shutdown request."
+            f"events with no new work. Recommending shutdown."
         ), True
 
     if current >= IDLE_SUGGEST_THRESHOLD:
@@ -334,14 +335,11 @@ def main():
 
         if messages:
             if should_shutdown:
-                # Hooks cannot call SendMessage directly. Instruct the orchestrator
-                # to send a shutdown_request via systemMessage.
+                # Hooks cannot call tools directly. Instruct the orchestrator to
+                # stop the teammate via systemMessage.
                 messages.append(
-                    f"ACTION REQUIRED: Send shutdown_request to '{teammate_name}' "
-                    f"via SendMessage(type=\"shutdown_request\", recipient=\"{teammate_name}\"), "
-                    f"then TaskStop(\"{teammate_name}\") — shutdown_request is "
-                    f"cooperative-only and does not itself terminate the teammate; "
-                    f"TaskStop is the termination primitive."
+                    f"ACTION REQUIRED: TaskStop(\"{teammate_name}\") — call it "
+                    f"directly; do NOT send a shutdown_request first."
                 )
 
             output = {"systemMessage": IDLE_PREAMBLE + " | ".join(messages)}

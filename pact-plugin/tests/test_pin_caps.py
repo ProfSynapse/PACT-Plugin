@@ -937,6 +937,26 @@ class TestDenyReasonTemplates_Constants:
         assert str(PIN_COUNT_CAP) in rendered
         assert "prune-memory" in rendered
 
+    def test_count_template_frames_removal_as_demotion_not_deletion(self):
+        """AC-B3: the cap deny is where a curator decides whether to give up
+        a pin, so it must say what happens to the content.
+
+        `demote` names the destination; `evict` named only the removal and
+        read as loss. The negative arm is the load-bearing half — a template
+        that says "demote" while still threatening deletion would satisfy a
+        keyword check and defeat the intent.
+        """
+        from pin_caps import DENY_REASON_COUNT, PIN_COUNT_CAP
+        rendered = DENY_REASON_COUNT.format(
+            count=PIN_COUNT_CAP + 1, cap=PIN_COUNT_CAP
+        ).lower()
+        assert "demote" in rendered or "demotion" in rendered
+        assert "long-term memory" in rendered
+        assert "evict" not in rendered, (
+            "deletion framing reintroduced — AC-B3 requires demotion framing"
+        )
+        assert "delete" not in rendered
+
     def test_size_template_renders(self):
         from pin_caps import DENY_REASON_SIZE, PIN_SIZE_CAP
         rendered = DENY_REASON_SIZE.format(chars=PIN_SIZE_CAP + 100, cap=PIN_SIZE_CAP)
