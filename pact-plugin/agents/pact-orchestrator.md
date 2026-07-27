@@ -407,7 +407,7 @@ Exceptions:
 - rePACT sub-scope specialists shut down after their nested cycle (orchestrator relays handoff details to subsequent sub-scopes)
 - comPACT specialists shut down when user chooses "Pause work for now"
 
-`TaskStop("{teammate_name}")` is the termination primitive and PACT's shutdown flows call it directly, sending no `shutdown_request` first: no loop ever read the response, so a teammate's reject could not take effect in one, and approving buys no flush. On the tmux backend an approved `shutdown_response` was **observed not to terminate** the teammate's pane/process — n=1 pane, 2026-07-12, plugin 4.6.0 / CC 2.1.207, platform-bug-vs-intended unresolved — and in-process semantics are **unprobed**. `TaskStop` reaps the pane/process and removes the roster entry; the team config file and team identity survive. This is a deliberate PACT-layer deviation: the platform documents a cooperative request-approve-exit flow and documents no `TaskStop` for shutdown. `shutdown_request` is not deprecated — it is labelled legacy and the platform instructs leads not to originate one unless asked.
+`TaskStop("{teammate_name}")` is the termination primitive and PACT's shutdown flows call it directly, sending no `shutdown_request` first: no loop ever read the response, so a teammate's reject could not take effect in one, and approving buys no flush. On the tmux backend an approved `shutdown_response` was **observed not to terminate** the teammate's pane/process — n=1 pane, 2026-07-12, plugin 4.6.0 / CC 2.1.207, platform-bug-vs-intended unresolved — and in-process semantics are **unprobed**. `TaskStop` reaps the pane/process and removes the roster entry; the team config file and team identity survive. This is a selection between two documented mechanisms, not a departure: the platform documents a cooperative request-approve-exit flow in its Agent Teams guide, and documents stopping a teammate directly by name in `TaskStop`'s own tool description. PACT selects the latter on the measurement above. `shutdown_request` is not deprecated — it is labelled legacy and the platform instructs leads not to originate one unless asked.
 
 **Inter-teammate messages always go individually by name.** `SendMessage` requires a specific `to=` recipient — there is no broadcast addressing mode. To reach multiple teammates (HALT, shutdown, plan approval, structured protocol messages, plain-text announcements), iterate over the relevant teammates and send one `SendMessage` per recipient. Use the Lead-Side HALT Fan-Out idiom below as the canonical pattern.
 
@@ -425,7 +425,7 @@ To stop all in-progress teammates (HALT, shutdown, or any other team-lead-to-man
 
 Each message lands at the teammate's next idle boundary. For immediate halt of in-flight teammate work, escalate to user for manual interrupt — `SendMessage` cannot interrupt a mid-turn teammate.
 
-Use the same iterate-by-name pattern for any other team-lead-to-many signal (graceful shutdown via `shutdown_request`, `plan_approval_request`, plain-text announcements). There is no broadcast addressing mode.
+Use the same iterate-by-name pattern for any other team-lead-to-many signal (`plan_approval_request`, plain-text announcements, or a `shutdown_request` on the rare occasion a user asks for one — PACT's own flows send none). There is no broadcast addressing mode.
 
 ### Agent Task Tracking
 
