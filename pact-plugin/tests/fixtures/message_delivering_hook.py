@@ -12,23 +12,33 @@ Summary: Synthetic NON-SHIPPED fixture for the message-delivery scanner in
          distinction observable on every suite run instead of once, by hand,
          at authoring time.
 
-         Four functions, deliberately paired:
-           deliver_via_write_text  -> MUST flag (INBOX-WRITE)
-           deliver_via_open_write  -> MUST flag (INBOX-WRITE, twice)
-           deliver_via_send_api    -> MUST flag (SEND-CALL)
-           read_only_inbox_probe   -> MUST NOT flag (reads an inbox path)
-           unrelated_write         -> MUST NOT flag (writes a non-inbox path)
+         Deliberately paired:
+           deliver_via_write_text     -> MUST flag (INBOX-WRITE)
+           deliver_via_open_write     -> MUST flag (INBOX-WRITE, twice)
+           deliver_via_atomic_replace -> MUST flag (INBOX-WRITE + INBOX-MOVE)
+           deliver_via_send_api       -> MUST flag (SEND-CALL)
+           read_only_inbox_probe      -> MUST NOT flag (reads an inbox path)
+           unrelated_write            -> MUST NOT flag (writes a non-inbox path)
+           archive_away_from_inbox    -> MUST NOT flag (moves OUT of an inbox)
 
-         The two negative controls are the load-bearing half. hooks/ contains
-         real inbox-path construction that is read-only, so a scanner that
-         flagged any inbox mention would be useless here -- it would fire on
-         shipped code that is behaving correctly. Pairing the positive and
-         negative legs in ONE file means neither can pass by absence.
+         The negative controls are the load-bearing half. hooks/ contains real
+         inbox-path construction that is read-only, so a scanner that flagged
+         any inbox mention would be useless here -- it would fire on shipped
+         code that is behaving correctly. Pairing the positive and negative
+         legs in ONE file means neither can pass by absence.
+
+         archive_away_from_inbox is the negative twin of the atomic-write leg
+         specifically. It proves the move rule keys on the DESTINATION rather
+         than on any argument: without it, an any-argument rule would look
+         correct against the positive leg alone while calling every move OUT of
+         an inbox a delivery.
 Used by: pact-plugin/tests/test_concurrent_auditor_wake.py
 """
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 
@@ -50,6 +60,40 @@ def deliver_via_open_write(team: str, name: str, payload: dict) -> None:
     target = base / f"{name}.json"
     with open(target, "w", encoding="utf-8") as handle:
         handle.write(json.dumps(payload))
+
+
+def deliver_via_atomic_replace(team: str, name: str, payload: dict) -> None:
+    """Delivery via the atomic-write idiom: mkstemp + write + os.replace.
+
+    This is the shape the repo's own durable writers use, and it defeats a
+    receiver-keyed rule twice over. The temp path arrives through a TUPLE
+    target, which a Name-only target filter drops entirely; and the inbox path
+    sits in an ARGUMENT of the move rather than as the receiver, so
+    _receiver_root cannot see it.
+    """
+    inbox_dir = Path.home() / ".claude" / "teams" / team / "inboxes"
+    fd, tmp_path = tempfile.mkstemp(dir=str(inbox_dir), suffix=".tmp")
+    # The stream name here MUST NOT collide with the one in
+    # deliver_via_open_write. Taint is module-flat, so reusing "handle" would
+    # let this leg inherit that function's taint and fire even with tuple-target
+    # binding reverted -- the leg would look like it proved the tuple fix while
+    # actually proving nothing. Verified by mutation: with the binding reverted
+    # and a distinct name, this write goes unflagged and the count assertion reddens.
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write(json.dumps(payload))
+    os.replace(tmp_path, str(inbox_dir / f"{name}.json"))
+
+
+def archive_away_from_inbox(team: str, name: str) -> None:
+    """NEGATIVE control: a move whose SOURCE is an inbox and whose destination
+    is not. Retiring a delivered message is not delivering one.
+
+    Pairs with deliver_via_atomic_replace to pin the move rule to the
+    destination position. An any-argument rule passes the positive leg and
+    fails here.
+    """
+    inbox = Path.home() / ".claude" / "teams" / team / "inboxes" / f"{name}.json"
+    os.replace(inbox, Path(tempfile.gettempdir()) / "archived.json")
 
 
 def deliver_via_send_api(recipient: str, body: str) -> None:

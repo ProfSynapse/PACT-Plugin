@@ -446,6 +446,23 @@ SEND_CALLEE_NAMES = frozenset({
     "notify_teammate",
 })
 
+# The atomic-write idiom: write a temp file, then move it into place. This is
+# how the repo's own durable writers work, so a delivery would almost certainly
+# be shaped this way rather than as a direct write.
+#
+# Keyed on the DOTTED (module, attr) pair, NOT on the bare callee name, and the
+# two reasons are the whole design:
+#
+#   * a bare "replace" collides with str.replace, which hooks/pin_caps.py uses
+#     heavily on file CONTENT -- an unrelated call with a wide argument surface.
+#   * pathlib's Path.rename / Path.replace are the MIRROR IMAGE: destination at
+#     args[0] with the source as the receiver. Folding them into one arm would
+#     flag moves AWAY from an inbox as deliveries, which is the opposite claim.
+#
+# The cost is stated as limit 4 on the test class: `from os import replace` and
+# the pathlib method form are both out of reach.
+MOVE_CALLEES = frozenset({("os", "replace"), ("os", "rename"), ("shutil", "move")})
+
 
 def hook_python_files() -> List[Path]:
     """The scanned denominator: every .py under hooks/, __pycache__ excluded.
@@ -481,6 +498,49 @@ def _receiver_root(node: ast.Call) -> str | None:
     return cur.id if isinstance(cur, ast.Name) else None
 
 
+def _move_destination(call: ast.Call):
+    """The DESTINATION expression of a move/rename call, or None if not one.
+
+    Destination-position keyed, deliberately not any-argument. A delivery is
+    ``os.replace(tmp, inbox)``; ``os.replace(inbox, backup)`` is a move AWAY
+    from an inbox, which is not a delivery and arguably its opposite. All three
+    callees in MOVE_CALLEES take (src, dst) with the destination second.
+    """
+    func = call.func
+    if not isinstance(func, ast.Attribute):
+        return None
+    root = func.value
+    if not isinstance(root, ast.Name) or (root.id, func.attr) not in MOVE_CALLEES:
+        return None
+    if len(call.args) >= 2:
+        return call.args[1]
+    for keyword in call.keywords:
+        if keyword.arg == "dst":
+            return keyword.value
+    return None
+
+
+def _bound_names(target: ast.AST) -> Iterator[str]:
+    """Every Name id bound by an assignment target, descending unpack forms.
+
+    A bare ``isinstance(target, ast.Name)`` filter silently drops every tuple
+    target, so ``fd, tmp = tempfile.mkstemp(dir=inbox_dir)`` propagated no taint
+    at all -- and that shape is exactly how the repo's own atomic writers open
+    their temp files.
+
+    Deliberately OVER-approximate: the form above taints BOTH ``fd`` and
+    ``tmp`` although only one is a path. Over-approximating taint is the safe
+    direction for a detector; under-approximating is what produced the gap.
+    """
+    if isinstance(target, ast.Name):
+        yield target.id
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for element in target.elts:
+            yield from _bound_names(element)
+    elif isinstance(target, ast.Starred):
+        yield from _bound_names(target.value)
+
+
 def _mentions_inbox(node: ast.AST, tainted: Set[str]) -> bool:
     """True if the subtree names an inbox path -- as a string literal, as an
     identifier, or by reading a name already known to hold one."""
@@ -500,13 +560,24 @@ def _mentions_inbox(node: ast.AST, tainted: Set[str]) -> bool:
 def _tainted_names(tree: ast.AST) -> Set[str]:
     """Names bound to an expression that mentions an inbox path.
 
-    Iterated to a fixpoint so multi-step path construction propagates. Real
-    delivery code builds the path in one statement and writes in another, so a
-    scanner that only inspected the write call's own subtree would miss it
+    Iterated to a TRUE fixpoint so multi-step path construction propagates.
+    Real delivery code builds the path in one statement and writes in another,
+    so a scanner that only inspected the write call's own subtree would miss it
     entirely -- which is exactly what the fixture's first positive leg proves.
+
+    The loop is unbounded ON PURPOSE and terminates by construction: `tainted`
+    only ever grows, a name is added at most once, and it is bounded above by
+    the finite set of Name ids in the module -- so the loop runs at most
+    |names| + 1 times. An earlier draft capped this at 8 passes, which bought
+    no termination guarantee that monotonicity does not already provide and
+    could only TRUNCATE: because ast.walk is breadth-first, a chain whose
+    producers sit deeper than their consumers propagates one link per pass, so
+    the cap became a hard depth limit. Past it the scanner returned a clean
+    zero over code it had not finished reading -- the silent false-clean this
+    whole module exists to make impossible. Do not reintroduce a cap.
     """
     tainted: Set[str] = set()
-    for _ in range(8):
+    while True:
         grew = False
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
@@ -524,12 +595,12 @@ def _tainted_names(tree: ast.AST) -> Set[str]:
             if not _mentions_inbox(value, tainted):
                 continue
             for target in targets:
-                if isinstance(target, ast.Name) and target.id not in tainted:
-                    tainted.add(target.id)
-                    grew = True
+                for name in _bound_names(target):
+                    if name not in tainted:
+                        tainted.add(name)
+                        grew = True
         if not grew:
-            break
-    return tainted
+            return tainted
 
 
 def _is_write_mode(call: ast.Call) -> bool:
@@ -548,15 +619,29 @@ def _is_write_mode(call: ast.Call) -> bool:
 def scan_source(source: str) -> Tuple[List[Tuple[str, int, str]], Set[str]]:
     """Return (findings, tainted-names) for one module's source.
 
-    A finding is (rule, lineno, callee). Two rules:
+    A finding is (rule, lineno, callee). Three rules:
       INBOX-WRITE  a write-capable call on an inbox-derived path
+      INBOX-MOVE   a move/rename whose DESTINATION is an inbox-derived path
       SEND-CALL    a call to a name in the send enumeration
+
+    INBOX-MOVE is not a variant of INBOX-WRITE and is checked first, because
+    the two match on opposite sides of the call: INBOX-WRITE keys on the
+    RECEIVER, INBOX-MOVE on an ARGUMENT. It carries its own rule name so that
+    the positive-control assertion can prove it fires -- folded into
+    INBOX-WRITE its liveness would be invisible, since the fixture could stop
+    exercising it entirely and the rules assertion would still pass on the
+    strength of the other legs.
     """
     findings: List[Tuple[str, int, str]] = []
     tree = ast.parse(source)
     tainted = _tainted_names(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
+            continue
+        destination = _move_destination(node)
+        if destination is not None:
+            if _mentions_inbox(destination, tainted):
+                findings.append(("INBOX-MOVE", node.lineno, _callee_name(node)))
             continue
         name = _callee_name(node)
         if name is None:
@@ -584,25 +669,45 @@ class TestNoPactHookCanDeliverAMessage:
        would remain TRUE and this pin would stay GREEN while the guidance
        became misleading. Named, not closed; it is not pytest-testable.
 
-    2. SEND_CALLEE_NAMES is an ENUMERATION the author wrote, and there is no
-       Python send-message callable in this repo to calibrate it against. The
-       fixture proves the scanner runs and flags -- it validates the PIPELINE,
-       not the PATTERN. Delivery routed through an indirection the enumeration
-       does not anticipate (a subprocess invocation, a dynamically-built
-       attribute, a helper in a module the sweep does not cover) would not be
-       caught. Read a green here as "no delivery construct of a KNOWN SHAPE",
-       never as proof of impossibility.
+    2. SEND_CALLEE_NAMES and MOVE_CALLEES are ENUMERATIONS the author wrote,
+       and there is no Python send-message callable in this repo to calibrate
+       the first against. The fixture proves the scanner runs and flags -- it
+       validates the PIPELINE, not the PATTERN. Delivery routed through an
+       indirection an enumeration does not anticipate (a subprocess
+       invocation, a dynamically-built attribute, a helper in a module the
+       sweep does not cover) would not be caught. Read a green here as "no
+       delivery construct of a KNOWN SHAPE", never as proof of impossibility.
 
-    3. Taint propagation is intra-module and assignment-based. A path passed
-       through a function boundary and written on the far side is not tracked.
+    3. Taint propagation is intra-module, assignment-based, and FLOW-
+       INSENSITIVE. A path passed through a function boundary and written on
+       the far side is not tracked. Within a module the taint set is FLAT --
+       there is no per-function scoping, so a name tainted in one function
+       taints the same identifier everywhere in that module. That is the safe
+       direction (it over-approximates), but it means a finding's location is
+       evidence about the module, not proof about the enclosing function.
+       Tuple targets ARE tracked, and over-approximately: `fd, tmp =
+       mkstemp(dir=inbox_dir)` taints both names though only one is a path.
+
+    4. The move rule is keyed on the dotted (module, attr) pairs in
+       MOVE_CALLEES, so `from os import replace; replace(tmp, inbox)` and the
+       pathlib method forms `tmp.rename(inbox)` / `tmp.replace(inbox)` are NOT
+       caught. The pathlib omission is deliberate rather than an oversight:
+       those put the destination at args[0] with the SOURCE as the receiver,
+       the mirror image of os.replace, so folding them in would flag every
+       move OUT of an inbox as a delivery. Copy-family calls (shutil.copy,
+       copy2, copyfile) are also out of scope; they deliver too, and closing
+       that is a deliberate widening, not a bug fix.
     """
 
     FIXTURE = FIXTURES_DIR / "message_delivering_hook.py"
 
     # Derived from the fixture's own structure, not copied from a run:
-    # write_text (1) + open(...,"w") (1) + handle.write (1) = 3 INBOX-WRITE,
-    # send_message (1) = 1 SEND-CALL.
-    EXPECTED_FIXTURE_FINDINGS = 4
+    #   INBOX-WRITE (4) = write_text (1) + open(...,"w") (1)
+    #                     + handle.write in the open leg (1)
+    #                     + handle.write in the atomic-replace leg (1)
+    #   INBOX-MOVE  (1) = os.replace onto an inbox destination
+    #   SEND-CALL   (1) = send_message
+    EXPECTED_FIXTURE_FINDINGS = 6
 
     def test_denominator_is_non_empty_and_stated(self):
         """Vacuity guard. A scan of zero files reports zero findings."""
@@ -621,6 +726,11 @@ class TestNoPactHookCanDeliverAMessage:
         zero over a tree it had not actually read.
         """
         files = hook_python_files()
+        # Inline guard: never pass on an empty sweep. The sibling denominator
+        # test also covers this, but a universal whose non-vacuity lives in a
+        # DIFFERENT test still passes under -k selection or if that sibling is
+        # deleted. Convention borrowed from tests/test_import_hygiene.py.
+        assert len(files) >= 25, f"empty/truncated sweep: {len(files)} files"
         unparsed = []
         for path in files:
             try:
@@ -660,6 +770,11 @@ class TestNoPactHookCanDeliverAMessage:
     def test_no_hook_delivers_a_message(self):
         """The pin itself."""
         files = hook_python_files()
+        # Inline guard: a scan of zero files reports zero findings, so without
+        # this the assertion below is satisfiable by an empty sweep. The
+        # sibling denominator test covers the same condition; this one keeps
+        # THIS assertion non-vacuous on its own.
+        assert len(files) >= 25, f"empty/truncated sweep: {len(files)} files"
         findings = []
         for path in files:
             for rule, lineno, callee in scan_source(path.read_text(encoding="utf-8"))[0]:
@@ -686,15 +801,56 @@ class TestNoPactHookCanDeliverAMessage:
         assert self.FIXTURE.is_file(), f"positive-control fixture missing: {self.FIXTURE}"
         findings, _ = scan_source(self.FIXTURE.read_text(encoding="utf-8"))
         rules = sorted({rule for rule, _, _ in findings})
-        assert rules == ["INBOX-WRITE", "SEND-CALL"], (
-            f"positive-control fixture fired rules {rules}, expected both "
-            f"['INBOX-WRITE', 'SEND-CALL']. A rule that never fires cannot "
-            f"clear the shipped tree of anything."
+        assert rules == ["INBOX-MOVE", "INBOX-WRITE", "SEND-CALL"], (
+            f"positive-control fixture fired rules {rules}, expected all three "
+            f"of ['INBOX-MOVE', 'INBOX-WRITE', 'SEND-CALL']. A rule that never "
+            f"fires cannot clear the shipped tree of anything. This is also why "
+            f"the move rule carries its OWN name: folded into INBOX-WRITE its "
+            f"liveness would be invisible here, and the fixture could stop "
+            f"exercising it while this assertion still passed on the other legs."
         )
         assert len(findings) == self.EXPECTED_FIXTURE_FINDINGS, (
             f"positive-control fixture produced {len(findings)} findings, "
             f"expected {self.EXPECTED_FIXTURE_FINDINGS}: "
             f"{findings}"
+        )
+
+    def test_taint_propagation_has_no_depth_cap(self):
+        """The fixpoint is a fixpoint, at any chain depth.
+
+        An earlier draft capped the propagation loop at 8 passes. Because
+        ast.walk is breadth-first, a chain whose PRODUCERS sit deeper than
+        their CONSUMERS advances one link per pass, so the cap acted as a hard
+        depth limit -- and past it the scanner returned a clean zero over code
+        it had not finished reading. That is a silent fail-open, and the docstring
+        note saying not to reintroduce a cap is prose that nothing enforces.
+        This is the enforcement.
+
+        Depth 24 is chosen well clear of the old bound so the assertion is
+        FALSE under any small cap and TRUE only against a real fixpoint.
+        Without this row, the only thing standing between the module and a
+        reintroduced cap would be a docstring asking politely.
+        """
+        depth = 24
+        lines = ["def deliver(payload):"]
+        indent = "    "
+        for i in range(1, depth):
+            lines.append(f"{indent}a{i} = a{i + 1}")
+            lines.append(f"{indent}if True:")
+            indent += "    "
+        lines.append(f'{indent}a{depth} = Path.home() / "inboxes" / "victim.json"')
+        lines.append("    a1.write_text(payload)")
+        source = "\n".join(lines)
+
+        findings, tainted = scan_source(source)
+        assert [rule for rule, _, _ in findings] == ["INBOX-WRITE"], (
+            f"a delivery {depth} assignment-links deep was NOT detected "
+            f"(findings={findings}, {len(tainted)} of {depth} names tainted). "
+            f"The propagation loop is terminating before its fixpoint, so the "
+            f"scanner reports a clean zero over code it has not finished "
+            f"reading -- the silent false-clean this module exists to prevent. "
+            f"Do not 'fix' this by raising a cap: the loop terminates on "
+            f"monotonic growth over a finite name set and needs no bound."
         )
 
     def test_negative_control_reads_and_unrelated_writes_are_not_flagged(self):
@@ -715,6 +871,7 @@ class TestNoPactHookCanDeliverAMessage:
             ("inbox.read_text(", "an inbox path that is only read"),
             ("inbox.is_file()", "an inbox existence probe"),
             ("log.write_text(", "a write to a path that is not an inbox"),
+            ("os.replace(inbox,", "a move whose SOURCE is an inbox"),
         ):
             lineno = next(i for i, ln in enumerate(lines, start=1) if marker in ln)
             assert lineno not in flagged, (
