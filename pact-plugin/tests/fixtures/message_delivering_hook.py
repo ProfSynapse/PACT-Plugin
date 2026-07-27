@@ -49,8 +49,8 @@ def deliver_via_write_text(team: str, name: str, payload: dict) -> None:
     above it. A scanner that only inspects the call's own subtree misses this,
     which is how real delivery code is shaped.
     """
-    inbox = Path.home() / ".claude" / "teams" / team / "inboxes" / f"{name}.json"
-    inbox.write_text(json.dumps(payload), encoding="utf-8")
+    dest = Path.home() / ".claude" / "teams" / team / "inboxes" / f"{name}.json"
+    dest.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def deliver_via_open_write(team: str, name: str, payload: dict) -> None:
@@ -71,8 +71,8 @@ def deliver_via_atomic_replace(team: str, name: str, payload: dict) -> None:
     sits in an ARGUMENT of the move rather than as the receiver, so
     _receiver_root cannot see it.
     """
-    inbox_dir = Path.home() / ".claude" / "teams" / team / "inboxes"
-    fd, tmp_path = tempfile.mkstemp(dir=str(inbox_dir), suffix=".tmp")
+    dest_dir = Path.home() / ".claude" / "teams" / team / "inboxes"
+    fd, tmp_path = tempfile.mkstemp(dir=str(dest_dir), suffix=".tmp")
     # The stream name here MUST NOT collide with the one in
     # deliver_via_open_write. Taint is module-flat, so reusing "handle" would
     # let this leg inherit that function's taint and fire even with tuple-target
@@ -81,7 +81,7 @@ def deliver_via_atomic_replace(team: str, name: str, payload: dict) -> None:
     # and a distinct name, this write goes unflagged and the count assertion reddens.
     with os.fdopen(fd, "w", encoding="utf-8") as stream:
         stream.write(json.dumps(payload))
-    os.replace(tmp_path, str(inbox_dir / f"{name}.json"))
+    os.replace(tmp_path, str(dest_dir / f"{name}.json"))
 
 
 def archive_away_from_inbox(team: str, name: str) -> None:

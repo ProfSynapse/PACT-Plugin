@@ -453,8 +453,12 @@ SEND_CALLEE_NAMES = frozenset({
 # Keyed on the DOTTED (module, attr) pair, NOT on the bare callee name, and the
 # two reasons are the whole design:
 #
-#   * a bare "replace" collides with str.replace, which hooks/pin_caps.py uses
-#     heavily on file CONTENT -- an unrelated call with a wide argument surface.
+#   * a bare "replace" collides with str.replace. Measured over the scanned
+#     denominator itself -- hooks/**/*.py, which is all this scanner ever reads
+#     -- there are 23 such call sites across 14 files, every one an unrelated
+#     call with a wide argument surface. (Counts over wider trees are larger
+#     but describe code the scanner never opens, so they cannot justify a
+#     decision about its false-positive surface.)
 #   * pathlib's Path.rename / Path.replace are the MIRROR IMAGE: destination at
 #     args[0] with the source as the receiver. Folding them into one arm would
 #     flag moves AWAY from an inbox as deliveries, which is the opposite claim.
@@ -691,7 +695,10 @@ class TestNoPactHookCanDeliverAMessage:
     4. The move rule is keyed on the dotted (module, attr) pairs in
        MOVE_CALLEES, so `from os import replace; replace(tmp, inbox)` and the
        pathlib method forms `tmp.rename(inbox)` / `tmp.replace(inbox)` are NOT
-       caught. The pathlib omission is deliberate rather than an oversight:
+       caught. Nor is the splat form `os.replace(*args)`: the destination is
+       read positionally, and a starred argument collapses to a single
+       ast.Starred node, so `len(call.args) >= 2` is false and the call is
+       never examined. The pathlib omission is deliberate rather than an oversight:
        those put the destination at args[0] with the SOURCE as the receiver,
        the mirror image of os.replace, so folding them in would flag every
        move OUT of an inbox as a delivery. Copy-family calls (shutil.copy,
