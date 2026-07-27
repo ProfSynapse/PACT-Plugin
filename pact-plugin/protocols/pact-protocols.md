@@ -1940,7 +1940,7 @@ The auditor operates primarily through file observation, not messaging. This min
 1. Read all available references (architecture doc, plan, dispatch context)
 2. Identify key interfaces, high-risk dimensions, cross-cutting requirements
 3. Note coder assignments from TaskList
-4. Wait for coders to produce initial output before observing. The wake is the orchestrator's stage-ready relay — no PACT hook sends a message, so do not arm a background monitor, sleep loop, or watch process and end the turn. While waiting, SET `intentional_wait`; if no relay has arrived, poll `git status --porcelain` on a bounded cadence within the current turn rather than ending it.
+4. Wait for coders to produce initial output before observing. The wake is the orchestrator's stage-ready relay — no PACT hook sends a message, so do not end the turn with a background process as the route back; backgrounding a long command is fine while the auditor stays in its turn and polls it. If no relay has arrived, poll `git status --porcelain` on a bounded cadence within the current turn rather than ending it. If the cadence is exhausted and the turn must end, SET `intentional_wait` (reason `awaiting_coder_output`, resolver `lead`) first, and CLEAR it on the relay.
 
 **Phase B: Observation cycles** (periodic):
 1. Check modified files: `git diff`, read changed files
@@ -1955,6 +1955,8 @@ The auditor operates primarily through file observation, not messaging. This min
 1. Sweep all modified files
 2. Emit summary signal (GREEN/YELLOW/RED)
 3. Store audit summary in task metadata
+
+The auditor emits RED and YELLOW as soon as it has them, and does not compress the final sweep to land a summary ahead of a commit — the workflow does not close CODE on auditor silence, and an audit against the committed artifact is an established path rather than a degraded one. If the commit lands first, the auditor audits the committed SHA and emits then. This relieves the verdict, not the observation: Phase B cycles continue while coders work.
 
 ### Audit Criteria (Priority Order)
 
@@ -2051,7 +2053,7 @@ The auditor is **non-blocking**: never hold the workflow waiting for its verdict
 
 Treat absence as a prompt to act, not to conclude. Before dispatching TEST, confirm one of: `audit_summary` is present, or an audit has been dispatched against the committed artifact. If neither holds, SendMessage the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
 
-The team-lead retains the authority to override an auditor verdict (a `TaskUpdate` that rewrites `audit_summary`), and that override is made safe rather than blocked. When a lead `TaskUpdate` overwrites an auditor-authored verdict, the lifecycle gate preserves the auditor's original to `metadata.audit_summary_authored`, routes the lead's value to `metadata.lead_close_note`, and emits an `audit_summary_overwrite` advisory (severity-escalated when the override lowers the verdict, e.g. RED→GREEN). The verdict is therefore never silently lost; a consumer reading the authoritative auditor signal should prefer `metadata.audit_summary_authored` when present. This front-line discipline (never overwrite on timeout-inferred silence) reduces how often the gate fires — the gate is the durable backstop, not a substitute for the discipline.
+The team-lead retains the authority to override an auditor verdict (a `TaskUpdate` that rewrites `audit_summary`), and that override is made safe rather than blocked. When a lead `TaskUpdate` overwrites an auditor-authored verdict, the lifecycle gate preserves the auditor's original to `metadata.audit_summary_authored`, routes the lead's value to `metadata.lead_close_note`, and emits an `audit_summary_overwrite` advisory (severity-escalated when the override lowers the verdict, e.g. RED→GREEN). The verdict is therefore never silently lost; a consumer reading the authoritative auditor signal should prefer `metadata.audit_summary_authored` when present. This front-line discipline (never overwrite on inferred silence) reduces how often the gate fires — the gate is the durable backstop, not a substitute for the discipline.
 
 **Reading the verdict**: to READ an auditor's verdict, prefer `metadata.audit_summary_authored` (the durable mirror written at auditor-author time) over `metadata.audit_summary` — a lead close/overwrite may have replaced `audit_summary` with a lead-authored value, and the mirror survives it. Fall back to `audit_summary` only if no mirror exists. (Today no code consumer reads the verdict VALUE — `validate_handoff` keys on `audit_summary` PRESENCE, not its content — so this is guidance for the team-lead and any future value-consumer.)
 

@@ -90,6 +90,8 @@ Triggered by: an orchestrator message, OR all coder tasks showing completed in T
 2. Check cross-agent consistency (parallel coders: compatible interfaces? consistent naming?)
 3. Emit summary signal (GREEN/YELLOW/RED) to orchestrator
 
+Emit RED and YELLOW as soon as you have them. Do not compress the final sweep to land a summary ahead of a commit — the workflow does not close CODE on your silence, and an audit against the committed artifact is an established path rather than a degraded one. If the commit lands first, audit the committed SHA and emit then. This relieves the verdict, not the observation: keep running Phase B cycles while coders work.
+
 ## BEHAVIORAL RULES
 
 | Rule | Rationale |

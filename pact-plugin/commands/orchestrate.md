@@ -768,6 +768,8 @@ The auditor stores its final signal as `metadata.audit_summary` via `TaskUpdate`
 
 When a coder reports stage-ready, send a wake-SendMessage to the concurrent auditor: "coder staged — observe the staged diff now." Send this on every stage-ready, including for later commits in the same phase.
 
+Pass through whatever the coder's stage-ready message claimed about the staged work — counts, paths, what it says it did not touch, anything it corrected — labelled as claims for the auditor to verify against the diff, not as findings. Forward what the coder already wrote rather than composing a summary; if that would delay the wake, send the wake line first and the claims after.
+
 **Before next phase**:
 - [ ] Implementation complete
 - [ ] All tests passing (full test suite; fix any tests your changes break)
