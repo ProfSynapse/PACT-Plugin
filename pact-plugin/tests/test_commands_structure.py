@@ -48,24 +48,18 @@ SHUTDOWN_LOOP_CALL = 'For each active teammate:\n  TaskStop("{teammate_name}")'
 # only legible when they are listed together. Each is deliberate and each
 # fails in a direction we chose; none is a TODO.
 #
-#   1. _asserts_deprecation false-positives on a NOMINALISED denial
-#      ("deprecation is not planned"): it recognises the adjective, not the
-#      nominalisation. Fails CLOSED — a visible red on a rephrasing, rather
-#      than a silent miss. Widening the denial pattern would start admitting
-#      the assertions the pin exists to catch.
-#
-#   2. _section_by_heading cannot exclude a heading DEEPER than its anchor: a
+#   1. _section_by_heading cannot exclude a heading DEEPER than its anchor: a
 #      #### subsection nested inside the section, carrying a TaskStop,
 #      satisfies the assertion even when the section's own call is gone.
 #
-#   3. test_no_undeclared_teammate_stopping_command scans for the call form
+#   2. test_no_undeclared_teammate_stopping_command scans for the call form
 #      "TaskStop(" WITH the paren, so a command instructing a stop in prose
 #      only — a bare `TaskStop` — is invisible to it. NOT widened on purpose:
 #      bare-word matching flags every cross-reference (orchestrate.md names
 #      TaskStop solely to point at imPACT), and a scan that cries wolf gets
-#      relaxed. Same trade as limit 1.
+#      relaxed.
 #
-# All three verified by execution, not inferred from reading.
+# Both verified by execution, not inferred from reading.
 # ---------------------------------------------------------------------------
 
 EXPECTED_COMMANDS = {
@@ -1358,7 +1352,7 @@ def test_no_undeclared_teammate_stopping_command():
     the text that is absent. The role table makes it a visible authoring
     decision; it does not make it detectable.
 
-    KNOWN LIMIT (limit 3 in the set at the top of this file), measured: the
+    KNOWN LIMIT (limit 2 in the set at the top of this file), measured: the
     scan matches the CALL FORM "TaskStop(" with its paren, so a command that
     instructs a stop in prose alone — a bare `TaskStop` — is not seen. Left
     narrow deliberately: widening to the bare word flags every

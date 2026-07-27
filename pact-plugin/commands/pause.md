@@ -101,7 +101,7 @@ JSON
 | `consolidation_completed` | boolean | Whether memory consolidation finished successfully |
 | `team_name` | string | Session team name (format: `pact-{session_hash}`) |
 
-The timestamp (`ts`) is set automatically by `make_event()` and serves the same purpose as the previous `paused_at` field.
+The timestamp (`ts`) is set automatically by `make_event()`.
 
 ### 6. Shut Down Teammates
 
