@@ -13,8 +13,8 @@ Tests cover:
 - Idle count tracking: read/write/reset + TOCTOU atomicity.
 - check_idle_cleanup: threshold 3 (suggest) + threshold 5 (force shutdown)
   + task reassignment reset + stalled/terminated skip.
-- main(): stdin/stdout/exit behavior including force-shutdown ACTION
-  REQUIRED emission.
+- main(): stdin/stdout/exit behavior including the force-threshold ACTION
+  REQUIRED stop advisory.
 - Legacy int → structured-dict migration.
 - Concurrent multi-agent tracking independence.
 """
@@ -574,9 +574,9 @@ class TestMainEdgeCases:
 
         assert exc_info.value.code == 0
 
-    def test_shutdown_message_includes_action_required(self, capsys, tmp_path):
-        """At force threshold, output must include ACTION REQUIRED +
-        shutdown_request wording for the team-lead to act on."""
+    def test_shutdown_message_advises_taskstop_directly(self, capsys, tmp_path):
+        """At force threshold, output must include ACTION REQUIRED + a direct
+        TaskStop instruction for the team-lead to act on."""
         import io
         from teammate_idle import main, write_idle_counts
 
@@ -599,7 +599,18 @@ class TestMainEdgeCases:
         output = json.loads(captured.out)
         msg = output.get("systemMessage", "")
         assert "ACTION REQUIRED" in msg
-        assert "shutdown_request" in msg
-        # Two-tier pin: the advisory must carry the cooperative-only rationale AND the TaskStop tier (request-only guidance = regression).
-        assert "cooperative-only" in msg
+        # NEGATIVE, not a presence pin. The advisory still contains the substring
+        # "shutdown_request" — in the clause telling the lead NOT to send one — so
+        # `assert "shutdown_request" in msg` would keep passing while pinning the
+        # opposite of its intent. Gate on the phrase that can observe the change.
+        assert "Send shutdown_request" not in msg, (
+            "the idle advisory must not instruct a graceful request — the shutdown "
+            "loops no longer send one, and a hook that advises otherwise re-creates "
+            "the cross-surface divergence this change closed"
+        )
+        assert 'TaskStop("coder-a")' in msg
+        # Claim + bound, pinned together: the advisory carries what was observed
+        # and how much was observed, so it cannot drift into a semantics claim.
+        assert "observed not to terminate" in msg
+        assert "n=1 pane" in msg
         assert "TaskStop" in msg
