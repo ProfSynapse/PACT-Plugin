@@ -18,6 +18,21 @@ from helpers import parse_frontmatter
 
 COMMANDS_DIR = Path(__file__).parent.parent / "commands"
 
+# The shutdown loop's call AS IT APPEARS INSIDE THE FENCED BLOCK.
+#
+# Anchoring on the bare call form instead is satisfied by the PROSE sentence
+# that introduces the loop on each of these surfaces, which carries the
+# identical literal. Measured: with a bare-call anchor, deleting pause.md's
+# and refresh.md's ENTIRE loop body produced 0 failures across the 207-test
+# structural set, while the same deletion on wrap-up.md (which names the call
+# once) fired 3 pins — so the green was the prose copy absorbing the edit,
+# not a dead pin. The predecessor anchor, `then: TaskStop("{teammate_name}")`,
+# occurred only inside the loop and DID catch this; dropping the `then: `
+# prefix was required when the second tier went away, but it silently widened
+# the anchor from loop-scoped to file-wide. This constant restores the
+# predecessor's coverage envelope.
+SHUTDOWN_LOOP_CALL = 'For each active teammate:\n  TaskStop("{teammate_name}")'
+
 EXPECTED_COMMANDS = {
     "bootstrap",
     "comPACT",
@@ -134,8 +149,13 @@ class TestAskUserQuestionOptions:
         assert -1 not in (yes, pause, end) and yes < pause < end, (
             "step 8's three options must be present in continue/pause/end order"
         )
-        assert "TaskStop" in section[end:], (
-            "the end-session branch must carry the shutdown loop"
+        assert SHUTDOWN_LOOP_CALL in section[end:], (
+            "the end-session branch must carry the shutdown loop. Anchored on "
+            "the LOOP form because the end-session slice contains five prose "
+            "mentions of TaskStop against one real call, so a bare-word "
+            "assertion stays green with the loop deleted. The two negative "
+            "legs below stay on the bare word on purpose — for leak detection "
+            "over-sensitivity is the safe direction."
         )
         assert "TaskStop" not in section[yes:pause], "TaskStop leaked into the continue branch"
         assert "TaskStop" not in section[pause:end], "TaskStop leaked into the pause branch"
@@ -1112,8 +1132,12 @@ class TestPauseShutdownStructure:
         one line, so dropping TaskStop does not fall back to a graceful
         request — it leaves pause with no termination step at all, and
         teammates would survive every pause. The anchor lost its `then: `
-        prefix along with the second tier that prefix sequenced."""
-        assert 'TaskStop("{teammate_name}")' in pause_text
+        prefix along with the second tier that prefix sequenced.
+
+        Anchored on the LOOP form: pause.md names the call in the prose
+        sentence introducing the loop as well as in the loop itself, so a
+        bare-call anchor stays green when the loop body is deleted."""
+        assert SHUTDOWN_LOOP_CALL in pause_text
 
     def test_observation_shaped_claim_present(self, pause_text):
         """Detects two drifts at once: a claim losing its bound, and a claim
@@ -1186,9 +1210,9 @@ class TestPauseShutdownStructure:
 # Group 1 — lifecycle commands whose flow stops teammates. Cross-checked in the
 # additive direction by test_no_undeclared_teammate_stopping_command below.
 TERMINATION_COMMAND_SURFACES = [
-    ("commands/pause.md",   ("observed not to terminate", "n=1 pane", 'TaskStop("{teammate_name}")')),
-    ("commands/refresh.md", ("observed not to terminate", "n=1 pane", 'TaskStop("{teammate_name}")')),
-    ("commands/wrap-up.md", ("observed not to terminate", "n=1 pane", 'TaskStop("{teammate_name}")')),
+    ("commands/pause.md",   ("observed not to terminate", "n=1 pane", SHUTDOWN_LOOP_CALL)),
+    ("commands/refresh.md", ("observed not to terminate", "n=1 pane", SHUTDOWN_LOOP_CALL)),
+    ("commands/wrap-up.md", ("observed not to terminate", "n=1 pane", SHUTDOWN_LOOP_CALL)),
 ]
 
 # Group 2 — surfaces that REASON about shutdown without running a loop. Each
@@ -1457,7 +1481,7 @@ def _section_by_heading(text, heading):
 def test_terminal_flow_carries_taskstop(relpath, heading):
     text = (COMMANDS_DIR.parent / relpath).read_text(encoding="utf-8")
     section = _section_by_heading(text, heading)
-    assert 'TaskStop("{teammate_name}")' in section, (
+    assert SHUTDOWN_LOOP_CALL in section, (
         f"{relpath}'s terminal flow ({heading}) does not call TaskStop. A "
         f"lifecycle command that ends teammate participation must stop them; "
         f"reporting that they will stop is not stopping them."
