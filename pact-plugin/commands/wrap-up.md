@@ -195,12 +195,12 @@ Audit and optionally clean up Task state:
 
 Use `AskUserQuestion` with these exact options:
 - **"Yes, continue"** (description: "Keep team alive, ready for next task") → On selection: Report "Ready for next task." Teammates stay alive — do NOT stop them on this branch.
-- **"Pause work for now"** (description: "Save session knowledge and pause — resume later") → On selection: invoke `/PACT:pause`. That command owns the teammate shutdown — do NOT stop teammates here; a second loop on this branch would duplicate what `/PACT:pause` already does.
+- **"Pause work for now"** (description: "Save session knowledge and pause — resume later") → On selection: invoke `/PACT:pause`. That command owns the teammate shutdown — do NOT stop teammates here.
 - **"No, end session"** (description: "Stop teammates now, then close out — PACT's 30-day TTL cleans directories (recommended)") → On selection: run the teammate-shutdown loop below, then report.
 
 ### Teammate shutdown — end-session branch only
 
-Run this **only** on the end-session branch. Shut down each active teammate **by name**, staggered 1 teammate per turn (rate-limit discipline — 1 op per teammate).
+Run this **only** on the end-session branch. Shut down each active teammate **by name**, staggered 1 teammate per turn.
 
 ```
 For each active teammate:
@@ -210,12 +210,6 @@ For each active teammate:
 Treat a `TaskStop` not-found / already-exited error as already-stopped success and CONTINUE the loop — never abort mid-iteration; an abort strands later teammates unstopped.
 
 The secretary is included in the loop. On the normal path, step 5's drain-confirmation already established that its consolidation completed, so stopping it here loses nothing. **If step 5 took its cannot-confirm branch — which warns rather than halts — that guarantee does not hold**: the secretary may still be mid-harvest, and `TaskStop` is unconditional. Stop it LAST in the loop, and say so in the report, so an undrained journal is visible rather than silent.
-
-**Why no graceful request** (documentary, not empirical): a `shutdown_request` was removed from every PACT shutdown loop because no loop ever read the response — the stop followed unconditionally, so a teammate's reject could not take effect — and approving buys no flush, since teammates are instructed to save learnings incrementally rather than at shutdown.
-
-**What was measured, and its bound**: on the tmux backend an approved `shutdown_response` was **observed not to terminate** the teammate's pane/process — n=1 pane, 2026-07-12, plugin 4.6.0 / CC 2.1.207, platform-bug-vs-intended unresolved. On the in-process backend `shutdown_response` semantics are **unprobed**. `TaskStop` was measured to remove the roster entry and end reachability in-process (n=1, 2026-07-26, CC 2.1.219) and to reap pane and process on tmux (n=1, 2026-07-12, plugin 4.6.0 / CC 2.1.207 — the shutdown_response run above, not the in-process run). Against a **mid-turn** teammate `TaskStop` is **unmeasured on both backends**, and wrap-up will stop mid-turn teammates. The *axis* is no better measured than before, but wrap-up's exposure to it is new — this command stopped no teammates at all until now, so these are the first stops it has ever performed. It is not risk-free.
-
-**Mechanism selection**: the platform documents two ways to end a teammate — the cooperative flow in its Agent Teams guide (request, approve, exit), and stopping a teammate directly by name, which `TaskStop`'s own tool description documents. PACT selects the second on the measurement above; this is a choice between documented mechanisms, not a departure from them. `shutdown_request` is not deprecated; the platform labels the structured-request pattern legacy and instructs leads not to originate one unless asked, so a flow that sends none is conformant on that point. The request remains available as a protocol capability — see the Shutdown section of the pact-agent-teams skill — but no PACT flow originates one.
 
 EXPECTED post-state: each stop removes that member's roster entry — the config FILE and the team IDENTITY survive; a lead-only roster is the correct post-shutdown state, not corruption. Do NOT delete the team.
 

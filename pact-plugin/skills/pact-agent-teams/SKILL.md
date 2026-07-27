@@ -522,11 +522,7 @@ When you receive a `shutdown_request`:
 
 > **Save learnings incrementally**: PACT's shutdown flows call `TaskStop` directly and send no request first, so you can be stopped with no warning at all. Save domain learnings to your agent memory as you work and treat any turn as possibly your last; approving a `shutdown_request` is a courtesy, not your save trigger.
 
-`TaskStop` is the termination primitive, and PACT's shutdown flows call it directly. **No PACT flow sends you a `shutdown_request`** — it was removed from every shutdown loop because no loop read the response, so the reject option above could not take effect in one, and approving buys no flush.
-
-What was measured, and its bound: on the tmux backend an approved `shutdown_response` was **observed not to terminate** the teammate's pane/process — n=1 pane, 2026-07-12, plugin 4.6.0 / CC 2.1.207 — and whether that is a platform bug or intended behaviour is unresolved. On the in-process backend, `shutdown_response` semantics are **unprobed**: platform documentation claims approval terminates the process, but this is unverified in either direction. `TaskStop` was measured to remove the roster entry and end reachability in-process (n=1, 2026-07-26, CC 2.1.219) and to reap pane and process on tmux (n=1, 2026-07-12, plugin 4.6.0 / CC 2.1.207 — the shutdown_response run above, not the in-process run). Against a mid-turn teammate `TaskStop` is unmeasured on both backends.
-
-This is a selection between two documented mechanisms, not a departure: the platform documents a cooperative flow — request, approve, exit — in its Agent Teams guide, and documents stopping a teammate directly by name in `TaskStop`'s own tool description. PACT selects the latter on the measurement above. `shutdown_request` is not deprecated; the platform labels the structured-request pattern legacy and instructs leads not to originate one unless asked. **The response protocol above is still live** — the platform may deliver a request, and a lead may send one ad hoc at a user's request, which is precisely the platform's sanctioned case. Reply as the table directs when one arrives.
+**No PACT flow sends you a `shutdown_request`.** If one arrives anyway — the platform may deliver one, or a lead may send one at a user's request — reply as the table directs.
 
 ## Completion Integrity (SACROSANCT)
 

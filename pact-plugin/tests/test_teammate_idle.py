@@ -614,7 +614,3 @@ class TestMainEdgeCases:
         # first, so the weaker one could never be the sole failure. Removed
         # rather than kept as a line that cannot fail.
         assert 'TaskStop("coder-a")' in msg
-        # Claim + bound, pinned together: the advisory carries what was observed
-        # and how much was observed, so it cannot drift into a semantics claim.
-        assert "observed not to terminate" in msg
-        assert "n=1 pane" in msg

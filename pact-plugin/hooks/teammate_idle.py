@@ -339,10 +339,7 @@ def main():
                 # stop the teammate via systemMessage.
                 messages.append(
                     f"ACTION REQUIRED: TaskStop(\"{teammate_name}\") — call it "
-                    f"directly; do NOT send a shutdown_request first. TaskStop "
-                    f"is the termination primitive. An approved shutdown_response "
-                    f"was observed not to terminate a tmux teammate (n=1 pane) "
-                    f"and its in-process semantics are unprobed."
+                    f"directly; do NOT send a shutdown_request first."
                 )
 
             output = {"systemMessage": IDLE_PREAMBLE + " | ".join(messages)}

@@ -117,7 +117,7 @@ The timestamp (`ts`) is set automatically by the journal writer and becomes the 
 
 ### 5. SHUTDOWN teammates
 
-Shut down each active teammate **by name**, staggered 1 teammate per turn (rate-limit discipline — 1 op per teammate, down from 2). `TaskStop("{teammate_name}")` is the termination primitive and the only call this loop makes: do NOT send a `shutdown_request` first.
+Shut down each active teammate **by name**, staggered 1 teammate per turn. `TaskStop("{teammate_name}")` is the termination primitive and the only call this loop makes: do NOT send a `shutdown_request` first.
 
 ```
 For each active teammate:
@@ -125,12 +125,6 @@ For each active teammate:
 ```
 
 Treat a `TaskStop` not-found / already-exited error as already-stopped success and CONTINUE the loop — never abort mid-iteration; an abort strands later teammates unstopped.
-
-**Why no graceful request** (documentary, not empirical): a `shutdown_request` was removed from every PACT shutdown loop because no loop ever read the response — the stop followed unconditionally, so a teammate's reject could not take effect — and approving buys no flush, since teammates are instructed to save learnings incrementally rather than at shutdown.
-
-**What was measured, and its bound**: on the tmux backend an approved `shutdown_response` was **observed not to terminate** the teammate's pane/process — n=1 pane, 2026-07-12, plugin 4.6.0 / CC 2.1.207, platform-bug-vs-intended unresolved. On the in-process backend `shutdown_response` semantics are **unprobed**. `TaskStop` was measured to remove the roster entry and end reachability in-process (n=1, 2026-07-26, CC 2.1.219) and to reap pane and process on tmux (n=1, 2026-07-12, plugin 4.6.0 / CC 2.1.207 — the shutdown_response run above, not the in-process run). Against a **mid-turn** teammate `TaskStop` is **unmeasured on both backends** — stopping one carries no *additional* risk, on an axis that was already unmeasured. It is not risk-free.
-
-**Mechanism selection**: the platform documents two ways to end a teammate — the cooperative flow in its Agent Teams guide (request, approve, exit), and stopping a teammate directly by name, which `TaskStop`'s own tool description documents. PACT selects the second on the measurement above; this is a choice between documented mechanisms, not a departure from them. `shutdown_request` is not deprecated; the platform labels the structured-request pattern legacy and instructs leads not to originate one unless asked, so a flow that sends none is conformant on that point. The request remains available as a protocol capability — see the Shutdown section of the pact-agent-teams skill — but no PACT flow originates one.
 
 EXPECTED post-state: each stop removes that member's roster entry — the config FILE and the team IDENTITY survive; a lead-only roster is the correct post-refresh state, not corruption. Do NOT add a synchronous confirmation step — verify by a disk re-read of the team config, or simply proceed. Do NOT delete the team.
 
