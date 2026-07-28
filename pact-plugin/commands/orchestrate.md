@@ -766,6 +766,10 @@ Agent(
 
 The auditor stores its final signal as `metadata.audit_summary` via `TaskUpdate` before marking the task completed. On RED signal: SendMessage to the affected coder and pause their work. On YELLOW: pass finding to test engineer as focus area. See [pact-audit.md](../protocols/pact-audit.md) for the full Concurrent Audit Protocol.
 
+When a coder reports stage-ready, send a wake-SendMessage to the concurrent auditor: "coder staged — observe the staged diff now." Send this on every stage-ready, including for later commits in the same phase.
+
+Pass through whatever the coder's stage-ready message claimed about the staged work — counts, paths, what it says it did not touch, anything it corrected — labelled as claims for the auditor to verify against the diff, not as findings. Forward what the coder already wrote rather than composing a summary; if that would delay the wake, send the wake line first and the claims after.
+
 **Before next phase**:
 - [ ] Implementation complete
 - [ ] All tests passing (full test suite; fix any tests your changes break)
@@ -799,6 +803,7 @@ JSON
   ```
   Do not block on completion — TEST phase proceeds in parallel.
 - [ ] **Primary HANDOFF-presence check**: on receiving each Task-complete SendMessage, verify via TaskGet — confirm status=completed AND metadata.handoff populated/non-empty. If missing, SendMessage the agent to complete HANDOFF before downstream dispatch proceeds.
+- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — `metadata.audit_summary` is present (verify via TaskGet), OR an audit has been dispatched against the committed artifact. If neither holds, SendMessage the auditor with the committed SHA, or dispatch a post-artifact audit, before TEST dispatch proceeds.
 - [ ] **S4 Checkpoint**: Environment stable? Model aligned? Plan viable?
 
 #### Handling Complex Sub-Tasks During CODE
