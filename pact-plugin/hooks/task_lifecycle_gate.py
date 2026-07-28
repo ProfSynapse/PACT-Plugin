@@ -636,6 +636,78 @@ def _writeback_audit_recovery(task_id: str, updates: dict) -> bool:
         return False
 
 
+def _append_event_checked(event: dict, what: str, task_id: str = "") -> bool:
+    """``append_event`` with its silent-rejection path closed. Returns the
+    write outcome; never raises.
+
+    ``append_event`` returns **False** on schema rejection or an unwritable
+    journal WITHOUT raising, and its in-process contract discards the reason
+    by design. An emit site that calls it bare inside ``except Exception:
+    pass`` therefore loses a dropped write with no signal of ANY kind — not a
+    log line, not an exception, not a return value anyone reads. A consumer
+    counting these events cannot distinguish "never emitted" from "emitted and
+    rejected", which is the difference between a real gap and an instrument
+    failure.
+
+    This helper closes that silence at the CAPTURE end and nothing more: it
+    captures the bool, converts a raise into the same False (callers already
+    treat both as "not written"), and writes one bounded stderr diagnostic.
+
+    CAVEAT ON THE STDERR LEG, because "observable" would over-claim: writing
+    it provably cannot break this hook's exit-0 contract, but whether
+    PostToolUse stderr reaches an operator AT ALL was never established. So
+    the certain value here is the capture — a caller can now act on the
+    outcome, and a durable consumer can be built on it — while the stderr
+    line is a diagnostic channel of UNVERIFIED REACH. Do not cite it as
+    evidence that drops are surfaced. It deliberately
+    does NOT count, aggregate, or persist — these hooks run as a separate
+    process per tool call, so any in-process tally would reset every
+    invocation and could never carry a session total to a consumer. A durable
+    skip-accounting surface is a separate concern with a separate mechanism.
+
+    Mirrors the capture already done at ``_emit_gate_health_event`` and
+    ``_emit_lead_side_agent_handoff``; the difference is that those two have a
+    marker to roll back, and these emit sites have none — so "act on it" here
+    can only mean "say so".
+
+    ``what`` is a caller-supplied literal (the event type). ``task_id`` is
+    stdin-derived and is bounded + stripped of non-printables before it
+    reaches stderr, matching the sanitize discipline ``_emit_gate_health_event``
+    applies to ``tool_name``.
+
+    The diagnostic write is wrapped: this runs inside PostToolUse paths whose
+    stdout JSON is only honored on exit 0, so a raising ``print`` must never
+    flip the exit code.
+    """
+    # The two failure modes are reported DISTINCTLY. They have different
+    # causes — a False is a schema rejection or an unwritable journal, a raise
+    # is a defect in the writer — and a diagnostic that collapses them sends
+    # the reader looking for the wrong thing.
+    try:
+        written = append_event(event)
+        cause = "append_event returned False"
+    except Exception as exc:
+        written = False
+        cause = f"append_event raised {_bounded_error_text(exc)}"
+    if not written:
+        try:
+            detail = ""
+            if task_id:
+                text = task_id if type(task_id) is str else f"{task_id}"
+                if len(text) > _ERROR_TEXT_MAX:
+                    text = text[:_ERROR_TEXT_MAX] + "...[truncated]"
+                text = "".join(c if c.isprintable() else " " for c in text)
+                detail = f" task_id={text}"
+            print(
+                f"task_lifecycle_gate: {what} journal emit dropped "
+                f"({cause}){detail}",
+                file=sys.stderr,
+            )
+        except BaseException:  # noqa: BLE001 — a diagnostic write must not flip the exit code
+            pass
+    return written
+
+
 def _emit_lead_side_agent_handoff(
     team_name: str,
     task_id: str,
@@ -1320,12 +1392,22 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
                     # so this fires naturally-once per dispatch (unlike
                     # agent_handoff, which can re-fire across b1/b2/backstop and
                     # therefore needs the O_EXCL occupant marker).
+                    # The bool is CAPTURED, not discarded: a schema rejection
+                    # returns False without raising, and this event is the
+                    # per-dispatch calibration mirror — a silently dropped one
+                    # is indistinguishable downstream from a dispatch that was
+                    # never stamped. Still fail-open (the try covers make_event,
+                    # which the helper cannot).
                     try:
-                        append_event(make_event(
+                        _append_event_checked(
+                            make_event(
+                                "dispatch_variety",
+                                task_id=new_task_id,
+                                variety=projected_variety,
+                            ),
                             "dispatch_variety",
-                            task_id=new_task_id,
-                            variety=projected_variety,
-                        ))
+                            new_task_id,
+                        )
                     except Exception:
                         pass  # fail-open: emit failure never breaks the gate
 
@@ -1549,8 +1631,15 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
                         # TaskUpdate(A, status="completed") fires naturally-once
                         # per teachback acceptance, so no occupant marker is
                         # needed (cf. the dispatch_variety note above).
+                        # Bool captured (see _append_event_checked): a dropped
+                        # ack is silently indistinguishable from a teachback
+                        # that carried no acknowledgment at all.
                         try:
-                            append_event(make_event("teachback_ack", **ack_fields))
+                            _append_event_checked(
+                                make_event("teachback_ack", **ack_fields),
+                                "teachback_ack",
+                                str(task_id),
+                            )
                         except Exception:
                             pass  # fail-open
 
@@ -1966,7 +2055,10 @@ def _journal_lifecycle_decision(
             advisories=messages,
             verdict="advisory" if advisories else "allow",
         )
-        append_event(event)
+        # Bool captured (see _append_event_checked): this is the per-invocation
+        # decision record, so a dropped one reads downstream as a turn in which
+        # the gate never ran at all.
+        _append_event_checked(event, "lifecycle_decision")
     except Exception:
         pass
 
