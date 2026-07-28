@@ -6,13 +6,38 @@ Tests cover:
 2. Four assessment questions defined
 3. pact-memory save convention documented
 4. Estimation pattern question documented
+5. Q5/Q6 journal-read hardening
+6. Q5/Q6 extractions are total (no direct-indexing comprehension)
+7. Q5's recovery path depends on the dimension-sum resolver candidate
 """
+import re
+import sys
 from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
+
+from shared.teachback_schema import resolve_variety_total  # noqa: E402
 
 WRAPUP_PATH = Path(__file__).parent.parent / "commands" / "wrap-up.md"
+
+
+@pytest.fixture
+def q5():
+    """The Q5 question line, module-scoped for the classes that execute the
+    expression it carries."""
+    return _question_line(
+        WRAPUP_PATH.read_text(encoding="utf-8"), "5. **Variety divergence**"
+    )
+
+
+@pytest.fixture
+def q6():
+    return _question_line(
+        WRAPUP_PATH.read_text(encoding="utf-8"),
+        "6. **Variety acknowledgment signals**",
+    )
 
 
 class TestOrchestrationRetrospective:
@@ -39,6 +64,32 @@ class TestOrchestrationRetrospective:
 
     def test_memory_save_convention(self, wrapup_content):
         assert "orchestration_calibration" in wrapup_content
+
+
+def _backticked_expression(line, prefix):
+    """Return the single inline-backticked code span in `line` that starts with
+    `prefix`. The retrospective questions carry their extraction code inline, so
+    this lifts the ACTUAL documented expression out of the instruction rather
+    than restating it in the test — a restatement would drift from the markdown
+    silently and pin nothing."""
+    for span in re.findall(r"`([^`]+)`", line):
+        if span.startswith(prefix):
+            return span
+    raise AssertionError(f"no backticked expression starting with {prefix!r}")
+
+
+def _run_extraction(expression, events):
+    """Execute a documented extraction expression against `events` and return
+    the resulting namespace.
+
+    `exec` is the point, not a shortcut: wrap-up.md is executed by an LLM at
+    runtime, so the only way to pin the instruction's BEHAVIOUR (rather than
+    grep its wording) is to run the expression the file actually carries. The
+    input is repo-controlled markdown.
+    """
+    namespace = {"events": events, "resolve_variety_total": resolve_variety_total}
+    exec(expression, namespace)  # noqa: S102 — repo-controlled instruction text
+    return namespace
 
 
 def _question_line(content, prefix):
@@ -149,3 +200,176 @@ class TestRetroReadHardening:
         assert "0% signal rate" in q6
         # ordering: the re-read guard precedes the fallback-on-zero clause
         assert q6.index("Masked-empty guard") < q6.index("fall back to the legacy")
+
+
+class TestTotalExtraction:
+    """Both retrospective extractions must be TOTAL — defined for every event
+    the journal can hand them — rather than aborting on the first bad one.
+
+    Both questions used a direct-indexing comprehension, so a single event
+    missing its key raised `KeyError` and destroyed the WHOLE list, not just
+    that event. The blast radius is the session, not the row: measured
+    2026-07-28 over 2254 journals, 20 `dispatch_variety` events lacked a usable
+    `variety['total']`, and they sat in 8 sessions holding 289 events between
+    them.
+
+    These are STRUCTURAL (prose) assertions with the vacuity limit the sibling
+    class documents: they detect the guard being removed or reworded away, but
+    cannot prove an LLM obeys it at runtime. The negative halves are the
+    load-bearing ones — they fail if a direct-indexing form is reinstated.
+    """
+
+    @pytest.fixture
+    def wrapup_content(self):
+        return WRAPUP_PATH.read_text(encoding="utf-8")
+
+    @pytest.fixture
+    def q5(self, wrapup_content):
+        return _question_line(wrapup_content, "5. **Variety divergence**")
+
+    @pytest.fixture
+    def q6(self, wrapup_content):
+        return _question_line(wrapup_content, "6. **Variety acknowledgment signals**")
+
+    def test_q5_resolves_the_total_through_the_shared_accessor(self, q5):
+        assert "resolve_variety_total" in q5
+        assert "shared.teachback_schema" in q5
+
+    def test_q5_does_not_direct_index_the_total(self, q5):
+        """The negative half: `[e["variety"]["total"] for e in events]` is the
+        shape that aborts the whole comprehension on one malformed stamp."""
+        assert '["variety"]["total"]' not in q5
+        assert "for e in events]" not in q5
+
+    def test_q5_reports_the_dropped_count(self, q5):
+        """An unresolvable stamp lowers coverage exactly like an un-stamped
+        dispatch, so without the count a data-quality problem reads as a
+        compliance gap."""
+        assert "len(events) - len(dispatch_varieties)" in q5
+
+    def test_q6_guards_the_flag_extraction(self, q6):
+        assert "isinstance(e.get(\"rationale_articulates_this_dispatch\"), str)" in q6
+
+    def test_q6_does_not_direct_index_the_flag(self, q6):
+        assert "for e in events]" not in q6
+
+    def test_q6_excludes_unreadable_acks_from_both_terms(self, q6):
+        """Counting an unreadable ack in the denominator but not the numerator
+        dilutes the rate toward "no concern" — the direction that hides the
+        signal Q6 exists to surface."""
+        assert "total_teachbacks = len(flags)" in q6
+        assert "len(events) - len(flags)" in q6
+
+    def test_q6_does_not_divide_when_no_flag_is_readable(self, q6):
+        """`len(flags)` can be 0 while `events` is non-empty — a divisor the
+        previous `len(events)` form could never produce."""
+        assert "total_teachbacks > 0" in q6
+
+
+class TestQ5ExtractionDependsOnTheDimensionSumCandidate:
+    """The Q5 EXTRACTION PATH — the expression wrap-up.md actually carries —
+    rests on `resolve_variety_total`'s FOURTH candidate (the four-dimension
+    sum) and on no other.
+
+    Measured 2026-07-28 across 2254 session journals: of the 20 `dispatch_variety`
+    events lacking a usable `variety['total']`, 20 recover — and 0 are
+    recoverable through candidate 2 (`score`) or candidate 3
+    (`metadata.variety_score`). The malformed shape in the wild is exactly the
+    four dimensions with no total.
+
+    These RUN the documented expression rather than calling the resolver
+    directly, and the distinction is the whole point. The resolver's own
+    dimension-sum tests already exist in `test_teachback_schema.py`, so a test
+    that calls `resolve_variety_total(...)` here would re-pin THEIR guard under
+    a Q5 name and leave the extraction path unpinned. Executing the expression
+    couples the candidate to this consumer: removing candidate 4 breaks these,
+    and so does reverting the expression to a direct `variety['total']` index.
+
+    Dropping candidate 4 fails DARK — the resolver returns `None` rather than
+    raising, so the events vanish from the numerator and coverage drops with
+    nothing to attribute it to.
+    """
+
+    # The malformed stamp exactly as it appears in the journal corpus: the four
+    # dimensions, no total, no score. Candidates 1 and 2 cannot fire on it, and
+    # candidate 3 reads a metadata argument the Q5 expression never passes — so
+    # a recovery here can only have come from the dimension sum.
+    CORPUS_MALFORMED_EVENT = {
+        "task_id": "2",
+        "variety": {"novelty": 2, "scope": 2, "uncertainty": 2, "risk": 2},
+    }
+    CANONICAL_EVENT = {"task_id": "1", "variety": {"total": 9}}
+
+    @pytest.fixture
+    def q5_expression(self, q5):
+        return _backticked_expression(q5, "dispatch_varieties = ")
+
+    def test_higher_candidates_cannot_fire_on_the_corpus_shape(self):
+        """Fixture control. Without it, a shape that candidate 1 resolved would
+        pass every test below while proving nothing about candidate 4."""
+        variety = self.CORPUS_MALFORMED_EVENT["variety"]
+        assert "total" not in variety
+        assert "score" not in variety
+        assert resolve_variety_total({}, {"variety_score": 8}) == 8, (
+            "candidate 3 is live, so its silence below is the Q5 expression "
+            "not passing metadata — not the candidate being gone"
+        )
+
+    def test_extraction_recovers_the_corpus_malformed_stamp(self, q5_expression):
+        namespace = _run_extraction(
+            q5_expression, [self.CANONICAL_EVENT, self.CORPUS_MALFORMED_EVENT]
+        )
+        assert namespace["dispatch_varieties"] == [9, 8], (
+            "the four-dimension sum is the ONLY path by which the 20 malformed "
+            "dispatch_variety events in the corpus reach Q5's numerator; drop "
+            "candidate 4 and this returns [9], silently, with no exception"
+        )
+
+    def test_extraction_survives_an_unresolvable_event(self, q5_expression):
+        """The C-1 defect itself: ONE bad event used to destroy the whole list.
+        A stamp that no candidate can resolve must cost only its own row."""
+        events = [
+            {"task_id": "1", "variety": {"novelty": 2}},  # partial: unresolvable
+            self.CANONICAL_EVENT,
+            {"task_id": "3"},                              # no variety key at all
+            "not-a-dict",                                  # not even an object
+        ]
+        assert _run_extraction(q5_expression, events)["dispatch_varieties"] == [9]
+
+    def test_extraction_is_empty_not_raising_when_nothing_resolves(
+        self, q5_expression
+    ):
+        events = [{"task_id": "1", "variety": {}}, {"task_id": "2"}]
+        assert _run_extraction(q5_expression, events)["dispatch_varieties"] == []
+
+
+class TestQ6ExtractionSurvivesAnUnreadableAck:
+    """The Q6 flag extraction, run the same way and for the same reason.
+
+    Measured 2026-07-28: 616 `teachback_ack` events, 0 missing the flag — the
+    journal schema types that key `str`, which is why. So this guard is
+    defense-in-depth against a shape the corpus has not yet produced, which is
+    exactly when it is cheap to add.
+    """
+
+    @pytest.fixture
+    def q6_expression(self, q6):
+        return _backticked_expression(q6, "flags = ")
+
+    def test_extraction_drops_only_the_unreadable_acks(self, q6_expression):
+        events = [
+            {"task_id": "1", "rationale_articulates_this_dispatch": "yes"},
+            {"task_id": "2"},                                        # key absent
+            {"task_id": "3", "rationale_articulates_this_dispatch": None},
+            {"task_id": "4", "rationale_articulates_this_dispatch": "no"},
+            "not-a-dict",
+        ]
+        assert _run_extraction(q6_expression, events)["flags"] == ["yes", "no"]
+
+    def test_extraction_is_empty_not_raising_when_no_flag_is_readable(
+        self, q6_expression
+    ):
+        """`len(flags) == 0` with `events` non-empty is the divisor the previous
+        `len(events)` form could never produce — the case Q6's prose must (and
+        does) tell the reader not to divide by."""
+        assert _run_extraction(q6_expression, [{"task_id": "1"}])["flags"] == []

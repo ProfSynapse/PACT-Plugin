@@ -515,10 +515,11 @@ def read_task_json(
 
 
 # Canonical Teachback Task subject pattern: `<teammate-name>: TEACHBACK
-# for <mission descriptor>`. The leading `[a-z0-9-]+:` is the canonical
-# teammate-prefix shape used across the plugin (matches names like
-# `backend-coder-2`, `secretary`, `architect-1`); `TEACHBACK for ` is
-# the canonical mission-framing per pact-completion-authority.md.
+# <mission descriptor>`, normally `TEACHBACK for …`. The leading
+# `[a-z0-9-]+:` is the canonical teammate-prefix shape used across the
+# plugin (matches names like `backend-coder-2`, `secretary`,
+# `architect-1`); `TEACHBACK` is the canonical mission-framing marker per
+# pact-completion-authority.md.
 #
 # WHY a structural match instead of substring `"teachback" in subject`:
 # the substring form fires on ANY task subject containing the word —
@@ -534,12 +535,24 @@ def read_task_json(
 # side-effect risk). SINGLE definition: the lifecycle gate re-imports it from
 # here, so the regex is never duplicated (duplication would reintroduce the
 # drift class the structural match was introduced to close).
-_TEACHBACK_SUBJECT_PATTERN = re.compile(r"^[a-z0-9-]+: TEACHBACK for ")
+#
+# The tail is a WORD BOUNDARY, not the literal `TEACHBACK for `. The stricter
+# trailing-space form silently missed real gates that qualify the marker before
+# the mission — `preparer: TEACHBACK (respawn) for …` escaped the carve-out
+# entirely. Widening keeps every subject the strict form matched (it is a
+# superset) and admits qualified spellings; a work task titled
+# `<name>: TEACHBACK…` now reads as a gate, which drops it from the dispatch
+# population — the benign direction, and the reason a lossy-but-safe rule is
+# preferred here over a precise one that can fail harmfully. `\b` still refuses
+# `TEACHBACKS`/`TEACHBACKING`, so the marker must stand as its own word.
+_TEACHBACK_SUBJECT_PATTERN = re.compile(r"^[a-z0-9-]+: TEACHBACK\b")
 
 
 def is_teachback_subject(subject: str) -> bool:
     """Return True iff `subject` matches the canonical Teachback Task
-    shape (`<teammate-name>: TEACHBACK for <mission>`).
+    shape (`<teammate-name>: TEACHBACK <mission>`, normally
+    `TEACHBACK for <mission>`; a qualifier between the marker and the
+    mission — `TEACHBACK (respawn) for …` — still matches).
 
     Pure function; never raises. Returns False on non-string input or
     any subject that does not match the anchored pattern. Replaces the
