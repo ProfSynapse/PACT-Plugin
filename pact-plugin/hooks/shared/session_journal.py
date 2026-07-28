@@ -120,6 +120,22 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     # enforces only the top-level task_id+variety keys — the projection lives
     # at the emit site, not here.)
     "dispatch_variety": {"task_id": str, "variety": dict},
+    # hooks/task_lifecycle_gate.py emits dispatch_site at the owner-wiring
+    # TaskUpdate — one event per dispatched Task-B, O_EXCL-deduped on
+    # (team, task_id). It is the DENOMINATOR of dispatch-variety coverage:
+    # the event's EXISTENCE is the site, and the OPTIONAL `variety` within it
+    # is the numerator. Both terms therefore come from one stream, which is
+    # what makes coverage > 1.0 structurally impossible rather than merely
+    # guarded.
+    #
+    # `variety` is registered OPTIONAL below, NOT required here, and the
+    # distinction is load-bearing: an un-stamped dispatch is precisely the
+    # population this metric exists to count, so requiring `variety` would
+    # make those events schema-INVALID, silently reject them, and delete the
+    # gap from the denominator — a metric that improves because data was
+    # destroyed. The required registration below is also what ACTIVATES the
+    # optional check (_validate_event_schema short-circuits on unknown types).
+    "dispatch_site": {"task_id": str},
     # hooks/task_lifecycle_gate.py emits teachback_ack on the lead's
     # TaskUpdate(A, status="completed") accepting a teachback whose Task-A
     # metadata carries teachback_submit.variety_acknowledgment (#955). task_id is
@@ -429,6 +445,16 @@ _OPTIONAL_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     "teachback_ack": {
         "concern": str,
     },
+    # hooks/task_lifecycle_gate.py writes dispatch_site with an optional
+    # `variety` — the 4-dimensions-plus-total projection of the dispatched
+    # Task-B's metadata.variety, present only when that dispatch carried a
+    # resolvable stamp. ABSENCE IS MEANINGFUL AND MUST STAY LEGAL: it is what
+    # an un-stamped dispatch looks like, i.e. the coverage gap itself. The
+    # required registration above ("dispatch_site": {...}) is what activates
+    # this optional check (same activation pattern as teachback_ack).
+    "dispatch_site": {
+        "variety": dict,
+    },
     # commands/prune-memory.md writes pin_prune_skipped with an optional
     # `reason`, present ONLY where the flow genuinely elicited one: a
     # curator-supplied cancel reason, or the machine reason on
@@ -464,10 +490,10 @@ _OPTIONAL_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
         "occupant": str,
     },
     # commands/peer-review.md writes remediation with an optional task_id —
-    # the fixer's Task-B task id. The Q5 coverage denominator
-    # (variety_divergence.count_task_b_dispatch_sites) uses it to dedup a
-    # comPACT/orchestrate-dispatched remediation that ALSO emits
-    # agent_dispatch for the same task_id, so the site is counted once.
+    # the fixer's Task-B task id. It is no longer a Q5 term: the coverage
+    # denominator is now sourced from the `dispatch_site` stream
+    # (variety_divergence.extract_dispatch_coverage), so remediation is not
+    # counted or deduped against agent_dispatch for coverage purposes.
     # Optional because a remediation may omit it; an id-less remediation is
     # counted as a distinct site (fail-safe — never undercounts the
     # denominator). The required-fields registration above

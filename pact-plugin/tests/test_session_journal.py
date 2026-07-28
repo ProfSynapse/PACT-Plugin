@@ -3331,6 +3331,16 @@ class TestValidateEventSchemaPerType:
             "task_id": "42",
             "variety": {"novelty": 3, "scope": 3, "uncertainty": 3, "risk": 3, "total": 12},
         },
+        # dispatch_site carries the coverage DENOMINATOR. task_id ALONE is
+        # required, and `variety` is deliberately absent from this sample:
+        # the harness treats every sample key as required (it asserts each
+        # one's removal is rejected), so listing an optional field here would
+        # be a false claim about the schema. That absence is also the point of
+        # the event — an un-stamped dispatch is a legal dispatch_site with no
+        # variety, and it is precisely the gap the metric exists to count.
+        "dispatch_site": {
+            "task_id": "42",
+        },
         "teachback_ack": {
             "task_id": "41",
             "rationale_articulates_this_dispatch": "yes",
