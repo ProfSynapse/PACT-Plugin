@@ -102,7 +102,10 @@ _STDIN_READ_MAX = 8 * 1024 * 1024  # 8 MB
 # clean (0) and the output well-formed.
 try:
     import shared.pact_context as pact_context
-    from shared.dispatch_helpers import is_pact_specialist_owner
+    from shared.dispatch_helpers import (
+        is_pact_specialist_owner,
+        is_owner_wiring_shape,
+    )
     from shared.intentional_wait import is_self_complete_exempt
     from shared.task_utils import is_teachback_subject, read_task_json
     from shared.teachback_schema import resolve_variety_total
@@ -247,15 +250,25 @@ def _evaluate_dispatch_variety(input_data: dict) -> str | None:
 
     # COMPOSITE signature — a pact-specialist owner AND addBlockedBy non-empty
     # in the SAME tool_input. Either half alone is a non-terminal/partial write.
-    # Cheap in-memory guards FIRST (owner-present, addBlockedBy, taskId); the
+    # Cheap in-memory guards FIRST (the shape predicate, then taskId); the
     # owner→agentType resolution is a disk read, deferred until after the
     # team_name resolve below (cost-order).
-    owner = tool_input.get("owner")
-    if not isinstance(owner, str) or not owner.strip():
-        return None  # no owner → TaskCreate(B) / not a wiring write
-    add_blocked_by = tool_input.get("addBlockedBy")
-    if not isinstance(add_blocked_by, list) or not add_blocked_by:
-        return None  # partial wiring (owner-only) → not yet terminal
+    #
+    # The SHAPE half is delegated to shared.dispatch_helpers so this gate and
+    # the dispatch-coverage denominator recognize the wiring write through ONE
+    # expression instead of two that can drift (the parallel-path class). Only
+    # the shape is shared: the owner→specialist resolution and the exemption
+    # predicate stay here, because the exemption question this gate asks
+    # ("may this owner self-complete?") is NOT the question the denominator
+    # asks. See is_owner_wiring_shape's docstring for the full three-leg
+    # recognition and why the legs are kept separate. NOTE the shared helper
+    # says "shape" rather than this file's local "terminal", because that
+    # term is defined HERE (terminal = both halves present, vs a partial
+    # one-half write) and does not travel to a module with other consumers.
+    if not is_owner_wiring_shape(tool_input):
+        return None  # partial wiring (owner-only or blockers-only) → not terminal
+    # Guaranteed a non-empty, non-whitespace str by the shape predicate above.
+    owner = tool_input.get("owner", "")
 
     task_id = tool_input.get("taskId", "") or ""
     if not task_id:
