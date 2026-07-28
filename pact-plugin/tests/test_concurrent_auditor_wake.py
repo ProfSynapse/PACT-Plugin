@@ -874,21 +874,30 @@ class TestNoPactHookCanDeliverAMessage:
         lines = source.splitlines()
         flagged = {lineno for _, lineno, _ in findings}
 
-        for marker, why in (
+        anchors = (
             ("inbox.read_text(", "an inbox path that is only read"),
             ("inbox.is_file()", "an inbox existence probe"),
             ("log.write_text(", "a write to a path that is not an inbox"),
             ("os.replace(inbox,", "a move whose SOURCE is an inbox"),
-        ):
-            lineno = next(
-                (i for i, ln in enumerate(lines, start=1) if marker in ln), None
-            )
-            # The default and this guard are ONE unit -- never add the default
-            # alone. `None not in flagged` is True, so an unchecked defaulted
-            # lookup makes a missing anchor SATISFY the assertion below, and the
-            # row silently stops guarding anything. That is strictly worse than
-            # the bare next() this replaced, which at least failed loudly.
-            assert lineno is not None, (
+        )
+        assert anchors, (
+            "the anchor table is empty, so every row below would be skipped and "
+            "this test would pass having checked nothing"
+        )
+
+        for marker, why in anchors:
+            matches = [i for i, ln in enumerate(lines, start=1) if marker in ln]
+            # Both guards live INSIDE this loop deliberately. A separate pass
+            # over a derived collection can run zero times while these rows run
+            # -- a universal over nothing, which is the failure this module
+            # exists to prevent. Sharing the iteration makes that structurally
+            # impossible rather than merely asserted.
+            #
+            # The list and these guards are ONE unit -- never take matches[0]
+            # without them. `None not in flagged` is True, so an unchecked
+            # lookup makes a missing anchor SATISFY the flagged assertion below
+            # and the row silently stops guarding anything.
+            assert matches, (
                 f"negative-control anchor {marker!r} is not present in "
                 f"{_rel(self.FIXTURE)}.\n"
                 f"These markers are matched LITERALLY: each row locates the "
@@ -899,6 +908,30 @@ class TestNoPactHookCanDeliverAMessage:
                 f"Update the marker to match the new identifier -- do not "
                 f"delete the row."
             )
+            assert len(matches) == 1, (
+                f"negative-control anchor {marker!r} matches "
+                f"{len(matches)} lines of {_rel(self.FIXTURE)} "
+                f"(lines {matches}), so which line this row checks is now "
+                f"ambiguous and the first match wins.\n"
+                f"The usual cause is prose -- a docstring or comment that "
+                f"spells an anchor out as an example. Because the search runs "
+                f"over the whole file, such a line becomes the match and the "
+                f"row starts checking the prose instead of the code, while "
+                f"still passing.\n"
+                f"Describe the anchors without reproducing them, or narrow "
+                f"this marker until it matches only the code line."
+            )
+            lineno = matches[0]
+            # KNOWN LIMIT, stated because an unstated one is what this file
+            # keeps shipping: uniqueness does not catch a marker that matches
+            # exactly one line when that line is prose. Reaching it needs a
+            # rename to remove the code occurrence AND prose to reintroduce the
+            # same text. For the leg whose rename drops two anchors at once the
+            # sibling falls to zero and the guard above still fires, so the gap
+            # is open only for the single-anchor legs. Closing it would mean
+            # classifying lines as code, whose own failure modes (a call
+            # reformatted across lines reddens a test about renaming) are worse
+            # than the residual.
             assert lineno not in flagged, (
                 f"scanner flagged {why} at fixture line {lineno} ({marker!r}). "
                 f"Over-flagging makes this pin fire on correct code, and a pin "
