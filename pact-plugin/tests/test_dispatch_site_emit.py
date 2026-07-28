@@ -29,6 +29,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
 import task_lifecycle_gate as tlg  # noqa: E402
+import shared.session_journal as sj  # noqa: E402
 
 TEAM = "test-team"
 LEAD = "PACT:pact-orchestrator"
@@ -86,7 +87,7 @@ def env(tmp_path, monkeypatch, pact_context):
 @pytest.fixture
 def events(monkeypatch):
     captured: list[dict] = []
-    monkeypatch.setattr(tlg, "append_event", lambda e: captured.append(e) or True)
+    monkeypatch.setattr(sj, "append_event", lambda e: captured.append(e) or True)
     return captured
 
 
@@ -338,11 +339,11 @@ class TestDedup:
         """A claim whose write then failed must be released, or the site is
         suppressed forever with no journal entry to show for it."""
         seed(env, metadata={"variety": STAMP})
-        monkeypatch.setattr(tlg, "append_event", lambda e: False)
+        monkeypatch.setattr(sj, "append_event", lambda e: False)
         tlg.evaluate_lifecycle(wiring())
 
         captured: list[dict] = []
-        monkeypatch.setattr(tlg, "append_event", lambda e: captured.append(e) or True)
+        monkeypatch.setattr(sj, "append_event", lambda e: captured.append(e) or True)
         tlg.evaluate_lifecycle(wiring())
         assert len(sites(captured)) == 1, "rollback did not release the marker"
 

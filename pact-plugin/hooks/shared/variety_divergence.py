@@ -414,3 +414,159 @@ def resolve_arc_start(
         except (ValueError, TypeError):
             continue
     return latest_ts
+
+
+# Liveness states for check_denominator_liveness. FOUR states, and the fourth
+# must not collapse into any of the other three: the Q5 consumer already
+# separates "surfaced", "no dispatch sites (N/A)" and "zero coverage" — three
+# readings this design spent real effort disentangling — and INCONCLUSIVE is
+# none of them. It means "the witness is degraded, so this measurement cannot
+# be trusted", which is a statement about the INSTRUMENT rather than about the
+# population. Merging it into N/A would recreate exactly the conflation the
+# coverage extractor was built to remove, one field over.
+LIVENESS_ALIVE = "alive"
+LIVENESS_DEAD = "denominator_stream_dead"
+LIVENESS_INCONCLUSIVE = "witness_degraded"
+
+# The witness's own event type. Named here so the liveness check and the emit
+# site cannot drift on the string.
+WITNESS_EVENT_TYPE = "dispatch_decision"
+
+
+def _is_countable_witness(subagent_type: object, exempt_types: frozenset) -> bool:
+    """True iff a `dispatch_decision` names a spawn that SHOULD have produced
+    a dispatch site.
+
+    `dispatch_decision` fires on EVERY spawn, including the bootstrap
+    secretary's — measured at 248 of 856 events (29%) — and including
+    non-PACT helpers (Explore, general-purpose, fork). Counting those as
+    witnesses is what makes the uncorrected predicate trip in 117
+    legitimately-empty sessions instead of 5.
+
+    `subagent_type` here is an AGENT-TYPE token (`pact-backend-coder`), not a
+    task owner. Owners are bare names and must be resolved through team
+    config — that warning does not apply to this field, and a prefix test is
+    correct for it.
+
+    The exemption set is the caller's, threaded from the SAME
+    TEACHBACK_EXEMPT_AGENT_TYPES the emit predicate uses: if the witness
+    excluded a different set from the denominator, the two would drift and
+    this check would silently mis-aim — the same-population failure one level
+    out from the one Q5 already fixed.
+
+    DELIBERATE APPROXIMATION, stated because it has a direction: this tests
+    the `pact-` prefix rather than resolving against the on-disk specialist
+    registry, which would need a filesystem glob and make this module impure
+    and untestable without a seeded plugin root. An unregistered `pact-*`
+    type would therefore count as a witness — over-inclusive, which biases
+    toward TRIPPING. That is the noisier direction rather than the silent
+    one, and it is bounded in practice because an unregistered `pact-*` spawn
+    is refused at the dispatch gate before it can ever emit.
+    """
+    if not isinstance(subagent_type, str) or not subagent_type:
+        return False
+    if not subagent_type.startswith("pact-"):
+        return False
+    return subagent_type not in exempt_types
+
+
+def check_denominator_liveness(
+    dispatch_site_events: list[dict],
+    dispatch_decision_events: list[dict],
+    skip_events: list[dict],
+    exempt_types: frozenset,
+) -> dict:
+    """Binary liveness check over the Q5 denominator stream, plus the
+    instrument's own honesty about when it cannot answer.
+
+    Returns `{"state": ..., "dispatch_sites": int, "witness_spawns": int,
+    "witness_skips": int}` — RAW COUNTS AND NO RATIO. The ratio was never the
+    signal: `dispatch_decision` was chosen for being 0/45 degenerate on the
+    corpus, and its ratio against dispatch sites ranges 0.20–4.00, which is
+    useless. There is deliberately NO TUNABLE NUMBER anywhere in this
+    function, so there is nothing to mis-set.
+
+    The three states, in evaluation order, and the order is load-bearing:
+
+    1. INCONCLUSIVE — a `journal_emit_skipped` naming the witness type is
+       present in-window. **A liveness check that knows its own witness is
+       lossy must not return "alive"** — and equally must not return "dead",
+       because a missing witness makes BOTH readings untrustworthy. This is
+       checked FIRST for that reason.
+    2. DEAD — no dispatch sites at all, yet at least one countable spawn that
+       should have produced one. Advisory: the caller reports it and never
+       clamps or suppresses the coverage figure on the strength of it.
+    3. ALIVE — anything else, including the common healthy case of no sites
+       and no countable spawns (a session that dispatched nothing).
+
+    🔴 WHAT THIS CANNOT SEE, and it must not be softened into sounding
+    covered: PARTIAL degradation. If some dispatch_site emits are lost but
+    not all, this returns ALIVE — the stream is non-empty and nothing else
+    here distinguishes "fewer than expected" from "exactly as many as
+    happened". The concern that motivated a liveness check WAS partial
+    degradation, so this mitigation is strictly NARROWER than the concern it
+    answers. The two documented skip paths are covered by counting
+    `journal_emit_skipped`; everything outside them has no witness at all.
+    That gap is pinned as an executable test rather than left as prose.
+    """
+    sites = len(dispatch_site_events) if isinstance(dispatch_site_events, list) else 0
+
+    witness_skips = 0
+    if isinstance(skip_events, list):
+        for ev in skip_events:
+            if isinstance(ev, dict) and ev.get("skipped_type") == WITNESS_EVENT_TYPE:
+                witness_skips += 1
+
+    countable = 0
+    if isinstance(dispatch_decision_events, list):
+        for ev in dispatch_decision_events:
+            if not isinstance(ev, dict):
+                continue
+            if _is_countable_witness(ev.get("subagent_type"), exempt_types):
+                countable += 1
+
+    if witness_skips:
+        state = LIVENESS_INCONCLUSIVE
+    elif sites == 0 and countable > 0:
+        state = LIVENESS_DEAD
+    else:
+        state = LIVENESS_ALIVE
+
+    return {
+        "state": state,
+        "dispatch_sites": sites,
+        "witness_spawns": countable,
+        "witness_skips": witness_skips,
+    }
+
+
+def count_emit_skips(skip_events: list[dict]) -> dict:
+    """Count `journal_emit_skipped` events by skipped type and cause.
+
+    Consumer-side counting, deliberately. The hooks that record these run as a
+    SEPARATE OS PROCESS PER TOOL CALL, so an in-process tally resets every
+    invocation and can never deliver a session total — the durable store is
+    the journal, and the count happens here at read time.
+
+    Returns `{"total": int, "by_type": {...}, "by_cause": {...}}`. `by_cause`
+    keeps RAISED separate from RETURNED-FALSE: a writer defect and a schema
+    rejection have different remedies, and reporting a single "failed" number
+    rebuilds the ambiguity that capturing the bool removed.
+    """
+    by_type: dict = {}
+    by_cause: dict = {}
+    total = 0
+    if not isinstance(skip_events, list):
+        return {"total": 0, "by_type": by_type, "by_cause": by_cause}
+    for ev in skip_events:
+        if not isinstance(ev, dict):
+            continue
+        skipped = ev.get("skipped_type")
+        cause = ev.get("cause")
+        if not isinstance(skipped, str) or not skipped:
+            continue
+        total += 1
+        by_type[skipped] = by_type.get(skipped, 0) + 1
+        if isinstance(cause, str) and cause:
+            by_cause[cause] = by_cause.get(cause, 0) + 1
+    return {"total": total, "by_type": by_type, "by_cause": by_cause}

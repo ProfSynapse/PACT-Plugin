@@ -25,6 +25,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
 import task_lifecycle_gate as tlg  # noqa: E402
+import shared.session_journal as sj  # noqa: E402
 
 LEAD = "PACT:pact-orchestrator"
 TEAMMATE = "pact-devops-engineer"
@@ -50,7 +51,7 @@ VARIETY_WITH_RATIONALES = {
 @pytest.fixture
 def emit_events(monkeypatch):
     events: list[dict] = []
-    monkeypatch.setattr(tlg, "append_event", lambda e: events.append(e) or True)
+    monkeypatch.setattr(sj, "append_event", lambda e: events.append(e) or True)
     return events
 
 

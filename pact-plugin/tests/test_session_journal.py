@@ -3341,6 +3341,17 @@ class TestValidateEventSchemaPerType:
         "dispatch_site": {
             "task_id": "42",
         },
+        # journal_emit_skipped records a write that did NOT land. Both keys
+        # here are required: `skipped_type` is what lets the liveness check
+        # recognise a drop of its OWN witness rather than merely counting
+        # losses, and `cause` keeps a writer defect distinct from a schema
+        # rejection. `task_id` is optional (two of the causes have no task to
+        # name) and so is deliberately absent — this harness treats every
+        # sample key as required.
+        "journal_emit_skipped": {
+            "skipped_type": "dispatch_site",
+            "cause": "returned_false",
+        },
         "teachback_ack": {
             "task_id": "41",
             "rationale_articulates_this_dispatch": "yes",

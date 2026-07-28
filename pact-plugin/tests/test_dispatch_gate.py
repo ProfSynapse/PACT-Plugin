@@ -181,8 +181,14 @@ def _full_setup(
 
 
 def _capture_journal(monkeypatch):
-    """Replace append_event in both shared.session_journal and dispatch_gate
-    so every emit goes into a captured list. Returns the list.
+    """Replace append_event in shared.session_journal so every emit goes into
+    a captured list. Returns the list.
+
+    Patching the shared module alone is now SUFFICIENT and complete: the gate
+    emits through ``append_event_checked``, which funnels to
+    ``session_journal.append_event``, so there is no longer a module-local
+    ``append_event`` in dispatch_gate to patch. Patching one seam instead of
+    two is why the promotion is worth having — a single interception point.
     """
     captured: list[dict] = []
 
@@ -192,8 +198,6 @@ def _capture_journal(monkeypatch):
 
     import shared.session_journal as sj
     monkeypatch.setattr(sj, "append_event", _capture)
-    import dispatch_gate
-    monkeypatch.setattr(dispatch_gate, "append_event", _capture)
     return captured
 
 

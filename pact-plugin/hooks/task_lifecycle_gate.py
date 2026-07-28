@@ -298,6 +298,7 @@ try:
     from shared.intentional_wait import is_self_complete_exempt, is_teachback_exempt
     from shared.session_journal import (
         append_event,
+        append_event_checked,
         get_journal_path,
         make_event,
         read_events,
@@ -734,78 +735,6 @@ def _dispatch_site_unclaim(team_name: str, task_id: str) -> None:
     )
 
 
-def _append_event_checked(event: dict, what: str, task_id: str = "") -> bool:
-    """``append_event`` with its silent-rejection path closed. Returns the
-    write outcome; never raises.
-
-    ``append_event`` returns **False** on schema rejection or an unwritable
-    journal WITHOUT raising, and its in-process contract discards the reason
-    by design. An emit site that calls it bare inside ``except Exception:
-    pass`` therefore loses a dropped write with no signal of ANY kind — not a
-    log line, not an exception, not a return value anyone reads. A consumer
-    counting these events cannot distinguish "never emitted" from "emitted and
-    rejected", which is the difference between a real gap and an instrument
-    failure.
-
-    This helper closes that silence at the CAPTURE end and nothing more: it
-    captures the bool, converts a raise into the same False (callers already
-    treat both as "not written"), and writes one bounded stderr diagnostic.
-
-    CAVEAT ON THE STDERR LEG, because "observable" would over-claim: writing
-    it provably cannot break this hook's exit-0 contract, but whether
-    PostToolUse stderr reaches an operator AT ALL was never established. So
-    the certain value here is the capture — a caller can now act on the
-    outcome, and a durable consumer can be built on it — while the stderr
-    line is a diagnostic channel of UNVERIFIED REACH. Do not cite it as
-    evidence that drops are surfaced. It deliberately
-    does NOT count, aggregate, or persist — these hooks run as a separate
-    process per tool call, so any in-process tally would reset every
-    invocation and could never carry a session total to a consumer. A durable
-    skip-accounting surface is a separate concern with a separate mechanism.
-
-    Mirrors the capture already done at ``_emit_gate_health_event`` and
-    ``_emit_lead_side_agent_handoff``; the difference is that those two have a
-    marker to roll back, and these emit sites have none — so "act on it" here
-    can only mean "say so".
-
-    ``what`` is a caller-supplied literal (the event type). ``task_id`` is
-    stdin-derived and is bounded + stripped of non-printables before it
-    reaches stderr, matching the sanitize discipline ``_emit_gate_health_event``
-    applies to ``tool_name``.
-
-    The diagnostic write is wrapped: this runs inside PostToolUse paths whose
-    stdout JSON is only honored on exit 0, so a raising ``print`` must never
-    flip the exit code.
-    """
-    # The two failure modes are reported DISTINCTLY. They have different
-    # causes — a False is a schema rejection or an unwritable journal, a raise
-    # is a defect in the writer — and a diagnostic that collapses them sends
-    # the reader looking for the wrong thing.
-    try:
-        written = append_event(event)
-        cause = "append_event returned False"
-    except Exception as exc:
-        written = False
-        cause = f"append_event raised {_bounded_error_text(exc)}"
-    if not written:
-        try:
-            detail = ""
-            if task_id:
-                text = task_id if type(task_id) is str else f"{task_id}"
-                if len(text) > _ERROR_TEXT_MAX:
-                    text = text[:_ERROR_TEXT_MAX] + "...[truncated]"
-                text = "".join(c if c.isprintable() else " " for c in text)
-                detail = f" task_id={text}"
-            print(
-                f"task_lifecycle_gate: {what} journal emit dropped "
-                f"({cause}){detail}",
-                file=sys.stderr,
-            )
-        except BaseException:  # noqa: BLE001 — a diagnostic write must not flip the exit code
-            pass
-    return written
-
-
 def _dispatch_site_variety(tool_input: dict, task: dict) -> dict:
     """Project the dispatched Task-B's variety stamp for a dispatch_site
     payload: the four dimensions + total, WITHOUT the ``*_rationale`` strings.
@@ -948,7 +877,7 @@ def _emit_dispatch_site(
             variety = _dispatch_site_variety(tool_input, task)
             if variety:
                 fields["variety"] = variety
-            written = _append_event_checked(
+            written = append_event_checked(
                 make_event("dispatch_site", **fields),
                 "dispatch_site",
                 str(task_id),
@@ -1654,7 +1583,7 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
                     # never stamped. Still fail-open (the try covers make_event,
                     # which the helper cannot).
                     try:
-                        _append_event_checked(
+                        append_event_checked(
                             make_event(
                                 "dispatch_variety",
                                 task_id=new_task_id,
@@ -1886,11 +1815,11 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
                         # TaskUpdate(A, status="completed") fires naturally-once
                         # per teachback acceptance, so no occupant marker is
                         # needed (cf. the dispatch_variety note above).
-                        # Bool captured (see _append_event_checked): a dropped
+                        # Bool captured (see append_event_checked): a dropped
                         # ack is silently indistinguishable from a teachback
                         # that carried no acknowledgment at all.
                         try:
-                            _append_event_checked(
+                            append_event_checked(
                                 make_event("teachback_ack", **ack_fields),
                                 "teachback_ack",
                                 str(task_id),
@@ -2319,10 +2248,10 @@ def _journal_lifecycle_decision(
             advisories=messages,
             verdict="advisory" if advisories else "allow",
         )
-        # Bool captured (see _append_event_checked): this is the per-invocation
+        # Bool captured (see append_event_checked): this is the per-invocation
         # decision record, so a dropped one reads downstream as a turn in which
         # the gate never ran at all.
-        _append_event_checked(event, "lifecycle_decision")
+        append_event_checked(event, "lifecycle_decision")
     except Exception:
         pass
 
