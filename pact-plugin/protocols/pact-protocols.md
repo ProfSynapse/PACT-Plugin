@@ -1027,7 +1027,7 @@ The aggregation feeds back into Learning II calibration data alongside the featu
 | `/PACT:plan-mode` | None (consultant writes consultation HANDOFF, idles) | All consultant tasks; the plan-mode parent task |
 | `/PACT:imPACT` | None (triage agent writes triage HANDOFF, idles) | All triage tasks; the imPACT parent task |
 
-Carve-outs apply across all workflows: signal-tasks (auditor), session briefing + memory-save (secretary), force-termination (imPACT). See [pact-completion-authority.md](pact-completion-authority.md) for the full acceptance + rejection recipes and carve-out rationale; [Completion Authority](pact-completion-authority.md#completion-authority) holds the slim team-lead-side summary.
+Carve-outs apply across all workflows: signal-tasks (blocker + algedonic), session briefing + memory-save (secretary), force-termination (imPACT). See [pact-completion-authority.md](pact-completion-authority.md) for the full acceptance + rejection recipes and carve-out rationale; [Completion Authority](pact-completion-authority.md#completion-authority) holds the slim team-lead-side summary.
 
 ---
 
@@ -2107,7 +2107,7 @@ Both calls are **required**, and the ordering matches Acceptance for the same re
 
 | Carve-out | Trigger | Rule |
 |---|---|---|
-| Signal-tasks | `metadata.completion_type == "signal"` AND `metadata.type ∈ {"blocker", "algedonic"}` | Auditor + algedonic-emitting agents self-complete; the task IS the signal, no HANDOFF to judge. |
+| Signal-tasks | `metadata.completion_type == "signal"` AND `metadata.type ∈ {"blocker", "algedonic"}` | Blocker- and algedonic-signal tasks self-complete; the task IS the signal, no HANDOFF to judge. Auditor observation tasks carry `completion_type="signal"` with NO `metadata.type`, so this predicate does not witness them — they self-complete as documented practice in the Concurrent Audit Protocol, not as a predicate-witnessed exemption. Do NOT add `metadata.type` to an auditor dispatch to make it fit the predicate; the carve-out set is a policy surface, not a template detail. |
 | Secretary session briefing + memory-save | Owner's team-config `agentType` ∈ `SELF_COMPLETE_EXEMPT_AGENT_TYPES` (currently `{pact-secretary}`) | Secretary self-completes its session-briefing deliverable (`secretary: deliver session briefing`) as the final act of delivering the briefing, and its memory-save tasks; team-lead has no acceptance criteria for the secretary's own briefing or memory bookkeeping. Self-completion does not end the secretary's role (it stays alive as consultant + harvester). Resolved via team-config lookup on `member.agentType`, so the carve-out applies regardless of spawn name (`session-secretary`, etc.). |
 
 The canonical predicate `is_self_complete_exempt(task, team_name)` in `shared/intentional_wait.py` witnesses ONLY these two surfaces. It is a pure function read by the PostToolUse advisory gate `task_lifecycle_gate.py` (advisory-only — it cannot DENY; it emits a `self_completion` advisory + a `completion_disputed` writeback when a non-exempt teammate self-completes) as well as by your TaskGet inspection and audit tooling. No hook BLOCKS on it; the exemption is not enforced (nothing forces an exempt teammate to self-complete — that remains instruction-level). Pass `team_name` (read from session context) to get accurate exemption signal for surface 1; surface 2 is independent of `team_name`.
