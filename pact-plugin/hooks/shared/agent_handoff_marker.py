@@ -91,9 +91,13 @@ def sanitize_path_component(value: str) -> str:
     Strip path-traversal fragments + C0 control chars from a value destined
     for filesystem joins.
 
-    Mirrors the regex used inside task_utils.read_task_json so the status-read
-    site and the marker-write site apply symmetric sanitization. Without this,
-    an attacker-crafted task_id / team_name that happens to sanitize (in
+    PAIRS WITH — but is not identical to — the regex inside
+    task_utils.read_task_json, so the status-read site and the marker-write
+    site both strip path traversal. The patterns differ: this one is strictly
+    STRICTER, additionally stripping C0 control characters (\x00-\x1f), which
+    the read-side strip leaves intact. Read "paired", not "mirrored": the
+    symmetry holds on the traversal characters only. Without this, an
+    attacker-crafted task_id / team_name that happens to sanitize (in
     read_task_json) into a matching existing completed-task file could still
     carry raw "../" fragments into the marker-path join.
 
@@ -190,7 +194,46 @@ def _resolve_marker_target(
     to the fd, cannot be redirected through a symlinked directory swapped in
     after this resolution.
     """
-    task_id = sanitize_path_component(task_id)
+    # Coerce task_id to str BEFORE sanitizing. sanitize_path_component is a
+    # bare re.sub, which RAISES TypeError on a non-str input. Marker callers
+    # sit inside emit paths that wrap their whole body in
+    # `except Exception: pass`, so such a raise is SWALLOWED: the emit is
+    # skipped and the event silently vanishes from the journal instead of
+    # failing loudly. A consumer counting those events then measures a
+    # population smaller than the one that actually occurred, with no signal
+    # that anything was lost. Normalising HERE — the single resolver that
+    # BOTH already_emitted() and unclaim() route through — covers every
+    # marker entry point by construction, so a claim and its compensating
+    # rollback can never derive different keys from the same input.
+    #
+    # Deliberately NOT placed inside sanitize_path_component, and the
+    # decisive reason is that doing so would buy NOTHING. Of the three
+    # components this resolver sanitizes, occupant is a hex digest from
+    # occupant_hash() (str by construction) and team_name reaches .lower()
+    # BELOW, before any sanitize call — so a coercion inside the sanitizer is
+    # unreachable for team_name and pointless for occupant. It would cover
+    # exactly the one component covered here, while widening the change to
+    # every other caller of that shared helper: identical coverage, wider
+    # exposure.
+    #
+    # A second, independent reason: this sanitizer and the read-side strip in
+    # task_utils.read_task_json BOTH currently reject a non-str (both are a
+    # bare re.sub). Coercing only this one would leave the read side raising
+    # on an input the write side had begun accepting. The two are NOT the
+    # same pattern — this one is strictly stricter, also removing C0 controls
+    # where the read side removes traversal characters only — so they are
+    # paired on the reject-non-str behaviour, not mirrored generally. Settle
+    # that by EXECUTING both patterns; neither docstring is evidence for it.
+    #
+    # Coercion inside a path sanitizer is also the fail-open direction for a
+    # primitive whose whole job is constraining what reaches a filesystem
+    # join.
+    #
+    # task_id ONLY — the other two were assessed, not skipped. A non-str
+    # team_name still raises AttributeError at .lower(): a different
+    # exception, from a different line, than the TypeError this coercion
+    # prevents. Exactly ONE component is normalised here, not all three.
+    task_id = sanitize_path_component(str(task_id))
     occupant = sanitize_path_component(occupant)
 
     # Degenerate post-sanitization values collapse the marker path onto an
