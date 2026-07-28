@@ -15,9 +15,8 @@ Mirrors variety_scorer.py module conventions:
 Functions:
 - compute_variety_divergence(feature_variety, dispatch_varieties,
   total_pact_dispatch_count=None, threshold=2) -> dict
-- count_task_b_dispatch_sites(agent_dispatch_events,
-  review_dispatch_events, remediation_events) -> int — the Q5 coverage
-  denominator, counted from variety-independent journal markers.
+- extract_dispatch_coverage(dispatch_site_events) -> (variety_totals,
+  total, malformed) — BOTH Q5 terms from ONE pass over ONE input list.
 
 Return shape (stable keys):
 - `coverage`:  float — fraction of pact-* dispatches with variety stamped;
@@ -29,6 +28,12 @@ Return shape (stable keys):
                regression stays visible; it is debug-only there
                (surfaced=False). When total_pact_dispatch_count is None,
                assumed 1.0 (all known dispatches were stamped).
+- `stamped`:   int — the numerator as a RAW COUNT.
+- `total`:     int | None — the denominator as a RAW COUNT (None on the
+               legacy no-denominator path). `stamped` and `total` are
+               present on EVERY return path so a reader can render "0 of 5"
+               rather than a bare `0.000`: the counts say which of the two
+               zero-coverage states this is, and the ratio does not.
 - `mean`:      int | None — rounded mean of stamped dispatch variety
                totals; None when dispatches is empty.
 - `max`:       int | None — max of stamped dispatch totals; None when empty.
@@ -36,29 +41,44 @@ Return shape (stable keys):
 - `delta`:     int | None — abs(feature_variety - mean); None when either
                feature_variety is None or dispatches is empty.
 - `surfaced`:  bool — True when delta >= threshold AND feature_variety is
-               not None AND dispatches is non-empty.
+               not None AND dispatches is non-empty; ALSO True for the
+               `zero_coverage` state below, which is a finding rather than a
+               degenerate case.
 - `direction`: "overshot" | "undershot" | None — populated when
                surfaced=True, None otherwise. "overshot" means
                feature_variety > mean (feature was estimated too high);
                "undershot" means feature_variety < mean (estimated too low).
-- `reason`:    str | None — present when surfaced=False with a structural
-               cause: "feature_variety_missing", "no_dispatches_stamped",
-               "within_threshold", or "coverage_exceeds_unity" (the
-               defense-in-depth tripwire returned when stamped dispatches
-               outnumber the counted dispatch sites — coverage > 1.0,
-               which signals a denominator regression). None when
-               surfaced=True.
+- `reason`:    str | None — the structural cause, or None on the ordinary
+               surfaced-divergence path:
+               * "no_dispatch_sites"   — total == 0: NOTHING WAS DISPATCHED,
+                 so there is no entity to measure. surfaced=False. This is
+                 the N/A state; rendering 0.000 for it manufactures a
+                 compliance gap out of a missing stream.
+               * "zero_coverage"       — total > 0 and stamped == 0: every
+                 dispatch site exists and NONE was stamped. surfaced=TRUE —
+                 the loudest legitimate reading of this metric, not a
+                 degenerate case. (Replaces the former
+                 "no_dispatches_stamped", whose name was FALSE here: it
+                 said "no dispatches" when there were N.)
+               * "feature_variety_missing", "within_threshold" — as before.
+               * "coverage_exceeds_unity" — the defense-in-depth tripwire
+                 when stamped outnumbers total. UNREACHABLE from Q5 under
+                 the one-event topology (extract_dispatch_coverage cannot
+                 produce it); retained for a caller assembling both terms
+                 by hand.
 
 The composer in wrap-up.md §4 reads this dict and produces the §3.4
 sample output prose. compute_variety_divergence tests live in
 test_per_dispatch_variety.py; the net-new helpers
-(count_task_b_dispatch_sites, resolve_arc_start) live in
+(extract_dispatch_coverage, resolve_arc_start) live in
 test_variety_divergence.py.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+
+from .teachback_schema import resolve_variety_total
 
 
 # ---------------------------------------------------------------------------
@@ -121,17 +141,33 @@ def compute_variety_divergence(
     else:
         coverage = stamped_count / total_pact_dispatch_count
 
-    # --- Empty dispatches fail-open ---
+    # --- Nothing stamped: `total` is the DISCRIMINATOR, not a detail ---
+    # `stamped == 0` is NOT a terminal condition. Two opposite findings live
+    # here and they must never render identically:
+    #
+    #   total == 0              -> no entity to measure. N/A.
+    #   total > 0, stamped == 0 -> every site un-stamped. The metric's worst
+    #                              legitimate reading, and the loudest signal
+    #                              coverage can produce.
+    #
+    # Returning early on `stamped == 0` before consulting `total` suppressed
+    # the second as if it were the first: a REAL gap reported as "nothing to
+    # report". That is not a believable wrong answer beating a visible
+    # refusal — it is an INVISIBLE REFUSAL reading as nothing-to-report.
     if stamped_count == 0:
+        no_sites = total_pact_dispatch_count == 0 or total_pact_dispatch_count is None
         return {
             "coverage": coverage,
+            "stamped": stamped_count,
+            "total": total_pact_dispatch_count,
             "mean": None,
             "max": None,
             "min": None,
             "delta": None,
-            "surfaced": False,
+            # A 0% coverage gap is the finding, not a degenerate case to hide.
+            "surfaced": not no_sites,
             "direction": None,
-            "reason": "no_dispatches_stamped",
+            "reason": "no_dispatch_sites" if no_sites else "zero_coverage",
         }
 
     # --- Stats over stamped subset ---
@@ -167,6 +203,8 @@ def compute_variety_divergence(
         )
         return {
             "coverage": coverage,
+            "stamped": stamped_count,
+            "total": total_pact_dispatch_count,
             "mean": mean,
             "max": dispatch_max,
             "min": dispatch_min,
@@ -180,6 +218,8 @@ def compute_variety_divergence(
     if not isinstance(feature_variety, int):
         return {
             "coverage": coverage,
+            "stamped": stamped_count,
+            "total": total_pact_dispatch_count,
             "mean": mean,
             "max": dispatch_max,
             "min": dispatch_min,
@@ -195,6 +235,8 @@ def compute_variety_divergence(
         direction = "overshot" if feature_variety > mean else "undershot"
         return {
             "coverage": coverage,
+            "stamped": stamped_count,
+            "total": total_pact_dispatch_count,
             "mean": mean,
             "max": dispatch_max,
             "min": dispatch_min,
@@ -206,6 +248,8 @@ def compute_variety_divergence(
 
     return {
         "coverage": coverage,
+        "stamped": stamped_count,
+        "total": total_pact_dispatch_count,
         "mean": mean,
         "max": dispatch_max,
         "min": dispatch_min,
@@ -216,98 +260,85 @@ def compute_variety_divergence(
     }
 
 
-def count_task_b_dispatch_sites(
-    agent_dispatch_events: list[dict],
-    review_dispatch_events: list[dict],
-    remediation_events: list[dict],
-) -> int:
-    """Count the Task-B dispatch SITES — the Q5 coverage denominator.
+def extract_dispatch_coverage(
+    dispatch_site_events: list[dict],
+) -> tuple[list[int], int, list[dict]]:
+    """Derive BOTH Q5 coverage terms from ONE pass over the `dispatch_site`
+    stream.
 
-    coverage = (stamped dispatches) / (this count). The denominator is
-    sourced from the variety-INDEPENDENT journal markers (agent_dispatch,
-    review_dispatch reviewers, remediation) because those exist regardless
-    of whether variety was stamped — the variety stream cannot see its own
-    gaps. So an un-stamped dispatch still counts here and legitimately
-    lowers coverage (that is exactly what coverage exists to surface).
+    Returns `(variety_totals, total, malformed)`:
 
-    Count = len(agent_dispatch)
-            + Σ len(review_dispatch[i].reviewers)
-            + remediations whose task_id is NOT already an agent_dispatch
-              task_id.
+    - `variety_totals` — the resolved variety total of every event that
+      carries a resolvable stamp. **This list IS the numerator's source**:
+      the numerator is `len(variety_totals)`, and the same list object is
+      passed to `compute_variety_divergence` for mean/max/min/delta.
+    - `total` — the DENOMINATOR: the number of `dispatch_site` events, i.e.
+      the number of dispatch SITES. It counts the event's EXISTENCE, never
+      the stamp's presence.
+    - `malformed` — events carrying a `variety` value that could NOT be
+      resolved. A DIFFERENT category from a missing stamp (see below).
 
-    agent_dispatch is EVENT-counted (`len`), NOT deduped by distinct
-    task_id. This is correct because the caller arc-scopes the reads FIRST
-    (the journal `--since` boundary) → the input is a SINGLE arc → within
-    one arc every Task-B has a unique task_id → event-count == distinct
-    count. The "one agent_dispatch per task_id" property is GUARANTEED by
-    that arc-scoping precondition, not an unguarded assumption. Do NOT
-    "harden" this to a distinct-id count: across arcs the platform REUSES
-    low task_ids, so a prior arc's task-8 and the current arc's task-8 are
-    GENUINELY DISTINCT dispatches — collapsing them by id would be wrong on
-    unscoped input, buys no real robustness (it leans on the same
-    --since-first precondition that already makes event-count correct), and
-    fails more quietly on misuse than the loud over-count it would replace.
+    **Why one function returning the list, rather than a count the caller
+    re-derives:** the numerator and denominator must be sourced over the
+    same Task-B dispatch population. Returning a count would leave the
+    caller to compute the totals in a second pass, making that invariant a
+    rule maintained by agreement between two derivations. Here the numerator
+    IS the length of the list the caller uses, so the coupling is an
+    identity, not something a test has to keep true. There is deliberately
+    no `stamped == len(variety_totals)` assertion anywhere: the two cannot
+    diverge, so there is nothing to pin. Its absence is the design working,
+    not a missing test.
 
-    Reviewers are counted via `review_dispatch.reviewers` (by name) and are
-    NOT deduped: peer-review emits no `agent_dispatch`, so reviewers are
-    disjoint from the agent_dispatch population by emit-site design. A
-    reviewer REUSED as a fixer is not a double-count: reuse creates a NEW
-    fix Task-B (a distinct task_id in `remediation`), so the review-work and
-    the fix-work are two legitimately-distinct dispatches.
+    **Coverage > 1.0 is structurally impossible here.** Every element of
+    `variety_totals` comes from an event that also incremented `total`, so
+    `len(variety_totals) <= total` always — including for arbitrary,
+    hostile, or partially-malformed input.
 
-    ONLY remediation is deduped against agent_dispatch — a
-    comPACT/orchestrate-dispatched remediation emits BOTH `remediation` AND
-    `agent_dispatch` for the same task_id, so it is counted once (via the
-    agent_dispatch stream); a pure reuse-remediation (no agent_dispatch) is
-    counted via the remediation stream. Two `remediation` events that share
-    a task_id are NOT deduped among themselves: that is a bounded over-count
-    that only UNDER-states coverage (never >1.0) and is backstopped by the
-    `coverage_exceeds_unity` advisory in compute_variety_divergence, so no
-    self-dedup is warranted. A remediation with a missing task_id is COUNTED
-    (fail-safe: never undercount, so a dropped id can't inflate coverage).
+    **A missing stamp and a malformed stamp are different findings with
+    different remedies, and are never merged:**
 
-    DIRECTIONAL backstop caveat: the `coverage_exceeds_unity` advisory in
-    compute_variety_divergence only catches the OVER-count direction
-    (numerator > denominator → coverage >1.0). The OPPOSITE — a
-    remediation↔agent_dispatch task_id THREADING MISMATCH that fails to
-    dedup a site that should have deduped — OVER-counts the denominator and
-    UNDER-states coverage (a false stamping gap), which has NO advisory
-    backstop. That residual is bounded (one extra site per mismatched
-    remediation) and the str-normalized dedup key (below) is the primary
-    guard against the most likely mismatch (int vs str task_id).
+    - `variety` ABSENT — counted in `total`, absent from `variety_totals`,
+      and NOT in `malformed`. An honest un-stamped dispatch: the coverage
+      gap the metric exists to surface. The emit merges the on-disk task
+      metadata with the wiring write, so an absent `variety` means the
+      dispatch was never stamped ANYWHERE — a compliance signal, not a
+      producer artefact.
+    - `variety` PRESENT but unresolvable — counted in `total`, absent from
+      `variety_totals`, AND listed in `malformed`. A data-quality defect.
+      Folding these into the missing-stamp population would leave the ratio
+      unchanged while reporting a normal gap as a producer defect, which
+      trains readers to ignore the signal.
 
-    By construction this denominator excludes teachback Task-A gates and
-    signal/system tasks: they emit none of these three event types, so
-    there is nothing to filter out.
+    A stamp recovered through a NON-CANONICAL resolver candidate (e.g. the
+    four-dimension sum, with no `total` key) is STAMPED, not malformed:
+    `resolve_variety_total` returning a value IS resolution, and which
+    candidate won is not this consumer's business.
 
-    Pure function — no disk reads, no mutation. The caller passes event
-    lists scoped to the current arc; the remediation/agent_dispatch
-    task_id dedup is correct only WITHIN one arc, because the platform
-    reuses task_ids across arcs (the arc boundary is applied upstream at
-    read time).
+    Pure function; never raises. Non-list input yields `([], 0, [])`; a
+    non-dict element is counted as a site (it existed) and contributes no
+    total. The caller scopes `dispatch_site_events` to the current arc
+    before calling — the platform reuses task_ids across arcs.
     """
-    agent_task_ids = {
-        str(e.get("task_id"))
-        for e in agent_dispatch_events
-        if e.get("task_id") is not None
-    }
-    # Count reviewers only when `reviewers` is a list — a stray string value
-    # would otherwise have its CHARACTERS counted by len().
-    reviewer_count = sum(
-        len(e.get("reviewers"))
-        for e in review_dispatch_events
-        if isinstance(e.get("reviewers"), list)
-    )
-    # str-normalize the dedup key so an int agent task_id and a str
-    # remediation task_id (or vice versa) still match. A remediation with a
-    # missing task_id stringifies to "None" (never in the agent set, which
-    # excludes None) → counted (fail-safe: never undercount).
-    remediation_count = sum(
-        1
-        for r in remediation_events
-        if str(r.get("task_id")) not in agent_task_ids
-    )
-    return len(agent_dispatch_events) + reviewer_count + remediation_count
+    if not isinstance(dispatch_site_events, list):
+        return [], 0, []
+
+    variety_totals: list[int] = []
+    malformed: list[dict] = []
+
+    for event in dispatch_site_events:
+        if not isinstance(event, dict):
+            # It existed, so it is a site; it carries no resolvable stamp.
+            continue
+        # Absent key vs present-but-unresolvable are different findings, so
+        # membership is tested before resolution is attempted.
+        has_variety = "variety" in event
+        resolved = resolve_variety_total(event.get("variety"))
+        if resolved is not None:
+            variety_totals.append(resolved)
+        elif has_variety:
+            malformed.append(event)
+
+    return variety_totals, len(dispatch_site_events), malformed
 
 
 def resolve_arc_start(

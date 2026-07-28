@@ -19,6 +19,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
 from shared.teachback_schema import resolve_variety_total  # noqa: E402
+from shared.variety_divergence import extract_dispatch_coverage  # noqa: E402
 
 WRAPUP_PATH = Path(__file__).parent.parent / "commands" / "wrap-up.md"
 
@@ -87,7 +88,11 @@ def _run_extraction(expression, events):
     grep its wording) is to run the expression the file actually carries. The
     input is repo-controlled markdown.
     """
-    namespace = {"events": events, "resolve_variety_total": resolve_variety_total}
+    namespace = {
+        "events": events,
+        "resolve_variety_total": resolve_variety_total,
+        "extract_dispatch_coverage": extract_dispatch_coverage,
+    }
     exec(expression, namespace)  # noqa: S102 — repo-controlled instruction text
     return namespace
 
@@ -155,8 +160,25 @@ class TestRetroReadHardening:
             "pre-dates per-dispatch stamping"
         )
 
-    def test_q5_denominator_uses_count_helper_not_len_agent_dispatch(self, q5):
-        assert "count_task_b_dispatch_sites" in q5
+    def test_q5_denominator_comes_from_the_one_pass_helper(self, q5):
+        """Successor to the retired-helper pin. The NEGATIVE half is the
+        load-bearing one: it is what fails if someone reinstates
+        `count_task_b_dispatch_sites` in the prose, which would leave the
+        retirement silently incomplete."""
+        assert "extract_dispatch_coverage" in q5
+        assert "count_task_b_dispatch_sites" not in q5, (
+            "the retired 3-marker helper must not be named in Q5 — a "
+            "reinstated mention means the denominator was not actually moved"
+        )
+
+    def test_q5_reads_the_dispatch_site_stream(self, q5):
+        """The denominator is the dispatch_site event's EXISTENCE. Reading the
+        old variety-independent markers for Q5 would rebuild the two-population
+        split the one-event topology exists to remove."""
+        assert "--type dispatch_site" in q5
+        for retired_marker in ("--type agent_dispatch", "--type review_dispatch",
+                               "--type remediation"):
+            assert retired_marker not in q5
 
     def test_q5_arc_scoped_with_since(self, q5):
         assert "Arc scope (current feature only)" in q5
@@ -231,9 +253,15 @@ class TestTotalExtraction:
     def q6(self, wrapup_content):
         return _question_line(wrapup_content, "6. **Variety acknowledgment signals**")
 
-    def test_q5_resolves_the_total_through_the_shared_accessor(self, q5):
-        assert "resolve_variety_total" in q5
-        assert "shared.teachback_schema" in q5
+    def test_q5_sources_both_terms_through_the_shared_helper(self, q5):
+        """C-6 moved the resolver call INSIDE `extract_dispatch_coverage`, so
+        Q5 no longer names it. The guarantee it carried — that the total is
+        resolved rather than direct-indexed — did not go away; it moved into
+        code, and is pinned behaviourally by
+        `test_variety_divergence.py::TestExtractDispatchCoverage`. A prose pin
+        satisfiable by an import line is weaker than a behavioural one."""
+        assert "extract_dispatch_coverage" in q5
+        assert "shared.variety_divergence" in q5
 
     def test_q5_does_not_direct_index_the_total(self, q5):
         """The negative half: `[e["variety"]["total"] for e in events]` is the
@@ -241,11 +269,33 @@ class TestTotalExtraction:
         assert '["variety"]["total"]' not in q5
         assert "for e in events]" not in q5
 
-    def test_q5_reports_the_dropped_count(self, q5):
-        """An unresolvable stamp lowers coverage exactly like an un-stamped
-        dispatch, so without the count a data-quality problem reads as a
-        compliance gap."""
-        assert "len(events) - len(dispatch_varieties)" in q5
+    def test_q5_reports_the_malformed_count(self, q5):
+        """Successor to the dropped-count pin. An unresolvable stamp lowers
+        coverage exactly like an un-stamped dispatch, so without the count a
+        data-quality problem reads as a compliance gap. C-6 gives the two
+        populations different names rather than one subtraction, and the
+        prose must still require the malformed one be reported."""
+        assert "len(malformed_stamps)" in q5
+
+    def test_q5_keeps_absent_and_malformed_stamps_distinct(self, q5):
+        """The two have different remedies. Merging them leaves the ratio
+        unchanged while reporting a normal coverage gap as a producer defect,
+        which trains readers to ignore the malformed signal."""
+        assert "never merge them" in q5
+
+    def test_q5_requires_surfaced_to_be_honoured(self, q5):
+        """§6.1's actual mechanism. `coverage` is ALREADY 0.0 for an empty
+        session; the suppression lives in `surfaced=False` plus a reason. A
+        consumer that renders `coverage` without checking `surfaced` prints a
+        confident 0.000 for a session with nothing to measure — the original
+        defect rebuilt in its quietest form."""
+        assert "Honour `surfaced`" in q5
+        assert "N/A, never `0.000`" in q5
+        # The two zero-coverage states must be named distinctly, and the
+        # prose must say which signal separates them.
+        assert "no_dispatch_sites" in q5
+        assert "zero_coverage" in q5
+        assert "never the `coverage` float" in q5
 
     def test_q6_guards_the_flag_extraction(self, q6):
         assert "isinstance(e.get(\"rationale_articulates_this_dispatch\"), str)" in q6
@@ -302,7 +352,7 @@ class TestQ5ExtractionDependsOnTheDimensionSumCandidate:
 
     @pytest.fixture
     def q5_expression(self, q5):
-        return _backticked_expression(q5, "dispatch_varieties = ")
+        return _backticked_expression(q5, "variety_totals, ")
 
     def test_higher_candidates_cannot_fire_on_the_corpus_shape(self):
         """Fixture control. Without it, a shape that candidate 1 resolved would
@@ -319,9 +369,9 @@ class TestQ5ExtractionDependsOnTheDimensionSumCandidate:
         namespace = _run_extraction(
             q5_expression, [self.CANONICAL_EVENT, self.CORPUS_MALFORMED_EVENT]
         )
-        assert namespace["dispatch_varieties"] == [9, 8], (
+        assert namespace["variety_totals"] == [9, 8], (
             "the four-dimension sum is the ONLY path by which the 20 malformed "
-            "dispatch_variety events in the corpus reach Q5's numerator; drop "
+            "stamps in the dispatch_site corpus reach Q5's numerator; drop "
             "candidate 4 and this returns [9], silently, with no exception"
         )
 
@@ -334,13 +384,13 @@ class TestQ5ExtractionDependsOnTheDimensionSumCandidate:
             {"task_id": "3"},                              # no variety key at all
             "not-a-dict",                                  # not even an object
         ]
-        assert _run_extraction(q5_expression, events)["dispatch_varieties"] == [9]
+        assert _run_extraction(q5_expression, events)["variety_totals"] == [9]
 
     def test_extraction_is_empty_not_raising_when_nothing_resolves(
         self, q5_expression
     ):
         events = [{"task_id": "1", "variety": {}}, {"task_id": "2"}]
-        assert _run_extraction(q5_expression, events)["dispatch_varieties"] == []
+        assert _run_extraction(q5_expression, events)["variety_totals"] == []
 
 
 class TestQ6ExtractionSurvivesAnUnreadableAck:
