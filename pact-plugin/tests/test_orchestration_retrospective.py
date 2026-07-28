@@ -180,6 +180,28 @@ class TestRetroReadHardening:
                                "--type remediation"):
             assert retired_marker not in q5
 
+    def test_q5_derives_the_numerator_from_no_separate_stream(self, q5):
+        """The coupling risk MOVED when the helper made `stamped <= total` an
+        identity: the identity is internal to the helper and cannot stop a
+        CONSUMER bypassing it. A future edit could take `total` from
+        `extract_dispatch_coverage` while re-deriving the numerator from its
+        own `dispatch_variety` read — the original two-population defect,
+        verbatim, one level out.
+
+        Keyed on the READ COMMAND, not the bare string, and that is
+        deliberate: `dispatch_variety` must stay NAMEABLE as the Class-1
+        cross-check witness. The pin is on it not being a RATIO INPUT.
+
+        MUTATION THAT REDDENS: add a `read --type dispatch_variety` to Q5.
+        """
+        assert "--type dispatch_variety" not in q5, (
+            "Q5 has reacquired its own dispatch_variety read. Both ratio "
+            "terms must come from the single extract_dispatch_coverage pass; "
+            "a second stream is how the numerator and denominator drift onto "
+            "different populations. Naming dispatch_variety as the Class-1 "
+            "cross-check witness is fine — READING it as a ratio input is not."
+        )
+
     def test_q5_arc_scoped_with_since(self, q5):
         assert "Arc scope (current feature only)" in q5
         assert "--since" in q5
