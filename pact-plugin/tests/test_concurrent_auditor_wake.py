@@ -880,7 +880,25 @@ class TestNoPactHookCanDeliverAMessage:
             ("log.write_text(", "a write to a path that is not an inbox"),
             ("os.replace(inbox,", "a move whose SOURCE is an inbox"),
         ):
-            lineno = next(i for i, ln in enumerate(lines, start=1) if marker in ln)
+            lineno = next(
+                (i for i, ln in enumerate(lines, start=1) if marker in ln), None
+            )
+            # The default and this guard are ONE unit -- never add the default
+            # alone. `None not in flagged` is True, so an unchecked defaulted
+            # lookup makes a missing anchor SATISFY the assertion below, and the
+            # row silently stops guarding anything. That is strictly worse than
+            # the bare next() this replaced, which at least failed loudly.
+            assert lineno is not None, (
+                f"negative-control anchor {marker!r} is not present in "
+                f"{_rel(self.FIXTURE)}.\n"
+                f"These markers are matched LITERALLY: each row locates the "
+                f"fixture line it checks by searching for this exact text, so "
+                f"the fixture's identifiers are part of this test's contract. "
+                f"Renaming one removes the anchor and the row loses the case it "
+                f"was written to guard.\n"
+                f"Update the marker to match the new identifier -- do not "
+                f"delete the row."
+            )
             assert lineno not in flagged, (
                 f"scanner flagged {why} at fixture line {lineno} ({marker!r}). "
                 f"Over-flagging makes this pin fire on correct code, and a pin "

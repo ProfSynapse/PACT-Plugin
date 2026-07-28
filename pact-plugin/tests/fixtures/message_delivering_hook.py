@@ -32,6 +32,20 @@ Summary: Synthetic NON-SHIPPED fixture for the message-delivery scanner in
          than on any argument: without it, an any-argument rule would look
          correct against the positive leg alone while calling every move OUT of
          an inbox a delivery.
+
+         IDENTIFIERS IN THE NEGATIVE LEGS ARE PART OF THE TEST CONTRACT. The
+         negative-control test locates each line it checks by searching this
+         file for literal text spelled from those identifiers -- the local
+         binding in read_only_inbox_probe and in archive_away_from_inbox, and
+         the one in unrelated_write. Renaming one removes the anchor its row
+         depends on. The test asserts every anchor is present, so a rename that
+         breaks one fails with a message naming the missing marker; update the
+         marker in the test alongside the rename.
+
+         This note deliberately does NOT reproduce the marker strings. They are
+         matched by substring against this whole file, prose included, so
+         spelling one here would make it match this line instead of the code --
+         the row would still pass while testing nothing.
 Used by: pact-plugin/tests/test_concurrent_auditor_wake.py
 """
 from __future__ import annotations
