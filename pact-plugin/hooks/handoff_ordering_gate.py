@@ -261,6 +261,46 @@ def _variety_stamp_attempted(*metadatas: object) -> bool:
     return False
 
 
+def _is_bare_null_delete(
+    disk_metadata: object, incoming_metadata: object,
+) -> bool:
+    """True iff this write DELETES ``metadata.variety`` and the disk carried
+    no stamp attempt of its own — nothing was supplied by either side.
+
+    WHY THIS EXISTS SEPARATELY FROM THE SHAPE-BLINDNESS. A ``variety`` that
+    arrives as a string, a list or an empty dict SUPPLIES A BAD VALUE, and for
+    those the second sentence is true: something is there, re-read it. A
+    ``None`` SUPPLIES NO VALUE — it is the platform's remove-the-key form — so
+    telling that consumer to re-read their values names something that does
+    not exist. The remedy is the first sentence: stamp the block.
+
+    That is the whole distinction, and it is the reason
+    ``_variety_stamp_attempted`` is left exactly as it is rather than taught
+    about nulls. Its shape-blindness is correct for every shape that carries a
+    value; a null is the one shape that carries none.
+
+    ASKS THE DISK QUESTION BY CALLING ``_variety_stamp_attempted`` rather than
+    re-deriving it. There is one definition of "attempted" and this is not a
+    second one — if that predicate's notion ever widens, this follows it.
+
+    NARROWER THAN IT LOOKS, because of where it is consulted: the
+    partial-replace branch runs FIRST and has already claimed every null that
+    lands on a real disk stamp. A null reaching this predicate therefore has a
+    disk ``variety`` that is absent, non-dict, or empty. The disk's own
+    attempt signal stays decisive, so a null over ``{"variety": {}}`` or over
+    a ``variety_score`` sibling keeps the second sentence.
+
+    Pure; never raises.
+    """
+    if not isinstance(incoming_metadata, dict):
+        return False
+    if "variety" not in incoming_metadata:
+        return False
+    if incoming_metadata["variety"] is not None:
+        return False
+    return not _variety_stamp_attempted(disk_metadata)
+
+
 def _variety_write_drops_disk_keys(
     disk_metadata: object, incoming_metadata: object,
 ) -> bool:
@@ -548,7 +588,15 @@ def _evaluate_dispatch_variety(input_data: dict) -> str | None:
             "ENTIRE block (novelty/scope/uncertainty/risk + total 4-16) "
             "rather than only the keys being changed"
         )
-    elif _variety_stamp_attempted(disk_metadata, incoming_metadata):
+    # THE NULL CARVE-OUT rides as a conjunct here rather than as a change to
+    # the shape-blind predicate, which stays exactly as it is. A write that
+    # DELETES variety over a disk that never attempted one supplied no value
+    # to re-read, so the values sentence names nothing; it falls through to
+    # "stamp the block", which is the only remedy that is true of it.
+    elif (
+        _variety_stamp_attempted(disk_metadata, incoming_metadata)
+        and not _is_bare_null_delete(disk_metadata, incoming_metadata)
+    ):
         diagnosis = (
             "carries a metadata.variety stamp that does NOT resolve to a "
             "total. resolve_variety_total accepts, in order: variety.total, "

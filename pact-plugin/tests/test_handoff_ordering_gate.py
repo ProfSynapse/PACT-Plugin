@@ -1446,7 +1446,18 @@ class TestDispatchVarietyReadsTheIncomingWrite:
 
         Without this arm the guard could be deleted and the suite would stay
         green while the gate told callers their write destroyed a stamp that
-        was never there."""
+        was never there.
+
+        THIS ARM ONCE ASSERTED ONLY THE NEGATIVE, and that is why the wrong
+        sentence shipped. It checked that the answer was not the REPLACE
+        diagnosis and stopped there — which was satisfied by the ADD-THE-BLOCK
+        sentence (correct) and equally by the RE-READ-THE-VALUES sentence
+        (wrong, and what the gate actually returned). On a three-way selector
+        a negative assertion excludes ONE branch and licenses the rest.
+
+        It now asserts the branch it EXPECTS. Keep it that way: assert the
+        positive, and if the alternatives matter, exclude them explicitly the
+        way the selection table does."""
         _ctx(pact_context, monkeypatch, tmp_path)
         _seed_team_config(tmp_path, monkeypatch, TEAM)
         _seed_task(tmp_path, TEAM, "42", subject="impl foo",
@@ -1455,9 +1466,10 @@ class TestDispatchVarietyReadsTheIncomingWrite:
             _wiring_update_with_metadata("42", {"variety": None}),
         )
         assert adv is not None
-        assert "REPLACES the stamp already on disk" not in adv, (
-            f"nothing was on disk to replace, so the replace diagnosis is a "
-            f"false account of what happened: {adv!r}"
+        assert FIRST_ADD_THE_BLOCK in adv, (
+            f"a null write against a task that never carried a stamp must be "
+            f"told to stamp the block — nothing was supplied to re-read and "
+            f"nothing was on disk to replace: {adv!r}"
         )
 
     def test_a_MALFORMED_variety_value_keeps_the_values_sentence(
@@ -1509,14 +1521,27 @@ class TestDispatchVarietyReadsTheIncomingWrite:
         )
 
 
+# The three diagnoses, each keyed on a phrase unique to its sentence. Chosen
+# to be mutually exclusive as SUBSTRINGS so a row can assert one is present AND
+# the other two absent — deliberately NOT keying SECOND on "does NOT resolve",
+# which differs from a phrase inside the THIRD sentence only by letter case.
+FIRST_ADD_THE_BLOCK = "no metadata.variety stamp at all"
+SECOND_REREAD_VALUES = "so re-read the VALUES"
+THIRD_PARTIAL_REPLACE = "REPLACES the stamp already on disk"
+ALL_DIAGNOSES = (FIRST_ADD_THE_BLOCK, SECOND_REREAD_VALUES, THIRD_PARTIAL_REPLACE)
+
+
 class TestDispatchVarietyDiagnosisSplit:
-    """ABSENT vs PRESENT-BUT-UNRESOLVABLE. One trigger, two messages, because
-    the remedies are opposite: 'write the block' versus 'the block you wrote
-    does not resolve'. NOT a carve-out — both still fire.
+    """ONE TRIGGER, THREE MESSAGES, because the remedies are mutually wrong:
+    'write the block' versus 'the block you wrote does not resolve' versus
+    'what you sent is fine but it replaced a fuller stamp'. NOT a carve-out —
+    all three still fire.
 
     MUTATION THAT REDDENS: make `_variety_stamp_attempted` return a constant.
-    Either the absent tests or the unresolvable tests go red, whichever
-    constant is chosen.
+    Measured, both directions: forced True reddens the absent rows, forced
+    False reddens the unresolvable rows. Neither constant moves a VERDICT —
+    every failure is a message assertion — which is what establishes this
+    predicate as sentence-load-bearing rather than decision-load-bearing.
     """
 
     def _adv(self, tmp_path, monkeypatch, pact_context, disk, incoming=None):
@@ -1562,6 +1587,61 @@ class TestDispatchVarietyDiagnosisSplit:
             "a consumer who DID stamp is being told to add the block — that "
             "sends them hunting for a missing field instead of at the values"
         )
+
+    @pytest.mark.parametrize("disk,incoming,expected", [
+        pytest.param(None, {"variety": None}, FIRST_ADD_THE_BLOCK,
+                     id="null_wire_no_metadata_key_at_all"),
+        pytest.param({}, {"variety": None}, FIRST_ADD_THE_BLOCK,
+                     id="null_wire_no_disk_stamp"),
+        pytest.param({}, None, FIRST_ADD_THE_BLOCK,
+                     id="plain_absent"),
+        pytest.param({"variety": _variety(12)}, {"variety": None},
+                     THIRD_PARTIAL_REPLACE, id="null_wire_over_a_stamp"),
+        pytest.param({"variety": _variety(12)}, {"variety": {}},
+                     THIRD_PARTIAL_REPLACE, id="empty_dict_wire_over_a_stamp"),
+        pytest.param({"variety": _variety(12)}, {"variety": "12"},
+                     SECOND_REREAD_VALUES, id="string_wire_over_a_stamp"),
+        pytest.param({}, {"variety": "12"}, SECOND_REREAD_VALUES,
+                     id="string_wire_no_disk_stamp"),
+        pytest.param({"variety": {"total": 99}}, None, SECOND_REREAD_VALUES,
+                     id="bad_total_on_disk_wire_silent"),
+        pytest.param({"variety": {}}, {"variety": None}, SECOND_REREAD_VALUES,
+                     id="null_wire_over_an_EMPTY_disk_variety"),
+        pytest.param({"variety_score": "x"}, {"variety": None},
+                     SECOND_REREAD_VALUES, id="null_wire_over_a_disk_sibling"),
+    ])
+    def test_every_row_selects_EXACTLY_ONE_diagnosis(
+        self, tmp_path, monkeypatch, pact_context, disk, incoming, expected,
+    ):
+        """THE WHOLE SELECTION TABLE, asserted POSITIVELY and EXHAUSTIVELY.
+
+        Each row names the one sentence it must carry, and the row also
+        asserts the OTHER TWO ARE ABSENT. That second half is the point of the
+        table, and it is here because of how the null-with-no-disk-stamp row
+        got shipped wrong:
+
+        AN `assert X not in adv` ON AN N-WAY SELECTOR IS SATISFIED BY EVERY
+        BRANCH EXCEPT ONE. The arm that held this exact fixture asserted only
+        that the answer was not the THIRD sentence. It was green while the
+        answer was the SECOND, which is also wrong. A negative assertion over
+        a set with more than two members is a partial claim wearing a total
+        one's clothes — so assert the branch you EXPECT, not the branch you
+        do not.
+
+        Rows are stated as data rather than prose so a future member is added
+        to a table rather than argued about in a docstring.
+        """
+        adv = self._adv(tmp_path, monkeypatch, pact_context, disk, incoming)
+        assert adv is not None, "every row in this table must still DENY"
+        assert expected in adv, (
+            f"row selected the wrong diagnosis; expected {expected!r}: {adv!r}"
+        )
+        for other in ALL_DIAGNOSES:
+            if other != expected:
+                assert other not in adv, (
+                    f"two diagnoses in one message — {other!r} leaked into a "
+                    f"row that must carry only {expected!r}: {adv!r}"
+                )
 
     def test_BOTH_states_still_deny(
         self, tmp_path, monkeypatch, pact_context,
