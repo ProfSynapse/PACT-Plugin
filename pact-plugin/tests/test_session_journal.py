@@ -3331,6 +3331,27 @@ class TestValidateEventSchemaPerType:
             "task_id": "42",
             "variety": {"novelty": 3, "scope": 3, "uncertainty": 3, "risk": 3, "total": 12},
         },
+        # dispatch_site carries the coverage DENOMINATOR. task_id ALONE is
+        # required, and `variety` is deliberately absent from this sample:
+        # the harness treats every sample key as required (it asserts each
+        # one's removal is rejected), so listing an optional field here would
+        # be a false claim about the schema. That absence is also the point of
+        # the event — an un-stamped dispatch is a legal dispatch_site with no
+        # variety, and it is precisely the gap the metric exists to count.
+        "dispatch_site": {
+            "task_id": "42",
+        },
+        # journal_emit_skipped records a write that did NOT land. Both keys
+        # here are required: `skipped_type` is what lets the liveness check
+        # recognise a drop of its OWN witness rather than merely counting
+        # losses, and `cause` keeps a writer defect distinct from a schema
+        # rejection. `task_id` is optional (two of the causes have no task to
+        # name) and so is deliberately absent — this harness treats every
+        # sample key as required.
+        "journal_emit_skipped": {
+            "skipped_type": "dispatch_site",
+            "cause": "returned_false",
+        },
         "teachback_ack": {
             "task_id": "41",
             "rationale_articulates_this_dispatch": "yes",
@@ -4823,33 +4844,45 @@ class TestTsGeArcFilter:
 
 
 class TestArcScopedDenominator:
-    """End-to-end --since arc-scoping over a RESUMED 2-arc journal (#963).
+    """End-to-end --since arc-scoping over a RESUMED 2-arc journal.
 
-    The #960 worked example: two arcs written into one session journal.
-    Non-vacuity hinge (R5): the prior and current arcs REUSE task ids
-    8/10/12 — the collision is the whole point. A fixture with unique ids
-    would pass vacuously, because keying the arc boundary on task_id would
-    collide; keying on ts (via --since/_ts_ge) is what makes arc-scoping
-    correct. Unscoped denominator 9 → arc-scoped 4.
+    Two arcs written into one session journal. Non-vacuity hinge: the prior
+    and current arcs REUSE task ids 8/10/12 — the collision is the whole
+    point. A fixture with unique ids would pass vacuously, because keying the
+    arc boundary on task_id would collide; keying on ts (via --since/_ts_ge)
+    is what makes arc-scoping correct. Unscoped denominator 9 → arc-scoped 4.
+
+    RE-EXPRESSED for the one-event topology: the denominator moved from the
+    three variety-independent markers to the `dispatch_site` stream, so the
+    subject of these tests changed. The PROPERTY did not — a dispatch_site
+    stream is equally arc-scoped and equally subject to cross-arc task_id
+    reuse, so the arc boundary is exactly as load-bearing as before. This is
+    why the property was re-expressed rather than deleted with the helper.
     """
 
     ARC1_TS = "2026-06-13T12:00:00Z"
     ARC2_START = "2026-06-14T09:00:00Z"  # current feature's variety_assessed.ts
     ARC2_TS = "2026-06-14T12:00:00Z"
 
-    def _ad(self, task_id, agent, phase, ts):
-        return make_event(
-            "agent_dispatch", agent=agent, task_id=task_id, phase=phase, ts=ts
-        )
+    def _ds(self, task_id, ts, stamped=True):
+        """A `dispatch_site` event — the denominator's unit. `stamped=False`
+        omits `variety`, which is what an un-stamped dispatch looks like and
+        must stay legal: absence is the coverage gap itself."""
+        fields = {"task_id": task_id, "ts": ts}
+        if stamped:
+            fields["variety"] = {
+                "novelty": 2, "scope": 2, "uncertainty": 2, "risk": 2, "total": 8
+            }
+        return make_event("dispatch_site", **fields)
 
     def _resumed_two_arc_journal(self, journal_file):
         events = [
             # --- prior arc (5 dispatches) ---
-            self._ad("8", "preparer", "PREPARE", self.ARC1_TS),
-            self._ad("10", "architect", "ARCHITECT", self.ARC1_TS),
-            self._ad("12", "devops-engineer", "CODE", self.ARC1_TS),
-            self._ad("13", "auditor", "CODE", self.ARC1_TS),  # prior-arc-only
-            self._ad("16", "test-engineer", "TEST", self.ARC1_TS),
+            self._ds("8", self.ARC1_TS),
+            self._ds("10", self.ARC1_TS),
+            self._ds("12", self.ARC1_TS),
+            self._ds("13", self.ARC1_TS),  # prior-arc-only
+            self._ds("16", self.ARC1_TS),
             # --- current arc boundary: the feature's variety_assessed ---
             make_event(
                 "variety_assessed",
@@ -4864,10 +4897,10 @@ class TestArcScopedDenominator:
                 ts=self.ARC2_START,
             ),
             # --- current arc (4 dispatches) — REUSES ids 8/10/12 ---
-            self._ad("8", "preparer", "PREPARE", self.ARC2_TS),
-            self._ad("10", "architect", "ARCHITECT", self.ARC2_TS),
-            self._ad("12", "devops-engineer", "CODE", self.ARC2_TS),
-            self._ad("14", "test-engineer", "TEST", self.ARC2_TS),
+            self._ds("8", self.ARC2_TS),
+            self._ds("10", self.ARC2_TS),
+            self._ds("12", self.ARC2_TS),
+            self._ds("14", self.ARC2_TS),
         ]
         _write_journal(journal_file, events)
 
@@ -4877,11 +4910,11 @@ class TestArcScopedDenominator:
         """Baseline (the bug): without --since the denominator counts BOTH
         arcs = 9 (the #960 observed value)."""
         from shared.session_journal import read_events_from
-        from shared.variety_divergence import count_task_b_dispatch_sites
+        from shared.variety_divergence import extract_dispatch_coverage
 
         self._resumed_two_arc_journal(journal_file)
-        agent = read_events_from(session_dir, event_type="agent_dispatch")
-        assert count_task_b_dispatch_sites(agent, [], []) == 9
+        sites = read_events_from(session_dir, event_type="dispatch_site")
+        assert extract_dispatch_coverage(sites)[1] == 9
 
     def test_arc_scoped_denominator_counts_current_arc_only(
         self, journal_home, session_dir, journal_file
@@ -4890,13 +4923,13 @@ class TestArcScopedDenominator:
         The prior-arc-only auditor/task13 and the prior duplicates of
         8/10/12 are excluded."""
         from shared.session_journal import read_events_from
-        from shared.variety_divergence import count_task_b_dispatch_sites
+        from shared.variety_divergence import extract_dispatch_coverage
 
         self._resumed_two_arc_journal(journal_file)
-        agent = read_events_from(
-            session_dir, event_type="agent_dispatch", since=self.ARC2_START
+        sites = read_events_from(
+            session_dir, event_type="dispatch_site", since=self.ARC2_START
         )
-        assert count_task_b_dispatch_sites(agent, [], []) == 4
+        assert extract_dispatch_coverage(sites)[1] == 4
 
     def test_positive_control_current_arc_events_are_counted(
         self, journal_home, session_dir, journal_file
@@ -4908,10 +4941,10 @@ class TestArcScopedDenominator:
         from shared.session_journal import read_events_from
 
         self._resumed_two_arc_journal(journal_file)
-        agent = read_events_from(
-            session_dir, event_type="agent_dispatch", since=self.ARC2_START
+        sites = read_events_from(
+            session_dir, event_type="dispatch_site", since=self.ARC2_START
         )
-        task_ids = sorted((e["task_id"] for e in agent), key=int)
+        task_ids = sorted((e["task_id"] for e in sites), key=int)
         assert task_ids == ["8", "10", "12", "14"]
         assert "13" not in task_ids
 
@@ -4921,7 +4954,7 @@ class TestArcScopedDenominator:
         """No-change guard (963-B): a single-arc fresh session — --since at
         the only arc's start is a no-op; scoped count == unscoped count."""
         from shared.session_journal import read_events_from
-        from shared.variety_divergence import count_task_b_dispatch_sites
+        from shared.variety_divergence import extract_dispatch_coverage
 
         events = [
             make_event(
@@ -4936,17 +4969,17 @@ class TestArcScopedDenominator:
                 },
                 ts="2026-06-15T09:00:00Z",
             ),
-            self._ad("2", "coder", "CODE", "2026-06-15T10:00:00Z"),
-            self._ad("3", "test-engineer", "TEST", "2026-06-15T11:00:00Z"),
+            self._ds("2", "2026-06-15T10:00:00Z"),
+            self._ds("3", "2026-06-15T11:00:00Z"),
         ]
         _write_journal(journal_file, events)
         scoped = read_events_from(
-            session_dir, event_type="agent_dispatch", since="2026-06-15T09:00:00Z"
+            session_dir, event_type="dispatch_site", since="2026-06-15T09:00:00Z"
         )
-        unscoped = read_events_from(session_dir, event_type="agent_dispatch")
+        unscoped = read_events_from(session_dir, event_type="dispatch_site")
         assert (
-            count_task_b_dispatch_sites(scoped, [], [])
-            == count_task_b_dispatch_sites(unscoped, [], [])
+            extract_dispatch_coverage(scoped)[1]
+            == extract_dispatch_coverage(unscoped)[1]
             == 2
         )
 

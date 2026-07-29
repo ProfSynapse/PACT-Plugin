@@ -2,32 +2,36 @@
 GC-immune regression suite for the wrap-up Q5 coverage denominator + the
 coverage-exceeds-unity tripwire (epic #972, children #971/#963).
 
-This file is the dedicated home for the two pure helpers in
+This file is the dedicated home for the pure helpers in
 shared/variety_divergence.py that back the §4 Orchestration Retrospective
 Q5 (variety divergence):
 
-  - count_task_b_dispatch_sites(agent_dispatch, review_dispatch, remediation)
-    — the Q5 coverage DENOMINATOR, sourced from variety-INDEPENDENT journal
-    markers so an un-stamped dispatch still counts and rightly lowers
-    coverage. Pre-#971 the denominator was len(agent_dispatch), which
-    undercounted because peer-review emits review_dispatch (not
-    agent_dispatch) and remediation emits remediation (not agent_dispatch)
-    → coverage could exceed 1.0 (6/2 = 3.0 in the #958/PR #970 single-arc
-    session). This helper restores the coupled-pair invariant.
+  - extract_dispatch_coverage(dispatch_site_events) — derives BOTH Q5 terms
+    from ONE pass over ONE list. The DENOMINATOR is the existence of each
+    `dispatch_site` event; the NUMERATOR is the resolvable stamps within
+    those same events. Because every element of `variety_totals` comes from
+    an event that also incremented `total`, coverage > 1.0 is structurally
+    impossible rather than merely unobserved.
 
   - the coverage_exceeds_unity early-return in compute_variety_divergence —
-    a non-clamping advisory tripwire (#971): when stamped > total it returns
+    a non-clamping advisory tripwire: when stamped > total it returns
     reason="coverage_exceeds_unity", surfaced=False, coverage left UNCLAMPED.
-    Zero-residual with the distinct-site denominator, so it fires only on a
-    future denominator/emit regression.
+    It is now UNREACHABLE from the Q5 path (see above) and is retained only
+    as defense-in-depth for a caller that assembles the two terms by hand.
 
-Non-vacuity: count_task_b_dispatch_sites is a NET-NEW symbol, so a
-source-only revert removes it entirely (ImportError / collection error, not
-a clean assertion fail). The PRIMARY non-vacuity proof here is therefore a
-PAIRED intact/neutered test — coverage computed BOTH via the new helper and
-via the old len(agent_dispatch), asserted mutually-exclusive across the 1.0
-boundary — a standing CI guard that fails the instant the denominator source
-regresses. Plus branch-coupled mutation contrasts for the A-medium dedup.
+The predecessor denominator — a 3-argument helper counting
+agent_dispatch + review_dispatch.reviewers + deduped remediation — was
+RETIRED when the denominator moved to the one-event topology. Its tests are
+deleted rather than ported: they encoded 3-marker dedup semantics that have
+no referent here, and porting them would have manufactured meaning. The
+properties that survive the change of subject are re-expressed below and in
+test_session_journal.py (arc-scoping), NOT dropped.
+
+Non-vacuity: extract_dispatch_coverage is a NET-NEW symbol, so a source-only
+revert removes it entirely (ImportError / collection error, not a clean
+assertion fail). The behavioural guards that DO fail cleanly are the
+absent-vs-malformed partition and the structural `stamped <= total` bound,
+both asserted over arbitrary input below.
 
 GC-immune: every fixture is a synthetic journal event built via
 session_journal.make_event — zero dependence on the GC-reaped task store.
@@ -43,7 +47,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 from shared.session_journal import make_event  # noqa: E402
 from shared.variety_divergence import (  # noqa: E402
     compute_variety_divergence,
-    count_task_b_dispatch_sites,
+    extract_dispatch_coverage,
     resolve_arc_start,
 )
 
@@ -56,181 +60,89 @@ from shared.variety_divergence import (  # noqa: E402
 _TS = "2026-06-15T12:00:00Z"
 
 
-def _agent_dispatch(task_id, agent="coder", phase="CODE", ts=_TS):
-    return make_event(
-        "agent_dispatch", agent=agent, task_id=task_id, phase=phase, ts=ts
-    )
+class TestExtractDispatchCoverage:
+    """The replacement denominator. Both Q5 terms, one pass, one list.
 
-
-def _review_dispatch(reviewers, pr_number=970, ts=_TS):
-    return make_event(
-        "review_dispatch",
-        pr_number=pr_number,
-        pr_url=f"https://github.com/o/r/pull/{pr_number}",
-        reviewers=list(reviewers),
-        ts=ts,
-    )
-
-
-def _remediation(task_id=None, cycle=1, fixer="coder", ts=_TS):
-    fields = {"cycle": cycle, "items": ["F1"], "fixer": fixer, "ts": ts}
-    if task_id is not None:
-        fields["task_id"] = task_id
-    return make_event("remediation", **fields)
-
-
-# The #958 / PR #970 single-arc fixture (the worked example in issue #971).
-def _f971_markers():
-    """The three Q5 denominator markers for the single-arc PR-#970 session.
-
-      agent_dispatch : task8 (CODE), task11 (TEST)              -> 2 sites
-      review_dispatch: reviewers [14, 15, 16]                   -> 3 sites
-      remediation    : task20 (reuse, un-stamped), task21       -> 2 sites
-                       (neither 20 nor 21 is an agent_dispatch task_id)
-    denominator = 2 + 3 + 2 = 7
+    These are the behavioural guards that replace the retired 3-marker
+    tests. The partition they pin — ABSENT stamp vs PRESENT-but-unresolvable
+    stamp — is the one thing the old helper had no concept of, because a
+    marker either existed or it did not.
     """
-    agent = [_agent_dispatch("8", phase="CODE"), _agent_dispatch("11", phase="TEST")]
-    review = [_review_dispatch(["14", "15", "16"])]
-    remediation = [_remediation(task_id="20"), _remediation(task_id="21")]
-    return agent, review, remediation
 
+    STAMPED = {"task_id": "1", "variety": {"total": 9}}
+    ABSENT = {"task_id": "2"}
+    MALFORMED = {"task_id": "3", "variety": {"total": "junk"}}
+    DIMENSION_SUM = {
+        "task_id": "4",
+        "variety": {"novelty": 2, "scope": 2, "uncertainty": 2, "risk": 2},
+    }
 
-# Numerator: dispatch_variety totals for the SIX stamped dispatches
-# (task20 is un-stamped, so it is absent from the variety stream).
-_F971_STAMPED_TOTALS = [6, 8, 8, 8, 7, 7]  # task8, 11, 14, 15, 16, 21
-
-
-# =============================================================================
-# count_task_b_dispatch_sites — the Q5 coverage denominator (#971)
-# =============================================================================
-
-
-class TestCoverageDenominator:
-    """count_task_b_dispatch_sites: distinct Task-B dispatch sites."""
-
-    def test_single_arc_denominator_counts_review_and_remediation_sites(self):
-        """Single-arc PR session: the denominator counts variety-INDEPENDENT
-        dispatch sites, so peer-review reviewers and remediation fixers are
-        counted (not just orchestrate coders) and the un-stamped reuse
-        dispatch still counts. (#971 worked example → 2 + 3 + 2 = 7.)"""
-        agent, review, remediation = _f971_markers()
-        assert count_task_b_dispatch_sites(agent, review, remediation) == 7
-
-    def test_single_arc_coverage_is_below_unity(self):
-        """The #971 regression killed: NEW coverage = 6 stamped / 7 sites
-        ≈ 0.857 ≤ 1.0 (the old len(agent_dispatch)=2 path gave 6/2 = 3.0)."""
-        agent, review, remediation = _f971_markers()
-        denom = count_task_b_dispatch_sites(agent, review, remediation)
-        result = compute_variety_divergence(
-            feature_variety=6,
-            dispatch_varieties=_F971_STAMPED_TOTALS,
-            total_pact_dispatch_count=denom,
+    def test_denominator_counts_event_existence_not_stamp_presence(self):
+        """The whole point of the one-event topology: an un-stamped dispatch
+        is still a dispatch SITE, so it lowers coverage instead of vanishing
+        from the denominator along with its stamp."""
+        _totals, total, _malformed = extract_dispatch_coverage(
+            [self.STAMPED, self.ABSENT, self.MALFORMED]
         )
-        assert result["coverage"] == pytest.approx(6 / 7)
-        assert result["coverage"] <= 1.0
+        assert total == 3
 
-    def test_new_denominator_crosses_unity_boundary_old_did_not(self):
-        """PRIMARY non-vacuity (paired intact/neutered, standing CI guard).
+    def test_absent_stamp_is_a_coverage_gap_not_a_malformed_stamp(self):
+        """An absent stamp is an honest un-stamped dispatch — the gap
+        coverage exists to surface. Folding it into `malformed` would leave
+        the ratio unchanged while reporting a normal gap as a producer
+        defect, which trains readers to ignore the malformed signal."""
+        totals, total, malformed = extract_dispatch_coverage([self.ABSENT])
+        assert totals == []
+        assert total == 1
+        assert malformed == [], (
+            "a MISSING stamp and a MALFORMED stamp have different remedies "
+            "and must never be merged"
+        )
 
-        Computes coverage BOTH ways over the SAME single-arc fixture:
-          NEW: count_task_b_dispatch_sites(...) = 7 → 6/7 ≈ 0.857 ≤ 1.0
-          OLD: len(agent_dispatch)            = 2 → 6/2 = 3.0   > 1.0  (the bug)
-        Mutually exclusive across the 1.0 boundary → this guard fails the
-        instant the denominator source regresses back to len(agent_dispatch).
-        Stronger than a source-only revert for a net-new symbol (which would
-        remove the function → collection error, not a clean assertion fail).
-        """
-        agent, review, remediation = _f971_markers()
-        stamped = _F971_STAMPED_TOTALS
+    def test_present_but_unresolvable_stamp_is_malformed(self):
+        totals, total, malformed = extract_dispatch_coverage([self.MALFORMED])
+        assert totals == []
+        assert total == 1
+        assert malformed == [self.MALFORMED]
 
-        new_denom = count_task_b_dispatch_sites(agent, review, remediation)
-        old_denom = len(agent)  # the pre-#971 denominator source
+    def test_dimension_sum_recovery_counts_as_stamped(self):
+        """A stamp recovered through a non-canonical resolver candidate IS
+        resolved; which candidate won is not this consumer's business.
+        Counting it as malformed would record the dimension-sum recovery —
+        20 events across 8 sessions — as a data-quality problem, inverting
+        the fix that introduced it."""
+        totals, _total, malformed = extract_dispatch_coverage(
+            [self.DIMENSION_SUM]
+        )
+        assert totals == [8]
+        assert malformed == []
 
-        new_cov = compute_variety_divergence(6, stamped, new_denom)["coverage"]
-        old_cov = compute_variety_divergence(6, stamped, old_denom)["coverage"]
+    def test_one_unresolvable_stamp_costs_only_its_own_row(self):
+        """Totality: the extraction is defined for every event the journal
+        can hand it, so a single bad stamp cannot destroy the whole list."""
+        totals, total, malformed = extract_dispatch_coverage(
+            [self.STAMPED, self.MALFORMED, self.DIMENSION_SUM, self.ABSENT]
+        )
+        assert totals == [9, 8]
+        assert total == 4
+        assert len(malformed) == 1
 
-        # intact: the fixed denominator keeps coverage a valid fraction
-        assert new_denom == 7
-        assert new_cov == pytest.approx(6 / 7)
-        assert new_cov <= 1.0
-        # neutered: the old denominator produces the nonsensical > 1.0 coverage
-        assert old_denom == 2
-        assert old_cov == pytest.approx(3.0)
-        assert old_cov > 1.0
+    @pytest.mark.parametrize(
+        "hostile",
+        [None, "string", 42, {"not": "a list"}, object()],
+    )
+    def test_non_list_input_yields_the_empty_triple(self, hostile):
+        assert extract_dispatch_coverage(hostile) == ([], 0, [])
 
-    def test_orchestrate_only_session_denominator_unchanged(self):
-        """No-change guard: an orchestrate-only session (CODE+TEST, no
-        peer-review/remediation) has no review/remediation sites, so the new
-        denominator equals len(agent_dispatch) — the path that already worked
-        is unchanged (no regression)."""
-        agent = [_agent_dispatch("8"), _agent_dispatch("11")]
-        denom = count_task_b_dispatch_sites(agent, [], [])
-        assert denom == len(agent) == 2
-        result = compute_variety_divergence(8, [8, 8], denom)
-        assert result["coverage"] == pytest.approx(1.0)
-
-    def test_reviewers_counted_by_length_not_identity(self):
-        """review_dispatch contributes len(reviewers) sites; A-medium did NOT
-        add reviewer_task_ids, so the reviewer identifiers are counted by
-        list length only and are disjoint from agent_dispatch by emit-site
-        design (no dedup against reviewers)."""
-        agent = [_agent_dispatch("8")]
-        review = [_review_dispatch(["r1", "r2", "r3", "r4"])]
-        assert count_task_b_dispatch_sites(agent, review, []) == 1 + 4
-
-    def test_multiple_review_dispatch_events_sum_their_reviewers(self):
-        """Σ len(review_dispatch[i].reviewers) across multiple review events."""
-        review = [_review_dispatch(["a", "b"]), _review_dispatch(["c", "d", "e"])]
-        assert count_task_b_dispatch_sites([], review, []) == 5
-
-    def test_empty_inputs_yield_zero(self):
-        """Fail-open shape: all-empty marker lists → 0 sites."""
-        assert count_task_b_dispatch_sites([], [], []) == 0
-
-
-class TestRemediationDedup:
-    """A-medium remediation/agent_dispatch task_id dedup (#971, auditor anchor)."""
-
-    def test_compact_remediation_sharing_agent_task_id_counted_once(self):
-        """A comPACT/orchestrate remediation emits BOTH `remediation` AND
-        `agent_dispatch` for the same task_id → counted ONCE (via the
-        agent_dispatch stream)."""
-        agent = [_agent_dispatch("8"), _agent_dispatch("30")]
-        remediation = [_remediation(task_id="30")]  # collides with agent task30
-        # 2 agent + 0 reviewers + 0 (task30 ∈ agent ids → excluded) = 2
-        assert count_task_b_dispatch_sites(agent, [], remediation) == 2
-
-    def test_pure_reuse_remediation_without_agent_dispatch_is_counted(self):
-        """A pure reuse-remediation (no matching agent_dispatch) IS counted
-        via the remediation stream."""
-        agent = [_agent_dispatch("8")]
-        remediation = [_remediation(task_id="20")]  # ∉ agent ids
-        assert count_task_b_dispatch_sites(agent, [], remediation) == 2
-
-    def test_idless_remediation_is_counted_failsafe(self):
-        """A remediation with NO task_id is counted (fail-safe: never
-        undercount, so a dropped id can't inflate coverage above 1.0)."""
-        agent = [_agent_dispatch("8")]
-        remediation = [_remediation(task_id=None)]
-        assert count_task_b_dispatch_sites(agent, [], remediation) == 2
-
-    def test_dedup_is_load_bearing_versus_naive_count(self):
-        """Non-vacuity for the dedup branch: dropping the `task_id ∉
-        agent_task_ids` filter would double-count the colliding remediation.
-        Proven by contrast with the naive no-dedup count over the same
-        fixture (deduped 2 < naive 3)."""
-        agent = [_agent_dispatch("8"), _agent_dispatch("30")]
-        remediation = [_remediation(task_id="30")]
-        deduped = count_task_b_dispatch_sites(agent, [], remediation)
-        naive_no_dedup = len(agent) + len(remediation)  # un-filtered logic
-        assert deduped == 2
-        assert naive_no_dedup == 3
-        assert deduped < naive_no_dedup
-
-
-# =============================================================================
-# coverage_exceeds_unity advisory tripwire (#971)
-# =============================================================================
+    def test_non_dict_element_is_a_site_with_no_stamp(self):
+        """It existed, so it counts as a site; it carries nothing resolvable.
+        Never raises — this runs inside a wrap-up the session depends on."""
+        totals, total, malformed = extract_dispatch_coverage(
+            ["not-a-dict", None, self.STAMPED]
+        )
+        assert totals == [9]
+        assert total == 3
+        assert malformed == []
 
 
 class TestCoverageExceedsUnityAdvisory:
@@ -268,13 +180,39 @@ class TestCoverageExceedsUnityAdvisory:
         assert result["delta"] is None
         assert result["surfaced"] is False
 
-    def test_real_denominator_is_zero_residual(self):
-        """Complement: over a REAL count_task_b_dispatch_sites denominator,
-        stamped can never exceed total (un-stamped dispatches still count), so
-        the advisory is zero-residual. The #971 fixture: 6 stamped ≤ 7 sites."""
-        agent, review, remediation = _f971_markers()
-        denom = count_task_b_dispatch_sites(agent, review, remediation)
-        result = compute_variety_divergence(6, _F971_STAMPED_TOTALS, denom)
+    @pytest.mark.parametrize(
+        "events",
+        [
+            pytest.param([], id="empty"),
+            pytest.param([{"task_id": "1"}], id="one_unstamped"),
+            pytest.param(
+                [{"task_id": "1", "variety": {"total": 9}}], id="one_stamped"
+            ),
+            pytest.param(
+                [
+                    {"task_id": "1", "variety": {"total": 9}},
+                    {"task_id": "2"},
+                    {"task_id": "3", "variety": {"total": "junk"}},
+                    {"task_id": "4", "variety": {"n": 1}},
+                    "not-a-dict",
+                ],
+                id="mixed_including_hostile",
+            ),
+        ],
+    )
+    def test_advisory_is_unreachable_from_the_real_helper(self, events):
+        """Complement, strengthened by the one-event topology: over terms
+        produced by extract_dispatch_coverage the advisory can NEVER fire,
+        because every stamped event also incremented the total. The old
+        version proved zero-residual on ONE fixture; this proves it
+        structurally, including on hostile input."""
+        variety_totals, total, _malformed = extract_dispatch_coverage(events)
+        assert len(variety_totals) <= total, (
+            "coverage > 1.0 must be structurally impossible, not merely "
+            "unobserved — a stamped event that did not increment the total "
+            "would mean the two terms came from different populations"
+        )
+        result = compute_variety_divergence(6, variety_totals, total)
         assert result["reason"] != "coverage_exceeds_unity"
         assert result["coverage"] <= 1.0
 

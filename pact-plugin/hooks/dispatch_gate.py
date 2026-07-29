@@ -98,7 +98,7 @@ try:
         is_registered_pact_specialist,
         has_task_assigned,
     )
-    from shared.session_journal import append_event, make_event
+    from shared.session_journal import append_event_checked, make_event
     from shared.paths import get_claude_config_dir
     from shared.stale_session import detect_stale_session_block
 except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catch-all
@@ -498,7 +498,18 @@ def _journal_decision(decision: str, reason: str | None, rule: str | None,
             reason=reason,
             prompt_redacted=_redact(prompt)[:1024],
         )
-        append_event(event)
+        # Captured, not discarded: append_event_checked records a
+        # journal_emit_skipped naming this type when the write does not land,
+        # so a lost dispatch_decision leaves a durable trace rather than
+        # vanishing.
+        # NOTHING READS dispatch_decision TODAY. The liveness check that once
+        # treated it as its own witness was retired together with the Q5
+        # coverage ratio, and Q5's surviving sample-loss report reads only
+        # skipped_type == "dispatch_site". The capture stays — it is the cheap
+        # half, and a stream with no reader is harmless where a silently
+        # dropped one is not — but do NOT justify anything downstream on the
+        # claim that this event is watched.
+        append_event_checked(event, "dispatch_decision")
     except Exception:
         # Journal is best-effort; gate decision stands regardless.
         pass

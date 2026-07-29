@@ -287,10 +287,11 @@ def test_redaction_in_journal(tmp_path, monkeypatch, capsys):
         captured_events.append(event)
         return True
 
+    # Patching the shared seam alone is sufficient and complete: the gate
+    # emits through append_event_checked, which funnels here, so there is no
+    # module-local append_event in dispatch_gate left to patch.
     import shared.session_journal as sj
     monkeypatch.setattr(sj, "append_event", _capture_append)
-    import dispatch_gate
-    monkeypatch.setattr(dispatch_gate, "append_event", _capture_append)
 
     # Split via Python adjacent-string-literal concatenation so the
     # repo-root pre-commit secret-scanner regex

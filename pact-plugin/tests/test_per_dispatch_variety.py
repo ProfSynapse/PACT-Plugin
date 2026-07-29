@@ -742,15 +742,47 @@ class TestVarietyDivergence:
         assert result["mean"] == 5
 
     def test_empty_dispatches(self):
-        """Empty dispatch list → surfaced=False, reason=no_dispatches_stamped,
-        coverage=0.0, all stats None."""
+        """Empty dispatch list with NO denominator → surfaced=False,
+        reason=no_dispatch_sites, coverage=0.0, all stats None.
+
+        Renamed from no_dispatches_stamped: that name is FALSE in the sister
+        case below, where N sites exist and none is stamped."""
         result = compute_variety_divergence(9, [])
         assert result["surfaced"] is False
         assert result["coverage"] == 0.0
         assert result["mean"] is None
         assert result["max"] is None
         assert result["min"] is None
-        assert result["reason"] == "no_dispatches_stamped"
+        assert result["reason"] == "no_dispatch_sites"
+
+    def test_zero_stamped_with_sites_is_a_loud_finding(self):
+        """The discriminator: `stamped == 0` is not terminal — `total` says
+        which of two OPPOSITE findings this is.
+
+        total>0 with stamped==0 means the emit worked and the stamping did
+        not: a 0% coverage gap, the loudest legitimate reading this metric
+        produces. It must SURFACE. Rendering it identically to an empty
+        session is an invisible refusal reading as 'nothing to report'."""
+        empty = compute_variety_divergence(9, [], total_pact_dispatch_count=0)
+        gap = compute_variety_divergence(9, [], total_pact_dispatch_count=5)
+
+        assert empty["surfaced"] is False
+        assert empty["reason"] == "no_dispatch_sites"
+
+        assert gap["surfaced"] is True, (
+            "five dispatch sites with zero stamps is the finding, not a "
+            "degenerate case to suppress"
+        )
+        assert gap["reason"] == "zero_coverage"
+
+        # The raw counts are what let a reader render "0 of 5" instead of a
+        # bare 0.000 — the ratio alone cannot distinguish these two states.
+        assert (empty["stamped"], empty["total"]) == (0, 0)
+        assert (gap["stamped"], gap["total"]) == (0, 5)
+        assert empty["coverage"] == gap["coverage"] == 0.0, (
+            "both still report coverage 0.0, which is exactly why the "
+            "coverage float can never be the discriminator"
+        )
 
     def test_mixed_coverage(self):
         """3 stamped + 2 unstamped → coverage=0.6; math over the 3 stamped.
@@ -815,11 +847,16 @@ class TestVarietyDivergence:
     # ----- Stable-key contract ------------------------------------------
 
     def test_return_dict_has_stable_keys(self):
-        """Every return path returns the SAME 8 keys; downstream LLM-prose
+        """Every return path returns the SAME 10 keys; downstream LLM-prose
         composer in wrap-up.md §4 reads them by name. Counter-pin against
-        a future refactor that adds variant keys per branch."""
+        a future refactor that adds variant keys per branch.
+
+        `stamped` and `total` are the RAW COUNTS, and they are on every path
+        deliberately: the `coverage` float is 0.0 for both an empty session
+        and a session where every site went un-stamped, so the counts are
+        the only thing that distinguishes those two opposite findings."""
         expected_keys = {
-            "coverage", "mean", "max", "min",
+            "coverage", "stamped", "total", "mean", "max", "min",
             "delta", "surfaced", "direction", "reason",
         }
         for args in (

@@ -14,6 +14,15 @@ These tests pin three properties the hoist must preserve:
      predicate always returned across canonical / non-canonical / non-string
      inputs (the move is behavior-preserving, not a re-spec).
   3. PURITY — never raises on hostile input (mirrors the pre-hoist contract).
+
+A fourth property is pinned below, added when the pattern's tail was widened
+from the literal `TEACHBACK for ` to a word boundary:
+
+  4. WORD-BOUNDARY TAIL — a gate that qualifies the marker before the mission
+     (`preparer: TEACHBACK (respawn) for …`) matches, while the marker must
+     still stand as its own word (`TEACHBACKS` does not). Every subject the
+     strict trailing-space form matched still matches: the widening is a
+     superset, never a re-aim.
 """
 import re
 import sys
@@ -43,6 +52,26 @@ _FALSE_CASES = [
     "Devops: TEACHBACK for x",                      # uppercase name (pattern is [a-z0-9-])
     "devops:TEACHBACK for x",                       # missing the space after colon
     "",                                             # empty
+]
+
+# The historical trailing-space tail, kept ONLY as a fixture control: each
+# widened case below must fail THIS pattern, which is what makes it a genuine
+# widening case rather than a subject the strict form already matched.
+_STRICT_TRAILING_SPACE_PATTERN = re.compile(r"^[a-z0-9-]+: TEACHBACK for ")
+
+# Real gate shapes the strict trailing-space form silently missed. The first is
+# not hypothetical — it is a subject that shipped and escaped the carve-out.
+_WIDENED_TRUE_CASES = [
+    "preparer: TEACHBACK (respawn) for ste100-plugin",
+    "coder-a: TEACHBACK — C-1 + C-9",
+    "architect: TEACHBACK",
+]
+
+# The boundary itself. A widening that dropped `\b` (a bare `TEACHBACK` prefix)
+# would turn these True, so they pin the tail's SHAPE, not merely its looseness.
+_WORD_BOUNDARY_FALSE_CASES = [
+    "devops: TEACHBACKS for x",
+    "devops: TEACHBACKING the plan",
 ]
 
 
@@ -75,6 +104,37 @@ class TestBehavioralParity:
     def test_non_canonical_subjects_do_not_match(self, subject):
         assert is_teachback_subject(subject) is False
         assert tlg._is_teachback_subject(subject) is False
+
+
+class TestWordBoundaryTail:
+    """The tail is a word boundary, not the literal `TEACHBACK for `."""
+
+    @pytest.mark.parametrize("subject", _WIDENED_TRUE_CASES)
+    def test_qualified_marker_matches(self, subject):
+        # Fixture control FIRST: assert the case is genuinely one the strict
+        # form missed. Without this, a case that the old pattern already
+        # matched would pass while proving nothing about the widening.
+        assert _STRICT_TRAILING_SPACE_PATTERN.match(subject) is None, (
+            f"fixture error: {subject!r} matches the strict trailing-space "
+            "form, so it cannot demonstrate the widening"
+        )
+        assert is_teachback_subject(subject) is True
+        assert tlg._is_teachback_subject(subject) is True
+
+    @pytest.mark.parametrize("subject", _WORD_BOUNDARY_FALSE_CASES)
+    def test_marker_must_stand_as_its_own_word(self, subject):
+        assert is_teachback_subject(subject) is False, (
+            f"{subject!r} must NOT read as a teachback gate — the tail is a "
+            r"word boundary (\b), not a bare `TEACHBACK` prefix"
+        )
+        assert tlg._is_teachback_subject(subject) is False
+
+    @pytest.mark.parametrize("subject", _TRUE_CASES)
+    def test_widening_is_a_superset_of_the_strict_form(self, subject):
+        """Nothing the strict trailing-space form matched may stop matching:
+        the widening only ADDS subjects to the teachback carve-out."""
+        assert _STRICT_TRAILING_SPACE_PATTERN.match(subject) is not None
+        assert is_teachback_subject(subject) is True
 
 
 class TestPurity:

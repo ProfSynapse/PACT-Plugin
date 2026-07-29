@@ -290,10 +290,16 @@ try:
         sanitize_path_component,
         unclaim,
     )
-    from shared.dispatch_helpers import trustworthy_actor_name
+    from shared.dispatch_helpers import (
+        is_owner_wiring_shape,
+        is_pact_specialist_owner,
+        variety_stamp_as_of_write,
+        trustworthy_actor_name,
+    )
     from shared.intentional_wait import is_self_complete_exempt, is_teachback_exempt
     from shared.session_journal import (
         append_event,
+        append_event_checked,
         get_journal_path,
         make_event,
         read_events,
@@ -634,6 +640,267 @@ def _writeback_audit_recovery(task_id: str, updates: dict) -> bool:
         except OSError:
             pass
         return False
+
+
+# O_EXCL marker namespace for the dispatch_site family — a SEPARATE namespace
+# from the agent_handoff and task_metadata_snapshot marker dirs so the three
+# event families can never suppress one another. Module constant, never
+# input-derived.
+DISPATCH_SITE_MARKER_NAMESPACE: str = ".dispatch_site_emitted"
+
+# Fixed third key component, making the effective dedup key exactly
+# (team, task_id). Three things about this literal are load-bearing and none of
+# them are visible from the value, so they are written here rather than left to
+# be re-derived:
+#
+# 1. IT MUST BE NON-EMPTY. An empty occupant hits already_emitted's degenerate
+#    guard, which FAIL-OPENS: no marker is written, nothing raises, and dedup
+#    silently never fires while appearing to work. Measured: an empty third arg
+#    returns False on both of two consecutive calls, so both writes emit. That
+#    is the repeat-write over-count this claim exists to collapse, arriving
+#    through the claim itself.
+# 2. IT MUST BE A CONSTANT, NOT occupant_hash(owner, subject). The dedup has to
+#    be OWNER-INDEPENDENT: re-wiring the same Task-B to a DIFFERENT owner is
+#    the same dispatch site, not a second one. An owner-bearing key would emit
+#    twice and OVER-COUNT — fabricating an un-stamped site whenever only one of
+#    the two writes carried variety, which is the coverage-0.5 failure in the
+#    harmful direction. This is the opposite choice from agent_handoff
+#    (occupant-keyed) and task_metadata_snapshot (content-keyed), where
+#    re-emission on a changed payload IS wanted.
+# 3. The literal is spelled out rather than abbreviated because these markers
+#    are met in a directory listing, not here: they land as `91-dispatch_site`.
+_DISPATCH_SITE_MARKER_KEY: str = "dispatch_site"
+
+
+def _dispatch_site_already_emitted(team_name: str, task_id: str) -> bool:
+    """Test-and-set the dispatch_site marker — hard-bound to its namespace.
+
+    Thin wrapper over ``agent_handoff_marker.already_emitted`` that HARD-BINDS
+    both the namespace and the fixed key slot, mirroring
+    ``task_metadata_snapshot.snapshot_already_emitted``. The emit path calls
+    ONLY this wrapper and its ``_dispatch_site_unclaim`` twin, never the raw
+    marker functions: a forgotten namespace argument would claim in one dir and
+    no-op-unclaim against the other, leaving a marker that suppresses every
+    future emit for that task with no journal entry to show for it. The wrapper
+    makes that impossible by construction rather than by discipline.
+
+    ROUTING IS LOAD-BEARING, not stylistic. The ``str()`` coercion that makes a
+    non-str ``task_id`` safe lives inside ``_resolve_marker_target``, so it is
+    inherited ONLY by ``already_emitted``/``unclaim``. A direct
+    ``sanitize_path_component`` call is deliberately still non-coercing (it is
+    half of a security pair with ``read_task_json``, and coercion in a path
+    sanitizer is the fail-open direction). Reaching the marker path by any
+    other route therefore re-raises the old TypeError, the caller's guard
+    swallows it, the emit skips, and Q5's population silently loses a site.
+
+    Root policy is the default team-scoped root: the emit refuses to run on an
+    empty ``team_name`` (§5.2 step 2), so the empty-team fallback that
+    ``task_metadata_snapshot`` needs is unreachable here.
+
+    ACCEPTED RESIDUAL — CROSS-ARC task_id REUSE, stated because it is real and
+    has no witness. These markers are TASK-scoped, not session-scoped (so
+    fire-once survives pause/resume), and are cleaned only when the team reaper
+    removes the team dir. The platform REUSES low task_ids across arcs, so a
+    prior arc's ``91-dispatch_site`` marker will SUPPRESS a later arc's task-91
+    emit. Ruled ACCEPT rather than fixed, and the direction is why: one event
+    carries both the site and its stamp, so a suppressed emit drops that
+    dispatch from the distribution AND the site count together — the mean is
+    taken over fewer samples, but no dispatch is recorded as un-stamped that
+    was not. Under-count is the safe direction; over-count would fabricate a
+    gap. The only arc-distinguishing key available here is the task subject,
+    and keying on it re-opens an over-count on any mid-arc subject edit, which
+    trades a benign silent loss for a harmful visible one. This is a bounded
+    residual, NOT a solved problem: it shrinks N invisibly and nothing reports
+    it.
+    """
+    return already_emitted(
+        team_name,
+        task_id,
+        _DISPATCH_SITE_MARKER_KEY,
+        namespace=DISPATCH_SITE_MARKER_NAMESPACE,
+    )
+
+
+def _dispatch_site_unclaim(team_name: str, task_id: str) -> None:
+    """Compensating rollback for a claim whose journal write failed.
+
+    Hard-bound twin of ``_dispatch_site_already_emitted`` — same namespace
+    constant, same fixed key, same default root — so the claim and the
+    rollback can never derive divergent paths. Without it an optimistic claim
+    whose write then failed would permanently suppress that task's site.
+    """
+    unclaim(
+        team_name,
+        task_id,
+        _DISPATCH_SITE_MARKER_KEY,
+        namespace=DISPATCH_SITE_MARKER_NAMESPACE,
+    )
+
+
+def _dispatch_site_variety(tool_input: dict, task: dict) -> dict:
+    """Project the dispatched Task-B's variety stamp for a dispatch_site
+    payload: the four dimensions + total, WITHOUT the ``*_rationale`` strings.
+
+    Keys come from the canonical ``DISPATCH_VARIETY_KEYS`` (the same list the
+    dispatch_variety emit projects through), so a dimension rename cannot drift
+    the two streams apart. ``if k in`` keeps it tolerant of a partial stamp.
+    An empty result means "no resolvable stamp", which the caller renders as
+    an ABSENT ``variety`` key — the coverage gap itself, and a legal event.
+
+    SOURCE IS THE POST-WRITE STAMP — see ``variety_stamp_as_of_write``, which
+    owns that model. ``TaskUpdate`` replaces ``metadata.variety`` wholesale, so
+    the stamp is the incoming one when this write names ``variety`` at all and
+    the disk one otherwise; it is NOT a union of the two. Recording a union
+    would emit a sample the task never holds — disk dimensions beside a newly
+    written one, and a total inconsistent with them — for a dispatch that
+    post-write resolves to nothing.
+
+    THE RESOLUTION IS SHARED with the enforcement gate in handoff_ordering_gate
+    rather than copied, because the two answer the same question ("what will
+    this dispatch's stamp be once this write lands?") and a divergence between
+    them would mean the gate enforcing one stamp while this emit records
+    another.
+
+    ONLY THE PROJECTION IS LOCAL, and it must stay that way: the enforcement
+    gate resolves a TOTAL from the unfiltered stamp, where a non-canonical
+    ``score`` key is a legal candidate that this projection deliberately drops.
+
+    READ-ONLY on every input: builds new dicts only, never mutates ``task``,
+    ``tool_input`` or either metadata mapping.
+    """
+    post_write = variety_stamp_as_of_write(tool_input, task)
+    return {k: post_write[k] for k in DISPATCH_VARIETY_KEYS if k in post_write}
+
+
+def _emit_dispatch_site(
+    input_data: dict,
+    team_name: str,
+    task_id: str,
+    tool_input: dict,
+    task: dict,
+) -> None:
+    """Emit ONE ``dispatch_site`` event per dispatched Task-B, at the
+    owner-wiring TaskUpdate. The event's EXISTENCE is a dispatch site; the
+    OPTIONAL ``variety`` within it carries that dispatch's stamp. Both come
+    from one stream, so the distribution and the site count can never be
+    sourced over different populations.
+
+    READ BY Q5, AND IT IS THE ONLY SOURCE: commands/wrap-up.md sources the
+    retrospective's dispatch population from this stream and says so under a
+    red flag. Changing this event's shape, its emit conditions, or dropping it
+    changes what Q5 measures — there is no second stream to fall back on.
+
+    WHY HERE AND NOT BESIDE THE dispatch_variety EMIT: that emit lives in the
+    TaskCreate branch and is keyed on ``metadata.variety`` PRESENCE, precisely
+    because ``TaskCreate(B)`` leaves owner empty — its own comment records that
+    an owner gate there "would never fire". An owner-wiring predicate placed in
+    that branch would return False forever: Q5 would stay exactly as dark as it
+    is today with every test still green, and it would additionally inherit
+    that block's ``is_lead`` gate. The owner-wiring write is only observable on
+    TaskUpdate, so that is where this lives.
+
+    THE ORDER BELOW IS LOAD-BEARING, NOT STYLISTIC, and is kept in ONE ladder
+    so it can be audited at a single site. Two steps change the denominator
+    SILENTLY if dropped or reordered:
+
+      * step (2), the ``team_name`` precondition, is evaluated BEFORE any
+        exemption. Without it an unresolvable team makes ``is_teachback_exempt``
+        return False — "not exempt" — which admits every secretary task as an
+        un-stamped site and craters the distribution while the number still
+        renders. Gating the whole emit first converts that fail-DARK crater
+        into a total stream loss — an ABSENT answer instead of a confident
+        wrong one, which is the safer failure even though nothing detects it
+        today (the liveness check that would have was retired with the Q5
+        coverage ratio). ``team_name`` is also the
+        one marker component with no ``str()`` coercion behind it: a non-str
+        value fails with AttributeError at ``.lower()``, not the TypeError the
+        marker resolver handles, so nothing else is standing here.
+      * step (7), the O_EXCL claim, is what makes a repeat owner-bearing write
+        yield one site rather than two. Cheap insurance against a
+        high-severity, UNMEASURED-rate failure (a correctly-stamped dispatch
+        reading coverage 0.5). The composite-repeat rate has never been
+        measured; do not read this as evidence that repeats are known to occur.
+
+    Hermetic: never raises to the caller, matching the sibling emit legs.
+    """
+    try:
+        # (1) FRAME GATE — is_canonical_journal_frame, NOT is_lead. Class 3 is
+        #     a lead launched without --agent, carrying no agent_type at all:
+        #     a frame that SHOULD emit and that is_lead silently drops, zeroing
+        #     the whole population while every other journal stream keeps
+        #     writing. The topology leg survives it.
+        if not pact_context.is_canonical_journal_frame(input_data):
+            return
+        # (2) team_name resolvable and non-empty — BEFORE the exemption legs.
+        #     SUBSUMED TODAY BY STEP (4), AND PINNED ANYWAY. Measured: step
+        #     (4)'s is_pact_specialist_owner also fails closed on an empty or
+        #     non-str team_name, so no ordinary input reaches here and is
+        #     rejected only by this line. The crater §5.2 describes — an
+        #     unresolvable team making is_teachback_exempt return "not exempt"
+        #     and admitting every secretary task as an un-stamped site — is
+        #     therefore already unreachable by that second route.
+        #     DO NOT "SIMPLIFY" IT AWAY. It is guarded by a test that forces
+        #     the subsuming leg open and then asserts this one still stops the
+        #     emit, so deleting this line reddens the suite rather than passing
+        #     silently — and that test also pins the subsumption itself: if
+        #     is_pact_specialist_owner ever stops failing closed, the guard and
+        #     its cover do not go quiet together.
+        #     WHAT MAKES IT LOAD-BEARING RATHER THAN REDUNDANT: any change
+        #     letting step (4) pass on an unresolvable team — loosening that
+        #     predicate to fail open, or reordering the exemption ahead of it.
+        #     team_name is also the one marker component with no str()
+        #     coercion behind it: a non-str value fails with AttributeError at
+        #     .lower() inside the marker path, BEFORE any sanitize call, which
+        #     is why the marker module structurally cannot protect it.
+        if not isinstance(team_name, str) or not team_name:
+            return
+        # (3) task_id resolvable.
+        if not task_id:
+            return
+        # (4) The owner-wiring shape, then the owner resolving through team
+        #     config to a pact specialist. Owners are BARE names, so this is a
+        #     config resolution and never a `pact-` prefix test.
+        if not is_owner_wiring_shape(tool_input):
+            return
+        owner = tool_input.get("owner", "")
+        if not is_pact_specialist_owner(owner, team_name):
+            return
+        # (5) NOT a teachback Task-A gate (by subject).
+        subject = task.get("subject") or "" if isinstance(task, dict) else ""
+        if _is_teachback_subject(subject):
+            return
+        # (6) NOT teachback-exempt. is_teachback_exempt asks "should this owner
+        #     be dispatched via a Task A + Task B pair?" — the question Q5's
+        #     population asks. is_self_complete_exempt asks a DIFFERENT
+        #     question ("may this owner self-complete?"), and the two policies
+        #     are forbidden from being recoupled; see the frozenset comments in
+        #     shared/intentional_wait.py.
+        if is_teachback_exempt(owner, team_name):
+            return
+        # (7) O_EXCL dedup claim on (team, task_id).
+        if _dispatch_site_already_emitted(team_name, task_id):
+            return
+        # (8) We OWN the marker from here, so ANY failure below must roll it
+        #     back — otherwise the claim is poisoned and this task's site is
+        #     suppressed forever with no journal entry to show for it.
+        try:
+            fields: dict = {"task_id": str(task_id)}
+            variety = _dispatch_site_variety(tool_input, task)
+            if variety:
+                fields["variety"] = variety
+            written = append_event_checked(
+                make_event("dispatch_site", **fields),
+                "dispatch_site",
+                str(task_id),
+            )
+        except Exception:
+            written = False
+        if not written:
+            _dispatch_site_unclaim(team_name, task_id)
+    except Exception:
+        # Hermetic: a journal-emit failure must never break the gate's
+        # advisory evaluation or its exit-0 contract.
+        pass
 
 
 def _emit_lead_side_agent_handoff(
@@ -1320,12 +1587,22 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
                     # so this fires naturally-once per dispatch (unlike
                     # agent_handoff, which can re-fire across b1/b2/backstop and
                     # therefore needs the O_EXCL occupant marker).
+                    # The bool is CAPTURED, not discarded: a schema rejection
+                    # returns False without raising, and this event is the
+                    # per-dispatch calibration mirror — a silently dropped one
+                    # is indistinguishable downstream from a dispatch that was
+                    # never stamped. Still fail-open (the try covers make_event,
+                    # which the helper cannot).
                     try:
-                        append_event(make_event(
+                        append_event_checked(
+                            make_event(
+                                "dispatch_variety",
+                                task_id=new_task_id,
+                                variety=projected_variety,
+                            ),
                             "dispatch_variety",
-                            task_id=new_task_id,
-                            variety=projected_variety,
-                        ))
+                            new_task_id,
+                        )
                     except Exception:
                         pass  # fail-open: emit failure never breaks the gate
 
@@ -1549,8 +1826,15 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
                         # TaskUpdate(A, status="completed") fires naturally-once
                         # per teachback acceptance, so no occupant marker is
                         # needed (cf. the dispatch_variety note above).
+                        # Bool captured (see append_event_checked): a dropped
+                        # ack is silently indistinguishable from a teachback
+                        # that carried no acknowledgment at all.
                         try:
-                            append_event(make_event("teachback_ack", **ack_fields))
+                            append_event_checked(
+                                make_event("teachback_ack", **ack_fields),
+                                "teachback_ack",
+                                str(task_id),
+                            )
                         except Exception:
                             pass  # fail-open
 
@@ -1649,6 +1933,15 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         if not isinstance(task_a, dict):
             task_a = {}
         subject = task_a.get("subject") or ""
+
+        # dispatch_site emit — the coverage DENOMINATOR, one event per
+        # dispatched Task-B at the owner-wiring write. Consumes the shared
+        # task_a read above (subject for the teachback carve-out, metadata for
+        # the variety projection), so it adds no disk cost of its own. The full
+        # §5.2 evaluation order lives inside the helper as ONE auditable
+        # ladder rather than being split between here and there; it is
+        # hermetic and total, so it is called unconditionally.
+        _emit_dispatch_site(input_data, team_name, task_id, tool_input, task_a)
 
         # Wiring-boundary teachback_addblocks_missing — fires when the
         # canonical Step-3 wiring TaskUpdate (lead sets owner on a
@@ -1966,7 +2259,10 @@ def _journal_lifecycle_decision(
             advisories=messages,
             verdict="advisory" if advisories else "allow",
         )
-        append_event(event)
+        # Bool captured (see append_event_checked): this is the per-invocation
+        # decision record, so a dropped one reads downstream as a turn in which
+        # the gate never ran at all.
+        append_event_checked(event, "lifecycle_decision")
     except Exception:
         pass
 

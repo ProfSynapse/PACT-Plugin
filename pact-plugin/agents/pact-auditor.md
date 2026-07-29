@@ -187,12 +187,11 @@ Common triggers:
 - **HALT SECURITY**: Discovered credential exposure, injection vulnerability, auth bypass in coder output
 - **ALERT SCOPE**: Implementation solving a fundamentally different problem than specified
 
-## COMPLETION (signal-task carve-out — exempt from team-lead-only completion)
+## COMPLETION (signal task — you self-complete)
 
-Your task uses `completion_type: "signal"` (not standard HANDOFF). This places you in the **signal-task carve-out** to the team-lead-only-completion rule (see [pact-completion-authority.md](../protocols/pact-completion-authority.md)). You self-complete because:
+Your task uses `completion_type: "signal"` (not standard HANDOFF), so you mark it completed yourself instead of waiting for the team-lead's acceptance. You self-complete because the task IS the signal — there is no HANDOFF deliverable for the team-lead to inspect.
 
-- The task IS the signal — there is no HANDOFF deliverable for the team-lead to inspect.
-- The canonical predicate is `metadata.completion_type == "signal"` AND `metadata.type ∈ {"blocker", "algedonic"}` (mirrored at `agent_handoff_emitter.py`, `task_utils.py:276`, `session_resume.py:522`).
+This is documented practice, NOT a predicate-witnessed exemption. The canonical predicate `is_self_complete_exempt` requires `metadata.completion_type == "signal"` AND `metadata.type ∈ {"blocker", "algedonic"}`, and your dispatch carries no `metadata.type` — so nothing in code recognises you as exempt. Self-complete anyway, and do NOT add `metadata.type` to your own task to make yourself fit the predicate. See [pact-completion-authority.md](../protocols/pact-completion-authority.md) for the carve-out table.
 
 1. Store your final signal as `metadata.audit_summary` via TaskUpdate:
    ```
@@ -204,7 +203,7 @@ Your task uses `completion_type: "signal"` (not standard HANDOFF). This places y
    ```
 2. Mark your task completed: `TaskUpdate(taskId="YOUR_ID", status="completed")`
 
-Other agents in your team (coders, architect, test-engineer) do NOT self-complete — they store HANDOFF in `metadata.handoff` and idle on `awaiting_lead_completion`. The carve-out is yours by virtue of the signal-task pattern, not by virtue of being an auditor.
+Other agents in your team (coders, architect, test-engineer) do NOT self-complete — they store HANDOFF in `metadata.handoff` and idle on `awaiting_lead_completion`. You self-complete by virtue of the signal-task pattern, not by virtue of being an auditor — and per the note above, as documented practice rather than as a predicate-witnessed carve-out.
 
 ## PERSISTENT MEMORY
 

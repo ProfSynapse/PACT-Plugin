@@ -44,6 +44,7 @@ from shared.agent_handoff_marker import (
     is_signal_task,
     occupant_hash,
     sanitize_path_component,
+    unclaim,
 )
 
 HOOKS_DIR = Path(__file__).parent.parent / "hooks"
@@ -461,3 +462,177 @@ class TestDegenerateGuardSmoke:
         assert already_emitted("pact-test", "5", "") is False
         # sanitize_path_component is the SSOT used internally; sanity-pin it
         assert sanitize_path_component("..") == ""
+
+
+# =============================================================================
+# task_id str-normalisation inside the marker resolver
+# =============================================================================
+class TestTaskIdNormalisation:
+    """_resolve_marker_target coerces task_id with str() BEFORE handing it to
+    sanitize_path_component, whose bare re.sub RAISES TypeError on a non-str.
+
+    WHY A RAISE IS THE SEVERE CASE, not a mis-key: marker callers sit inside
+    emit paths that wrap their whole body in `except Exception: pass` (see
+    task_lifecycle_gate's agent_handoff emit). The TypeError is therefore
+    SWALLOWED — the emit is skipped and the event silently vanishes from the
+    journal rather than failing loudly, so a consumer counting those events
+    measures a population smaller than the one that occurred with no signal
+    that anything was lost.
+
+    NON-VACUITY — two INDEPENDENT mutations are needed, because no single one
+    can red both properties:
+      - delete the str() (revert to `sanitize_path_component(task_id)`)
+        → every int row below ERRORS with TypeError.
+      - collapse the coercion (e.g. `str(task_id)` → a constant)
+        → the int rows stop raising and PASS, and only
+          test_distinct_int_task_ids_still_discriminate reds.
+    That second mutation is the point of the discrimination row: a
+    normalisation that maps everything to one value ALSO removes the raise,
+    so "no longer raises" alone cannot tell a fix from a lobotomy.
+
+    NOT a restored capability — a NEW one. At base the int rows do not fail
+    an assertion, they never REACH one: already_emitted(team, 83, occ) dies
+    with TypeError before any comparison happens. So 83-vs-84 discrimination
+    was not "working and preserved", it was UNREACHABLE. These rows establish
+    that it is now reachable AND that it discriminates.
+
+    SCOPE BOUND: task_id only, and the exclusions are not symmetric with it.
+    occupant is a hex digest from occupant_hash() (str by construction).
+    team_name is validated upstream against [A-Za-z0-9_-]+ and is NOT
+    coerced — a non-str team_name raises AttributeError at .lower(), a
+    DIFFERENT exception from a DIFFERENT line than the task_id TypeError this
+    class is about. Do not read these rows as "all marker path components are
+    normalised"; exactly one is. test_team_name_is_not_coerced pins the
+    boundary so a later reader sees it was chosen rather than overlooked.
+
+    The int arguments below are DELIBERATE contract violations, carrying
+    type-checker suppressions at each site. task_id's annotation stays `str`
+    on purpose: the coercion is a defensive backstop, not a widened contract.
+    Passing a non-str task_id remains a CALL-SITE BUG — what changed is that
+    the bug stops turning into a silent event loss.
+    """
+
+    def test_int_task_id_does_not_raise(self, tmp_path, monkeypatch):
+        """Un-normalised, this ERRORS with
+        `TypeError: expected string or bytes-like object, got 'int'`."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        occ = occupant_hash("coder", "int task_id subject")
+        assert already_emitted("pact-test", 83, occ) is False  # type: ignore[arg-type]  # int is the point
+
+    def test_int_task_id_produces_same_key_as_its_string_form(
+        self, tmp_path, monkeypatch
+    ):
+        """83 and '83' are the SAME dispatch and must share one marker, so a
+        claim under either form suppresses a re-fire under the other. Without
+        this, a caller that changed the task_id's type between two fires would
+        double-emit."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        team, occ = "pact-test", occupant_hash("coder", "cross-form subject")
+        assert already_emitted(team, 83, occ) is False, "int form claims"  # type: ignore[arg-type]  # int is the point
+        assert already_emitted(team, "83", occ) is True, (
+            "the str form must resolve to the SAME marker key as the int "
+            "form and be suppressed; a False here means the two type forms "
+            "derive different keys and the dispatch double-emits"
+        )
+        marker_dir = (
+            tmp_path / ".claude" / "teams" / team / ".agent_handoff_emitted"
+        )
+        assert [p.name for p in marker_dir.iterdir()] == [f"83-{occ}"], (
+            "exactly ONE marker, keyed by the normalised task_id"
+        )
+
+    def test_distinct_int_task_ids_still_discriminate(self, tmp_path, monkeypatch):
+        """THE ANTI-LOBOTOMY ROW. Coercing to a CONSTANT would also stop the
+        raise, so this is what separates a normalisation from a collapse:
+        83 and 84 are different dispatches and must NOT share a marker."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        team, occ = "pact-test", occupant_hash("coder", "discrimination subject")
+        assert already_emitted(team, 83, occ) is False, "83 claims"  # type: ignore[arg-type]  # int is the point
+        assert already_emitted(team, 84, occ) is False, (  # type: ignore[arg-type]
+            "84 is a DIFFERENT task_id and must win its own marker — a True "
+            "here means the coercion collapsed distinct ids onto one key, "
+            "which would suppress genuine events"
+        )
+        marker_dir = (
+            tmp_path / ".claude" / "teams" / team / ".agent_handoff_emitted"
+        )
+        assert sorted(p.name for p in marker_dir.iterdir()) == [
+            f"83-{occ}",
+            f"84-{occ}",
+        ]
+
+    def test_claim_and_rollback_share_the_key_for_an_int_task_id(
+        self, tmp_path, monkeypatch
+    ):
+        """The property the placement buys: already_emitted (the CLAIM) and
+        unclaim (the compensating ROLLBACK) both resolve through
+        _resolve_marker_target, so normalising there makes it structurally
+        impossible for them to derive different keys.
+
+        If the rollback saw a different key it would unlink nothing, the claim
+        would stay poisoned, and every later fire for that task would be
+        suppressed forever — so the observable is that a re-fire AFTER the
+        rollback wins again."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        team, occ = "pact-test", occupant_hash("coder", "rollback subject")
+        marker_dir = (
+            tmp_path / ".claude" / "teams" / team / ".agent_handoff_emitted"
+        )
+
+        assert already_emitted(team, 83, occ) is False, "int claim wins"  # type: ignore[arg-type]  # int is the point
+        assert [p.name for p in marker_dir.iterdir()] == [f"83-{occ}"]
+
+        unclaim(team, 83, occ)  # type: ignore[arg-type]  # int is the point
+        assert list(marker_dir.iterdir()) == [], (
+            "the rollback must remove the marker the claim created; a "
+            "surviving file means claim and rollback derived DIFFERENT keys "
+            "and the marker is permanently poisoned"
+        )
+        assert already_emitted(team, 83, occ) is False, (  # type: ignore[arg-type]
+            "after a successful rollback a later fire must be able to claim "
+            "again (this is what the unclaim exists to preserve)"
+        )
+
+    def test_unclaim_no_longer_raises_on_an_int_task_id(
+        self, tmp_path, monkeypatch
+    ):
+        """unclaim documents itself as fail-SAFE and 'Never raises', but
+        _resolve_marker_target is called OUTSIDE its try — so before the
+        coercion an int task_id propagated a TypeError straight through and
+        falsified that contract. Pin the repaired contract."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        occ = occupant_hash("coder", "unclaim contract subject")
+        unclaim("pact-test", 83, occ)  # type: ignore[arg-type]  # int is the point
+
+    def test_str_task_ids_are_byte_identical_to_the_unnormalised_form(
+        self, tmp_path, monkeypatch
+    ):
+        """EQUIVALENCE CERTIFICATE for the population that already reached the
+        resolver. str(x) is x for a str, so every currently-arriving task_id
+        derives a byte-identical marker key and the dedup namespace cannot
+        fragment — which is the property the shared-seam constraint protects.
+        Pinned against a real sample rather than argued from the source."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        team = "pact-test"
+        occ = occupant_hash("coder", "equivalence subject")
+        marker_dir = (
+            tmp_path / ".claude" / "teams" / team / ".agent_handoff_emitted"
+        )
+        for task_id in ("5", "standing-7", "amp", "probe", "a b", "83"):
+            assert already_emitted(team, task_id, occ) is False
+            assert (marker_dir / f"{task_id}-{occ}").exists(), (
+                f"str task_id {task_id!r} must key exactly as it did before "
+                "the coercion"
+            )
+
+    def test_team_name_is_not_coerced(self, tmp_path, monkeypatch):
+        """SCOPE BOUND, pinned. team_name is validated upstream against
+        [A-Za-z0-9_-]+ and is additionally gated on being resolvable, so it is
+        deliberately NOT coerced here — it still reaches .lower() raw. This
+        row records that as an assessed decision; if a later change extends
+        the coercion to team_name, this row is the one that should be
+        consciously deleted rather than silently satisfied."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        occ = occupant_hash("coder", "team bound subject")
+        with pytest.raises(AttributeError):
+            already_emitted(7, "5", occ)  # type: ignore[arg-type]  # asserts it RAISES

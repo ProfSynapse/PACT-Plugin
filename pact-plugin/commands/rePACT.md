@@ -15,7 +15,7 @@ This command initiates a **nested P→A→C→T cycle** for a sub-task that is t
 Create a nested Task hierarchy as a child of the current context:
 
 ```
-1. `TaskCreate`: Sub-feature task "{verb} {sub-feature}" (child of parent context)
+1. `TaskCreate`: Sub-feature task "{verb} {sub-feature}" (child of parent context) — stamp metadata.variety.total (4-16)
 2. `TaskCreate`: Nested phase tasks:
    - "PREPARE: {sub-feature-slug}"
    - "ARCHITECT: {sub-feature-slug}"
@@ -214,7 +214,7 @@ Implement the sub-component:
 
 **Session team**: The `{team_name}` team is provisioned automatically by the platform — use it for dispatches; you do not create it.
 
-**Teachback-Gated Dispatch**
+### Teachback-Gated Dispatch
 
 Each specialist dispatch creates **two tasks**, not one:
 
@@ -263,7 +263,7 @@ TaskUpdate(A_id, addBlocks=[B_id])
 For each specialist needed, follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
 
 1. `TaskCreate(subject="{scope-prefixed-name}: TEACHBACK for {sub-task}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="{scope-prefixed-name}: implement {sub-task}", description=<see below>)` — Task B.
+2. `TaskCreate(subject="{scope-prefixed-name}: implement {sub-task}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
    - Task B's `description` carries the implementation mission: "[full CONTEXT/MISSION/INSTRUCTIONS/GUIDELINES]"
 3. `TaskUpdate(A_id, owner="{scope-prefixed-name}", addBlocks=[B_id])`
 4. `TaskUpdate(B_id, owner="{scope-prefixed-name}", addBlockedBy=[A_id])`
@@ -345,7 +345,9 @@ Specialists can invoke nested cycles autonomously (see [Autonomy Charter](../pro
 | Specialist discovers complexity | Uses Autonomy Charter (declares, executes, reports) |
 | Orchestrator identifies complex sub-task | Uses `/PACT:rePACT` command |
 
-Both follow the same protocol; the difference is who initiates.
+The two share the P→A→C→T *shape*, not this document's task mechanics. A specialist's nested cycle is a mini-cycle inside its own work, reported through its HANDOFF — the Autonomy Charter defines no `TaskCreate`, no `TaskUpdate`, and no dispatch wiring, so do NOT create or wire Task A / Task B pairs from a specialist. Creating a nested team and wiring dispatches is the orchestrator's path, via `/PACT:rePACT`.
+
+If a specialist's sub-task genuinely needs its own dispatched teammates, that is a cross-domain escalation to the orchestrator, not a nested cycle to run in place.
 
 ---
 

@@ -5,6 +5,22 @@ The plugin version is tracked in 4 files; all four must carry the same
 version literal. TARGET_VERSION is read from plugin.json at test time so
 the suite tracks every future bump without manual edits.
 
+WHY THERE ARE THREE TESTS FOR FOUR FILES, AND WHY A FOURTH MUST NOT BE
+ADDED BACK. `plugin.json` is the ANCHOR: TARGET_VERSION is sourced FROM it,
+so it is the reference the other three are measured against and it is NOT
+SELF-VERIFIABLE. A test asserting plugin.json agrees with TARGET_VERSION
+compares that file to itself and CANNOT FAIL FOR ANY VALUE — one shipped
+here and was retired. If you are reading this because three files have
+tests and a fourth does not, that is the design, not a gap.
+
+What this file therefore does and does not cover: it covers PARTIAL-AMEND
+drift, where a bump reaches some of the four files and not the others —
+which is the realistic release defect. It does NOT cover the anchor being
+wrong. Nothing here asserts the version is any particular literal, so a
+bump to an unintended-but-internally-consistent version passes every test
+below. Verifying the intended literal belongs to the release checklist,
+which is where the dynamic sourcing deliberately puts it.
+
 PRIOR_VERSION stale-sweep is disabled: with TARGET_VERSION sourced
 dynamically there is no canonical prior to enumerate, and explicit prior-
 version stale-sweeps belong to release-engineering checklists rather than
@@ -30,13 +46,10 @@ _TARGET_VERSION_PATTERN = re.compile(
 )
 
 
-# ---------- 4-file version invariants ----------
-
-def test_plugin_json_version():
-    p = REPO_ROOT / "pact-plugin" / ".claude-plugin" / "plugin.json"
-    data = json.loads(p.read_text(encoding="utf-8"))
-    assert data.get("version") == TARGET_VERSION
-
+# ---------- version invariants: the 3 files measured against the anchor ----------
+# plugin.json itself has no test — see the module docstring. It is the anchor
+# TARGET_VERSION is read from, so asserting it against TARGET_VERSION is a
+# tautology.
 
 def test_marketplace_json_version():
     p = REPO_ROOT / ".claude-plugin" / "marketplace.json"

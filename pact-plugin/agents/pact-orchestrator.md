@@ -482,6 +482,8 @@ Both calls are required, in this order. SendMessage must precede TaskUpdate. 3+ 
 
 Teammate self-completion carve-outs (predicate-witnessed): signal-tasks (`metadata.completion_type == "signal"` AND `metadata.type ∈ {"blocker", "algedonic"}`); secretary session briefing + memory-save (owner's team-config `agentType` ∈ `SELF_COMPLETE_EXEMPT_AGENT_TYPES` — currently `{pact-secretary}`; resolved via team-config lookup, so the carve-out applies regardless of spawn name). Canonical predicate: `is_self_complete_exempt(task, team_name)` in `shared/intentional_wait.py`. Separate path: imPACT force-termination (`metadata.terminated == true`) is team-lead-driven.
 
+An auditor dispatch carries `completion_type: "signal"` with NO `type` key, so it does NOT satisfy the signal-task predicate above and is NOT predicate-witnessed — auditors self-complete as documented practice, not as an exemption. Do NOT add `metadata.type` to an auditor dispatch to make it fit the predicate: that would silently move those dispatches out of the Q5 coverage denominator.
+
 **TaskGet metadata-blindness reminder**: `TaskGet` does NOT surface `metadata.handoff`. Read directly via `cat ~/.claude/tasks/{team_name}/{taskId}.json | jq .metadata.handoff`; do NOT mark completed if missing or empty.
 
 **You MUST `Read(file_path="../protocols/pact-completion-authority.md")` before answering** whenever you detect a TEACHBACK or HANDOFF arrival, a rejection cycle, or any teammate idle on `awaiting_lead_completion`.

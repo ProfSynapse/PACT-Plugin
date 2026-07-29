@@ -866,20 +866,38 @@ class TestDispatchVarietyEnvKnobModes:
         ("Deny", "deny"),
         (" shadow\t", "shadow"),
         ("warn", "warn"),
-        ("", "warn"),           # empty → safe default
-        ("bogus", "warn"),      # unknown → safe default
+        ("", "warn"),           # empty is SET-but-invalid → invalid_fallback
+        ("bogus", "warn"),      # unknown → the DECLARED invalid_fallback
         ("denY ", "deny"),
     ])
     def test_env_knob_strip_lower_normalization(
         self, monkeypatch, env_value, expected,
     ):
         """The PACT_DISPATCH_VARIETY_MODE read normalizes with .strip().lower()
-        BEFORE the membership check, then falls back to warn for anything not in
-        the allowed set. NON-TAUTOLOGICAL: reloads the module under the real env
-        value so it exercises the actual os.environ read + normalize + fallback
-        (not the already-resolved constant). Asserts case/whitespace variants of
-        'deny' arm deny, and unknown/empty values stay warn — proving the
-        normalization can never accidentally enable an unintended mode."""
+        BEFORE the membership check, then falls back to the option's DECLARED
+        default for anything not in the allowed set. NON-TAUTOLOGICAL: reloads
+        the module under the real env value so it exercises the actual
+        os.environ read + normalize + fallback (not the already-resolved
+        constant).
+
+        WHAT THE FALLBACK ROWS ASSERT, and their polarity has now moved twice:
+        first when this gate was armed (`deny` became the default), then again
+        when the row declared `invalid_fallback = "warn"`. What they prove is
+        the property that survived both moves — an unrecognised token resolves
+        to the row's DECLARED landing point for THAT path and to nothing else.
+        It is never derived from the token and never lands outside the allowed
+        set.
+
+        NOTE THE ASYMMETRY THESE ROWS NOW CARRY, because it is the whole point
+        of the declaration: an UNSET variable resolves to `deny` (enforcing),
+        while a MISSPELLED opt-down resolves here to `warn`. Absence is consent
+        to the shipped posture; an unparseable value is a request the resolver
+        could not read, and the only consumers who reach this branch are ones
+        trying to opt down.
+
+        The explicit `("warn", "warn")` row is the discriminator: if resolution
+        ever stopped consulting the registry and hardcoded a mode, that row and
+        the fallback rows could not both hold."""
         import importlib
         monkeypatch.setenv("PACT_DISPATCH_VARIETY_MODE", env_value)
         reloaded = importlib.reload(gate)
@@ -972,3 +990,666 @@ class TestIsPactSpecialistOwner:
 
         monkeypatch.setattr(ctx_module, "_iter_members", _raise)
         assert is_pact_specialist_owner("backend-coder", TEAM) is False
+
+
+# =============================================================================
+# The FRAME GATE — enforcement now matches the emit's canonical-frame predicate.
+# =============================================================================
+class TestEnforcementReachesTheCanonicalFrame:
+    """The emit recorded a dispatch_site on ANY canonical journal frame while
+    enforcement only reached the lead's, so an in-process teammate's wiring
+    write was COUNTED and never ENFORCED.
+
+    WHY THE PRE-EXISTING TEAMMATE-FRAME ARM STILL PASSES, and it is not a
+    vacuity: ``is_canonical_journal_frame`` short-circuits to False when the
+    frame carries no ``session_id`` at all, BEFORE it pays the config read.
+    Frames built without one are therefore unaffected by this change and
+    correctly still emit nothing. The widening is reachable ONLY through the
+    topology leg, which needs BOTH a ``session_id`` on the frame AND a
+    ``leadSessionId`` in the team config — so a test that omits either cannot
+    observe it, and would report a live change as a no-op.
+
+    THE TOPOLOGY LEG IS A BLIND SPOT FOR THE REST OF THIS FILE, stated at
+    class level because the consequence is not local to these two arms. The
+    pair below are the ONLY frames in this file that reach that leg. Every
+    other frame here short-circuits before it: ``_wiring_update`` builds no
+    ``session_id``, and the default ``_seed_team_config`` writes no
+    ``leadSessionId``, so those frames resolve through the ``is_lead`` leg or
+    exit on the absent ``session_id``. These two arms reach it only because
+    they supply BOTH by hand — ``frame["session_id"] = ...`` and
+    ``_seed_lead_session``.
+
+    WHAT THAT COSTS, and it cuts BOTH ways: outside this class the file
+    cannot detect a change to the frame predicate in EITHER direction. A
+    widening would go unobserved, and so would a narrowing back to
+    ``is_lead`` — the frames would answer identically under both predicates,
+    so a green run here is not evidence about the frame gate.
+
+    THE CURE IS THE FIXTURE DEFAULTS, not more arms: seed a ``session_id``
+    in ``_wiring_update`` and a ``leadSessionId`` in ``_seed_team_config``,
+    so that reaching the leg is the file's default rather than something two
+    tests opt into. Until then, read a frame-predicate claim as covered only
+    if it is asserted here.
+
+    MUTATION THAT REDDENS: restore ``is_lead`` in ``_evaluate_dispatch_variety``.
+    The first test flips to None. The tmux twin below does NOT — it is False
+    under both predicates, which is what makes the pair a discriminator rather
+    than a pair of restatements.
+    """
+
+    @staticmethod
+    def _seed_lead_session(tmp_path, team, sid):
+        cfg = tmp_path / ".claude" / "teams" / team / "config.json"
+        data = json.loads(cfg.read_text())
+        data["leadSessionId"] = sid
+        cfg.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_IN_PROCESS_teammate_frame_is_now_ENFORCED(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """session_id == leadSessionId: one process, one session. The write
+        lands in the canonical journal, so it must also be enforced.
+
+        SCOPE, STATED BECAUSE THIS ARM CANNOT CERTIFY THE WHOLE FIX: it calls
+        `_evaluate_dispatch_variety` directly, with `_ctx` having pre-seeded
+        `_context_path`. `init()` early-returns when that is set, so this arm
+        is TRUE EITHER SIDE of the frame-gate/`init` ORDERING — it distinguishes
+        the PREDICATE (in-process vs tmux) and nothing else. The ordering is
+        certified by `test_dispatch_variety_deny_honor_probe`, which drives
+        `main()` as a real subprocess with an unseeded context. Do not read a
+        green here as covering that.
+        """
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        self._seed_lead_session(tmp_path, TEAM, "S-LEAD")
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="", metadata={})
+        frame = _wiring_update("42", agent_type=TEAMMATE)
+        frame["session_id"] = "S-LEAD"
+        assert gate._evaluate_dispatch_variety(frame) is not None, (
+            "an in-process teammate's un-stamped wiring write was recorded as "
+            "a dispatch site and NOT enforced — the gap this fix closes"
+        )
+
+    def test_TMUX_teammate_frame_is_still_NOT_enforced(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """Distinct session_id: a separate process writing a separate journal.
+        Unchanged by this fix, and the bound on how far it widens."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        self._seed_lead_session(tmp_path, TEAM, "S-LEAD")
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="", metadata={})
+        frame = _wiring_update("42", agent_type=TEAMMATE)
+        frame["session_id"] = "S-OTHER"
+        assert gate._evaluate_dispatch_variety(frame) is None, (
+            "a tmux teammate frame was enforced — this fix must widen to the "
+            "in-process frame ONLY"
+        )
+
+
+# =============================================================================
+# The OWNER as of this write — the exemption over-block.
+# =============================================================================
+class TestExemptionReadsTheOwnerAsOfThisWrite:
+    """The gate ADMITS on ``tool_input["owner"]`` but the exemption predicate
+    resolved ``task["owner"]`` from DISK. At the terminal wiring write the disk
+    owner is still empty — THIS write is what sets it — and
+    ``_is_exempt_agent_type`` returns False on an empty owner, so no exempt
+    owner could ever reach its carve-out. Every exempt dispatch fell through to
+    enforcement, on a deny default. An OVER-BLOCK, which is the cardinal
+    failure for a control that can refuse a consumer's write.
+
+    MUTATION THAT REDDENS: in ``_evaluate_dispatch_variety``, pass ``task``
+    instead of ``task_as_of_this_write`` to ``is_self_complete_exempt``. The
+    first test flips to an advisory. That is the base behaviour, measured.
+
+    THE SECOND TEST IS THE LOAD-BEARING ARM. An overlay that exempted
+    everything would make the first test pass while silently retiring the
+    control, which is worse than the bug it fixes: it closes a Blocking finding
+    AND satisfies the acceptance criterion while leaving nothing enforced. Only
+    an arm that MUST still deny can tell the two apart.
+    """
+
+    def test_exempt_owner_in_the_WIRE_is_carved_out(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """Disk owner empty, secretary in the wire, no stamp -> ALLOW."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="")
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update("42", owner="secretary"),
+        )
+        assert adv is None, (
+            "an exempt owner carried in the wiring write was refused — the "
+            f"carve-out cannot see the owner that admitted the write: {adv!r}"
+        )
+
+    def test_ordinary_specialist_in_the_WIRE_still_DENIES(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """The must-deny control. Same shape, non-exempt agentType -> DENY.
+        Guards against an overlay that exempts everything."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="")
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update("42", owner="backend-coder"),
+        )
+        assert adv is not None, (
+            "an ordinary specialist's un-stamped dispatch was ALLOWED — the "
+            "overlay retired the control instead of repairing the carve-out"
+        )
+
+    def test_overlay_does_not_mutate_the_task_record(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """The overlay builds a new dict; the caller's task is untouched."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="")
+        gate._evaluate_dispatch_variety(_wiring_update("42", owner="secretary"))
+        on_disk = json.loads(
+            (tmp_path / ".claude" / "tasks" / TEAM / "42.json").read_text()
+        )
+        assert on_disk["owner"] == "", (
+            f"the exemption overlay wrote through to the task record: {on_disk!r}"
+        )
+
+    # ---- RE-WIRE: the only arms where "incoming wins" is observable, because
+    # "disk-first" and "incoming-first" agree whenever the disk owner is empty,
+    # which is the whole ordinary wiring case. Both directions are pinned; the
+    # second is a DELIBERATE deny-widening and must not be read as a regression.
+
+    def test_rewire_TO_an_exempt_owner_is_carved_out(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """disk=backend-coder -> wire=secretary. The task WILL be secretary-
+        owned, so it is exempt. Refusing it would be a new over-block created
+        by the fix for an over-block."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="backend-coder")
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update("42", owner="secretary"),
+        ) is None
+
+    def test_rewire_AWAY_from_an_exempt_owner_now_DENIES(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """disk=secretary -> wire=backend-coder. INTENDED DENY-WIDENING.
+
+        Keying on the stale DISK owner would let a write that assigns a real
+        specialist inherit the departing secretary's exemption — an unstamped
+        dispatch landing on a live coder in one ordinary-looking write. The
+        post-write model asks who the task WILL be owned by, so it denies."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="secretary")
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update("42", owner="backend-coder"),
+        ) is not None
+
+    def test_overlay_does_NOT_widen_the_exempt_AGENT_TYPE_set(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """A signal-shaped task whose metadata.type is ABSENT satisfies NEITHER
+        exemption surface: pact-auditor is not in SELF_COMPLETE_EXEMPT_AGENT_TYPES
+        and surface 2 needs type in {blocker, algedonic}. No owner overlay can
+        reach it, and it MUST NOT — granting it would mean enlarging the exempt
+        agentType set, which is a security change with its own review."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(
+            tmp_path, monkeypatch, TEAM,
+            members=_DEFAULT_MEMBERS + [
+                {"name": "auditor", "agentType": "pact-auditor"},
+            ],
+        )
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="",
+                   metadata={"completion_type": "signal"})
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update("42", owner="auditor"),
+        ) is not None
+
+
+# =============================================================================
+# The disk/incoming OVERLAY — the cardinal over-block fix.
+# =============================================================================
+def _wiring_update_with_metadata(task_id, metadata, **kw):
+    """A wiring write that ALSO carries metadata — the atomic wire+stamp."""
+    payload = _wiring_update(task_id, **kw)
+    payload["tool_input"]["metadata"] = metadata
+    return payload
+
+
+class TestDispatchVarietyReadsTheIncomingWrite:
+    """THE CARDINAL CASE. `TaskUpdate(B, owner=..., addBlockedBy=[A],
+    metadata={"variety": {...}})` wires and stamps in ONE call. At PreToolUse
+    the stamp is in the write and not yet on disk, so a disk-only read REFUSES
+    a faithful single command — which for a control that can deny is the
+    failure that must never ship.
+
+    MUTATION THAT REDDENS: in `_evaluate_dispatch_variety`, replace
+    `variety_stamp_as_of_write(tool_input, task)` with the disk-only read
+    (`task.get("metadata", {}).get("variety")`).
+
+    WHAT THAT MUTATION ACTUALLY DOES, measured rather than asserted, because
+    the members no longer move together and a single summary sentence about
+    them would be false:
+      - the ATOMIC arms (a stamp carried in the write against a bare disk)
+        flip ALLOW -> advisory. This is the cardinal over-block, and it is
+        the direction the class is named for.
+      - the arms with a stamp ON DISK — partial, delete, malformed, same-key
+        — flip the OTHER way, DENY -> allow: the disk-only read sees the very
+        stamp the write is about to destroy and blesses it. Same defect,
+        opposite symptom.
+      - some members do not move at all, and their staying green is a PASS
+        rather than a failed mutation. Named rather than counted, because a
+        tally here rots the moment a member is added:
+        `test_STILL_DENIES_when_neither_side_carries_a_stamp` and
+        `test_a_variety_DELETE_with_NOTHING_on_disk_is_not_a_replace` have
+        no disk stamp for the two reads to differ over, and
+        `test_atomic_stamp_via_the_variety_score_sibling` resolves through
+        `metadata["variety_score"]`, which this mutation does not touch.
+
+    So do not read this class as a block that reddens on cue. A mutation
+    sweep over it must check the DIRECTION of each flip, and must expect two
+    non-movers; counting reds alone would score a partial disarm as success.
+
+    INSTRUMENT HAZARD FOR ANY SUCH SWEEP: `TestDispatchVarietyEnvKnobModes`
+    above calls `importlib.reload(gate)`, which rebinds the real helper and
+    silently disarms an in-process patch for every test defined after it —
+    including this whole class. Re-apply the mutation per test, or the null
+    is an artefact of the reload rather than a property of these arms.
+    """
+
+    def test_atomic_wire_and_stamp_is_SILENT(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """PARTIALNESS SHAPE (c) — THE MUST-HOLD TWIN. A complete stamp
+        carried in the wiring write itself must still be ALLOWED.
+
+        It is the non-vacuity control for the two partial arms below: a gate
+        rebuilt to refuse anything with an incoming `variety` would satisfy
+        both of those and still be wrong, and this is the only arm that can
+        tell the difference. Deliberately NOT discriminating against the
+        union — union and replace agree here, because the disk side is empty
+        — so if this one ever moves, the write-model change over-reached
+        rather than a model being distinguished."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={})
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety": _variety(12)}),
+        )
+        assert adv is None, (
+            "a wiring write CARRYING a complete variety stamp was refused — "
+            f"this is the cardinal over-block: {adv!r}"
+        )
+
+    def test_atomic_stamp_survives_a_task_with_no_metadata_key(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder")
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety": _variety(12)}),
+        ) is None
+
+    def test_atomic_stamp_via_the_variety_score_sibling(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """The non-canonical spelling resolve_variety_total documents as
+        candidate 3. Reaching it needs `variety_stamp_as_of_write` to hand the
+        resolver a DICT rather than None: candidates 1, 2 and 4 all read from
+        `variety` and fall through on `{}`, which is what lets candidate 3 —
+        the only one that reads `metadata` instead — be consulted at all.
+
+        THAT IS WHY THE HELPER RETURNS `{}` AND NEVER None, and it is the
+        mechanism that made this path reachable. The resolver's own non-dict
+        coercion cannot do it here, because this call site never hands it a
+        non-dict; the helper's return type is doing the work."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={})
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety_score": 12}),
+        ) is None
+
+    def test_STILL_DENIES_when_neither_side_carries_a_stamp(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """The other direction, and the reason the overlay is not a hole: an
+        incoming metadata that carries no variety leaves the gate firing."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={})
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"handoff": {"produced": ["f"]}}),
+        ) is not None
+
+    def test_a_SUBSET_partial_restamp_that_lands_UNSTAMPED_denies(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """PARTIALNESS SHAPE (b) — the incoming keys are a STRICT SUBSET of
+        the disk stamp's. Post-write the task carries `{"novelty": 4}` and
+        resolves to nothing, because `TaskUpdate` replaces `metadata.variety`
+        wholesale, so the refusal is truthful.
+
+        This case was once ALLOWED, on the reasoning that refusing "a
+        correctly-stamped dispatch" would be a cardinal over-block. That
+        reasoning read the UNION of disk and wire — a state the task never
+        holds — so allowing it let an un-stamped dispatch through with the
+        gate's permission.
+
+        DISCRIMINATING: green here, RED under a mutation restoring the union,
+        which resolves 12 from the surviving disk keys and returns None.
+
+        Its diagnosis is the PARTIAL-REPLACE sentence, not the values one:
+        `{"novelty": 4}` is a perfectly good value and sending the consumer
+        to re-read it wastes their time. The same-key sibling below is what
+        keeps that distinction honest."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={"variety": _variety(12)})
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety": {"novelty": 4}}),
+        )
+        assert adv is not None, (
+            "a write that leaves the task un-stamped was allowed"
+        )
+        assert "REPLACES the stamp already on disk" in adv, (
+            "a partial write was diagnosed as bad VALUES; the values are "
+            f"fine and the write is what dropped the stamp: {adv!r}"
+        )
+
+    def test_a_DISJOINT_partial_restamp_that_lands_UNSTAMPED_denies(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """PARTIALNESS SHAPE (a) — THE CASE A CONTAINMENT READING EXCLUDES,
+        and the reason the precondition is partialness rather than subset.
+
+        The incoming stamp carries keys the disk stamp LACKS (`novelty`,
+        `scope` against a disk holding only `total`). It is not a subset of
+        anything, yet it still REPLACES the disk block: post-write the task
+        holds `{"novelty": 4, "scope": 4}`, which resolves to nothing because
+        two dimensions are neither a total nor all four.
+
+        Had the arms been built to containment, this fixture would not have
+        satisfied the precondition and the shape would have gone unpinned —
+        a green report over a population that excludes the defect the write
+        model was corrected for.
+
+        DISCRIMINATING: green here, RED under a mutation restoring the union,
+        which sees the disk `total` the write actually destroys, resolves 12
+        and returns None."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={"variety": {"total": 12}})
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata(
+                "42", {"variety": {"novelty": 4, "scope": 4}},
+            ),
+        )
+        assert adv is not None, (
+            "a disjoint partial write that lands the task un-stamped was "
+            "allowed — the containment reading of the precondition"
+        )
+        assert "REPLACES the stamp already on disk" in adv, (
+            f"the partial-replace diagnosis did not reach a disjoint write, "
+            f"which is the shape it was written for: {adv!r}"
+        )
+
+    def test_a_variety_DELETE_over_a_stamped_task_denies(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """PARTIALNESS AT FULL STRENGTH. `metadata={"variety": None}` is the
+        platform's remove-the-key form: it NAMES `variety` and carries
+        nothing forward, so it drops EVERY key the disk held and the task
+        lands un-stamped.
+
+        It takes the replace sentence rather than the values one for the
+        reason the partial arms do, only more so — there are no values here
+        to re-read, so sending the caller to look at them is advice they
+        cannot act on.
+
+        DISCRIMINATING: green here, RED under a mutation restoring the union,
+        where a null incoming contributes nothing and the disk stamp
+        survives to resolve 12."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={"variety": _variety(12)})
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety": None}),
+        )
+        assert adv is not None, "a write that deletes the stamp was allowed"
+        assert "REPLACES the stamp already on disk" in adv, (
+            f"a delete was diagnosed as bad VALUES, and it carries none: "
+            f"{adv!r}"
+        )
+
+    def test_a_variety_DELETE_with_NOTHING_on_disk_is_not_a_replace(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """THE DISK-SIDE GUARD, and the non-vacuity control for the arm
+        above. With no stamp on disk the same write drops nothing — it is a
+        null write against an already-un-stamped task, not a replace — so the
+        replace sentence would be a false explanation.
+
+        Without this arm the guard could be deleted and the suite would stay
+        green while the gate told callers their write destroyed a stamp that
+        was never there.
+
+        THIS ARM ONCE ASSERTED ONLY THE NEGATIVE, and that is why the wrong
+        sentence shipped. It checked that the answer was not the REPLACE
+        diagnosis and stopped there — which was satisfied by the ADD-THE-BLOCK
+        sentence (correct) and equally by the RE-READ-THE-VALUES sentence
+        (wrong, and what the gate actually returned). On a three-way selector
+        a negative assertion excludes ONE branch and licenses the rest.
+
+        It now asserts the branch it EXPECTS. Keep it that way: assert the
+        positive, and if the alternatives matter, exclude them explicitly the
+        way the selection table does."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={})
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety": None}),
+        )
+        assert adv is not None
+        assert FIRST_ADD_THE_BLOCK in adv, (
+            f"a null write against a task that never carried a stamp must be "
+            f"told to stamp the block — nothing was supplied to re-read and "
+            f"nothing was on disk to replace: {adv!r}"
+        )
+
+    def test_a_MALFORMED_variety_value_keeps_the_values_sentence(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """THE OTHER EDGE OF THE DELETE WIDENING. A `variety` arriving as a
+        string also lands the task un-stamped and also drops the disk keys —
+        but here the consumer really did send a bad VALUE, so the values
+        sentence is the true one. Only a null reads as 'carried nothing
+        forward' rather than 'sent something wrong'.
+
+        This is what stops the widening swallowing the second diagnosis
+        whole."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={"variety": _variety(12)})
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety": "12"}),
+        )
+        assert adv is not None and "does NOT resolve" in adv
+        assert "REPLACES the stamp already on disk" not in adv, (
+            f"a malformed VALUE was diagnosed as a write-shape defect: {adv!r}"
+        )
+
+    def test_an_incoming_write_that_JUNKS_the_only_resolving_key_denies(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """THE DISCRIMINATOR FOR THE DIAGNOSIS SPLIT, and the one same-key
+        case in this class. The write overwrites `total` in place: it drops
+        NO disk key, so the field list is intact and the VALUES really are
+        the defect. It must therefore keep the values sentence while both
+        partial arms above take the replace sentence.
+
+        Without this arm the two diagnoses would be restatements — every
+        fixture carrying an incoming variety would take the same branch and
+        nothing would establish that the gate tells them apart."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={"variety": {"total": 12}})
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety": {"total": "x"}}),
+        )
+        assert adv is not None and "does NOT resolve" in adv
+        assert "REPLACES the stamp already on disk" not in adv, (
+            "a same-key overwrite was diagnosed as a partial replace — it "
+            f"drops nothing, so the values are the real defect: {adv!r}"
+        )
+
+
+# The three diagnoses, each keyed on a phrase unique to its sentence. Chosen
+# to be mutually exclusive as SUBSTRINGS so a row can assert one is present AND
+# the other two absent — deliberately NOT keying SECOND on "does NOT resolve",
+# which differs from a phrase inside the THIRD sentence only by letter case.
+FIRST_ADD_THE_BLOCK = "no metadata.variety stamp at all"
+SECOND_REREAD_VALUES = "so re-read the VALUES"
+THIRD_PARTIAL_REPLACE = "REPLACES the stamp already on disk"
+ALL_DIAGNOSES = (FIRST_ADD_THE_BLOCK, SECOND_REREAD_VALUES, THIRD_PARTIAL_REPLACE)
+
+
+class TestDispatchVarietyDiagnosisSplit:
+    """ONE TRIGGER, THREE MESSAGES, because the remedies are mutually wrong:
+    'write the block' versus 'the block you wrote does not resolve' versus
+    'what you sent is fine but it replaced a fuller stamp'. NOT a carve-out —
+    all three still fire.
+
+    MUTATION THAT REDDENS: make `_variety_stamp_attempted` return a constant.
+    Measured, both directions: forced True reddens the absent rows, forced
+    False reddens the unresolvable rows. Neither constant moves a VERDICT —
+    every failure is a message assertion — which is what establishes this
+    predicate as sentence-load-bearing rather than decision-load-bearing.
+    """
+
+    def _adv(self, tmp_path, monkeypatch, pact_context, disk, incoming=None):
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        kw = {"subject": "impl foo", "owner": "backend-coder"}
+        if disk is not None:
+            kw["metadata"] = disk
+        _seed_task(tmp_path, TEAM, "42", **kw)
+        frame = (_wiring_update("42") if incoming is None
+                 else _wiring_update_with_metadata("42", incoming))
+        return gate._evaluate_dispatch_variety(frame)
+
+    @pytest.mark.parametrize("disk,incoming", [
+        pytest.param({}, None, id="no_metadata_content"),
+        pytest.param(None, None, id="no_metadata_key"),
+        pytest.param({}, {"handoff": {}}, id="incoming_without_variety"),
+    ])
+    def test_nothing_written_says_ADD_the_block(
+        self, tmp_path, monkeypatch, pact_context, disk, incoming,
+    ):
+        adv = self._adv(tmp_path, monkeypatch, pact_context, disk, incoming)
+        assert adv is not None
+        assert "no metadata.variety stamp at all" in adv
+        assert "does NOT resolve" not in adv
+
+    @pytest.mark.parametrize("disk,incoming", [
+        pytest.param({"variety": {}}, None, id="empty_variety_dict"),
+        pytest.param({"variety": "12"}, None, id="variety_is_a_string"),
+        pytest.param({"variety": {"total": 99}}, None, id="total_out_of_range"),
+        pytest.param({"variety": {"total": True}}, None, id="total_is_a_bool"),
+        pytest.param({"variety": {"total": "12"}}, None, id="total_is_a_string"),
+        pytest.param({"variety_score": "x"}, None, id="sibling_is_junk"),
+        pytest.param({}, {"variety": {}}, id="incoming_empty_variety"),
+    ])
+    def test_something_written_says_RE_READ_the_values(
+        self, tmp_path, monkeypatch, pact_context, disk, incoming,
+    ):
+        adv = self._adv(tmp_path, monkeypatch, pact_context, disk, incoming)
+        assert adv is not None
+        assert "does NOT resolve" in adv
+        assert "no metadata.variety stamp at all" not in adv, (
+            "a consumer who DID stamp is being told to add the block — that "
+            "sends them hunting for a missing field instead of at the values"
+        )
+
+    @pytest.mark.parametrize("disk,incoming,expected", [
+        pytest.param(None, {"variety": None}, FIRST_ADD_THE_BLOCK,
+                     id="null_wire_no_metadata_key_at_all"),
+        pytest.param({}, {"variety": None}, FIRST_ADD_THE_BLOCK,
+                     id="null_wire_no_disk_stamp"),
+        pytest.param({}, None, FIRST_ADD_THE_BLOCK,
+                     id="plain_absent"),
+        pytest.param({"variety": _variety(12)}, {"variety": None},
+                     THIRD_PARTIAL_REPLACE, id="null_wire_over_a_stamp"),
+        pytest.param({"variety": _variety(12)}, {"variety": {}},
+                     THIRD_PARTIAL_REPLACE, id="empty_dict_wire_over_a_stamp"),
+        pytest.param({"variety": _variety(12)}, {"variety": "12"},
+                     SECOND_REREAD_VALUES, id="string_wire_over_a_stamp"),
+        pytest.param({}, {"variety": "12"}, SECOND_REREAD_VALUES,
+                     id="string_wire_no_disk_stamp"),
+        pytest.param({"variety": {"total": 99}}, None, SECOND_REREAD_VALUES,
+                     id="bad_total_on_disk_wire_silent"),
+        pytest.param({"variety": {}}, {"variety": None}, SECOND_REREAD_VALUES,
+                     id="null_wire_over_an_EMPTY_disk_variety"),
+        pytest.param({"variety_score": "x"}, {"variety": None},
+                     SECOND_REREAD_VALUES, id="null_wire_over_a_disk_sibling"),
+    ])
+    def test_every_row_selects_EXACTLY_ONE_diagnosis(
+        self, tmp_path, monkeypatch, pact_context, disk, incoming, expected,
+    ):
+        """THE WHOLE SELECTION TABLE, asserted POSITIVELY and EXHAUSTIVELY.
+
+        Each row names the one sentence it must carry, and the row also
+        asserts the OTHER TWO ARE ABSENT. That second half is the point of the
+        table, and it is here because of how the null-with-no-disk-stamp row
+        got shipped wrong:
+
+        AN `assert X not in adv` ON AN N-WAY SELECTOR IS SATISFIED BY EVERY
+        BRANCH EXCEPT ONE. The arm that held this exact fixture asserted only
+        that the answer was not the THIRD sentence. It was green while the
+        answer was the SECOND, which is also wrong. A negative assertion over
+        a set with more than two members is a partial claim wearing a total
+        one's clothes — so assert the branch you EXPECT, not the branch you
+        do not.
+
+        Rows are stated as data rather than prose so a future member is added
+        to a table rather than argued about in a docstring.
+        """
+        adv = self._adv(tmp_path, monkeypatch, pact_context, disk, incoming)
+        assert adv is not None, "every row in this table must still DENY"
+        assert expected in adv, (
+            f"row selected the wrong diagnosis; expected {expected!r}: {adv!r}"
+        )
+        for other in ALL_DIAGNOSES:
+            if other != expected:
+                assert other not in adv, (
+                    f"two diagnoses in one message — {other!r} leaked into a "
+                    f"row that must carry only {expected!r}: {adv!r}"
+                )
+
+    def test_BOTH_states_still_deny(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """The non-carve-out. If the unresolvable branch is ever softened into
+        a pass, this is what reddens."""
+        absent = self._adv(tmp_path, monkeypatch, pact_context, {})
+        unresolvable = self._adv(
+            tmp_path, monkeypatch, pact_context, {"variety": {"total": 99}})
+        assert absent is not None and unresolvable is not None
+        assert absent != unresolvable, "the two states must not share a message"

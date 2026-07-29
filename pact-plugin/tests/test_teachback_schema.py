@@ -669,3 +669,92 @@ class TestResolverNeverRaises:
         for v in ({"total": True}, {"score": False}):
             result = resolve_variety_total(v)
             assert result is None or not isinstance(result, bool)
+
+
+# =============================================================================
+# Candidate 3 REACHABILITY — a non-dict `variety` must not short-circuit the
+# chain, because candidate 3 does not read `variety` at all.
+# =============================================================================
+# Every pre-existing candidate-3 test above passes `{}` as the variety — the
+# EMPTY DICT, which always worked. None of them covers a variety that is
+# ABSENT or NON-DICT, which is the shape the defect actually occurred on, and
+# that gap is why the contract could be false while the suite stayed green.
+_NON_DICT_VARIETIES = [
+    pytest.param(None, id="absent"),
+    pytest.param("twelve", id="string"),
+    pytest.param(["novelty", 3], id="list"),
+    pytest.param(12, id="bare_int"),
+    pytest.param(True, id="bool"),
+    pytest.param(object(), id="object"),
+]
+
+
+class TestResolverNonDictVarietyDoesNotShortCircuitCandidate3:
+    """INAPPLICABLE IS NOT THE SAME AS UNREACHABLE, and the distinction is the
+    whole defect. Candidates 1, 2 and 4 all READ FROM `variety`, so with no
+    dict there is nothing for them to read — skipping them costs nothing and
+    they are merely inapplicable. Candidate 3 reads only
+    `metadata["variety_score"]` and has no dependency on `variety`, so an
+    early `return None` on a non-dict `variety` made a DOCUMENTED candidate
+    unreachable in exactly the case it exists to serve.
+
+    MUTATION THAT REDDENS: in `resolve_variety_total`, restore the original
+    guard — replace `variety = {}` with `return None`. Every test in this
+    class flips, and nothing else in this file does.
+    """
+
+    @pytest.mark.parametrize("variety", _NON_DICT_VARIETIES)
+    def test_sibling_resolves_when_variety_is_not_a_dict(self, variety):
+        assert resolve_variety_total(variety, {"variety_score": 12}) == 12
+
+    @pytest.mark.parametrize("variety", _NON_DICT_VARIETIES)
+    def test_no_sibling_still_returns_None(self, variety):
+        """THE BOUNDARY, and it is what keeps the fix from being a widening.
+        Removing the short-circuit must not invent a resolution — with no
+        valid sibling there is still no candidate, so the answer is still
+        None. Reds if someone 'fixes' this by returning a default."""
+        assert resolve_variety_total(variety, None) is None
+        assert resolve_variety_total(variety, {}) is None
+        assert resolve_variety_total(variety, {"handoff": {}}) is None
+
+    @pytest.mark.parametrize("bad", _REJECTED_VALUES + _OUT_OF_RANGE_SCORE_INTS)
+    def test_an_invalid_sibling_is_still_rejected_without_a_dict(self, bad):
+        """The candidate becomes REACHABLE, not LENIENT. Every type and range
+        rule that applied to the sibling before still applies."""
+        assert resolve_variety_total(None, {"variety_score": bad}) is None
+
+    def test_the_empty_dict_path_is_unchanged(self):
+        """Control: the shape that ALREADY worked must keep working. If this
+        reddens the change was a rewrite rather than a reachability fix."""
+        assert resolve_variety_total({}, {"variety_score": 12}) == 12
+
+    def test_candidates_1_2_and_4_stay_inapplicable_without_a_dict(self):
+        """The coercion must not make the variety-reading candidates consult
+        anything else. A non-dict carrying look-alike data resolves ONLY via
+        the sibling, never by reaching into the non-dict."""
+        assert resolve_variety_total("total=12", {"variety_score": 9}) == 9
+        assert resolve_variety_total([("total", 12)], None) is None
+        assert resolve_variety_total(("total", 12), None) is None
+
+    def test_precedence_is_untouched_by_the_coercion(self):
+        """1 > 2 > 3 > 4 still holds when `variety` IS a dict — the fix must
+        change reachability only, never order."""
+        assert resolve_variety_total(
+            {"total": 12, "score": 8}, {"variety_score": 6}) == 12
+        assert resolve_variety_total({"score": 8}, {"variety_score": 6}) == 8
+        assert resolve_variety_total(
+            {"novelty": 1, "scope": 1, "uncertainty": 1, "risk": 1},
+            {"variety_score": 6}) == 6
+
+    def test_still_pure_and_total_on_a_non_dict(self):
+        """The property the whole hook rests on survives the restructure."""
+        md = {"variety_score": 12}
+        before = dict(md)
+        assert resolve_variety_total(None, md) == 12
+        assert md == before, "the metadata mapping was mutated"
+
+        class Hostile:
+            def __getattr__(self, name):
+                raise RuntimeError("hostile attribute access")
+
+        assert resolve_variety_total(Hostile(), Hostile()) is None

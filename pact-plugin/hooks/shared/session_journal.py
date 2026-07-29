@@ -120,6 +120,33 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     # enforces only the top-level task_id+variety keys — the projection lives
     # at the emit site, not here.)
     "dispatch_variety": {"task_id": str, "variety": dict},
+    # hooks/task_lifecycle_gate.py emits dispatch_site at the owner-wiring
+    # TaskUpdate — one event per dispatched Task-B, O_EXCL-deduped on
+    # (team, task_id). It is Q5's POPULATION: the event's EXISTENCE is the
+    # dispatch site, and the OPTIONAL `variety` within it is that dispatch's
+    # stamp. Both come from one stream, so the distribution and the site count
+    # can never be sourced over different populations.
+    #
+    # `variety` is registered OPTIONAL below, NOT required here, and the
+    # distinction is load-bearing: requiring it would make an un-stamped
+    # dispatch schema-INVALID and silently reject the event, deleting the
+    # dispatch from the population rather than recording it — data destroyed
+    # to make a number look better. The required registration below is also what ACTIVATES the
+    # optional check (_validate_event_schema short-circuits on unknown types).
+    "dispatch_site": {"task_id": str},
+    # shared/session_journal.append_event_checked emits journal_emit_skipped
+    # when a journal write it wrapped did NOT land. `skipped_type` keeps the
+    # record type-discriminated rather than a bare counter, so a reader can
+    # say WHICH stream lost an event.
+    # ONE CONSUMER TODAY: Q5's sample-loss report, which reads a skipped_type
+    # of "dispatch_site". A second consumer — a liveness check keyed on
+    # "dispatch_decision" — was retired with the Q5 coverage ratio. The
+    # discriminator stays because it costs nothing and any other stream's
+    # reader would need it, but only the dispatch_site arm is read today.
+    # `cause` keeps RAISED distinct from RETURNED-FALSE: they have different
+    # origins (a writer defect vs a schema rejection or unwritable journal)
+    # and collapsing them rebuilds the ambiguity the capture removed.
+    "journal_emit_skipped": {"skipped_type": str, "cause": str},
     # hooks/task_lifecycle_gate.py emits teachback_ack on the lead's
     # TaskUpdate(A, status="completed") accepting a teachback whose Task-A
     # metadata carries teachback_submit.variety_acknowledgment (#955). task_id is
@@ -429,6 +456,24 @@ _OPTIONAL_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     "teachback_ack": {
         "concern": str,
     },
+    # hooks/task_lifecycle_gate.py writes dispatch_site with an optional
+    # `variety` — the 4-dimensions-plus-total projection of the dispatched
+    # Task-B's metadata.variety, present only when that dispatch carried a
+    # resolvable stamp. ABSENCE IS MEANINGFUL AND MUST STAY LEGAL: it is what
+    # an un-stamped dispatch looks like, i.e. the coverage gap itself. The
+    # required registration above ("dispatch_site": {...}) is what activates
+    # this optional check (same activation pattern as teachback_ack).
+    "dispatch_site": {
+        "variety": dict,
+    },
+    # journal_emit_skipped names the task when the skipped write had one.
+    # Optional because two of the recorded causes have no task_id to give:
+    # a missing task_id is itself a cause, and a non-task emit (e.g.
+    # dispatch_decision) never carries one. The required registration above
+    # is what activates this optional check.
+    "journal_emit_skipped": {
+        "task_id": str,
+    },
     # commands/prune-memory.md writes pin_prune_skipped with an optional
     # `reason`, present ONLY where the flow genuinely elicited one: a
     # curator-supplied cancel reason, or the machine reason on
@@ -464,13 +509,12 @@ _OPTIONAL_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
         "occupant": str,
     },
     # commands/peer-review.md writes remediation with an optional task_id —
-    # the fixer's Task-B task id. The Q5 coverage denominator
-    # (variety_divergence.count_task_b_dispatch_sites) uses it to dedup a
-    # comPACT/orchestrate-dispatched remediation that ALSO emits
-    # agent_dispatch for the same task_id, so the site is counted once.
-    # Optional because a remediation may omit it; an id-less remediation is
-    # counted as a distinct site (fail-safe — never undercounts the
-    # denominator). The required-fields registration above
+    # the fixer's Task-B task id. It is no longer a Q5 term: Q5's population is
+    # sourced from the `dispatch_site` stream
+    # (variety_divergence.extract_dispatch_coverage), so remediation is not
+    # counted or deduped against agent_dispatch for Q5 purposes at all.
+    # Optional because a remediation may omit it. The required-fields
+    # registration above
     # ("remediation": {...}) activates this optional check.
     "remediation": {
         "task_id": str,
@@ -740,6 +784,154 @@ def append_event(event: dict[str, Any]) -> bool:
 
 
 # --- Read API ---
+
+
+# Cap on rendered exception text reaching stderr / the skip record.
+_CHECKED_ERROR_TEXT_MAX = 200
+
+# Cause tokens for journal_emit_skipped. RAISED and RETURNED-FALSE are kept
+# DISTINCT: a schema rejection or unwritable journal (False) and a defect in
+# the writer (raise) have different origins and different remedies, and
+# collapsing them into one "failed" bucket rebuilds the ambiguity that
+# capturing the bool removed in the first place.
+SKIP_CAUSE_RETURNED_FALSE = "returned_false"
+SKIP_CAUSE_RAISED = "raised"
+
+
+def _checked_error_text(error: BaseException) -> str:
+    """Total renderer for an arbitrary exception: always returns a str.
+
+    NOT a duplicate of the identically-shaped helpers in task_lifecycle_gate
+    and bootstrap_gate, despite looking like one. Those two are defined ABOVE
+    their modules' wrapped-import blocks precisely so they still work when
+    every shared import has FAILED — that is their entire purpose, and it is
+    why they cannot live here: a module in shared/ is exactly what is
+    unavailable on that path. This copy serves the normal path inside shared/.
+    Consolidating the three would break the two crash-path renderers.
+
+    Total by construction: the type name is captured first and forced to an
+    EXACT str (a hostile metaclass __name__ can raise or return a non-str,
+    including a str subclass whose own __format__ raises), so neither branch
+    below can fail on it; the only exception-owned code left is the message
+    render, which is guarded.
+    """
+    try:
+        type_name = type(error).__name__
+    except BaseException:  # noqa: BLE001 — hostile metaclass must not escape
+        type_name = "exception"
+    if type(type_name) is not str:
+        type_name = "exception"
+    try:
+        text = f"{type_name}: {error}"
+    except BaseException:  # noqa: BLE001 — hostile __str__ must not escape
+        text = f"{type_name}: <exception str() raised>"
+    return _bounded_printable(text)
+
+
+def _bounded_printable(text: str) -> str:
+    """Bound to _CHECKED_ERROR_TEXT_MAX, then strip non-printables.
+
+    Bounding BEFORE the sanitize join keeps the work O(cap) rather than O(n),
+    so a pathological multi-MB value never materializes a sanitized copy.
+    """
+    truncated = len(text) > _CHECKED_ERROR_TEXT_MAX
+    if truncated:
+        text = text[:_CHECKED_ERROR_TEXT_MAX]
+    text = "".join(c if c.isprintable() else " " for c in text)
+    return text + "...[truncated]" if truncated else text
+
+
+def append_event_checked(event: dict, what: str, task_id: str = "") -> bool:
+    """``append_event`` with its silent-rejection path closed. Returns the
+    write outcome; never raises.
+
+    ``append_event`` returns **False** on schema rejection or an unwritable
+    journal WITHOUT raising, and discards the reason by design. A site calling
+    it bare inside ``except Exception: pass`` therefore loses a dropped write
+    with no signal of any kind — no log line, no exception, no return value
+    anyone reads. A consumer counting those events cannot distinguish "never
+    emitted" from "emitted and rejected", which is the difference between a
+    real gap and an instrument failure.
+
+    This closes that silence three ways: it captures the bool, converts a
+    raise into the same False (callers already treat both as "not written"),
+    and records a durable ``journal_emit_skipped`` event naming the skipped
+    type and the cause.
+
+    WHY A JOURNAL EVENT AND NOT A COUNTER: these hooks run as a SEPARATE OS
+    PROCESS PER TOOL CALL, so an in-process tally resets every invocation and
+    could never carry a session total to a consumer. Counting is therefore
+    consumer-side, over these events, at read time.
+
+    🔴 NO RECURSION. The skip record is written with a BARE ``append_event``
+    and its result is deliberately ignored — never through this function. A
+    failure-to-record-a-failure must TERMINATE, not retry into the substrate
+    that just failed, or the degraded case becomes the loudest thing in the
+    journal. This also bounds what the record can cover: a type-specific
+    rejection still writes (a different type passes validation), but an
+    unresolvable journal path or I/O failure writes nothing.
+
+    🔴 THAT TOTAL LOSS IS UNCAUGHT TODAY — do not read the bound above as
+    "covered elsewhere". It was written when a liveness check owned whole-
+    stream loss; that check was retired with the Q5 coverage ratio and nothing
+    replaced it. A journal that cannot be written at all now fails silently,
+    and Q5 renders a mean over whatever survived. The bound on THIS record is
+    unchanged and correct; what changed is that the residual it hands off has
+    no catcher.
+
+    CAVEAT ON THE STDERR LEG, because "observable" would over-claim: writing
+    it provably cannot break a hook's exit-0 contract, but whether PostToolUse
+    stderr reaches an operator was never established. The durable half is the
+    journal event; the stderr line is a diagnostic channel of unverified
+    reach.
+
+    Args:
+        event: the event to write, as built by ``make_event``.
+        what: the event type being attempted, recorded as ``skipped_type``.
+              A caller-supplied literal, never derived from input.
+        task_id: optional; recorded when the skipped write concerned a task.
+                 Bounded and stripped of non-printables — it is stdin-derived.
+    """
+    try:
+        written = append_event(event)
+        cause = SKIP_CAUSE_RETURNED_FALSE
+        detail = "append_event returned False"
+    except Exception as exc:
+        written = False
+        cause = SKIP_CAUSE_RAISED
+        detail = f"append_event raised {_checked_error_text(exc)}"
+    if written:
+        return True
+
+    safe_task_id = ""
+    try:
+        if task_id:
+            raw = task_id if type(task_id) is str else f"{task_id}"
+            safe_task_id = _bounded_printable(raw)
+    except BaseException:  # noqa: BLE001 — rendering must not break the record
+        safe_task_id = ""
+
+    # Durable half — the record both checks read. Bare append_event, result
+    # ignored: see the NO RECURSION note above.
+    try:
+        fields = {"skipped_type": what, "cause": cause}
+        if safe_task_id:
+            fields["task_id"] = safe_task_id
+        append_event(make_event("journal_emit_skipped", **fields))
+    except BaseException:  # noqa: BLE001 — a failed skip record terminates here
+        pass
+
+    # Diagnostic half — unverified reach; wrapped because a raising print on a
+    # PostToolUse path would flip an exit code that stdout JSON depends on.
+    try:
+        suffix = f" task_id={safe_task_id}" if safe_task_id else ""
+        print(
+            f"PACT journal emit dropped: {what} ({detail}){suffix}",
+            file=sys.stderr,
+        )
+    except BaseException:  # noqa: BLE001 — diagnostic must not flip the exit code
+        pass
+    return False
 
 
 def read_events(
