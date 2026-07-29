@@ -345,7 +345,9 @@ Specialists can invoke nested cycles autonomously (see [Autonomy Charter](../pro
 | Specialist discovers complexity | Uses Autonomy Charter (declares, executes, reports) |
 | Orchestrator identifies complex sub-task | Uses `/PACT:rePACT` command |
 
-Both follow the same protocol; the difference is who initiates.
+The two share the P→A→C→T *shape*, not this document's task mechanics. A specialist's nested cycle is a mini-cycle inside its own work, reported through its HANDOFF — the Autonomy Charter defines no `TaskCreate`, no `TaskUpdate`, and no dispatch wiring, so do NOT create or wire Task A / Task B pairs from a specialist. Creating a nested team and wiring dispatches is the orchestrator's path, via `/PACT:rePACT`.
+
+If a specialist's sub-task genuinely needs its own dispatched teammates, that is a cross-domain escalation to the orchestrator, not a nested cycle to run in place.
 
 ---
 

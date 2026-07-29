@@ -293,9 +293,29 @@ def _evaluate_dispatch_variety(input_data: dict) -> str | None:
     if tool_name != "TaskUpdate":
         return None  # matcher already scopes this, but be defensive
 
-    # DUAL-MODE: lead frame only (same structural is_lead discriminator the
-    # #956 branch uses). A teammate frame emits nothing.
-    if not pact_context.is_lead(input_data):
+    # FRAME GATE — is_canonical_journal_frame, NOT is_lead, matching the
+    # dispatch_site emit this gate is supposed to enforce over. The two were
+    # split: the emit RECORDED a site on any canonical frame while enforcement
+    # only reached the lead's, so an in-process teammate's wiring write was
+    # counted and never enforced. Enforcing over a narrower population than the
+    # one being recorded is the divergence, and the wider predicate is the one
+    # the design fixed on.
+    #
+    # WHAT THIS ADMITS, stated because "wider" is not self-explanatory:
+    # is_canonical_journal_frame returns True on is_lead, then FALLS THROUGH to
+    # a topology leg comparing session_id against the team's leadSessionId. An
+    # IN-PROCESS teammate shares the lead's session_id and is now admitted; a
+    # TMUX teammate carries a distinct session_id and is still not. So this
+    # widens to exactly one new class of frame, not to teammates generally.
+    #
+    # THE WIDENING CAN ONLY ADD DENIES, so it is the direction that needs a
+    # remedy to exist before it ships. It does: every dispatch-wiring site in
+    # the shipped templates is lead-frame and already stamped, and the
+    # specialist autonomy path is a conceptual mini-cycle with no task
+    # mechanics at all (pact-s1-autonomy.md defines no TaskCreate/TaskUpdate),
+    # so no shipped instruction directs a teammate to wire a dispatch. The one
+    # sentence that read as if it did is corrected in rePACT.md alongside this.
+    if not pact_context.is_canonical_journal_frame(input_data):
         return None
 
     tool_input = input_data.get("tool_input") or {}

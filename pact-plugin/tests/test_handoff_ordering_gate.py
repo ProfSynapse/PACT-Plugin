@@ -993,6 +993,69 @@ class TestIsPactSpecialistOwner:
 
 
 # =============================================================================
+# The FRAME GATE — enforcement now matches the emit's canonical-frame predicate.
+# =============================================================================
+class TestEnforcementReachesTheCanonicalFrame:
+    """The emit recorded a dispatch_site on ANY canonical journal frame while
+    enforcement only reached the lead's, so an in-process teammate's wiring
+    write was COUNTED and never ENFORCED.
+
+    WHY THE PRE-EXISTING TEAMMATE-FRAME ARM STILL PASSES, and it is not a
+    vacuity: ``is_canonical_journal_frame`` short-circuits to False when the
+    frame carries no ``session_id`` at all, BEFORE it pays the config read.
+    Frames built without one are therefore unaffected by this change and
+    correctly still emit nothing. The widening is reachable ONLY through the
+    topology leg, which needs BOTH a ``session_id`` on the frame AND a
+    ``leadSessionId`` in the team config — so a test that omits either cannot
+    observe it, and would report a live change as a no-op.
+
+    MUTATION THAT REDDENS: restore ``is_lead`` in ``_evaluate_dispatch_variety``.
+    The first test flips to None. The tmux twin below does NOT — it is False
+    under both predicates, which is what makes the pair a discriminator rather
+    than a pair of restatements.
+    """
+
+    @staticmethod
+    def _seed_lead_session(tmp_path, team, sid):
+        cfg = tmp_path / ".claude" / "teams" / team / "config.json"
+        data = json.loads(cfg.read_text())
+        data["leadSessionId"] = sid
+        cfg.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_IN_PROCESS_teammate_frame_is_now_ENFORCED(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """session_id == leadSessionId: one process, one session. The write
+        lands in the canonical journal, so it must also be enforced."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        self._seed_lead_session(tmp_path, TEAM, "S-LEAD")
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="", metadata={})
+        frame = _wiring_update("42", agent_type=TEAMMATE)
+        frame["session_id"] = "S-LEAD"
+        assert gate._evaluate_dispatch_variety(frame) is not None, (
+            "an in-process teammate's un-stamped wiring write was recorded as "
+            "a dispatch site and NOT enforced — the gap this fix closes"
+        )
+
+    def test_TMUX_teammate_frame_is_still_NOT_enforced(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """Distinct session_id: a separate process writing a separate journal.
+        Unchanged by this fix, and the bound on how far it widens."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        self._seed_lead_session(tmp_path, TEAM, "S-LEAD")
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="", metadata={})
+        frame = _wiring_update("42", agent_type=TEAMMATE)
+        frame["session_id"] = "S-OTHER"
+        assert gate._evaluate_dispatch_variety(frame) is None, (
+            "a tmux teammate frame was enforced — this fix must widen to the "
+            "in-process frame ONLY"
+        )
+
+
+# =============================================================================
 # The OWNER as of this write — the exemption over-block.
 # =============================================================================
 class TestExemptionReadsTheOwnerAsOfThisWrite:
