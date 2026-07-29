@@ -331,3 +331,133 @@ def test_deny_does_not_fire_at_taskcreate_no_misfire(isolated_session):
 
     assert code == 0, "TaskCreate must never deny (no-misfire invariant)"
     assert "permissionDecision" not in out.get("hookSpecificOutput", {})
+
+
+# =============================================================================
+# THE ATOMIC DISPOSITION — wire-and-stamp in ONE call, through main().
+# =============================================================================
+# The over-block this gate shipped with: a caller that wires the owner AND
+# stamps metadata.variety in the SAME TaskUpdate was REFUSED, because the
+# predicate read the stamp from disk only and at PreToolUse the stamp is still
+# in the write. The predicate-level fix is covered elsewhere; what lives ONLY
+# here is the end-to-end DISPOSITION — that main() turns that frame into
+# suppressOutput/exit-0 rather than deny/exit-2, through the real env knob and
+# the real disk seam.
+#
+# 🔴 WHY THE COMPANION ARMS ARE NOT OPTIONAL. This gate FAILS OPEN on every
+# error path, so a harness that never reaches the predicate emits exactly what
+# a PASS emits: {"suppressOutput": true}, exit 0. Asserting only the atomic arm
+# would therefore go green against a completely dead harness — a probe built
+# this way was run during development and returned "pass" for every input,
+# including one the platform had refused minutes earlier. The must-deny arm is
+# what distinguishes "the gate allowed this" from "the gate never ran".
+
+
+def _atomic_frame(variety, *, task_id=_TASK_ID):
+    """A wiring write that ALSO carries the stamp — owner + addBlockedBy +
+    metadata.variety in ONE tool_input."""
+    return json.dumps({
+        "tool_name": "TaskUpdate",
+        "session_id": _SID,
+        "agent_type": _LEAD,
+        "tool_input": {
+            "taskId": task_id,
+            "owner": _OWNER,
+            "addBlockedBy": ["A"],
+            "metadata": {"variety": variety},
+        },
+    })
+
+
+_D11 = {
+    "novelty": 3, "novelty_rationale": "x",
+    "scope": 3, "scope_rationale": "x",
+    "uncertainty": 3, "uncertainty_rationale": "x",
+    "risk": 3, "risk_rationale": "x",
+    "total": 12,
+}
+
+
+def test_atomic_wire_and_stamp_is_ALLOWED_in_deny_mode(isolated_session):
+    """THE ARM THE FIX EXISTS FOR. Task B is UNSTAMPED on disk (the fixture's
+    default) and the stamp arrives in the write. Pre-fix this was exit 2 +
+    permissionDecision:deny — a faithful single command refused, which is the
+    cardinal failure for a control that can deny."""
+    env, _home, _task = isolated_session
+    code, out, stderr = _run_hook(env, _atomic_frame(_D11), mode="deny")
+
+    assert code == 0, (
+        f"a wiring write CARRYING a complete variety stamp was refused in deny "
+        f"mode — this is the cardinal over-block. exit={code} out={out!r} "
+        f"stderr={stderr!r}"
+    )
+    assert "permissionDecision" not in json.dumps(out), (
+        f"the atomic stamp-and-wire must not carry a permission decision; "
+        f"got {out!r}"
+    )
+
+
+def test_the_SAME_fixture_still_denies_without_the_stamp(isolated_session):
+    """THE MUST-DENY CONTROL, and the reason the arm above is evidence at all.
+
+    Identical env, identical disk, identical mode — the ONLY difference is that
+    the frame carries no metadata. This MUST deny. A harness that fails to
+    reach the predicate (bad team resolution, unreadable context, wrong HOME)
+    fails OPEN to suppressOutput/exit-0, which is byte-identical to the pass
+    above. If this arm ever goes green, the atomic arm proves nothing and both
+    must be treated as unmeasured."""
+    env, _home, _task = isolated_session
+    code, out, stderr = _run_hook(env, _wiring_frame(), mode="deny")
+
+    assert code == 2, (
+        f"the must-deny control did NOT deny — the harness is not reaching the "
+        f"predicate, so the atomic arm's pass is not evidence of anything. "
+        f"exit={code} out={out!r} stderr={stderr!r}"
+    )
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_the_env_knob_SELECTS_rather_than_a_hardcoded_verdict(isolated_session):
+    """THE MODE-SELECT DISCRIMINATOR. The same unstamped frame under warn must
+    advise instead of denying. Without this, a gate hardcoded to deny would
+    satisfy the control above and look correct."""
+    env, _home, _task = isolated_session
+    code, out, _stderr = _run_hook(env, _wiring_frame(), mode="warn")
+
+    assert code == 0
+    hso = out.get("hookSpecificOutput", {})
+    assert hso.get("additionalContext"), f"warn must advise; got {out!r}"
+    assert "permissionDecision" not in hso
+
+
+def test_a_DISK_stamped_task_is_allowed_too_not_just_the_atomic_one(
+    isolated_session,
+):
+    """NOT-ALWAYS-DENY, via the other stamping route. Proves the allow in the
+    atomic arm comes from the stamp being RESOLVED rather than from anything
+    peculiar to carrying metadata in the frame."""
+    env, _home, task_path = isolated_session
+    task = json.loads(task_path.read_text(encoding="utf-8"))
+    task["metadata"] = {"variety": _D11}
+    task_path.write_text(json.dumps(task), encoding="utf-8")
+
+    code, out, _stderr = _run_hook(env, _wiring_frame(), mode="deny")
+    assert code == 0, f"a disk-stamped Task B must not be refused; got {out!r}"
+    assert "permissionDecision" not in json.dumps(out)
+
+
+def test_an_atomic_stamp_that_does_NOT_resolve_still_denies(isolated_session):
+    """The boundary: carrying `metadata.variety` is not itself a pass. A stamp
+    whose total cannot be resolved leaves the task genuinely un-stamped after
+    the write, so the refusal is truthful — and the message must send the
+    caller to the VALUES rather than telling them to add a block they can see
+    they already wrote."""
+    env, _home, _task = isolated_session
+    code, out, _stderr = _run_hook(env, _atomic_frame({"total": "twelve"}), mode="deny")
+
+    assert code == 2, f"an unresolvable atomic stamp must still deny; got {out!r}"
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "does NOT resolve" in reason, (
+        f"a caller who DID stamp must be told the stamp does not resolve, not "
+        f"told to add one: {reason!r}"
+    )
