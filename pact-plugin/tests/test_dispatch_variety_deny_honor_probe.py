@@ -258,21 +258,43 @@ def test_shadow_mode_suppresses_through_real_env(isolated_session):
 # BOTH-MODES — is_lead structural discriminator through the real frame.
 # In-process (lead frame) denies; a teammate frame on identical disk does not.
 # =============================================================================
-def test_deny_does_not_fire_on_teammate_frame(isolated_session):
-    """DUAL-MODE: deny mode + TEAMMATE agent_type (is_lead False) on the
-    identical unstamped disk → no deny (exit 0, suppressOutput). The gate is
-    lead-frame-only; a teammate observing the same wiring write must not block
-    it. Paired with the lead-frame deny above, this exercises BOTH topology
-    branches of the is_lead discriminator over the real frame."""
+def test_deny_FIRES_on_an_in_process_teammate_frame(isolated_session):
+    """DUAL-MODE: deny mode + TEAMMATE agent_type on the identical unstamped
+    disk. This fixture is IN-PROCESS — `session_id` equals the config's
+    `leadSessionId` — so the frame IS canonical and the gate MUST enforce it.
+
+    THIS ASSERTION WAS INVERTED DELIBERATELY. It previously expected exit 0 on
+    the reasoning that the gate is lead-frame-only. That stopped being true
+    when enforcement moved from `is_lead` to `is_canonical_journal_frame`, but
+    the test kept passing — because the frame gate then ran BEFORE
+    `pact_context.init()`, so the topology leg could not resolve and the
+    predicate silently degraded back to `is_lead`. The green was certifying an
+    ordering bug, not a decision.
+
+    IT IS THE ONLY TEST POSITIONED TO SEE THIS. It drives `main()` as a real
+    subprocess with an unseeded context, which is where the ordering lives.
+    Every in-process arm — including the in-process/tmux pair in
+    test_handoff_ordering_gate — is true either side of that ordering and
+    cannot distinguish the fixed code from the broken code."""
     env, _home, _task = isolated_session
     code, out, _stderr = _run_hook(
         env, _wiring_frame(agent_type=_TEAMMATE), mode="deny"
     )
 
-    assert code == 0, "a teammate frame must never deny (is_lead False)"
-    assert out == {"suppressOutput": True}, (
-        f"teammate frame in deny mode must suppress; got {out!r}"
+    assert code == 2, (
+        "an in-process teammate frame was NOT enforced. This fixture carries "
+        "BOTH halves of the topology leg (session_id == config leadSessionId), "
+        "so the frame IS canonical and the gate must evaluate it. The previous "
+        "expectation (exit 0) encoded the ORDERING BUG, not a decision: the "
+        "frame gate ran before pact_context.init(), so the leg could not "
+        "resolve and the predicate silently degraded to is_lead. Keeping this "
+        "green would re-suppress the behaviour the widening exists to enable."
     )
+    hso = out.get("hookSpecificOutput", {})
+    assert hso.get("permissionDecision") == "deny", (
+        f"expected a deny on the canonical teammate frame; got {out!r}"
+    )
+    assert "metadata.variety" in hso.get("permissionDecisionReason", "")
 
 
 # =============================================================================

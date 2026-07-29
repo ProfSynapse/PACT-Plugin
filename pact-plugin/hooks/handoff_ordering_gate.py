@@ -94,10 +94,13 @@ _SUPPRESS_OUTPUT = json.dumps({"suppressOutput": True})
 # Resolution is delegated to the shared PACT_* resolver
 # (shared.pact_config.get_enum): it applies the same .strip().lower()
 # normalization BEFORE the membership check ("DENY" / " deny " / "Deny" → deny)
-# and owns the allowed set in its registry (SSOT). NOTE the consequence of an
-# enforcing default: an unset var AND a misspelled value both resolve to
-# "deny", so a consumer who means to opt down must spell "warn"/"shadow"
-# correctly — the resolver's stderr warning is the tell.
+# and owns the allowed set in its registry (SSOT). NOTE that UNSET and
+# MISSPELLED do NOT land in the same place: an unset var takes the enforcing
+# default "deny", while an unrecognized value resolves to the row's declared
+# invalid_fallback of "warn". Absence is consent to the shipped posture; a
+# value the resolver cannot parse is not a request to enforce, and the only
+# consumers reaching that branch are ones trying to opt DOWN. The resolver's
+# stderr line names the value it actually resolved to.
 #
 # The fail-open guard below is DELIBERATELY "warn" and must NOT follow the
 # registry default: it fires when the resolver itself is unavailable, and a
@@ -129,7 +132,7 @@ try:
     from shared.dispatch_helpers import (
         is_pact_specialist_owner,
         is_owner_wiring_shape,
-        merged_variety_stamp,
+        variety_stamp_as_of_write,
     )
     from shared.intentional_wait import is_self_complete_exempt
     from shared.task_utils import is_teachback_subject, read_task_json
@@ -293,30 +296,6 @@ def _evaluate_dispatch_variety(input_data: dict) -> str | None:
     if tool_name != "TaskUpdate":
         return None  # matcher already scopes this, but be defensive
 
-    # FRAME GATE — is_canonical_journal_frame, NOT is_lead, matching the
-    # dispatch_site emit this gate is supposed to enforce over. The two were
-    # split: the emit RECORDED a site on any canonical frame while enforcement
-    # only reached the lead's, so an in-process teammate's wiring write was
-    # counted and never enforced. Enforcing over a narrower population than the
-    # one being recorded is the divergence, and the wider predicate is the one
-    # the design fixed on.
-    #
-    # WHAT THIS ADMITS, stated because "wider" is not self-explanatory:
-    # is_canonical_journal_frame returns True on is_lead, then FALLS THROUGH to
-    # a topology leg comparing session_id against the team's leadSessionId. An
-    # IN-PROCESS teammate shares the lead's session_id and is now admitted; a
-    # TMUX teammate carries a distinct session_id and is still not. So this
-    # widens to exactly one new class of frame, not to teammates generally.
-    #
-    # THE WIDENING CAN ONLY ADD DENIES, so it is the direction that needs a
-    # remedy to exist before it ships. It does: every dispatch-wiring site in
-    # the shipped templates is lead-frame and already stamped, and the
-    # specialist autonomy path is a conceptual mini-cycle with no task
-    # mechanics at all (pact-s1-autonomy.md defines no TaskCreate/TaskUpdate),
-    # so no shipped instruction directs a teammate to wire a dispatch. The one
-    # sentence that read as if it did is corrected in rePACT.md alongside this.
-    if not pact_context.is_canonical_journal_frame(input_data):
-        return None
 
     tool_input = input_data.get("tool_input") or {}
     if not isinstance(tool_input, dict):
@@ -354,6 +333,41 @@ def _evaluate_dispatch_variety(input_data: dict) -> str | None:
         team_name = ""
     if not team_name:
         return None  # no team context → cannot resolve owner/Task B → bypass
+
+    # ORDER IS LOAD-BEARING: this sits AFTER pact_context.init(), not before.
+    # is_canonical_journal_frame's topology leg resolves the team through
+    # get_team_name(), which reads the context init() populates. In a fresh
+    # hook subprocess that context is unset until init runs, so the leg
+    # resolves to "" and returns False for EVERY non-lead frame — the
+    # predicate would silently degrade to is_lead and this widening would be
+    # a no-op in production while passing any test whose fixture pre-seeds a
+    # context. Placing it here also keeps the cheap in-memory guards above it,
+    # so the cost order is unchanged: nothing new is read for a frame that was
+    # going to be rejected on shape anyway.
+    # FRAME GATE — is_canonical_journal_frame, NOT is_lead, matching the
+    # dispatch_site emit this gate is supposed to enforce over. The two were
+    # split: the emit RECORDED a site on any canonical frame while enforcement
+    # only reached the lead's, so an in-process teammate's wiring write was
+    # counted and never enforced. Enforcing over a narrower population than the
+    # one being recorded is the divergence, and the wider predicate is the one
+    # the design fixed on.
+    #
+    # WHAT THIS ADMITS, stated because "wider" is not self-explanatory:
+    # is_canonical_journal_frame returns True on is_lead, then FALLS THROUGH to
+    # a topology leg comparing session_id against the team's leadSessionId. An
+    # IN-PROCESS teammate shares the lead's session_id and is now admitted; a
+    # TMUX teammate carries a distinct session_id and is still not. So this
+    # widens to exactly one new class of frame, not to teammates generally.
+    #
+    # THE WIDENING CAN ONLY ADD DENIES, so it is the direction that needs a
+    # remedy to exist before it ships. It does: every dispatch-wiring site in
+    # the shipped templates is lead-frame and already stamped, and the
+    # specialist autonomy path is a conceptual mini-cycle with no task
+    # mechanics at all (pact-s1-autonomy.md defines no TaskCreate/TaskUpdate),
+    # so no shipped instruction directs a teammate to wire a dispatch. The one
+    # sentence that read as if it did is corrected in rePACT.md alongside this.
+    if not pact_context.is_canonical_journal_frame(input_data):
+        return None
 
     # CORRECTED PREDICATE (#865 cycle-1): identify a pact-specialist teammate by
     # resolving the BARE owner → team-member → agentType (the same resolution
@@ -417,11 +431,11 @@ def _evaluate_dispatch_variety(input_data: dict) -> str | None:
     # PreToolUse the stamp is in the write and not yet on disk. Blocking a
     # faithful single command is the cardinal failure for a control that can
     # deny, so this overlay is what makes deny mode shippable at all. The merge
-    # is SHARED with the dispatch_site emit (see merged_variety_stamp) so the
+    # is SHARED with the dispatch_site emit (see variety_stamp_as_of_write) so the
     # stamp this gate enforces and the stamp that emit records cannot drift.
     disk_metadata = task.get("metadata")
     incoming_metadata = tool_input.get("metadata")
-    variety = merged_variety_stamp(tool_input, task)
+    variety = variety_stamp_as_of_write(tool_input, task)
     # The `metadata` argument feeds ONLY resolve_variety_total's non-canonical
     # `metadata["variety_score"]` sibling candidate, which needs the same
     # overlay for the same reason — otherwise the atomic wire+stamp stays
@@ -467,7 +481,9 @@ def _evaluate_dispatch_variety(input_data: dict) -> str | None:
         f"wired into a teachback-gated dispatch (owner {owner!r}) and "
         f"{diagnosis}. Per-dispatch variety stamping is required so the hook "
         "can resolve the reasoning_reconstruction band and the "
-        "concurrent-auditor trigger."
+        "concurrent-auditor trigger. To opt this enforcement down, set "
+        "PACT_DISPATCH_VARIETY_MODE=warn (advisory) or =shadow (journal "
+        "only); it defaults to deny."
     )
 
 

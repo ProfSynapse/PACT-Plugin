@@ -293,7 +293,7 @@ try:
     from shared.dispatch_helpers import (
         is_owner_wiring_shape,
         is_pact_specialist_owner,
-        merged_variety_stamp,
+        variety_stamp_as_of_write,
         trustworthy_actor_name,
     )
     from shared.intentional_wait import is_self_complete_exempt, is_teachback_exempt
@@ -748,7 +748,7 @@ def _dispatch_site_variety(tool_input: dict, task: dict) -> dict:
     an ABSENT ``variety`` key — the coverage gap itself, and a legal event.
 
     SOURCE IS DISK OVERLAID WITH THE INCOMING WRITE — see
-    ``merged_variety_stamp``, which owns that overlay and its direction. The
+    ``variety_stamp_as_of_write``, which owns that overlay and its direction. The
     merge is SHARED with the enforcement gate in handoff_ordering_gate rather
     than copied, because the two answer the same question ("what is this
     dispatch's stamp as of this write?") and a divergence between them would
@@ -761,7 +761,7 @@ def _dispatch_site_variety(tool_input: dict, task: dict) -> dict:
     READ-ONLY on every input: builds new dicts only, never mutates ``task``,
     ``tool_input`` or either metadata mapping.
     """
-    merged = merged_variety_stamp(tool_input, task)
+    merged = variety_stamp_as_of_write(tool_input, task)
     return {k: merged[k] for k in DISPATCH_VARIETY_KEYS if k in merged}
 
 

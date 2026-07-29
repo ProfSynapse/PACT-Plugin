@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
 from shared.dispatch_helpers import (  # noqa: E402
     is_owner_wiring_shape,
-    merged_variety_stamp,
+    variety_stamp_as_of_write,
 )
 
 
@@ -147,7 +147,7 @@ class TestScopeBoundary:
 
 
 # =============================================================================
-# merged_variety_stamp — the disk/incoming overlay both the enforcement gate
+# variety_stamp_as_of_write — the disk/incoming overlay both the enforcement gate
 # and the dispatch_site emit resolve through.
 # =============================================================================
 D11 = {
@@ -166,42 +166,48 @@ def _task(variety=None, **metadata_extra):
     return {"id": "42", "metadata": md} if md else {"id": "42"}
 
 
-class TestMergedVarietyStampLevel:
-    """THE LEVEL IS THE PROPERTY, not an implementation detail. Merging the
-    METADATA dicts instead of the VARIETY keys lets a write that names
-    `variety` at all replace the on-disk stamp wholesale — which resolves to
-    no total and manufactures the false 'un-stamped' reading the overlay
-    exists to remove. These pins fail under that reading and pass under this
-    one, which is the only difference between the two implementations.
+class TestVarietyStampAsOfWriteModelsTheWrite:
+    """THE PLATFORM'S WRITE IS THE PROPERTY. `TaskUpdate` merges metadata at
+    the TOP-LEVEL KEY, so naming `variety` REPLACES the nested dict and drops
+    every disk key the write does not name. A union of the two sources
+    describes a state that exists nowhere — not on disk, not in the write, not
+    after it — so resolving a total from it blesses writes that land
+    un-stamped. These pins are the discriminator: they pass under replace and
+    fail under the union.
     """
 
-    def test_partial_incoming_does_NOT_wipe_a_complete_disk_stamp(self):
-        """The discriminator. Under a metadata-level merge the result is
-        `{"novelty": 4}` and every other key is gone; under the key-level
-        merge the disk keys survive and only `novelty` is overwritten."""
-        merged = merged_variety_stamp(
+    def test_partial_incoming_REPLACES_the_disk_stamp(self):
+        """The discriminator. A one-key re-stamp is exactly what the platform
+        writes, so the post-write stamp IS `{"novelty": 4}` — the disk keys are
+        gone. Under the union this returned a complete-looking stamp that the
+        task would never hold."""
+        stamp = variety_stamp_as_of_write(
             {"metadata": {"variety": {"novelty": 4}}}, _task(D11),
         )
-        assert merged["novelty"] == 4, "the incoming write must win on its key"
-        assert merged["total"] == 12, (
-            "a one-key re-stamp wiped the disk total — this is the "
-            "metadata-level merge, and it turns a stamped dispatch into an "
-            "un-stamped one"
+        assert stamp == {"novelty": 4}, (
+            "the post-write stamp must be what the write leaves on the task; "
+            "surviving disk keys mean this is still the union"
         )
-        assert merged["scope"] == 3 and merged["risk"] == 3
+
+    def test_a_variety_DELETE_yields_the_unstamped_answer(self):
+        """`metadata={"variety": None}` is the platform's delete-the-key form.
+        It NAMES variety, so the post-write value is absent."""
+        assert variety_stamp_as_of_write(
+            {"metadata": {"variety": None}}, _task(D11),
+        ) == {}
 
     def test_incoming_wins_on_a_key_it_names(self):
-        merged = merged_variety_stamp(
+        merged = variety_stamp_as_of_write(
             {"metadata": {"variety": {"total": 8}}}, _task(D11),
         )
         assert merged["total"] == 8
 
     def test_disk_alone_when_the_write_carries_no_variety(self):
-        assert merged_variety_stamp({"metadata": {"handoff": {}}}, _task(D11)) == D11
+        assert variety_stamp_as_of_write({"metadata": {"handoff": {}}}, _task(D11)) == D11
 
     def test_incoming_alone_when_disk_is_empty(self):
         """The atomic wire+stamp: the stamp exists only in the write."""
-        assert merged_variety_stamp({"metadata": {"variety": D11}}, _task()) == D11
+        assert variety_stamp_as_of_write({"metadata": {"variety": D11}}, _task()) == D11
 
 
 class TestMergedVarietyStampIsUnfiltered:
@@ -210,42 +216,42 @@ class TestMergedVarietyStampIsUnfiltered:
         candidate and is NOT in DISPATCH_VARIETY_KEYS, so projecting here
         would deny a stamp that resolves today. Reds if someone 'tidies' this
         by reusing the emit's projection."""
-        merged = merged_variety_stamp({}, _task({"score": 12}))
+        merged = variety_stamp_as_of_write({}, _task({"score": 12}))
         assert merged == {"score": 12}
 
     def test_keeps_the_rationale_strings(self):
         """The emit drops these; the merge must not, or the two consumers
         stop being able to differ."""
-        merged = merged_variety_stamp({}, _task(D11))
+        merged = variety_stamp_as_of_write({}, _task(D11))
         assert merged["novelty_rationale"] == "x"
 
 
 class TestMergedVarietyStampIsTotalAndReadOnly:
     @pytest.mark.parametrize("tool_input", [None, "", 0, [], "notadict"])
     def test_non_dict_tool_input_contributes_nothing(self, tool_input):
-        assert merged_variety_stamp(tool_input, _task(D11)) == D11
+        assert variety_stamp_as_of_write(tool_input, _task(D11)) == D11
 
     @pytest.mark.parametrize("task", [None, "", 0, [], "notadict"])
     def test_non_dict_task_contributes_nothing(self, task):
-        assert merged_variety_stamp({"metadata": {"variety": D11}}, task) == D11
+        assert variety_stamp_as_of_write({"metadata": {"variety": D11}}, task) == D11
 
     @pytest.mark.parametrize("md", [None, "x", 7, [], {"variety": "notadict"},
                                     {"variety": None}, {}])
     def test_hostile_metadata_never_raises(self, md):
-        assert isinstance(merged_variety_stamp({"metadata": md}, {"metadata": md}), dict)
+        assert isinstance(variety_stamp_as_of_write({"metadata": md}, {"metadata": md}), dict)
 
     def test_both_empty_is_an_empty_DICT_not_None(self):
         """Load-bearing at the gate: resolve_variety_total early-returns None
         on a non-dict `variety`, which makes its metadata.variety_score
         candidate unreachable. Returning {} rather than None is what keeps
         that candidate live."""
-        assert merged_variety_stamp({}, {}) == {}
+        assert variety_stamp_as_of_write({}, {}) == {}
 
     def test_does_not_mutate_either_input(self):
         task = _task(dict(D11))
         tool_input = {"metadata": {"variety": {"novelty": 4}}}
         before_task = json.loads(json.dumps(task))
         before_input = json.loads(json.dumps(tool_input))
-        merged_variety_stamp(tool_input, task)
+        variety_stamp_as_of_write(tool_input, task)
         assert task == before_task, "the disk task dict was mutated"
         assert tool_input == before_input, "the incoming tool_input was mutated"

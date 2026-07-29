@@ -1026,7 +1026,17 @@ class TestEnforcementReachesTheCanonicalFrame:
         self, tmp_path, monkeypatch, pact_context,
     ):
         """session_id == leadSessionId: one process, one session. The write
-        lands in the canonical journal, so it must also be enforced."""
+        lands in the canonical journal, so it must also be enforced.
+
+        SCOPE, STATED BECAUSE THIS ARM CANNOT CERTIFY THE WHOLE FIX: it calls
+        `_evaluate_dispatch_variety` directly, with `_ctx` having pre-seeded
+        `_context_path`. `init()` early-returns when that is set, so this arm
+        is TRUE EITHER SIDE of the frame-gate/`init` ORDERING — it distinguishes
+        the PREDICATE (in-process vs tmux) and nothing else. The ordering is
+        certified by `test_dispatch_variety_deny_honor_probe`, which drives
+        `main()` as a real subprocess with an unseeded context. Do not read a
+        green here as covering that.
+        """
         _ctx(pact_context, monkeypatch, tmp_path)
         _seed_team_config(tmp_path, monkeypatch, TEAM)
         self._seed_lead_session(tmp_path, TEAM, "S-LEAD")
@@ -1198,9 +1208,11 @@ class TestDispatchVarietyReadsTheIncomingWrite:
     failure that must never ship.
 
     MUTATION THAT REDDENS: in `_evaluate_dispatch_variety`, replace
-    `merged_variety_stamp(tool_input, task)` with the disk-only read
+    `variety_stamp_as_of_write(tool_input, task)` with the disk-only read
     (`task.get("metadata", {}).get("variety")`). Every test in this class
-    flips to an advisory. That is the base behaviour, measured.
+    flips to an advisory. That is the base behaviour, measured — and the claim
+    holds for THIS class only because the one case that denies under the
+    post-write model was moved out of it, to sit beside its same-key sibling.
     """
 
     def test_atomic_wire_and_stamp_is_SILENT(
@@ -1233,29 +1245,21 @@ class TestDispatchVarietyReadsTheIncomingWrite:
         self, tmp_path, monkeypatch, pact_context,
     ):
         """The non-canonical spelling resolve_variety_total documents as
-        candidate 3. Reaching it needs the overlay to hand the resolver a DICT
-        rather than None — the resolver early-returns on a non-dict `variety`
-        and never consults the sibling."""
+        candidate 3. Reaching it needs `variety_stamp_as_of_write` to hand the
+        resolver a DICT rather than None: candidates 1, 2 and 4 all read from
+        `variety` and fall through on `{}`, which is what lets candidate 3 —
+        the only one that reads `metadata` instead — be consulted at all.
+
+        THAT IS WHY THE HELPER RETURNS `{}` AND NEVER None, and it is the
+        mechanism that made this path reachable. The resolver's own non-dict
+        coercion cannot do it here, because this call site never hands it a
+        non-dict; the helper's return type is doing the work."""
         _ctx(pact_context, monkeypatch, tmp_path)
         _seed_team_config(tmp_path, monkeypatch, TEAM)
         _seed_task(tmp_path, TEAM, "42", subject="impl foo",
                    owner="backend-coder", metadata={})
         assert gate._evaluate_dispatch_variety(
             _wiring_update_with_metadata("42", {"variety_score": 12}),
-        ) is None
-
-    def test_a_ONE_KEY_restamp_does_not_flip_a_stamped_task_to_unstamped(
-        self, tmp_path, monkeypatch, pact_context,
-    ):
-        """The LEVEL pin at the gate. Under a metadata-level merge the
-        incoming `{"novelty": 4}` replaces the whole disk variety, nothing
-        resolves, and a correctly-stamped dispatch is refused."""
-        _ctx(pact_context, monkeypatch, tmp_path)
-        _seed_team_config(tmp_path, monkeypatch, TEAM)
-        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
-                   owner="backend-coder", metadata={"variety": _variety(12)})
-        assert gate._evaluate_dispatch_variety(
-            _wiring_update_with_metadata("42", {"variety": {"novelty": 4}}),
         ) is None
 
     def test_STILL_DENIES_when_neither_side_carries_a_stamp(
@@ -1270,6 +1274,33 @@ class TestDispatchVarietyReadsTheIncomingWrite:
         assert gate._evaluate_dispatch_variety(
             _wiring_update_with_metadata("42", {"handoff": {"produced": ["f"]}}),
         ) is not None
+
+    def test_a_ONE_KEY_restamp_that_lands_UNSTAMPED_denies(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """SIBLING OF THE PIN BELOW, and the reason they now agree. That one
+        re-stamps the SAME key; this one re-stamps a STRICT SUBSET. Both leave
+        the task holding only what the write named, because `TaskUpdate`
+        replaces `metadata.variety` wholesale — so both are truthful refusals.
+
+        The two used to disagree: this case was ALLOWED on the reasoning that
+        refusing "a correctly-stamped dispatch" would be a cardinal over-block.
+        That reasoning read the UNION of disk and wire, which is a state the
+        task never holds. Post-write it carries `{"novelty": 4}` and resolves
+        to nothing, so allowing it let an un-stamped dispatch through with the
+        gate's permission — the enforcement gap this closes. Union and replace
+        agree everywhere except this strict-subset overlap, which is why the
+        pin below stayed green while this one was wrong."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={"variety": _variety(12)})
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety": {"novelty": 4}}),
+        )
+        assert adv is not None and "does NOT resolve" in adv, (
+            "a write that leaves the task un-stamped was allowed: {!r}".format(adv)
+        )
 
     def test_an_incoming_write_that_JUNKS_the_only_resolving_key_denies(
         self, tmp_path, monkeypatch, pact_context,

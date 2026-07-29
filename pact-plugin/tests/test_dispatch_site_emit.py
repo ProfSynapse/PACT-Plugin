@@ -156,25 +156,25 @@ class TestEmitsAtTheWiringWrite:
         tlg.evaluate_lifecycle(wiring(metadata={"variety": {"total": 16}}))
         assert sites(events)[0]["variety"]["total"] == 16
 
-    def test_partial_restamp_does_NOT_wipe_the_complete_disk_variety(
+    def test_partial_restamp_records_the_POST_WRITE_stamp(
         self, env, events
     ):
-        """The merge happens at the VARIETY-KEY level, not the metadata level,
-        and the distinction is the whole safety of the overlay.
+        """THE SAMPLE MUST BE A STAMP THE TASK ACTUALLY ENDS UP WITH.
 
-        A metadata-level `{**disk_md, **incoming_md}` would let a partial
-        same-write re-stamp REPLACE the complete stamp wholesale: the four
-        dimensions vanish, only the re-stamped key survives, and a
-        correctly-stamped dispatch is recorded as a malformed one. That is the
-        very false-negative the overlay was introduced to prevent, arriving by
-        a different route. Here a one-key incoming stamp must overlay that key
-        and leave the other four intact."""
+        `TaskUpdate` replaces `metadata.variety` wholesale, so a one-key
+        re-stamp leaves the task holding ONLY that key. Recording the union
+        instead would emit a complete-looking sample — old dimensions beside
+        the new one, and a total inconsistent with them — for a dispatch that
+        post-write resolves to nothing. The calibration delta is the metric
+        this arc preserved; feeding it a value that never existed on disk is
+        the failure mode that matters here, not a cosmetic divergence."""
         seed(env, metadata={"variety": STAMP})
         tlg.evaluate_lifecycle(wiring(metadata={"variety": {"risk": 1}}))
         v = sites(events)[0]["variety"]
-        assert v["risk"] == 1, "the incoming key must win"
-        assert set(v) == CANONICAL, "the other four dimensions must survive"
-        assert v["novelty"] == 3 and v["total"] == 11
+        assert v == {"risk": 1}, (
+            "the emit recorded a stamp the task does not hold post-write — "
+            f"surviving disk keys mean this is still the union: {v!r}"
+        )
 
 
 class TestEvaluationOrderNegations:

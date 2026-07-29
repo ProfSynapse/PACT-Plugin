@@ -13,11 +13,11 @@ Exposes:
     see its docstring for the other two legs, why they are deliberately
     NOT folded into one composite, and — important — what this predicate
     does NOT establish)
-  - merged_variety_stamp(tool_input, task) — the dispatched Task-B's
-    variety stamp as of this write: disk overlaid with the incoming
-    tool_input, merged at the variety-KEY level. Shared so the stamp the
-    enforcement gate reads and the stamp the dispatch_site emit records
-    can never drift apart.
+  - variety_stamp_as_of_write(tool_input, task) — the variety stamp the
+    dispatched Task-B WILL carry once this write lands. Models the
+    platform's top-level-key REPLACE, not a union of the two sources.
+    Shared so the stamp the enforcement gate reads and the stamp the
+    dispatch_site emit records can never drift apart.
   - has_task_assigned(team_name, name) — task-assigned check (one of
     the dispatch_gate rules; rejects spawn before TaskCreate)
   - trustworthy_actor_name(input_data) — actor resolution for the
@@ -270,50 +270,66 @@ def is_owner_wiring_shape(tool_input: dict) -> bool:
     return isinstance(add_blocked_by, list) and bool(add_blocked_by)
 
 
-def merged_variety_stamp(tool_input: object, task: object) -> dict:
-    """The dispatched Task-B's variety stamp AS OF THIS WRITE — the on-disk
-    stamp overlaid with the stamp carried in the incoming ``tool_input``.
+def variety_stamp_as_of_write(tool_input: object, task: object) -> dict:
+    """The variety stamp the dispatched Task-B WILL CARRY once this write lands.
 
-    The stamp is normally written at ``TaskCreate(B)`` and is already on disk
-    when the owner-wiring ``TaskUpdate`` lands. But a caller may wire and stamp
-    in ONE call — ``TaskUpdate(B, owner=..., addBlockedBy=[A],
-    metadata={"variety": {...}})`` — and at PreToolUse that stamp exists only
-    in the write. A disk-only read of that case is wrong in both directions:
-    the dispatch_site emit records an un-stamped site for a dispatch that WAS
-    stamped (coverage biased down), and the enforcement gate REFUSES a faithful
-    single command (the cardinal failure for a control that can deny).
+    A PreToolUse consumer is making a PREDICTION, so this models the PLATFORM'S
+    WRITE, not a convenient view of the two sources. ``TaskUpdate`` merges
+    metadata at the TOP-LEVEL KEY: naming ``variety`` REPLACES the whole nested
+    dict, and every disk key the write does not name is DROPPED. So the
+    post-write stamp is the incoming one when the write names ``variety`` at
+    all, and the disk one otherwise. There is no merge, because the platform
+    does not perform one.
 
-    MERGED AT THE VARIETY-KEY LEVEL, NOT THE METADATA LEVEL, and the level is
-    the point rather than an implementation detail. ``{**disk_metadata,
-    **incoming_metadata}`` would let a write that names ``variety`` at all
-    replace the on-disk variety wholesale, so a caller re-stamping ONE
-    dimension would read as un-stamped — manufacturing the exact false negative
-    this overlay exists to remove. Merging the variety dicts' KEYS keeps every
-    disk key the incoming write does not name.
+    WHY THIS IS NOT A UNION, since the union is the intuitive shape and was the
+    shipped one: ``{**disk_variety, **incoming_variety}`` describes a state that
+    exists NOWHERE — not on disk, not in the write, and not after it. Resolving
+    a total from it lets a caller re-stamping ONE dimension pass a gate while
+    the write leaves the task holding only that dimension, i.e. UN-STAMPED. The
+    union does not merely mis-measure; it blesses the exact write it exists to
+    catch. It is wrong for BOTH consumers below, for this one reason, which is
+    why the correction belongs here rather than at either call site.
 
-    DIRECTION: disk first, incoming last, so the write in flight wins on any
-    key it names.
+    A WRITE THAT DELETES IS STILL A WRITE: ``metadata={"variety": None}`` is the
+    platform's delete-the-key form. It NAMES ``variety``, so the post-write
+    value is "absent" and this returns ``{}`` — the un-stamped answer, which is
+    the truthful one.
 
-    UNFILTERED BY DESIGN — returns every key found in either source, NOT the
-    canonical ``DISPATCH_VARIETY_KEYS`` projection. A caller wanting the journal
+    SHARED BY THE GATE AND THE EMIT ON PURPOSE. ``handoff_ordering_gate``
+    ENFORCES against this value and ``task_lifecycle_gate``'s ``dispatch_site``
+    emit RECORDS it. They must answer "what will this dispatch's stamp be?"
+    identically or the calibration record carries samples for dispatches the
+    gate refused — and a sample whose value never existed on disk.
+
+    ALWAYS RETURNS A DICT, never None, and that is load-bearing rather than
+    defensive: ``resolve_variety_total`` reaches its ``metadata["variety_score"]``
+    candidate only when handed a dict, so returning None here would silently
+    un-reach the non-canonical sibling spelling for every caller.
+
+    UNFILTERED BY DESIGN — every key of the post-write stamp, NOT the canonical
+    ``DISPATCH_VARIETY_KEYS`` projection. A caller wanting the journal
     projection applies it itself; a caller resolving a TOTAL must not, because
     ``resolve_variety_total`` accepts non-canonical candidates (``score``) that
-    the projection discards, and filtering here would reject a stamp that
-    resolves today.
+    the projection discards.
 
     Pure: no FS, no I/O, never raises, and READ-ONLY on every input — builds one
     new dict and never mutates ``task``, ``tool_input`` or either metadata
-    mapping. Either argument may be any type; a non-dict contributes nothing.
+    mapping. Either argument may be any type; a non-dict yields ``{}``.
     """
-    merged: dict = {}
-    for container in (task, tool_input):
+    def _variety_of(container: object) -> object:
         if not isinstance(container, dict):
-            continue
+            return None
         metadata = container.get("metadata")
-        variety = metadata.get("variety") if isinstance(metadata, dict) else None
-        if isinstance(variety, dict):
-            merged.update(variety)
-    return merged
+        return metadata.get("variety") if isinstance(metadata, dict) else None
+
+    incoming_metadata = (
+        tool_input.get("metadata") if isinstance(tool_input, dict) else None
+    )
+    if isinstance(incoming_metadata, dict) and "variety" in incoming_metadata:
+        post_write = incoming_metadata.get("variety")
+    else:
+        post_write = _variety_of(task)
+    return dict(post_write) if isinstance(post_write, dict) else {}
 
 
 # ─── task-assigned check ───────────────────────────────────────────────────
