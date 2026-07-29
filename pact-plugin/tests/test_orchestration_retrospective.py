@@ -189,11 +189,24 @@ class TestRetroReadHardening:
         nothing in the suite would go red.
 
         SCOPED TO THE DOCUMENTED CALL SPAN, which is what makes it a pin
-        rather than decoration. `sites` occurs seven times on the Q5 line as a
-        legitimately REPORTED COUNT, so a line-wide `"sites" not in q5` would
-        be red today against correct prose and would have to be deleted again.
-        Lifting the backticked call isolates the one position where the token
-        is forbidden.
+        rather than decoration. Both obvious alternatives are unfalsifiable
+        for this purpose, and the occupancy counts are why -- do not loosen
+        this to either of them:
+
+        - A line-wide `"sites" not in q5` is RED TODAY against correct prose.
+          `sites` occurs SEVEN times on the Q5 line as a legitimately
+          reported COUNT; the token is forbidden in one position, not on the
+          line.
+        - A bare `"len(variety_totals)" in <file>` cannot fail for the reason
+          it claims. That literal occurs FOUR times in wrap-up.md, so the
+          sample-output region alone satisfies it and the call could be
+          changed to `sites` with the pin still green.
+
+        The FULL call expression occurs exactly ONCE in the file, so lifting
+        it is the one form that observes the argument this rule governs.
+        Verified alongside it: the prefix `compute_variety_divergence(`
+        selects exactly one backticked span, and correctly EXCLUDES the bare
+        no-paren mention inside the FORBIDDEN sentence itself.
 
         Read the call out of the markdown rather than restating it, for the
         same reason `_backticked_expression` exists: a restatement drifts from

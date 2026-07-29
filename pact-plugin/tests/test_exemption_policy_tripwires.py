@@ -16,6 +16,7 @@ denominator keys on `is_teachback_exempt`, which has no metadata surface, so
 that fact is irrelevant here and pinning it would ossify a hazard that no
 longer exists.
 """
+import ast
 import json
 import sys
 from pathlib import Path
@@ -32,6 +33,29 @@ from shared.intentional_wait import (  # noqa: E402
 )
 
 VARIETY_PROTOCOL = Path(__file__).parent.parent / "protocols" / "pact-variety.md"
+INTENTIONAL_WAIT_SRC = (
+    Path(__file__).parent.parent / "hooks" / "shared" / "intentional_wait.py"
+)
+
+
+def _assigned_value_node(source, target_name):
+    """Return the AST value node assigned to a module-level `target_name`.
+
+    Handles both `X = ...` and the annotated `X: frozenset = ...` form.
+    """
+    tree = ast.parse(source)
+    for node in tree.body:
+        if isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == target_name:
+                return node.value
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id == target_name:
+                    return node.value
+    raise AssertionError(
+        f"no module-level assignment to {target_name!r} found -- the constant "
+        f"was renamed or moved, which this file's pins depend on"
+    )
 
 
 def _write_team_config(teams_dir, team_name, members):
@@ -65,16 +89,22 @@ class TestTheTwoExemptionSetsAreNotAliased:
     `is not` is the only form that separates "two sets that happen to
     match" from "one set under two names".
 
-    AND WHY THAT REASONING IS WRITTEN HERE RATHER THAN ASSERTED. A pin on
-    the contents being equal today would redden on a change the module
-    explicitly invites -- its docstring supports future divergence, a
-    rote-only agentType joining one set with a one-line change. A test that
-    fires on an intended edit is worse than no test. One test did assert
-    it, by binding a local alias and comparing that local against the
-    constant it was just assigned from; both of its arms were true by the
-    assignment and no change to this module could redden either. It was
-    RETIRED. Do not re-add it: if you want the content relationship
-    recorded, this paragraph is the right place for it.
+    AND WHY NOT A PIN ON THE CONTENTS BEING EQUAL TODAY. That would redden
+    on a change the module explicitly invites -- its docstring supports
+    future divergence, a rote-only agentType joining one set with a one-line
+    change. A test that fires on an intended edit is worse than no test, so
+    the content relationship is recorded in this paragraph and asserted
+    nowhere. A previous test did assert it, by binding a local alias and
+    comparing that local against the constant it had just been assigned
+    from; both arms were true by the assignment and no change to this module
+    could redden either. Do not re-add that shape.
+
+    TWO PINS, TWO DIFFERENT OBSERVATIONS -- neither subsumes the other:
+    - `test_the_two_sets_are_distinct_objects` reads the IMPORTED objects
+      and catches `T = S`.
+    - `test_the_teachback_set_is_not_derived_from_the_self_complete_set`
+      reads the SOURCE and additionally catches `T = frozenset({*S})`,
+      which the identity pin cannot see.
     """
 
     def test_the_two_sets_are_distinct_objects(self):
@@ -85,6 +115,51 @@ class TestTheTwoExemptionSetsAreNotAliased:
             "through a teachback gate?' vs 'may this owner self-complete?' -- "
             "and aliasing them means a future change to either silently moves "
             "the other, including the Q5 denominator."
+        )
+
+    def test_the_teachback_set_is_not_derived_from_the_self_complete_set(self):
+        """The coupling the identity pin above CANNOT see.
+
+        `is not` compares objects, so it catches `T = S` and nothing else.
+        It passes on `T = frozenset({*S})` and `T = frozenset(set(S))`,
+        which build a DISTINCT object whose contents are still DERIVED from
+        S -- measured, not assumed: `frozenset({*S}) is S` is False while
+        `frozenset({*S}) == S` is True. That is the plausible shape of a
+        well-meant decoupling that decouples nothing: it satisfies the
+        identity pin while leaving a later edit to S silently moving T, and
+        with it the Q5 denominator.
+
+        Reads the SHIPPED SOURCE rather than the imported values because the
+        forbidden thing is a source relationship. By the time the module is
+        imported, `frozenset({*S})` has already collapsed into an ordinary
+        frozenset carrying no trace of where its members came from -- the
+        evidence exists only in the assignment expression.
+
+        Deliberately narrow: it forbids REFERENCING the other constant, not
+        every non-literal form. `T = frozenset(_ROTE_AGENT_TYPES)` off some
+        independent source stays green, because that is a real decoupling.
+
+        MUTATIONS THAT REDDEN: `TEACHBACK_EXEMPT_AGENT_TYPES =
+        SELF_COMPLETE_EXEMPT_AGENT_TYPES` (also caught by the pin above), or
+        `= frozenset({*SELF_COMPLETE_EXEMPT_AGENT_TYPES})` (caught ONLY
+        here).
+        """
+        value = _assigned_value_node(
+            INTENTIONAL_WAIT_SRC.read_text(encoding="utf-8"),
+            "TEACHBACK_EXEMPT_AGENT_TYPES",
+        )
+        referenced = {
+            n.id for n in ast.walk(value) if isinstance(n, ast.Name)
+        }
+        assert "SELF_COMPLETE_EXEMPT_AGENT_TYPES" not in referenced, (
+            "TEACHBACK_EXEMPT_AGENT_TYPES is now DERIVED from "
+            "SELF_COMPLETE_EXEMPT_AGENT_TYPES in the source. Even when the "
+            "two are distinct objects -- so the identity pin stays green -- "
+            "deriving one from the other recouples them: editing the "
+            "self-complete carve-out silently moves the teachback carve-out, "
+            "and with it which dispatches count as Q5 sites. Build the set "
+            "from its own literal, or from a source that is not the other "
+            "policy surface."
         )
 
 
