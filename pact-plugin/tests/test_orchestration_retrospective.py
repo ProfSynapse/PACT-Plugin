@@ -177,6 +177,46 @@ class TestRetroReadHardening:
             "reinstated mention means the denominator was not actually moved"
         )
 
+    def test_q5_denominator_argument_is_the_resolvable_count_not_the_site_count(
+        self, q5
+    ):
+        """THE FORBIDDEN-DENOMINATOR RULE, as an assertion instead of prose.
+
+        Q5 marks `sites` FORBIDDEN as the third argument to
+        `compute_variety_divergence`, because passing it revives the coverage
+        ratio this question no longer reports. Until this pin that rule was
+        carried by prose alone: a future edit could swap the argument back and
+        nothing in the suite would go red.
+
+        SCOPED TO THE DOCUMENTED CALL SPAN, which is what makes it a pin
+        rather than decoration. `sites` occurs seven times on the Q5 line as a
+        legitimately REPORTED COUNT, so a line-wide `"sites" not in q5` would
+        be red today against correct prose and would have to be deleted again.
+        Lifting the backticked call isolates the one position where the token
+        is forbidden.
+
+        Read the call out of the markdown rather than restating it, for the
+        same reason `_backticked_expression` exists: a restatement drifts from
+        the instruction silently and pins nothing.
+
+        MUTATION THAT REDDENS: change the third argument in wrap-up.md from
+        `len(variety_totals)` to `sites`.
+        """
+        call = _backticked_expression(q5, "compute_variety_divergence(")
+
+        assert call.endswith("len(variety_totals))"), (
+            "Q5's divergence call must take len(variety_totals) as its third "
+            "argument -- the number of dispatches carrying a RESOLVABLE "
+            f"stamp. Got: {call!r}"
+        )
+        assert "sites" not in call, (
+            "`sites` has been passed to compute_variety_divergence. That "
+            "revives the coverage ratio Q5 no longer reports, by making the "
+            "denominator every recorded dispatch site rather than the ones "
+            "whose stamp resolves. `sites` is a reported COUNT, never a "
+            f"denominator. Got: {call!r}"
+        )
+
     def test_q5_reads_the_dispatch_site_stream(self, q5):
         """The denominator is the dispatch_site event's EXISTENCE. Reading the
         old variety-independent markers for Q5 would rebuild the two-population

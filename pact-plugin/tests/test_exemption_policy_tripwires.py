@@ -58,6 +58,23 @@ class TestTheTwoExemptionSetsAreNotAliased:
     MUTATION THAT REDDENS: in `shared/intentional_wait.py`, replace the
     `TEACHBACK_EXEMPT_AGENT_TYPES = frozenset({...})` literal with
     `TEACHBACK_EXEMPT_AGENT_TYPES = SELF_COMPLETE_EXEMPT_AGENT_TYPES`.
+
+    WHY IDENTITY AND NOT CONTENTS. The two frozensets hold identical
+    contents today, so a content-shaped pin (`T == S`, or comparing either
+    against a literal) stays GREEN on an aliased pair and detects nothing.
+    `is not` is the only form that separates "two sets that happen to
+    match" from "one set under two names".
+
+    AND WHY THAT REASONING IS WRITTEN HERE RATHER THAN ASSERTED. A pin on
+    the contents being equal today would redden on a change the module
+    explicitly invites -- its docstring supports future divergence, a
+    rote-only agentType joining one set with a one-line change. A test that
+    fires on an intended edit is worse than no test. One test did assert
+    it, by binding a local alias and comparing that local against the
+    constant it was just assigned from; both of its arms were true by the
+    assignment and no change to this module could redden either. It was
+    RETIRED. Do not re-add it: if you want the content relationship
+    recorded, this paragraph is the right place for it.
     """
 
     def test_the_two_sets_are_distinct_objects(self):
@@ -69,25 +86,6 @@ class TestTheTwoExemptionSetsAreNotAliased:
             "and aliasing them means a future change to either silently moves "
             "the other, including the Q5 denominator."
         )
-
-    def test_a_content_check_could_not_have_caught_that(self):
-        """NON-VACUITY, and the reason this file asserts identity at all.
-
-        The two frozensets have IDENTICAL CONTENTS today, so every
-        content-shaped form of this pin passes on an ALIASED pair and pins
-        nothing. Simulate the forbidden recoupling and show each candidate
-        predicate's verdict on it.
-        """
-        assert TEACHBACK_EXEMPT_AGENT_TYPES == SELF_COMPLETE_EXEMPT_AGENT_TYPES, (
-            "precondition for this proof: contents are equal today"
-        )
-
-        aliased = SELF_COMPLETE_EXEMPT_AGENT_TYPES  # the forbidden `T = S`
-
-        # Content form: BLIND -- passes on the aliased pair.
-        assert aliased == SELF_COMPLETE_EXEMPT_AGENT_TYPES
-        # Identity form: DETECTS -- this is the only discriminating check.
-        assert aliased is SELF_COMPLETE_EXEMPT_AGENT_TYPES
 
 
 class TestAuditorDispatchesCount:
