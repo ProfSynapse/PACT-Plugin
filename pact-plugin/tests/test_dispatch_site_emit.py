@@ -293,6 +293,82 @@ class TestDedup:
         tlg.evaluate_lifecycle(wiring())
         assert len(sites(events)) == 1
 
+    def test_same_task_DIFFERENT_owner_emits_ONE_site(self, env, events):
+        """OWNER-INDEPENDENCE. Re-wiring the SAME Task-B to a DIFFERENT owner
+        is the SAME dispatch site, so it must emit ONCE.
+
+        WHY THE OPPOSITE OF THE agent_handoff SIBLING, and this is the half
+        that keeps either from reading as a mistake. Both families share the
+        same ``already_emitted`` primitive and differ ONLY in the third key
+        argument, so the two policies sit one argument apart:
+
+          * ``agent_handoff`` records an OCCURRENCE — who handed off what. A
+            different occupant is a genuinely different handoff, so
+            re-emission on a changed occupant is WANTED. It is occupant-keyed,
+            and `test_handoff_b1_b2_dedup.py` pins that a different owner
+            emits TWICE.
+          * ``dispatch_site`` records a POSITION — one Task-B is one site, and
+            the site IS the coverage denominator. A re-wired Task-B is the
+            same position, so a second event FABRICATES a denominator entry.
+
+        One counts occurrences, the other counts positions. Neither is a
+        mistake, and **aligning them "for consistency" is the defect** — it
+        does not take carelessness, only a maintainer who reads the pinned
+        sibling and tidies this family to match.
+
+        THE COST OF GETTING IT WRONG IS SILENT AND IN THE HARMFUL DIRECTION:
+        the fabricated second site carries no variety, so a correctly-stamped
+        dispatch reports 1 of 2 = 0.500 where the truth is 1 of 1 = 1.000 —
+        a compliance gap invented out of a re-wire. Measured: an
+        owner-dependent key applied to the claim and its unclaim twin passes
+        the entire suite without this pin.
+
+        Paired with the eligibility control directly below — read them
+        together, because this assertion alone cannot tell you WHY there is
+        one event."""
+        seed(env, "42", metadata={"variety": STAMP})
+        tlg.evaluate_lifecycle(wiring("42", owner="backend-coder"))
+        tlg.evaluate_lifecycle(wiring("42", owner="auditor"))
+        s = sites(events)
+        assert len(s) == 1, (
+            "a re-wired Task-B is the SAME dispatch site; a second event "
+            "fabricates a denominator entry and drives coverage down"
+        )
+        assert "variety" in s[0], (
+            "the surviving site must be the STAMPED first write — suppressing "
+            "the first and keeping the un-stamped second would preserve the "
+            "count while inverting the numerator"
+        )
+
+    def test_control_the_second_owner_IS_emit_eligible(self, env, events):
+        """ELIGIBILITY CONTROL for the pin above. Do not delete.
+
+        `len(sites) == 1` has a SECOND, CHEAPER SOURCE than dedup: it is also
+        what you get if the second write was never eligible to emit at all —
+        a non-specialist owner, a teachback-exempt owner, a teachback-shaped
+        subject, a non-canonical frame, an unresolvable team. Every one of
+        those yields one event for a reason that has nothing to do with the
+        marker key, and an assertion whose truth has a cheaper source than the
+        mechanism it names is decorative however true it reads.
+
+        Worse, that decorative version would pass BOTH directions of the usual
+        check — green at HEAD and red under an owner-dependent mutation —
+        because the mutation changes the key and an ineligible write stays
+        ineligible either way.
+
+        This arm removes the ambiguity: the SAME owner-B wiring write, against
+        a DIFFERENT task_id, emits. So owner-B is demonstrably eligible, and
+        the single event above is dedup collapsing it — not the gate refusing
+        it."""
+        seed(env, "42", metadata={"variety": STAMP})
+        seed(env, "43", metadata={"variety": STAMP})
+        tlg.evaluate_lifecycle(wiring("42", owner="backend-coder"))
+        tlg.evaluate_lifecycle(wiring("43", owner="auditor"))
+        assert len(sites(events)) == 2, (
+            "owner 'auditor' must be emit-eligible in this fixture, or "
+            "the one-event assertion above proves nothing about dedup"
+        )
+
     def test_distinct_tasks_are_not_deduped_against_each_other(self, env, events):
         seed(env, task_id="42", metadata={"variety": STAMP})
         seed(env, task_id="43", metadata={"variety": STAMP})
