@@ -2,20 +2,23 @@
 env var is SET-but-invalid) must never CHANGE a gate's disposition, and must
 never leak into the gate's stdout decision JSON.
 
-WHAT THIS FILE NO LONGER CLAIMS (it was named ..._no_deny before this): an
-invalid mode is not universally non-denying. `PACT_DISPATCH_VARIETY_MODE` now
-DECLARES "deny" as its shipped default, so a misspelled opt-down at that gate
-resolves to "deny" and the gate enforces. That is the declared policy acting,
-not the diagnostic acting -- which is the distinction this file exists to keep
-sharp. The invariant that survives is the one that was always the real subject:
-the resolution lands on the option's DECLARED DEFAULT and nowhere else, and the
-diagnostic goes to stderr.
+WHAT THIS FILE CLAIMS, restated once more because the behaviour moved twice:
+`PACT_DISPATCH_VARIETY_MODE` ships an ENFORCING default ("deny") but declares
+`invalid_fallback = "warn"`, so an UNSET variable enforces while an UNPARSEABLE
+one does not. Those are different user intents and the resolver now treats them
+as such. The invariant is that resolution lands on the option's DECLARED
+landing point for the path taken -- `default` for unset, `invalid_fallback` for
+unrecognised -- and nowhere else, with the diagnostic on stderr.
 
 Mechanism the tests pin:
-- A set-but-invalid mode (e.g. "banana") resolves through get_enum to that
-  option's registry default -- "warn" for the inline-mission gate, "deny" for
-  the dispatch-variety gate -- and never to anything derived from the invalid
-  token. (TestInvalidModeResolvesToTheDeclaredDefault)
+- A set-but-invalid mode (e.g. "banana") resolves to that option's declared
+  `invalid_fallback` -- "warn" for BOTH rows -- and never to anything derived
+  from the invalid token.
+- An UNSET variable resolves to that option's `default` -- "warn" for the
+  inline-mission gate, "deny" for the dispatch-variety gate. **This is the arm
+  carrying the discrimination**, because the invalid column coincides across
+  the two rows and therefore cannot distinguish them.
+  (TestInvalidModeResolvesToTheDeclaredFallback)
 - The additive diagnostic is written to STDERR at gate import, so it cannot
   corrupt the gate's STDOUT decision JSON. (same class -- captures the reload
   stderr)
@@ -42,12 +45,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 INLINE_ENV = "PACT_DISPATCH_INLINE_MISSION_MODE"
 VARIETY_ENV = "PACT_DISPATCH_VARIETY_MODE"
 
-# (module, env var, mode-constant name, that option's DECLARED default).
-# The default is an independent literal, not read back from the registry --
-# reading the registry would make the assertion tautological.
+# (module, env var, mode-constant name, UNSET default, INVALID fallback).
+# Both are independent literals, not read back from the registry -- reading the
+# registry would make the assertions tautological.
+#
+# 🔴 THE TWO COLUMNS ARE WHY THIS TABLE HAS FIVE ELEMENTS, and dropping either
+# would produce a test that looks like per-option coverage and is not. After
+# `invalid_fallback` landed, the INVALID column COINCIDES for both rows (both
+# "warn"), so an invalid-only assertion expects the same answer for both gates
+# and cannot tell them apart -- it would pass unchanged if one row's policy were
+# deleted. The discrimination lives in the UNSET column, where they differ
+# ("warn" vs "deny"). Verified by execution before this table was restructured,
+# not reasoned about: an assertion whose two arms expect the same value is not
+# a parametrisation, it is one arm run twice.
 _GATES = [
-    ("dispatch_gate", INLINE_ENV, "INLINE_MISSION_MODE", "warn"),
-    ("handoff_ordering_gate", VARIETY_ENV, "DISPATCH_VARIETY_MODE", "deny"),
+    ("dispatch_gate", INLINE_ENV, "INLINE_MISSION_MODE", "warn", "warn"),
+    ("handoff_ordering_gate", VARIETY_ENV, "DISPATCH_VARIETY_MODE", "deny", "warn"),
 ]
 
 
@@ -75,25 +88,65 @@ def _reload_capturing_stderr(monkeypatch, module_name, env_name, value, const_na
     return getattr(module, const_name), buf.getvalue()
 
 
-class TestInvalidModeResolvesToTheDeclaredDefault:
-    @pytest.mark.parametrize("module_name,env_name,const_name,default", _GATES)
-    def test_invalid_value_resolves_to_the_declared_default(
-        self, monkeypatch, module_name, env_name, const_name, default
+class TestInvalidModeResolvesToTheDeclaredFallback:
+    @pytest.mark.parametrize(
+        "module_name,env_name,const_name,unset_default,invalid_fallback", _GATES)
+    def test_invalid_value_resolves_to_the_declared_invalid_fallback(
+        self, monkeypatch, module_name, env_name, const_name,
+        unset_default, invalid_fallback,
     ):
         mode, _stderr = _reload_capturing_stderr(
             monkeypatch, module_name, env_name, "banana", const_name
         )
-        assert mode == default, (
+        assert mode == invalid_fallback, (
             f"{module_name}: an invalid {env_name} must resolve to that "
-            f"option's DECLARED default {default!r}. It must never resolve to "
-            f"the other gate's default, to the invalid token, or to a value "
-            f"the resolver invented -- the diagnostic reports the fallback, it "
-            f"does not choose it."
+            f"option's DECLARED invalid fallback {invalid_fallback!r}. It must "
+            f"never resolve to the invalid token or to a value the resolver "
+            f"invented -- the diagnostic reports the fallback, it does not "
+            f"choose it."
         )
 
-    @pytest.mark.parametrize("module_name,env_name,const_name,default", _GATES)
+    @pytest.mark.parametrize(
+        "module_name,env_name,const_name,unset_default,invalid_fallback", _GATES)
+    def test_UNSET_resolves_to_the_declared_default_not_the_fallback(
+        self, monkeypatch, module_name, env_name, const_name,
+        unset_default, invalid_fallback,
+    ):
+        """THE ARM THAT CARRIES THE DISCRIMINATION. The invalid column
+        coincides across both rows, so the test above cannot distinguish them;
+        this one can, because the unset column differs ("warn" vs "deny").
+
+        It is also the pin on the separation itself: unset and invalid are
+        DIFFERENT user intents and must not collapse. For the variety row the
+        two values differ, so a change that made either branch resolve like the
+        other reddens here."""
+        monkeypatch.delenv(env_name, raising=False)
+        module = importlib.import_module(module_name)
+        importlib.reload(module)
+        assert getattr(module, const_name) == unset_default, (
+            f"{module_name}: an UNSET {env_name} must resolve to the registry "
+            f"default {unset_default!r}, never to the invalid fallback "
+            f"{invalid_fallback!r} -- an absent variable is consent to the "
+            f"shipped posture, not an unparseable request."
+        )
+
+    def test_the_two_options_actually_DIFFER_on_unset(self):
+        """NON-VACUITY FOR THE PAIRING. If both rows ever declared the same
+        unset default, every assertion in this class would hold with the rows
+        swapped, and the parametrisation would be decoration. This asserts the
+        table itself still discriminates."""
+        unset_defaults = {row[3] for row in _GATES}
+        assert len(unset_defaults) == len(_GATES), (
+            "the _GATES rows no longer differ on their unset default, so the "
+            "parametrised assertions above can no longer tell the two options "
+            "apart -- restore a discriminating column or drop the claim"
+        )
+
+    @pytest.mark.parametrize(
+        "module_name,env_name,const_name,unset_default,invalid_fallback", _GATES)
     def test_additive_warn_goes_to_stderr_not_stdout(
-        self, monkeypatch, module_name, env_name, const_name, default
+        self, monkeypatch, module_name, env_name, const_name,
+        unset_default, invalid_fallback,
     ):
         # The tell: the invalid branch fires the diagnostic, and it lands on
         # STDERR (so it cannot pollute the gate's stdout decision JSON).

@@ -866,8 +866,8 @@ class TestDispatchVarietyEnvKnobModes:
         ("Deny", "deny"),
         (" shadow\t", "shadow"),
         ("warn", "warn"),
-        ("", "deny"),           # empty → the DECLARED default
-        ("bogus", "deny"),      # unknown → the DECLARED default
+        ("", "warn"),           # empty is SET-but-invalid → invalid_fallback
+        ("bogus", "warn"),      # unknown → the DECLARED invalid_fallback
         ("denY ", "deny"),
     ])
     def test_env_knob_strip_lower_normalization(
@@ -880,20 +880,24 @@ class TestDispatchVarietyEnvKnobModes:
         os.environ read + normalize + fallback (not the already-resolved
         constant).
 
-        WHAT THE FALLBACK ROWS NOW ASSERT, because their polarity inverted when
-        this gate was armed: they used to prove "an unrecognised token cannot
-        accidentally ENABLE enforcement". The declared default is now `deny`, so
-        what they prove instead is the property that survives the flip — an
-        unrecognised token resolves to the DECLARED DEFAULT and to nothing else.
+        WHAT THE FALLBACK ROWS ASSERT, and their polarity has now moved twice:
+        first when this gate was armed (`deny` became the default), then again
+        when the row declared `invalid_fallback = "warn"`. What they prove is
+        the property that survived both moves — an unrecognised token resolves
+        to the row's DECLARED landing point for THAT path and to nothing else.
         It is never derived from the token and never lands outside the allowed
-        set. The consumer-facing consequence is real and is the reason these
-        rows are kept rather than deleted: a MISSPELLED opt-down (`warm`,
-        `Warnn`) still enforces, so a consumer who means to opt down must spell
-        it correctly and read the resolver's stderr line.
+        set.
 
-        The 'warn' row is the discriminator: if the fallback ever stopped
-        consulting the registry and hardcoded a mode, that row and the fallback
-        rows could not both hold."""
+        NOTE THE ASYMMETRY THESE ROWS NOW CARRY, because it is the whole point
+        of the declaration: an UNSET variable resolves to `deny` (enforcing),
+        while a MISSPELLED opt-down resolves here to `warn`. Absence is consent
+        to the shipped posture; an unparseable value is a request the resolver
+        could not read, and the only consumers who reach this branch are ones
+        trying to opt down.
+
+        The explicit `("warn", "warn")` row is the discriminator: if resolution
+        ever stopped consulting the registry and hardcoded a mode, that row and
+        the fallback rows could not both hold."""
         import importlib
         monkeypatch.setenv("PACT_DISPATCH_VARIETY_MODE", env_value)
         reloaded = importlib.reload(gate)

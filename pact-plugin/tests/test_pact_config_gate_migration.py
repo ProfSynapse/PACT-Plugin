@@ -54,17 +54,30 @@ _BATTERY = [None, "warn", "deny", "shadow", "banana", "  deny ", "DENY", "", "SH
 # the unset and invalid rows below, which is the point.
 _DEFAULT = {INLINE: "warn", VARIETY: "deny"}
 
+# Where an UNPARSEABLE value lands, which is NOT always where an unset one does.
+# The variety row declares `invalid_fallback = "warn"` against a `deny` default;
+# the inline row declares none, so its two paths coincide. Splitting the oracle
+# is required rather than cosmetic: a single-default oracle cannot express a row
+# whose unset and invalid paths differ, and would silently assert the collapse
+# the declaration exists to prevent.
+_INVALID_FALLBACK = {INLINE: "warn", VARIETY: "warn"}
 
-def _old_resolve(raw, default="warn"):
+
+def _old_resolve(raw, default="warn", invalid_fallback=None):
     """The pre-refactor inline logic BOTH gates used, generalised over the
-    option's declared default.
+    option's declared default AND its declared invalid fallback.
 
-    os.environ.get(NAME, default).strip().lower(); a value outside the allowed
-    set (including an unset var, empty string, or bogus token) falls back to
-    `default`.
+    os.environ.get(NAME) -> unset yields `default`; otherwise strip().lower()
+    and, if the value is outside the allowed set (including an empty string or
+    a bogus token), yield `invalid_fallback` (which defaults to `default`, the
+    behaviour of every row that declares no fallback).
     """
-    value = (raw if raw is not None else default).strip().lower()
-    return value if value in _ALLOWED else default
+    if invalid_fallback is None:
+        invalid_fallback = default
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    return value if value in _ALLOWED else invalid_fallback
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -103,7 +116,7 @@ class TestResolverValueEquivalence:
             clean.delenv(name, raising=False)
         else:
             clean.setenv(name, raw)
-        assert pact_config.get_enum(name) == _old_resolve(raw, _DEFAULT[name])
+        assert pact_config.get_enum(name) == _old_resolve(raw, _DEFAULT[name], _INVALID_FALLBACK[name])
 
 
 def _reload_gate_mode(monkeypatch, module_name, env_name, raw, const_name):
@@ -126,11 +139,11 @@ class TestGateSiteWiring:
     @pytest.mark.parametrize("raw", _BATTERY)
     def test_dispatch_gate_inline_mission_mode(self, clean, raw):
         got = _reload_gate_mode(clean, "dispatch_gate", INLINE, raw, "INLINE_MISSION_MODE")
-        assert got == _old_resolve(raw, _DEFAULT[INLINE])
+        assert got == _old_resolve(raw, _DEFAULT[INLINE], _INVALID_FALLBACK[INLINE])
 
     @pytest.mark.parametrize("raw", _BATTERY)
     def test_handoff_gate_variety_mode(self, clean, raw):
         got = _reload_gate_mode(
             clean, "handoff_ordering_gate", VARIETY, raw, "DISPATCH_VARIETY_MODE"
         )
-        assert got == _old_resolve(raw, _DEFAULT[VARIETY])
+        assert got == _old_resolve(raw, _DEFAULT[VARIETY], _INVALID_FALLBACK[VARIETY])

@@ -39,7 +39,15 @@ from typing import Dict
 #   type "bool":  parsed by EXACT MEMBERSHIP (see _BOOL_TRUE) -- NOT Python
 #                 truthiness, under which bool("0") is True (a fail-UNSAFE slip).
 #   type "enum":  validated against "allowed"; an unrecognized value falls back
-#                 to "default" AND emits a one-line stderr warning (the tell).
+#                 to "invalid_fallback" when the row declares one, else to
+#                 "default", AND emits a one-line stderr warning naming the
+#                 value actually resolved (the tell).
+#   "invalid_fallback" (OPTIONAL, enum rows only): where an UNPARSEABLE value
+#                 lands, when that should differ from where an UNSET one does.
+#                 Omit it and the two coincide. Declare it when a row's default
+#                 is the restrictive mode, because an unreadable value is not a
+#                 request for that mode. Read ONLY by get_enum's unrecognized
+#                 branch -- never by get_bool, and never by the raise handler.
 #   consumer "llm":  surfaced to the orchestrator LLM via llm_options() +
 #                    session_init's SessionStart injection (markdown flows
 #                    cannot read env vars).
@@ -56,14 +64,24 @@ _REGISTRY: Dict[str, dict] = {
         "type": "enum", "default": "warn",
         "allowed": ("warn", "deny", "shadow"), "consumer": "hook",
     },
-    # The one ENFORCING default in this registry: an unset value DENIES. The
+    # The one ENFORCING default in this registry: an UNSET value DENIES. The
     # asymmetry against its sibling above is deliberate -- this gate refuses a
     # dispatch-wiring write whose Task B carries no resolvable variety, and a
-    # consumer opts DOWN to "warn"/"shadow" rather than opting up. Note the
-    # consequence at the resolver: an unrecognized value falls back to this
-    # default too, so a misspelled opt-down still denies.
+    # consumer opts DOWN to "warn"/"shadow" rather than opting up.
+    #
+    # WHY "invalid_fallback" EXISTS AT ALL, and it is a statement about THIS
+    # TABLE rather than about this option: without it, neither row here declares
+    # an unknown-value policy -- both simply inherit whatever `get_enum` does
+    # with an unparseable value. The two rows would then differ on that policy
+    # ONLY as a side effect of their defaults differing, with nothing anywhere
+    # expressing intent. An EMERGENT policy is the defect, independently of
+    # which behaviour it emerges into: a reader who learns one row and predicts
+    # the other has no way to know whether the difference was chosen. So the
+    # policy is DECLARED here even where it merely restates what would have
+    # happened, and the sibling above deliberately declares nothing because its
+    # default already IS its fallback.
     "PACT_DISPATCH_VARIETY_MODE": {
-        "type": "enum", "default": "deny",
+        "type": "enum", "default": "deny", "invalid_fallback": "warn",
         "allowed": ("warn", "deny", "shadow"), "consumer": "hook",
     },
 }
@@ -110,15 +128,29 @@ def get_enum(name: str) -> str:
     """Resolve an enum-typed PACT option from os.environ (live, at call time).
 
     Applies the gates' existing ``.strip().lower()`` normalization, then
-    validates against the registry's "allowed" tuple. An UNSET var returns the
-    registry default silently (the expected steady state, not a
-    misconfiguration). A SET-but-unrecognized value returns the default AND
-    emits a one-line stderr warning -- the non-vacuity tell that the
-    invalid-value branch is live. Total: never raises; any failure returns the
-    registry default.
+    validates against the registry's "allowed" tuple.
+
+    THREE RESOLUTION PATHS, EACH DECLARED RATHER THAN INHERITED:
+
+    * UNSET       -> the registry ``default``, silently. The expected steady
+      state, not a misconfiguration, so it earns no diagnostic.
+    * SET-BUT-UNRECOGNIZED -> the row's ``invalid_fallback`` when it declares
+      one, else its ``default``; ALWAYS with a one-line stderr warning naming
+      the value actually resolved. An unparseable value is not a request for
+      the default -- it is a statement this resolver could not read -- so a row
+      may declare a different landing point for it than for "unset".
+    * RAISED      -> the ``default`` (never ``invalid_fallback``). See the
+      handler for why the two are deliberately not the same.
+
+    Total: never raises. Note that an empty-string env var is SET, so it takes
+    the unrecognized path (and its warning), not the unset path.
     """
     entry = _REGISTRY.get(name, {})
     default = str(entry.get("default", ""))
+    # Declared landing point for an unparseable value; defaults to `default`,
+    # which is what every row without the key gets and is why adding the key is
+    # behaviour-preserving for those rows.
+    invalid_fallback = str(entry.get("invalid_fallback", default))
     allowed = entry.get("allowed", ())
     try:
         raw = os.environ.get(name)
@@ -127,17 +159,34 @@ def get_enum(name: str) -> str:
         value = _normalize(raw)
         if value in allowed:
             return value
-        # Recognized option, unrecognized value: fall back to default + WARN.
-        # The warning never disables the gate (default is the safe mode) and is
-        # additive observability -- it does not change the resolved value, so
-        # the gate's behavior is identical to the pre-resolver coercion.
+        # Recognized option, unrecognized value: resolve to the row's DECLARED
+        # invalid fallback and say so. The message must name the value actually
+        # returned, not the row's default -- for a row where the two differ,
+        # reporting the default would send the one consumer this branch exists
+        # to serve (someone who mistyped an opt-down) to inspect a setting that
+        # is not what took effect. The stderr line is their only tell.
         print(
             f"pact_config: {name}={raw!r} is not one of {tuple(allowed)}; "
-            f"using default {default!r}",
+            f"using {invalid_fallback!r}",
             file=sys.stderr,
         )
-        return default
+        return invalid_fallback
     except Exception:  # noqa: BLE001 -- total contract (fail-safe -> default)
+        # DELIBERATELY `default`, NOT `invalid_fallback`, and the distinction is
+        # about whose statement we are interpreting: an unrecognized value is a
+        # user statement this resolver could not parse, whereas a raise here is
+        # not a user statement at all -- so it belongs with "unset". Stretching
+        # a key named `invalid_fallback` to cover crashes would broaden its
+        # meaning past its name, which is how a precise key becomes a vague one.
+        #
+        # RESIDUAL, named because a can't-happen path with an undocumented
+        # direction is exactly what gets re-litigated later: for a row whose
+        # default is enforcing, this handler fails CLOSED -- the opposite
+        # direction from the unrecognized branch above, on purpose. The exposure
+        # is bounded by the path being structurally non-raising (dict lookups,
+        # os.environ.get, tuple membership), i.e. a guard rather than a route.
+        # If it ever becomes reachable, revisit this choice rather than assuming
+        # it was made with a live path in mind.
         return default
 
 
