@@ -147,17 +147,23 @@ class TestRetroReadHardening:
         assert "|| echo" in q5
         assert "`head`" in q5
 
-    def test_q5_masked_empty_guard_precedes_predates_conclusion(self, q5):
-        # the re-read guard must appear, and gate the "pre-dates" conclusion
+    def test_q5_masked_empty_guard_precedes_omission_conclusion(self, q5):
+        # the re-read guard must appear, and gate the omission conclusion
         assert "masked-empty guard" in q5
         assert "re-read the raw" in q5
         assert "session-journal.jsonl" in q5
-        # the unique OMISSION-note phrasing (distinct from the earlier
-        # GC-problem mention "wrongly reports 'pre-dates stamping'")
-        assert "pre-dates per-dispatch stamping" in q5
-        # ordering: the guard must precede the pre-dates OMISSION conclusion
+        # RE-ANCHORED, strength unchanged. The landmark was the omission
+        # note's old wording, "pre-dates per-dispatch stamping" -- which
+        # asserted a CAUSE the reader cannot verify and which is false in
+        # both branches: a session predating the emit and a session whose
+        # emit path is broken produce the same journal signature. The note
+        # now states what was OBSERVED, so the landmark moves with it.
+        # Identical assertion shape: same three guard requirements, same
+        # single ordering check, one substituted landmark string.
+        assert "no dispatch sites recorded" in q5
+        # ordering: the guard must precede the OMISSION conclusion
         assert q5.index("masked-empty guard") < q5.index(
-            "pre-dates per-dispatch stamping"
+            "no dispatch sites recorded"
         )
 
     def test_q5_denominator_comes_from_the_one_pass_helper(self, q5):
