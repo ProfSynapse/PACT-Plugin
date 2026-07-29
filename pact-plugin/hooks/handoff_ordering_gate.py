@@ -235,17 +235,23 @@ def _variety_stamp_attempted(*metadatas: object) -> bool:
     plainly INTENDED as a variety stamp — a ``variety`` key of any shape, or
     the non-canonical ``variety_score`` sibling.
 
-    This splits the two situations ``resolve_variety_total`` collapses into a
-    single None: NOTHING was written (remedy: write the block) versus something
-    WAS written that does not resolve (remedy: look at the values, not the
-    field list). Deliberately shape-BLIND — a ``variety`` that is a string, a
-    list, or an empty dict is still an attempt, and telling that consumer to
-    "add the block" points them away from the actual defect.
+    This separates NOTHING was written (remedy: write the block) from
+    something WAS written that does not resolve (remedy: look at the values,
+    not the field list) — two of the situations ``resolve_variety_total``
+    collapses into a single None. Deliberately shape-BLIND: a ``variety``
+    that is a string, a list, or an empty dict is still an attempt, and
+    telling that consumer to "add the block" points them away from the
+    actual defect.
 
     It decides only WHICH SENTENCE the deny carries. Both situations still
     deny; there is no carve-out here and adding one would let the malformed
     case through, which is the case most likely to be a silent wrong number
     downstream. Pure; never raises.
+
+    NOT THE WHOLE SPLIT — see ``_variety_write_drops_disk_keys``, which is
+    consulted FIRST and peels off the case where the values are fine and the
+    WRITE is what broke the stamp. This predicate is shape-blind, so it
+    cannot tell that case apart on its own.
     """
     for metadata in metadatas:
         if isinstance(metadata, dict) and (
@@ -253,6 +259,70 @@ def _variety_stamp_attempted(*metadatas: object) -> bool:
         ):
             return True
     return False
+
+
+def _variety_write_drops_disk_keys(
+    disk_metadata: object, incoming_metadata: object,
+) -> bool:
+    """True iff this write NAMES ``metadata.variety`` and the on-disk stamp
+    holds at least one key the write does not carry forward.
+
+    THE THIRD DIAGNOSIS, and it exists because the other two both misread
+    this case. ``TaskUpdate`` merges metadata at the TOP-LEVEL key, so naming
+    ``variety`` REPLACES the whole nested dict: every disk key the write
+    omits is dropped and the task lands holding only what was sent. The
+    consumer's VALUES are fine here, so the "re-read the values" sentence
+    sends them hunting for a defect that is not there; and they plainly did
+    stamp, so the "add the block" sentence is wrong in the other direction.
+    The defect is the SHAPE OF THE WRITE, and the remedy is to send the whole
+    block.
+
+    PARTIALNESS, NOT CONTAINMENT, and the distinction is the whole point of
+    the predicate. A write carrying keys the disk stamp LACKS still replaces
+    it, so this asks only whether the write DROPS something. Testing that
+    the incoming keys sit inside the disk keys would exclude the disjoint
+    case — which is the one that motivated the correction, so a containment
+    reading would report clean over a population missing the defect.
+
+    A DELETE IS THE SAME DEFECT AT FULL STRENGTH. ``{"variety": None}`` is
+    the platform's remove-the-key form: it NAMES ``variety`` and carries
+    nothing forward, so it drops every key the disk held. The values are not
+    wrong — there are none — so the values sentence is even less use here
+    than for a partial block.
+
+    A MALFORMED VALUE IS NOT THIS CASE, and the split is deliberate: a
+    ``variety`` that arrives as a string or a list also lands the task
+    un-stamped, but there the consumer really did send a bad VALUE and the
+    second sentence is the true one. Only ``None`` reads as "carried nothing
+    forward" rather than "sent something wrong".
+
+    GUARDED ON THE DISK SIDE: with no on-disk stamp to lose, nothing was
+    dropped and this is not the diagnosis, whatever the write looks like.
+    An empty on-disk ``variety`` counts as nothing to lose.
+
+    A SAME-KEY OVERWRITE DROPS NOTHING and is likewise NOT this case:
+    a disk ``{"total": 12}`` overwritten by ``{"total": "x"}`` leaves the
+    field list intact, so there too the values are the defect. That pair is
+    what separates the two sentences.
+
+    Decides only WHICH SENTENCE the deny carries — every case reaching it
+    denies either way. Pure; never raises.
+    """
+    if not isinstance(incoming_metadata, dict):
+        return False
+    if "variety" not in incoming_metadata:
+        return False
+    disk_variety = (
+        disk_metadata.get("variety") if isinstance(disk_metadata, dict) else None
+    )
+    if not isinstance(disk_variety, dict) or not disk_variety:
+        return False
+    incoming_variety = incoming_metadata["variety"]
+    if incoming_variety is None:
+        return True
+    if not isinstance(incoming_variety, dict):
+        return False
+    return bool(set(disk_variety) - set(incoming_variety))
 
 
 def _evaluate_dispatch_variety(input_data: dict) -> str | None:
@@ -289,8 +359,9 @@ def _evaluate_dispatch_variety(input_data: dict) -> str | None:
     below. The "present-but-malformed-rationale" case stays a PostToolUse
     advisory in task_lifecycle_gate R4 (the surgical split) — this gate keys
     solely on resolve_variety_total being None. That single trigger reports as
-    TWO MESSAGES (no stamp at all / a stamp that does not resolve) because the
-    remedies are opposite; the TRIGGER is not split, only the sentence.
+    THREE MESSAGES (no stamp at all / a stamp that does not resolve / a
+    partial write that replaced a fuller stamp) because the remedies are
+    mutually wrong; the TRIGGER is not split, only the sentence.
     """
     tool_name = input_data.get("tool_name", "")
     if tool_name != "TaskUpdate":
@@ -452,13 +523,32 @@ def _evaluate_dispatch_variety(input_data: dict) -> str | None:
     if resolve_variety_total(variety, metadata) is not None:
         return None  # stamp resolves → not a missing-stamp dispatch
 
-    # ABSENT vs PRESENT-BUT-UNRESOLVABLE. resolve_variety_total returns None
-    # for both, and they need OPPOSITE remedies: "add the block" versus "the
-    # block you added does not resolve". Telling the second consumer to stamp
-    # a block they can see they already wrote sends them in circles looking for
-    # a missing field instead of at the values. NOT A CARVE-OUT — both still
+    # THREE STATES BEHIND ONE None. resolve_variety_total collapses them, and
+    # their remedies are mutually wrong: "add the block" versus "the block you
+    # added does not resolve" versus "the block you sent is fine but it
+    # REPLACED a fuller one". Telling a consumer who already stamped to stamp
+    # again sends them in circles looking for a missing field; telling a
+    # consumer whose values are correct to re-read those values sends them
+    # after a defect that is not there. NOT A CARVE-OUT — all three still
     # deny; only the sentence differs.
-    if _variety_stamp_attempted(disk_metadata, incoming_metadata):
+    #
+    # PARTIAL-REPLACE IS TESTED FIRST because it is a SUBSET of "attempted":
+    # a partial write names `variety`, so the shape-blind predicate below
+    # would claim it and hand out the values sentence. Order is the only
+    # thing keeping the narrower diagnosis reachable.
+    if _variety_write_drops_disk_keys(disk_metadata, incoming_metadata):
+        diagnosis = (
+            "REPLACES the stamp already on disk without carrying it whole. "
+            "TaskUpdate merges metadata at the TOP-LEVEL key, so naming "
+            "variety overwrites the whole nested dict and every key this "
+            "write does not name is DROPPED — and naming it with a null "
+            "removes the stamp outright. Post-write the task holds only what "
+            "this write sent, which does not resolve to a total. The values "
+            "sent are fine; the SHAPE of the write is the defect. Re-send the "
+            "ENTIRE block (novelty/scope/uncertainty/risk + total 4-16) "
+            "rather than only the keys being changed"
+        )
+    elif _variety_stamp_attempted(disk_metadata, incoming_metadata):
         diagnosis = (
             "carries a metadata.variety stamp that does NOT resolve to a "
             "total. resolve_variety_total accepts, in order: variety.total, "

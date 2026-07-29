@@ -151,10 +151,24 @@ class TestEmitsAtTheWiringWrite:
         s = sites(events)
         assert len(s) == 1 and s[0]["variety"]["total"] == 11
 
-    def test_incoming_overlays_disk(self, env, events):
+    def test_incoming_REPLACES_disk_rather_than_overlaying_it(self, env, events):
+        """RE-POINTED, because the arm this replaces could not observe the
+        model it was named for. It seeded a complete disk stamp, wrote
+        `{"total": 16}` and asserted `total == 16` — which is true under the
+        union AND under the replace, since both agree on a key the write
+        names. Its truth value never depended on the question, so it reported
+        green either way while its name asserted the retired vocabulary.
+
+        The assertion is now on the WHOLE projected stamp, which is where the
+        two models disagree: replace yields `{"total": 16}` alone, union
+        yields it beside the four disk dimensions."""
         seed(env, metadata={"variety": {**STAMP, "total": 4}})
         tlg.evaluate_lifecycle(wiring(metadata={"variety": {"total": 16}}))
-        assert sites(events)[0]["variety"]["total"] == 16
+        assert sites(events)[0]["variety"] == {"total": 16}, (
+            "the recorded sample kept disk dimensions the write dropped — "
+            "a complete-looking stamp for a dispatch that post-write holds "
+            "only a total"
+        )
 
     def test_partial_restamp_records_the_POST_WRITE_stamp(
         self, env, events
@@ -175,6 +189,129 @@ class TestEmitsAtTheWiringWrite:
             "the emit recorded a stamp the task does not hold post-write — "
             f"surviving disk keys mean this is still the union: {v!r}"
         )
+
+
+def project(disk_variety, incoming_metadata=None):
+    """Call `_dispatch_site_variety` DIRECTLY — no journal, no team config,
+    no task store, no marker root. Just the (tool_input, task) pair it
+    projects from, so an arm here survives a refactor of the emit caller.
+
+    `disk_variety=None` seeds a task whose metadata carries no `variety`;
+    `incoming_metadata=None` sends a write that names no metadata at all.
+    """
+    task = {"id": "42", "metadata": {}}
+    if disk_variety is not None:
+        task["metadata"]["variety"] = disk_variety
+    tool_input = {"taskId": "42"}
+    if incoming_metadata is not None:
+        tool_input["metadata"] = incoming_metadata
+    return tlg._dispatch_site_variety(tool_input, task)
+
+
+class TestDispatchSiteVarietyProjectsThePostWriteStamp:
+    """THE RECORDED SAMPLE MUST BE A STAMP THE TASK ACTUALLY ENDS UP WITH.
+
+    Direct coverage of the projection, housed beside the end-to-end arms
+    rather than replacing them: the E2E arms prove the emit REACHES this
+    function with the right arguments, these prove the function ANSWERS
+    correctly, and neither substitutes for the other.
+
+    WHY THIS IS PINNED AT ALL, given the gate is the half that can refuse:
+    a security review that measures `permissionDecision` sees nothing on
+    this path, so its zero-delta here is silence rather than evidence. The
+    failure it cannot see is a PHANTOM SAMPLE — old disk dimensions recorded
+    beside a new one, with a total inconsistent with them, for a dispatch
+    that post-write resolves to nothing. The calibration delta is the one
+    metric this arc preserved, and a plausible wrong number reaching it is
+    worse than an absent one, because absence is legible as the coverage gap
+    and a phantom is not.
+
+    THE THREE PARTIALNESS SHAPES ARE COVERED HERE TOO, and shape (a) is why
+    the class exists: the emit's end-to-end rebuild pinned only the SUBSET
+    shape, so a disjoint write — the one a containment reading excludes —
+    was unpinned on this path as well as on the gate's.
+    """
+
+    def test_DISJOINT_partial_records_only_what_the_write_sent(self):
+        """SHAPE (a). The write names `novelty`/`scope`, which the disk stamp
+        LACKS, and drops the `total` it held. Post-write the task carries
+        exactly what was sent.
+
+        THE PHANTOM IS THE POINT: under the union this returns a `total` of
+        11 sitting beside dimensions from a different write — a sample that
+        existed on no version of this task, for a dispatch that post-write
+        resolves to nothing. Discriminating: green here, red under the
+        union."""
+        got = project({"total": 11}, {"variety": {"novelty": 3, "scope": 2}})
+        assert got == {"novelty": 3, "scope": 2}, (
+            f"the projection kept a disk key the write dropped: {got!r}"
+        )
+        assert "total" not in got, (
+            "a total the task does not hold post-write reached the "
+            "calibration sample"
+        )
+
+    def test_SUBSET_partial_records_only_what_the_write_sent(self):
+        """SHAPE (b). Every incoming key is already on disk, so only the
+        DROPPED keys distinguish the models. Discriminating: green here, red
+        under the union, which would return all five."""
+        got = project(STAMP, {"variety": {"risk": 1}})
+        assert got == {"risk": 1}, (
+            f"surviving disk keys mean this is still the union: {got!r}"
+        )
+
+    def test_a_COMPLETE_stamp_in_the_write_survives_whole(self):
+        """SHAPE (c) — the must-hold twin, and the non-vacuity control for
+        the two arms above. A projection rebuilt to drop everything an
+        incoming write names would satisfy both of those and be useless;
+        only an arm that must still record a full sample separates them.
+
+        Deliberately NOT discriminating against the union: with no disk
+        stamp the two models agree, so a move here means the change
+        over-reached rather than a model being told apart."""
+        got = project(None, {"variety": STAMP})
+        assert set(got) == CANONICAL and got["total"] == 11
+
+    def test_disk_stands_when_the_write_names_no_variety(self):
+        """A write that does not name `variety` leaves the disk stamp
+        untouched — the ordinary wiring case, where the stamp landed at
+        TaskCreate and this write only wires the owner."""
+        assert project(STAMP, {"handoff": {"produced": ["f.py"]}})["total"] == 11
+        assert project(STAMP)["total"] == 11
+
+    def test_a_variety_DELETE_records_nothing(self):
+        """`metadata={"variety": None}` is the platform's delete-the-key
+        form. It NAMES `variety`, so post-write the stamp is absent and the
+        caller renders no `variety` on the event — the un-stamped answer,
+        which is the truthful one."""
+        assert project(STAMP, {"variety": None}) == {}
+
+    def test_rationale_strings_never_reach_the_sample(self):
+        """The projection's own job, asserted separately from the write
+        model so a regression in either is attributable. Rationales are
+        calibration noise in a GC-immune journal."""
+        got = project(STAMP)
+        assert set(got) == CANONICAL
+        assert not any(k.endswith("_rationale") for k in got)
+
+    def test_a_non_canonical_key_is_dropped_even_though_it_RESOLVES(self):
+        """THE PROJECTION AND THE GATE DELIBERATELY DIFFER HERE, and the
+        difference is not a bug in either. `score` is a legal candidate for
+        `resolve_variety_total`, so the enforcement gate reads a stamp of
+        `{"score": 12}` as RESOLVED and stays silent — while this projection
+        drops it and the event records no variety.
+
+        The two answer different questions: the gate asks whether the
+        dispatch was stamped at all, this asks for the canonical dimensions
+        the calibration record is keyed on. Reds if someone 'aligns' them by
+        widening the projection."""
+        assert project({"score": 12}) == {}
+
+    def test_no_stamp_on_either_side_is_an_EMPTY_dict(self):
+        """Empty, not None: the caller renders an ABSENT `variety` key from
+        this, which is what the consumer reads as un-stamped."""
+        assert project(None) == {}
+        assert project(None, {"variety": {}}) == {}
 
 
 class TestEvaluationOrderNegations:

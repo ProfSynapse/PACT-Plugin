@@ -747,22 +747,29 @@ def _dispatch_site_variety(tool_input: dict, task: dict) -> dict:
     An empty result means "no resolvable stamp", which the caller renders as
     an ABSENT ``variety`` key — the coverage gap itself, and a legal event.
 
-    SOURCE IS DISK OVERLAID WITH THE INCOMING WRITE — see
-    ``variety_stamp_as_of_write``, which owns that overlay and its direction. The
-    merge is SHARED with the enforcement gate in handoff_ordering_gate rather
-    than copied, because the two answer the same question ("what is this
-    dispatch's stamp as of this write?") and a divergence between them would
-    mean the gate enforcing one stamp while this emit records another.
+    SOURCE IS THE POST-WRITE STAMP — see ``variety_stamp_as_of_write``, which
+    owns that model. ``TaskUpdate`` replaces ``metadata.variety`` wholesale, so
+    the stamp is the incoming one when this write names ``variety`` at all and
+    the disk one otherwise; it is NOT a union of the two. Recording a union
+    would emit a sample the task never holds — disk dimensions beside a newly
+    written one, and a total inconsistent with them — for a dispatch that
+    post-write resolves to nothing.
+
+    THE RESOLUTION IS SHARED with the enforcement gate in handoff_ordering_gate
+    rather than copied, because the two answer the same question ("what will
+    this dispatch's stamp be once this write lands?") and a divergence between
+    them would mean the gate enforcing one stamp while this emit records
+    another.
 
     ONLY THE PROJECTION IS LOCAL, and it must stay that way: the enforcement
-    gate resolves a TOTAL from the unfiltered merge, where a non-canonical
+    gate resolves a TOTAL from the unfiltered stamp, where a non-canonical
     ``score`` key is a legal candidate that this projection deliberately drops.
 
     READ-ONLY on every input: builds new dicts only, never mutates ``task``,
     ``tool_input`` or either metadata mapping.
     """
-    merged = variety_stamp_as_of_write(tool_input, task)
-    return {k: merged[k] for k in DISPATCH_VARIETY_KEYS if k in merged}
+    post_write = variety_stamp_as_of_write(tool_input, task)
+    return {k: post_write[k] for k in DISPATCH_VARIETY_KEYS if k in post_write}
 
 
 def _emit_dispatch_site(

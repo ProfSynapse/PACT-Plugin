@@ -543,6 +543,14 @@ The two cardinalities are not interchangeable. Empirical example from a bundled 
 
 Whole-commit revert is still correct for commits that ship source-only (or tests-only); the bundled distinction only applies when both move together.
 
+### In-process mutation: re-arm per test, or mutate on disk
+
+A mutation applied **in process** — monkeypatching the symbol on the module under test rather than editing its source — is silently undone by any `importlib.reload` of that module. The reload re-executes the module and rebinds the real symbol, so a mutation applied once at session start is disarmed for every test that runs after it. Test files reload a module to re-read import-time configuration (an env-derived constant, a registry snapshot captured at import), so this happens in the middle of an otherwise ordinary run and produces no error.
+
+Apply the mutation from a **per-test hook** rather than once at configure time, or **edit the source on disk** — a disk edit survives reload, because reload re-reads from disk.
+
+**Treat a total non-flip as an instrument alarm before a finding.** When arms you expected to redden all stay green, do not report that the code under test is unprotected until you have confirmed the mutation was still armed when they ran. Re-run one expected-red arm in isolation: if it reddens alone but not in the full run, the mutation is being disarmed — the arms discriminate fine. This check matters because a partially-disarmed sweep still reports *some* kills, so its output reads as a specific and plausible finding rather than as a broken instrument, and nothing about it looks wrong.
+
 ---
 
 ## Testing Craft Patterns
