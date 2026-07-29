@@ -204,18 +204,35 @@ def resolve_variety_total(variety: object, metadata: object = None) -> int | Non
     Returns an int in [MIN_SCORE, MAX_SCORE] (4..16), or None when no
     candidate yields a resolvable in-range total.
 
-    Pure; NEVER raises. Non-dict / missing / malformed input → None.
-    bool is rejected at every key (bool subclasses int). A present-but-
-    out-of-range or wrong-typed candidate does NOT halt the chain — the
-    resolver falls through to the next candidate, so a junk canonical
-    total cannot shadow a recoverable fallback.
+    Pure; NEVER raises. bool is rejected at every key (bool subclasses int).
+    A present-but-out-of-range or wrong-typed candidate does NOT halt the
+    chain — the resolver falls through to the next candidate, so a junk
+    canonical total cannot shadow a recoverable fallback.
+
+    A NON-DICT ``variety`` DOES NOT SHORT-CIRCUIT THE CHAIN, and the
+    distinction is the difference between inapplicable and unreachable.
+    Candidates 1, 2 and 4 all READ FROM ``variety``, so with no dict there is
+    nothing for them to read and they are INAPPLICABLE — skipping them costs
+    nothing. Candidate 3 reads only ``metadata["variety_score"]`` and has no
+    dependency on ``variety`` at all, so short-circuiting made it UNREACHABLE
+    in exactly the case it exists to serve: a task carrying the sibling and no
+    ``metadata.variety``. The precedence above is the advertised contract, and
+    it was false for candidate 3 until the coercion below replaced the
+    early return.
     """
     # Belt-and-suspenders: the body below is structurally non-raising, but
     # the outermost guard ensures no exotic input can ever escape as an
     # exception — this hook fires on every Task-tool use.
     try:
+        # COERCE, DO NOT RETURN. An empty dict makes every variety-reading
+        # candidate below fall through on its own terms — `{}.get(k)` is None,
+        # which `_is_in_range_int` rejects — so precedence is preserved by the
+        # existing order rather than restated, and candidate 3 is not
+        # duplicated above the guard (two copies of a candidate is how the two
+        # drift apart). Rebinding a parameter is local; no caller input is
+        # mutated, so the function stays pure.
         if not isinstance(variety, dict):
-            return None
+            variety = {}
 
         # Candidate 1: canonical total.
         if _is_in_range_int(variety.get("total"), MIN_SCORE, MAX_SCORE):
