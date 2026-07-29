@@ -33,7 +33,6 @@ from shared.intentional_wait import (  # noqa: E402
 )
 from shared.variety_divergence import check_denominator_liveness  # noqa: E402
 
-WRAPUP_PATH = Path(__file__).parent.parent / "commands" / "wrap-up.md"
 VARIETY_PROTOCOL = Path(__file__).parent.parent / "protocols" / "pact-variety.md"
 
 
@@ -52,13 +51,6 @@ def teams_dir(tmp_path):
     d = tmp_path / "teams"
     d.mkdir()
     return str(d)
-
-
-def _q5_line():
-    for line in WRAPUP_PATH.read_text(encoding="utf-8").splitlines():
-        if line.lstrip().startswith("5. **Variety divergence**"):
-            return line
-    raise AssertionError("Q5 question line not found in wrap-up.md")
 
 
 class TestTheTwoExemptionSetsAreNotAliased:
@@ -177,12 +169,16 @@ class TestCheckAWitnessCannotSilentlyOmitTheExemptionSet:
     SCOPE, stated because this pin must not inherit a claim it does not
     make: no-default catches OMISSION -- the argument being dropped. It does
     NOT catch DIVERGENCE, where a caller passes the set's CONTENTS inlined
-    instead of the constant. That passes here, works today, and silently
-    decouples the witness from the SSOT, so a later addition to
-    TEACHBACK_EXEMPT_AGENT_TYPES would reach the emit predicate and not the
-    witness. Divergence is covered separately by
-    `test_q5_does_not_inline_the_exempt_set_contents`. Neither pin is
-    sufficient alone.
+    instead of the constant, silently decoupling the witness from the SSOT so
+    that a later addition to TEACHBACK_EXEMPT_AGENT_TYPES reaches the emit
+    predicate and not the witness.
+
+    THE DIVERGENCE HALF IS NOT COVERED, and cannot be while this helper has
+    no instruction-side caller: divergence is a property of how a CALLER
+    threads the constant, and the instruction text that called this helper
+    was removed. Reintroducing a caller must reintroduce a divergence pin
+    with it -- this pin alone is not sufficient, and its silence about
+    divergence is a gap rather than a clean bill.
 
     MUTATION THAT REDDENS: give `exempt_types` any default value, e.g.
     `exempt_types: frozenset = frozenset()`.
@@ -206,91 +202,6 @@ class TestCheckAWitnessCannotSilentlyOmitTheExemptionSet:
         produces the loud failure the pin claims it does."""
         with pytest.raises(TypeError):
             check_denominator_liveness([], [], [])
-
-
-class TestQ5ThreadsTheExemptionConstantIntoCheckA:
-    """Consumer (b), instruction half: the Q5 text must invoke the helper AND
-    thread the SSOT constant by name, rather than writing an exempt set out
-    locally. A second copy of that set is how the witness and the denominator
-    drift apart.
-
-    SCOPE LIMIT, stated because it is easy to overread: this pins the
-    INSTRUCTION, not the runtime. wrap-up.md is executed by an LLM, so a red
-    here means the instruction changed; a green does not prove the constant
-    was threaded at run time.
-
-    MUTATION THAT REDDENS: edit Q5 to inline a set literal in the call, e.g.
-    `check_denominator_liveness(events, dd, skips, frozenset({"pact-secretary"}))`.
-    """
-
-    def test_q5_calls_check_a_threading_the_named_constant(self):
-        q5 = _q5_line()
-        assert "check_denominator_liveness" in q5
-        assert "TEACHBACK_EXEMPT_AGENT_TYPES" in q5, (
-            "Q5 no longer names TEACHBACK_EXEMPT_AGENT_TYPES. Check A's "
-            "witness must exclude exactly what the denominator excludes; a "
-            "locally-written exempt set is a second copy that will drift."
-        )
-        call_start = q5.find("check_denominator_liveness(")
-        assert call_start != -1, "the helper is named but never called"
-        call_text = q5[call_start:call_start + 200]
-        assert "TEACHBACK_EXEMPT_AGENT_TYPES" in call_text, (
-            "the constant is named somewhere in Q5 but is not threaded "
-            "THROUGH THE CALL -- naming it in prose while passing something "
-            "else is exactly the drift this pin exists to catch"
-        )
-
-    def test_q5_does_not_inline_the_exempt_set_contents(self):
-        """The DIVERGENCE half, which the no-default pin does not cover.
-
-        Someone "simplifying" the instruction can inline the set's contents
-        instead of importing the constant. That passes every other pin here
-        and works today -- and silently decouples Check A's witness from the
-        SSOT, so a later addition to TEACHBACK_EXEMPT_AGENT_TYPES reaches the
-        emit predicate and NOT the witness.
-
-        The forbidden literals are DERIVED FROM THE CONSTANT rather than
-        hard-coded, which buys three things: it discriminates today, it
-        auto-tracks the set as it grows instead of freezing today's contents,
-        and its red means exactly one thing -- the contents were inlined
-        instead of the name.
-
-        NOT a `pact-` prefix probe, deliberately: Q5 legitimately contains
-        `pact-variety` (a documentation filename), so a prefix-keyed pin is
-        RED ON CORRECT CODE -- the mirror of the vacuity failure -- and
-        would force a hand-maintained exclusion list that rots.
-
-        NEITHER THIS PIN NOR `test_q5_calls_check_a_threading_the_named_constant`
-        SUBSUMES THE OTHER -- do not delete one as redundant. They overlap on
-        the obvious mutation and diverge on the interesting ones, and both
-        directions were demonstrated:
-
-          * pass a DIFFERENT VARIABLE in the call (`..., exempt)`) --
-            the call-text pin REDS, this one stays green: no member literal
-            is present anywhere.
-          * leave the constant threaded and write a SECOND COPY of the
-            contents into nearby prose -- this pin REDS, the call-text pin
-            stays green: the call itself is still correct.
-
-        The call-text pin guards the CALL SITE; this one guards the WHOLE
-        SECTION against a second copy of the set appearing at all.
-
-        MUTATION THAT REDDENS: replace the threaded constant in the Q5 call
-        with `frozenset({"pact-secretary"})` -- which reddens BOTH pins, and
-        is exactly why the two asymmetric mutations above are the ones that
-        establish independence.
-        """
-        q5 = _q5_line()
-        for member in sorted(TEACHBACK_EXEMPT_AGENT_TYPES):
-            for literal in (f'"{member}"', f"'{member}'"):
-                assert literal not in q5, (
-                    f"Q5 inlines the exempt-set member {literal} instead of "
-                    "threading TEACHBACK_EXEMPT_AGENT_TYPES. A copy of the "
-                    "set's contents does not track the set: add an agent "
-                    "type later and the emit predicate excludes it while "
-                    "Check A's witness still counts it, which is the drift "
-                    "this pin exists to catch."
-                )
 
 
 class TestProtocolProseNamesTheSameConstant:

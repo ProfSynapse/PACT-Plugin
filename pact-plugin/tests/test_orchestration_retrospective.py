@@ -297,33 +297,49 @@ class TestTotalExtraction:
         assert '["variety"]["total"]' not in q5
         assert "for e in events]" not in q5
 
-    def test_q5_reports_the_malformed_count(self, q5):
-        """Successor to the dropped-count pin. An unresolvable stamp lowers
-        coverage exactly like an un-stamped dispatch, so without the count a
-        data-quality problem reads as a compliance gap. C-6 gives the two
-        populations different names rather than one subtraction, and the
-        prose must still require the malformed one be reported."""
-        assert "len(malformed_stamps)" in q5
+    def test_q5_sample_keys_the_two_delta_forms_off_surfaced(self, wrapup_content):
+        """The rendering must key off the returned `surfaced` flag rather than
+        re-deriving the verdict from `delta`. A renderer that decides for
+        itself when a delta is worth surfacing reimplements the threshold, and
+        the two copies drift silently — the reader sees a confident verdict
+        that the computation never reached.
 
-    def test_q5_keeps_absent_and_malformed_stamps_distinct(self, q5):
-        """The two have different remedies. Merging them leaves the ratio
-        unchanged while reporting a normal coverage gap as a producer defect,
-        which trains readers to ignore the malformed signal."""
-        assert "never merge them" in q5
+        AIMED AT THE SAMPLE BLOCK, NOT THE QUESTION LINE, and that is load-
+        bearing: the flag is what SEPARATES the two forms, so the property
+        lives where the forms are declared. The question line names `surfaced`
+        only as one dict key among seven, and a pin there would assert a
+        membership that survives every rendering mistake this guards against.
 
-    def test_q5_requires_surfaced_to_be_honoured(self, q5):
-        """§6.1's actual mechanism. `coverage` is ALREADY 0.0 for an empty
-        session; the suppression lives in `surfaced=False` plus a reason. A
-        consumer that renders `coverage` without checking `surfaced` prints a
-        confident 0.000 for a session with nothing to measure — the original
-        defect rebuilt in its quietest form."""
-        assert "Honour `surfaced`" in q5
-        assert "N/A, never `0.000`" in q5
-        # The two zero-coverage states must be named distinctly, and the
-        # prose must say which signal separates them.
-        assert "no_dispatch_sites" in q5
-        assert "zero_coverage" in q5
-        assert "never the `coverage` float" in q5
+        SCOPE: structural (prose), with the vacuity limit this class documents
+        — it detects the keying being dropped or reworded away, not an LLM
+        disobeying it at run time. The behavioural half (that
+        `compute_variety_divergence` sets `surfaced` correctly) is pinned in
+        `test_per_dispatch_variety.py` and `test_variety_divergence.py`.
+
+        MUTATION THAT REDDENS: strip `surfaced=True` / `surfaced=False` from
+        the two form headers, leaving them separated by the delta wording
+        alone — i.e. a sample that renders regardless of the flag.
+        """
+        headers = [
+            line for line in wrapup_content.splitlines()
+            if line.startswith("**SURFACED**") or line.startswith("**IN BAND**")
+        ]
+        assert len(headers) == 2, (
+            "expected exactly one SURFACED and one IN BAND form header in the "
+            f"Q5 sample block, found {len(headers)}: {headers}"
+        )
+        surfaced_header = next(h for h in headers if h.startswith("**SURFACED**"))
+        in_band_header = next(h for h in headers if h.startswith("**IN BAND**"))
+        assert "`surfaced=True`" in surfaced_header, (
+            "the SURFACED form no longer declares `surfaced=True`. Without it "
+            "the sample tells a renderer to decide from `delta` alone, which "
+            "is the threshold reimplemented in prose."
+        )
+        assert "`surfaced=False`" in in_band_header, (
+            "the IN BAND form no longer declares `surfaced=False`. The two "
+            "forms are then separated by wording rather than by the flag the "
+            "computation actually returns."
+        )
 
     def test_q6_guards_the_flag_extraction(self, q6):
         assert "isinstance(e.get(\"rationale_articulates_this_dispatch\"), str)" in q6
