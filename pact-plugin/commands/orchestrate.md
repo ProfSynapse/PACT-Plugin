@@ -463,7 +463,7 @@ When a phase is skipped but a coder encounters a decision that would have been h
 **Dispatch `pact-preparer`** — follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
 
 1. `TaskCreate(subject="preparer: TEACHBACK for {feature}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="preparer: research {feature}", description=<see below>)` — Task B.
+2. `TaskCreate(subject="preparer: research {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
      - CONTEXT: [task description, plan sections (if any)]
      - MISSION: [research mission]
@@ -570,7 +570,7 @@ When detection fires (score >= threshold), follow the evaluation response protoc
 **Dispatch `pact-architect`** — follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
 
 1. `TaskCreate(subject="architect: TEACHBACK for {feature}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="architect: design {feature}", description=<see below>)` — Task B.
+2. `TaskCreate(subject="architect: design {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
      - CONTEXT: [task description, where to find PREPARE outputs (e.g., "Read `docs/preparation/{feature}.md`"), plan sections (if any), plan reference]
      - MISSION: [design mission]
@@ -705,7 +705,7 @@ JSON
 **Dispatch coder(s)** — for each coder needed, follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
 
 1. `TaskCreate(subject="{coder-type}: TEACHBACK for {scope}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="{coder-type}: implement {scope}", description=<see below>)` — Task B.
+2. `TaskCreate(subject="{coder-type}: implement {scope}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
      - CONTEXT: Where to find ARCHITECT outputs (e.g., "Read `docs/architecture/{feature}.md`"), plan sections (if any), plan reference. (NOTE: Do not read the phase output files yourself or paste their content into the task description.)
      - MISSION: [implementation mission]
@@ -855,7 +855,7 @@ Execute the [CONSOLIDATE Phase protocol](../protocols/pact-scope-phases.md#conso
 **Dispatch `pact-test-engineer`** — follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
 
 1. `TaskCreate(subject="test-engineer: TEACHBACK for {feature}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="test-engineer: test {feature}", description=<see below>)` — Task B.
+2. `TaskCreate(subject="test-engineer: test {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
      - CONTEXT: [task description, coder task references (e.g., "Coder tasks: #{id1}, #{id2} — read via `TaskGet` for implementation decisions and flagged uncertainties"), plan sections (if any), plan reference]
      - MISSION: [testing mission]

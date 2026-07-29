@@ -142,7 +142,7 @@ Select the domain coder based on PR focus:
 - Infrastructure changes → **pact-devops-engineer** (CI/CD quality, Docker best practices, script safety)
 - Multiple domains → Coder for domain with most significant changes, or all relevant domain coders if changes are equally significant
 
-**Teachback-Gated Dispatch**
+### Teachback-Gated Dispatch
 
 Each reviewer dispatch creates **two tasks**, not one:
 
