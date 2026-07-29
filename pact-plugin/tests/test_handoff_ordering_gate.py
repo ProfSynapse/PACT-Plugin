@@ -866,20 +866,34 @@ class TestDispatchVarietyEnvKnobModes:
         ("Deny", "deny"),
         (" shadow\t", "shadow"),
         ("warn", "warn"),
-        ("", "warn"),           # empty → safe default
-        ("bogus", "warn"),      # unknown → safe default
+        ("", "deny"),           # empty → the DECLARED default
+        ("bogus", "deny"),      # unknown → the DECLARED default
         ("denY ", "deny"),
     ])
     def test_env_knob_strip_lower_normalization(
         self, monkeypatch, env_value, expected,
     ):
         """The PACT_DISPATCH_VARIETY_MODE read normalizes with .strip().lower()
-        BEFORE the membership check, then falls back to warn for anything not in
-        the allowed set. NON-TAUTOLOGICAL: reloads the module under the real env
-        value so it exercises the actual os.environ read + normalize + fallback
-        (not the already-resolved constant). Asserts case/whitespace variants of
-        'deny' arm deny, and unknown/empty values stay warn — proving the
-        normalization can never accidentally enable an unintended mode."""
+        BEFORE the membership check, then falls back to the option's DECLARED
+        default for anything not in the allowed set. NON-TAUTOLOGICAL: reloads
+        the module under the real env value so it exercises the actual
+        os.environ read + normalize + fallback (not the already-resolved
+        constant).
+
+        WHAT THE FALLBACK ROWS NOW ASSERT, because their polarity inverted when
+        this gate was armed: they used to prove "an unrecognised token cannot
+        accidentally ENABLE enforcement". The declared default is now `deny`, so
+        what they prove instead is the property that survives the flip — an
+        unrecognised token resolves to the DECLARED DEFAULT and to nothing else.
+        It is never derived from the token and never lands outside the allowed
+        set. The consumer-facing consequence is real and is the reason these
+        rows are kept rather than deleted: a MISSPELLED opt-down (`warm`,
+        `Warnn`) still enforces, so a consumer who means to opt down must spell
+        it correctly and read the resolver's stderr line.
+
+        The 'warn' row is the discriminator: if the fallback ever stopped
+        consulting the registry and hardcoded a mode, that row and the fallback
+        rows could not both hold."""
         import importlib
         monkeypatch.setenv("PACT_DISPATCH_VARIETY_MODE", env_value)
         reloaded = importlib.reload(gate)
@@ -972,3 +986,177 @@ class TestIsPactSpecialistOwner:
 
         monkeypatch.setattr(ctx_module, "_iter_members", _raise)
         assert is_pact_specialist_owner("backend-coder", TEAM) is False
+
+
+# =============================================================================
+# The disk/incoming OVERLAY — the cardinal over-block fix.
+# =============================================================================
+def _wiring_update_with_metadata(task_id, metadata, **kw):
+    """A wiring write that ALSO carries metadata — the atomic wire+stamp."""
+    payload = _wiring_update(task_id, **kw)
+    payload["tool_input"]["metadata"] = metadata
+    return payload
+
+
+class TestDispatchVarietyReadsTheIncomingWrite:
+    """THE CARDINAL CASE. `TaskUpdate(B, owner=..., addBlockedBy=[A],
+    metadata={"variety": {...}})` wires and stamps in ONE call. At PreToolUse
+    the stamp is in the write and not yet on disk, so a disk-only read REFUSES
+    a faithful single command — which for a control that can deny is the
+    failure that must never ship.
+
+    MUTATION THAT REDDENS: in `_evaluate_dispatch_variety`, replace
+    `merged_variety_stamp(tool_input, task)` with the disk-only read
+    (`task.get("metadata", {}).get("variety")`). Every test in this class
+    flips to an advisory. That is the base behaviour, measured.
+    """
+
+    def test_atomic_wire_and_stamp_is_SILENT(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={})
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety": _variety(12)}),
+        )
+        assert adv is None, (
+            "a wiring write CARRYING a complete variety stamp was refused — "
+            f"this is the cardinal over-block: {adv!r}"
+        )
+
+    def test_atomic_stamp_survives_a_task_with_no_metadata_key(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder")
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety": _variety(12)}),
+        ) is None
+
+    def test_atomic_stamp_via_the_variety_score_sibling(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """The non-canonical spelling resolve_variety_total documents as
+        candidate 3. Reaching it needs the overlay to hand the resolver a DICT
+        rather than None — the resolver early-returns on a non-dict `variety`
+        and never consults the sibling."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={})
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety_score": 12}),
+        ) is None
+
+    def test_a_ONE_KEY_restamp_does_not_flip_a_stamped_task_to_unstamped(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """The LEVEL pin at the gate. Under a metadata-level merge the
+        incoming `{"novelty": 4}` replaces the whole disk variety, nothing
+        resolves, and a correctly-stamped dispatch is refused."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={"variety": _variety(12)})
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety": {"novelty": 4}}),
+        ) is None
+
+    def test_STILL_DENIES_when_neither_side_carries_a_stamp(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """The other direction, and the reason the overlay is not a hole: an
+        incoming metadata that carries no variety leaves the gate firing."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={})
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"handoff": {"produced": ["f"]}}),
+        ) is not None
+
+    def test_an_incoming_write_that_JUNKS_the_only_resolving_key_denies(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """The single new deny this overlay opens, asserted so it is a decision
+        rather than a surprise. The write itself destroys the stamp — post-write
+        the task holds `{"total": "x"}` — so the refusal is truthful, and the
+        message sends the caller to the VALUES rather than to the field list."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo",
+                   owner="backend-coder", metadata={"variety": {"total": 12}})
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update_with_metadata("42", {"variety": {"total": "x"}}),
+        )
+        assert adv is not None and "does NOT resolve" in adv
+
+
+class TestDispatchVarietyDiagnosisSplit:
+    """ABSENT vs PRESENT-BUT-UNRESOLVABLE. One trigger, two messages, because
+    the remedies are opposite: 'write the block' versus 'the block you wrote
+    does not resolve'. NOT a carve-out — both still fire.
+
+    MUTATION THAT REDDENS: make `_variety_stamp_attempted` return a constant.
+    Either the absent tests or the unresolvable tests go red, whichever
+    constant is chosen.
+    """
+
+    def _adv(self, tmp_path, monkeypatch, pact_context, disk, incoming=None):
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        kw = {"subject": "impl foo", "owner": "backend-coder"}
+        if disk is not None:
+            kw["metadata"] = disk
+        _seed_task(tmp_path, TEAM, "42", **kw)
+        frame = (_wiring_update("42") if incoming is None
+                 else _wiring_update_with_metadata("42", incoming))
+        return gate._evaluate_dispatch_variety(frame)
+
+    @pytest.mark.parametrize("disk,incoming", [
+        pytest.param({}, None, id="no_metadata_content"),
+        pytest.param(None, None, id="no_metadata_key"),
+        pytest.param({}, {"handoff": {}}, id="incoming_without_variety"),
+    ])
+    def test_nothing_written_says_ADD_the_block(
+        self, tmp_path, monkeypatch, pact_context, disk, incoming,
+    ):
+        adv = self._adv(tmp_path, monkeypatch, pact_context, disk, incoming)
+        assert adv is not None
+        assert "no metadata.variety stamp at all" in adv
+        assert "does NOT resolve" not in adv
+
+    @pytest.mark.parametrize("disk,incoming", [
+        pytest.param({"variety": {}}, None, id="empty_variety_dict"),
+        pytest.param({"variety": "12"}, None, id="variety_is_a_string"),
+        pytest.param({"variety": {"total": 99}}, None, id="total_out_of_range"),
+        pytest.param({"variety": {"total": True}}, None, id="total_is_a_bool"),
+        pytest.param({"variety": {"total": "12"}}, None, id="total_is_a_string"),
+        pytest.param({"variety_score": "x"}, None, id="sibling_is_junk"),
+        pytest.param({}, {"variety": {}}, id="incoming_empty_variety"),
+    ])
+    def test_something_written_says_RE_READ_the_values(
+        self, tmp_path, monkeypatch, pact_context, disk, incoming,
+    ):
+        adv = self._adv(tmp_path, monkeypatch, pact_context, disk, incoming)
+        assert adv is not None
+        assert "does NOT resolve" in adv
+        assert "no metadata.variety stamp at all" not in adv, (
+            "a consumer who DID stamp is being told to add the block — that "
+            "sends them hunting for a missing field instead of at the values"
+        )
+
+    def test_BOTH_states_still_deny(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """The non-carve-out. If the unresolvable branch is ever softened into
+        a pass, this is what reddens."""
+        absent = self._adv(tmp_path, monkeypatch, pact_context, {})
+        unresolvable = self._adv(
+            tmp_path, monkeypatch, pact_context, {"variety": {"total": 99}})
+        assert absent is not None and unresolvable is not None
+        assert absent != unresolvable, "the two states must not share a message"

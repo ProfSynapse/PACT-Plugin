@@ -56,8 +56,14 @@ _REGISTRY: Dict[str, dict] = {
         "type": "enum", "default": "warn",
         "allowed": ("warn", "deny", "shadow"), "consumer": "hook",
     },
+    # The one ENFORCING default in this registry: an unset value DENIES. The
+    # asymmetry against its sibling above is deliberate -- this gate refuses a
+    # dispatch-wiring write whose Task B carries no resolvable variety, and a
+    # consumer opts DOWN to "warn"/"shadow" rather than opting up. Note the
+    # consequence at the resolver: an unrecognized value falls back to this
+    # default too, so a misspelled opt-down still denies.
     "PACT_DISPATCH_VARIETY_MODE": {
-        "type": "enum", "default": "warn",
+        "type": "enum", "default": "deny",
         "allowed": ("warn", "deny", "shadow"), "consumer": "hook",
     },
 }

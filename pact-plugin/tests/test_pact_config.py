@@ -73,14 +73,21 @@ class TestGetEnumNormalizationAndValidation:
         assert get_enum(_INLINE) == expected
 
     def test_unset_returns_default_silently(self, _clean_env, capsys):
+        # The two enums declare DIFFERENT defaults on purpose: the
+        # dispatch-variety gate ships ENFORCING, the inline-mission gate
+        # advisory. Asserting both here is what keeps a copy-paste revert of
+        # either one visible.
         assert get_enum(_INLINE) == "warn"
-        assert get_enum(_VARIETY) == "warn"
+        assert get_enum(_VARIETY) == "deny"
         # Unset is the steady state -- NOT a misconfiguration -> no warning.
         assert capsys.readouterr().err == ""
 
     def test_invalid_value_falls_back_and_warns(self, _clean_env, capsys):
         _clean_env.setenv(_VARIETY, "banana")
-        assert get_enum(_VARIETY) == "warn"
+        # Falls back to the DECLARED default, which for this option is "deny".
+        # A misspelled opt-down therefore still enforces -- deliberate, and the
+        # stderr warning below is the consumer's only tell that it happened.
+        assert get_enum(_VARIETY) == "deny"
         # The non-vacuity tell: the invalid branch MUST emit a stderr warning.
         err = capsys.readouterr().err
         assert "PACT_DISPATCH_VARIETY_MODE" in err

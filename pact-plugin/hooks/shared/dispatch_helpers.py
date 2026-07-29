@@ -13,6 +13,11 @@ Exposes:
     see its docstring for the other two legs, why they are deliberately
     NOT folded into one composite, and — important — what this predicate
     does NOT establish)
+  - merged_variety_stamp(tool_input, task) — the dispatched Task-B's
+    variety stamp as of this write: disk overlaid with the incoming
+    tool_input, merged at the variety-KEY level. Shared so the stamp the
+    enforcement gate reads and the stamp the dispatch_site emit records
+    can never drift apart.
   - has_task_assigned(team_name, name) — task-assigned check (one of
     the dispatch_gate rules; rejects spawn before TaskCreate)
   - trustworthy_actor_name(input_data) — actor resolution for the
@@ -263,6 +268,52 @@ def is_owner_wiring_shape(tool_input: dict) -> bool:
         return False
     add_blocked_by = tool_input.get("addBlockedBy")
     return isinstance(add_blocked_by, list) and bool(add_blocked_by)
+
+
+def merged_variety_stamp(tool_input: object, task: object) -> dict:
+    """The dispatched Task-B's variety stamp AS OF THIS WRITE — the on-disk
+    stamp overlaid with the stamp carried in the incoming ``tool_input``.
+
+    The stamp is normally written at ``TaskCreate(B)`` and is already on disk
+    when the owner-wiring ``TaskUpdate`` lands. But a caller may wire and stamp
+    in ONE call — ``TaskUpdate(B, owner=..., addBlockedBy=[A],
+    metadata={"variety": {...}})`` — and at PreToolUse that stamp exists only
+    in the write. A disk-only read of that case is wrong in both directions:
+    the dispatch_site emit records an un-stamped site for a dispatch that WAS
+    stamped (coverage biased down), and the enforcement gate REFUSES a faithful
+    single command (the cardinal failure for a control that can deny).
+
+    MERGED AT THE VARIETY-KEY LEVEL, NOT THE METADATA LEVEL, and the level is
+    the point rather than an implementation detail. ``{**disk_metadata,
+    **incoming_metadata}`` would let a write that names ``variety`` at all
+    replace the on-disk variety wholesale, so a caller re-stamping ONE
+    dimension would read as un-stamped — manufacturing the exact false negative
+    this overlay exists to remove. Merging the variety dicts' KEYS keeps every
+    disk key the incoming write does not name.
+
+    DIRECTION: disk first, incoming last, so the write in flight wins on any
+    key it names.
+
+    UNFILTERED BY DESIGN — returns every key found in either source, NOT the
+    canonical ``DISPATCH_VARIETY_KEYS`` projection. A caller wanting the journal
+    projection applies it itself; a caller resolving a TOTAL must not, because
+    ``resolve_variety_total`` accepts non-canonical candidates (``score``) that
+    the projection discards, and filtering here would reject a stamp that
+    resolves today.
+
+    Pure: no FS, no I/O, never raises, and READ-ONLY on every input — builds one
+    new dict and never mutates ``task``, ``tool_input`` or either metadata
+    mapping. Either argument may be any type; a non-dict contributes nothing.
+    """
+    merged: dict = {}
+    for container in (task, tool_input):
+        if not isinstance(container, dict):
+            continue
+        metadata = container.get("metadata")
+        variety = metadata.get("variety") if isinstance(metadata, dict) else None
+        if isinstance(variety, dict):
+            merged.update(variety)
+    return merged
 
 
 # ─── task-assigned check ───────────────────────────────────────────────────

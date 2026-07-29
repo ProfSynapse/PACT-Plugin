@@ -16,7 +16,6 @@ denominator keys on `is_teachback_exempt`, which has no metadata surface, so
 that fact is irrelevant here and pinning it would ossify a hazard that no
 longer exists.
 """
-import inspect
 import json
 import sys
 from pathlib import Path
@@ -31,7 +30,6 @@ from shared.intentional_wait import (  # noqa: E402
     TEACHBACK_EXEMPT_AGENT_TYPES,
     is_teachback_exempt,
 )
-from shared.variety_divergence import check_denominator_liveness  # noqa: E402
 
 VARIETY_PROTOCOL = Path(__file__).parent.parent / "protocols" / "pact-variety.md"
 
@@ -155,57 +153,8 @@ class TestTheEmitPredicateReadsTheSSOT:
         )
 
 
-class TestCheckAWitnessCannotSilentlyOmitTheExemptionSet:
-    """Consumer (b): Check A's witness filter.
-
-    `check_denominator_liveness` does NOT read the SSOT -- it takes the
-    exemption set as a parameter, threaded by the caller. That is the better
-    design for an LLM-executed caller, and this pin is what keeps it true:
-    with NO DEFAULT, omitting the argument is a loud TypeError and the
-    constant must appear BY NAME in reviewable instruction text. Add a
-    default and the markdown can quietly stop naming it while everything
-    still runs -- a silent coupling whose rot is undetectable.
-
-    SCOPE, stated because this pin must not inherit a claim it does not
-    make: no-default catches OMISSION -- the argument being dropped. It does
-    NOT catch DIVERGENCE, where a caller passes the set's CONTENTS inlined
-    instead of the constant, silently decoupling the witness from the SSOT so
-    that a later addition to TEACHBACK_EXEMPT_AGENT_TYPES reaches the emit
-    predicate and not the witness.
-
-    THE DIVERGENCE HALF IS NOT COVERED, and cannot be while this helper has
-    no instruction-side caller: divergence is a property of how a CALLER
-    threads the constant, and the instruction text that called this helper
-    was removed. Reintroducing a caller must reintroduce a divergence pin
-    with it -- this pin alone is not sufficient, and its silence about
-    divergence is a gap rather than a clean bill.
-
-    MUTATION THAT REDDENS: give `exempt_types` any default value, e.g.
-    `exempt_types: frozenset = frozenset()`.
-    """
-
-    def test_exempt_types_has_no_default(self):
-        param = inspect.signature(check_denominator_liveness).parameters[
-            "exempt_types"
-        ]
-        assert param.default is inspect.Parameter.empty, (
-            "check_denominator_liveness.exempt_types has acquired a default. "
-            "The caller is LLM-executed markdown: with no default, dropping "
-            "the argument fails loudly and the SSOT constant must be named in "
-            "the instruction text. With a default, the instruction can stop "
-            "naming it and the witness silently filters on a different set "
-            "than the denominator excludes."
-        )
-
-    def test_omitting_the_exemption_set_is_a_loud_failure(self):
-        """Non-vacuity for the above: prove the no-default state actually
-        produces the loud failure the pin claims it does."""
-        with pytest.raises(TypeError):
-            check_denominator_liveness([], [], [])
-
-
 class TestProtocolProseNamesTheSameConstant:
-    """Consumer (c): the protocol prose.
+    """Consumer (b): the protocol prose.
 
     HONEST SCOPE, and it must not be reported as more than this: prose cannot
     READ an SSOT, so this checks only that it NAMES the same constant. A red

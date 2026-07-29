@@ -293,6 +293,7 @@ try:
     from shared.dispatch_helpers import (
         is_owner_wiring_shape,
         is_pact_specialist_owner,
+        merged_variety_stamp,
         trustworthy_actor_name,
     )
     from shared.intentional_wait import is_self_complete_exempt, is_teachback_exempt
@@ -745,25 +746,21 @@ def _dispatch_site_variety(tool_input: dict, task: dict) -> dict:
     An empty result means "no resolvable stamp", which the caller renders as
     an ABSENT ``variety`` key — the coverage gap itself, and a legal event.
 
-    SOURCE IS DISK OVERLAID WITH THE INCOMING WRITE, and the direction matters
-    to the numerator. The stamp is normally written at ``TaskCreate(B)`` and so
-    lives on disk by the time the owner-wiring TaskUpdate lands. But if a lead
-    ever stamps ``metadata.variety`` in the SAME update that wires the owner, a
-    disk-only read would miss it and record an un-stamped site for a dispatch
-    that WAS stamped — a false negative biasing coverage DOWN. Overlaying the
-    incoming write over the disk read is correct under both orderings, and is
-    the same ``{**disk, **incoming}`` shape ``_emit_per_write_snapshot`` uses.
+    SOURCE IS DISK OVERLAID WITH THE INCOMING WRITE — see
+    ``merged_variety_stamp``, which owns that overlay and its direction. The
+    merge is SHARED with the enforcement gate in handoff_ordering_gate rather
+    than copied, because the two answer the same question ("what is this
+    dispatch's stamp as of this write?") and a divergence between them would
+    mean the gate enforcing one stamp while this emit records another.
+
+    ONLY THE PROJECTION IS LOCAL, and it must stay that way: the enforcement
+    gate resolves a TOTAL from the unfiltered merge, where a non-canonical
+    ``score`` key is a legal candidate that this projection deliberately drops.
 
     READ-ONLY on every input: builds new dicts only, never mutates ``task``,
     ``tool_input`` or either metadata mapping.
     """
-    disk_md = task.get("metadata") if isinstance(task, dict) else None
-    incoming_md = tool_input.get("metadata") if isinstance(tool_input, dict) else None
-    merged: dict = {}
-    for source in (disk_md, incoming_md):
-        variety = source.get("variety") if isinstance(source, dict) else None
-        if isinstance(variety, dict):
-            merged.update(variety)
+    merged = merged_variety_stamp(tool_input, task)
     return {k: merged[k] for k in DISPATCH_VARIETY_KEYS if k in merged}
 
 
