@@ -498,19 +498,17 @@ def _journal_decision(decision: str, reason: str | None, rule: str | None,
             reason=reason,
             prompt_redacted=_redact(prompt)[:1024],
         )
-        # Captured, not discarded — and this site matters more than a
-        # generic best-effort emit, because dispatch_decision is the LIVENESS
-        # CHECK'S OWN WITNESS. A dropped event here does not merely make that
-        # check under-fire: the design already documents a benign reason the
-        # witness can read zero (a resumed session whose specialists were all
-        # spawned in a prior arc), so a real failure produces a signature
-        # INDISTINGUISHABLE from an explanation readers have already been told
-        # to accept. Not "a guard that can no longer fire looks healthy
-        # forever" — worse: a guard whose silence has a PRE-APPROVED INNOCENT
-        # READING, which nobody investigates because we told them not to.
-        # append_event_checked records a journal_emit_skipped naming this
-        # type, which is what lets the liveness check report INCONCLUSIVE
-        # instead of alive when its own witness was lost.
+        # Captured, not discarded: append_event_checked records a
+        # journal_emit_skipped naming this type when the write does not land,
+        # so a lost dispatch_decision leaves a durable trace rather than
+        # vanishing.
+        # NOTHING READS dispatch_decision TODAY. The liveness check that once
+        # treated it as its own witness was retired together with the Q5
+        # coverage ratio, and Q5's surviving sample-loss report reads only
+        # skipped_type == "dispatch_site". The capture stays — it is the cheap
+        # half, and a stream with no reader is harmless where a silently
+        # dropped one is not — but do NOT justify anything downstream on the
+        # claim that this event is watched.
         append_event_checked(event, "dispatch_decision")
     except Exception:
         # Journal is best-effort; gate decision stands regardless.

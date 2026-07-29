@@ -691,7 +691,7 @@ def _dispatch_site_already_emitted(team_name: str, task_id: str) -> bool:
     half of a security pair with ``read_task_json``, and coercion in a path
     sanitizer is the fail-open direction). Reaching the marker path by any
     other route therefore re-raises the old TypeError, the caller's guard
-    swallows it, the emit skips, and the denominator silently loses a site.
+    swallows it, the emit skips, and Q5's population silently loses a site.
 
     Root policy is the default team-scoped root: the emit refuses to run on an
     empty ``team_name`` (§5.2 step 2), so the empty-team fallback that
@@ -703,9 +703,10 @@ def _dispatch_site_already_emitted(team_name: str, task_id: str) -> bool:
     removes the team dir. The platform REUSES low task_ids across arcs, so a
     prior arc's ``91-dispatch_site`` marker will SUPPRESS a later arc's task-91
     emit. Ruled ACCEPT rather than fixed, and the direction is why: one event
-    carries both coverage terms, so a suppressed emit drops that dispatch from
-    the numerator AND the denominator together — the ratio stays valid and only
-    N shrinks. Under-count is the safe direction; over-count would fabricate a
+    carries both the site and its stamp, so a suppressed emit drops that
+    dispatch from the distribution AND the site count together — the mean is
+    taken over fewer samples, but no dispatch is recorded as un-stamped that
+    was not. Under-count is the safe direction; over-count would fabricate a
     gap. The only arc-distinguishing key available here is the task subject,
     and keying on it re-opens an over-count on any mid-arc subject edit, which
     trades a benign silent loss for a harmful visible one. This is a bounded
@@ -772,12 +773,15 @@ def _emit_dispatch_site(
     task: dict,
 ) -> None:
     """Emit ONE ``dispatch_site`` event per dispatched Task-B, at the
-    owner-wiring TaskUpdate. The event's EXISTENCE is a dispatch site (the
-    coverage denominator); the OPTIONAL ``variety`` within it is the numerator.
-    Sourcing both terms from one stream is what makes coverage > 1.0
-    structurally impossible instead of merely guarded.
+    owner-wiring TaskUpdate. The event's EXISTENCE is a dispatch site; the
+    OPTIONAL ``variety`` within it carries that dispatch's stamp. Both come
+    from one stream, so the distribution and the site count can never be
+    sourced over different populations.
 
-    ADDITIVE AND INERT at this commit: nothing reads dispatch_site yet.
+    READ BY Q5, AND IT IS THE ONLY SOURCE: commands/wrap-up.md sources the
+    retrospective's dispatch population from this stream and says so under a
+    red flag. Changing this event's shape, its emit conditions, or dropping it
+    changes what Q5 measures — there is no second stream to fall back on.
 
     WHY HERE AND NOT BESIDE THE dispatch_variety EMIT: that emit lives in the
     TaskCreate branch and is keyed on ``metadata.variety`` PRESENCE, precisely
@@ -795,9 +799,12 @@ def _emit_dispatch_site(
       * step (2), the ``team_name`` precondition, is evaluated BEFORE any
         exemption. Without it an unresolvable team makes ``is_teachback_exempt``
         return False — "not exempt" — which admits every secretary task as an
-        un-stamped site and craters coverage while the number still renders.
-        Gating the whole emit first converts that fail-DARK crater into a total
-        stream loss, which the liveness check can see. ``team_name`` is also the
+        un-stamped site and craters the distribution while the number still
+        renders. Gating the whole emit first converts that fail-DARK crater
+        into a total stream loss — an ABSENT answer instead of a confident
+        wrong one, which is the safer failure even though nothing detects it
+        today (the liveness check that would have was retired with the Q5
+        coverage ratio). ``team_name`` is also the
         one marker component with no ``str()`` coercion behind it: a non-str
         value fails with AttributeError at ``.lower()``, not the TypeError the
         marker resolver handles, so nothing else is standing here.
@@ -856,8 +863,8 @@ def _emit_dispatch_site(
         if _is_teachback_subject(subject):
             return
         # (6) NOT teachback-exempt. is_teachback_exempt asks "should this owner
-        #     be dispatched via a Task A + Task B pair?" — the question the
-        #     denominator asks. is_self_complete_exempt asks a DIFFERENT
+        #     be dispatched via a Task A + Task B pair?" — the question Q5's
+        #     population asks. is_self_complete_exempt asks a DIFFERENT
         #     question ("may this owner self-complete?"), and the two policies
         #     are forbidden from being recoupled; see the frozenset comments in
         #     shared/intentional_wait.py.

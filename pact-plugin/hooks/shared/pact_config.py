@@ -179,14 +179,25 @@ def get_enum(name: str) -> str:
         # a key named `invalid_fallback` to cover crashes would broaden its
         # meaning past its name, which is how a precise key becomes a vague one.
         #
-        # RESIDUAL, named because a can't-happen path with an undocumented
-        # direction is exactly what gets re-litigated later: for a row whose
-        # default is enforcing, this handler fails CLOSED -- the opposite
-        # direction from the unrecognized branch above, on purpose. The exposure
-        # is bounded by the path being structurally non-raising (dict lookups,
-        # os.environ.get, tuple membership), i.e. a guard rather than a route.
-        # If it ever becomes reachable, revisit this choice rather than assuming
-        # it was made with a live path in mind.
+        # RESIDUAL, named because a path with an undocumented direction is
+        # exactly what gets re-litigated later: for a row whose default is
+        # enforcing, this handler fails CLOSED -- the opposite direction from
+        # the unrecognized branch above, on purpose.
+        #
+        # THIS IS A LIVE PATH, NOT A CAN'T-HAPPEN GUARD. The `print` to stderr
+        # above is an I/O syscall and raises on a closed or broken stream
+        # (BrokenPipeError / OSError) -- a real condition for a hook running as
+        # a short-lived subprocess whose stderr may already be gone. It is the
+        # ONLY raising statement in the try: os.environ.get, the normalize and
+        # the tuple membership do not raise.
+        # CONSEQUENCE, and it is the one worth knowing: the raise can only
+        # happen on the SET-BUT-UNRECOGNIZED branch, because that is where the
+        # print lives. So the single consumer this costs is the person who
+        # mistyped an opt-down -- they land on `default` (enforcing) rather
+        # than the `invalid_fallback` the row declared for them, and the stderr
+        # line that would have told them never made it out. Fail-closed is
+        # still the right direction for a control that can deny; do not read
+        # the reachability as an argument to switch it.
         return default
 
 

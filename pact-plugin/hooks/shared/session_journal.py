@@ -122,31 +122,27 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     "dispatch_variety": {"task_id": str, "variety": dict},
     # hooks/task_lifecycle_gate.py emits dispatch_site at the owner-wiring
     # TaskUpdate — one event per dispatched Task-B, O_EXCL-deduped on
-    # (team, task_id). It is the DENOMINATOR of dispatch-variety coverage:
-    # the event's EXISTENCE is the site, and the OPTIONAL `variety` within it
-    # is the numerator. Both terms therefore come from one stream, which is
-    # what makes coverage > 1.0 structurally impossible rather than merely
-    # guarded.
+    # (team, task_id). It is Q5's POPULATION: the event's EXISTENCE is the
+    # dispatch site, and the OPTIONAL `variety` within it is that dispatch's
+    # stamp. Both come from one stream, so the distribution and the site count
+    # can never be sourced over different populations.
     #
     # `variety` is registered OPTIONAL below, NOT required here, and the
-    # distinction is load-bearing: an un-stamped dispatch is precisely the
-    # population this metric exists to count, so requiring `variety` would
-    # make those events schema-INVALID, silently reject them, and delete the
-    # gap from the denominator — a metric that improves because data was
-    # destroyed. The required registration below is also what ACTIVATES the
+    # distinction is load-bearing: requiring it would make an un-stamped
+    # dispatch schema-INVALID and silently reject the event, deleting the
+    # dispatch from the population rather than recording it — data destroyed
+    # to make a number look better. The required registration below is also what ACTIVATES the
     # optional check (_validate_event_schema short-circuits on unknown types).
     "dispatch_site": {"task_id": str},
     # shared/session_journal.append_event_checked emits journal_emit_skipped
-    # when a journal write it wrapped did NOT land. ONE MECHANISM, TWO
-    # CONSUMERS, which is the whole reason it carries `skipped_type` rather
-    # than being a bare counter:
-    #   * the emit-loss check reads it as "a dispatch_site was lost";
-    #   * the liveness check reads a skipped_type of "dispatch_decision" as
-    #     "MY OWN WITNESS was dropped" and must then report INCONCLUSIVE
-    #     rather than healthy. A schema built only for the first consumer
-    #     cannot answer the second, and that failure is silent in the worst
-    #     way — the liveness check keeps reporting alive while blind to its
-    #     own degradation.
+    # when a journal write it wrapped did NOT land. `skipped_type` keeps the
+    # record type-discriminated rather than a bare counter, so a reader can
+    # say WHICH stream lost an event.
+    # ONE CONSUMER TODAY: Q5's sample-loss report, which reads a skipped_type
+    # of "dispatch_site". A second consumer — a liveness check keyed on
+    # "dispatch_decision" — was retired with the Q5 coverage ratio. The
+    # discriminator stays because it costs nothing and any other stream's
+    # reader would need it, but only the dispatch_site arm is read today.
     # `cause` keeps RAISED distinct from RETURNED-FALSE: they have different
     # origins (a writer defect vs a schema rejection or unwritable journal)
     # and collapsing them rebuilds the ambiguity the capture removed.
@@ -513,13 +509,12 @@ _OPTIONAL_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
         "occupant": str,
     },
     # commands/peer-review.md writes remediation with an optional task_id —
-    # the fixer's Task-B task id. It is no longer a Q5 term: the coverage
-    # denominator is now sourced from the `dispatch_site` stream
+    # the fixer's Task-B task id. It is no longer a Q5 term: Q5's population is
+    # sourced from the `dispatch_site` stream
     # (variety_divergence.extract_dispatch_coverage), so remediation is not
-    # counted or deduped against agent_dispatch for coverage purposes.
-    # Optional because a remediation may omit it; an id-less remediation is
-    # counted as a distinct site (fail-safe — never undercounts the
-    # denominator). The required-fields registration above
+    # counted or deduped against agent_dispatch for Q5 purposes at all.
+    # Optional because a remediation may omit it. The required-fields
+    # registration above
     # ("remediation": {...}) activates this optional check.
     "remediation": {
         "task_id": str,
@@ -874,8 +869,15 @@ def append_event_checked(event: dict, what: str, task_id: str = "") -> bool:
     that just failed, or the degraded case becomes the loudest thing in the
     journal. This also bounds what the record can cover: a type-specific
     rejection still writes (a different type passes validation), but an
-    unresolvable journal path or I/O failure writes nothing — that total loss
-    is the liveness check's to catch, not this record's.
+    unresolvable journal path or I/O failure writes nothing.
+
+    🔴 THAT TOTAL LOSS IS UNCAUGHT TODAY — do not read the bound above as
+    "covered elsewhere". It was written when a liveness check owned whole-
+    stream loss; that check was retired with the Q5 coverage ratio and nothing
+    replaced it. A journal that cannot be written at all now fails silently,
+    and Q5 renders a mean over whatever survived. The bound on THIS record is
+    unchanged and correct; what changed is that the residual it hands off has
+    no catcher.
 
     CAVEAT ON THE STDERR LEG, because "observable" would over-claim: writing
     it provably cannot break a hook's exit-0 contract, but whether PostToolUse

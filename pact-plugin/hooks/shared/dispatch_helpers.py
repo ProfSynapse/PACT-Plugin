@@ -234,8 +234,8 @@ def is_owner_wiring_shape(tool_input: dict) -> bool:
 
     on top of which each consumer applies its OWN exemption predicate:
     ``handoff_ordering_gate`` asks "may this owner self-complete?"
-    (``is_self_complete_exempt``); the dispatch-coverage denominator asks "is
-    this a dispatch requiring understanding verification?"
+    (``is_self_complete_exempt``); the ``dispatch_site`` emit that builds Q5's
+    population asks "is this a dispatch requiring understanding verification?"
     (``is_teachback_exempt``). Those two are deliberately NOT unified — see the
     "DO NOT recouple by aliasing to the prior constant" note on
     ``TEACHBACK_EXEMPT_AGENT_TYPES`` in shared/intentional_wait.py. No
