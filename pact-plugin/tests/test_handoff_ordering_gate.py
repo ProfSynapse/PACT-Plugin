@@ -993,6 +993,131 @@ class TestIsPactSpecialistOwner:
 
 
 # =============================================================================
+# The OWNER as of this write — the exemption over-block.
+# =============================================================================
+class TestExemptionReadsTheOwnerAsOfThisWrite:
+    """The gate ADMITS on ``tool_input["owner"]`` but the exemption predicate
+    resolved ``task["owner"]`` from DISK. At the terminal wiring write the disk
+    owner is still empty — THIS write is what sets it — and
+    ``_is_exempt_agent_type`` returns False on an empty owner, so no exempt
+    owner could ever reach its carve-out. Every exempt dispatch fell through to
+    enforcement, on a deny default. An OVER-BLOCK, which is the cardinal
+    failure for a control that can refuse a consumer's write.
+
+    MUTATION THAT REDDENS: in ``_evaluate_dispatch_variety``, pass ``task``
+    instead of ``task_as_of_this_write`` to ``is_self_complete_exempt``. The
+    first test flips to an advisory. That is the base behaviour, measured.
+
+    THE SECOND TEST IS THE LOAD-BEARING ARM. An overlay that exempted
+    everything would make the first test pass while silently retiring the
+    control, which is worse than the bug it fixes: it closes a Blocking finding
+    AND satisfies the acceptance criterion while leaving nothing enforced. Only
+    an arm that MUST still deny can tell the two apart.
+    """
+
+    def test_exempt_owner_in_the_WIRE_is_carved_out(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """Disk owner empty, secretary in the wire, no stamp -> ALLOW."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="")
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update("42", owner="secretary"),
+        )
+        assert adv is None, (
+            "an exempt owner carried in the wiring write was refused — the "
+            f"carve-out cannot see the owner that admitted the write: {adv!r}"
+        )
+
+    def test_ordinary_specialist_in_the_WIRE_still_DENIES(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """The must-deny control. Same shape, non-exempt agentType -> DENY.
+        Guards against an overlay that exempts everything."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="")
+        adv = gate._evaluate_dispatch_variety(
+            _wiring_update("42", owner="backend-coder"),
+        )
+        assert adv is not None, (
+            "an ordinary specialist's un-stamped dispatch was ALLOWED — the "
+            "overlay retired the control instead of repairing the carve-out"
+        )
+
+    def test_overlay_does_not_mutate_the_task_record(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """The overlay builds a new dict; the caller's task is untouched."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="")
+        gate._evaluate_dispatch_variety(_wiring_update("42", owner="secretary"))
+        on_disk = json.loads(
+            (tmp_path / ".claude" / "tasks" / TEAM / "42.json").read_text()
+        )
+        assert on_disk["owner"] == "", (
+            f"the exemption overlay wrote through to the task record: {on_disk!r}"
+        )
+
+    # ---- RE-WIRE: the only arms where "incoming wins" is observable, because
+    # "disk-first" and "incoming-first" agree whenever the disk owner is empty,
+    # which is the whole ordinary wiring case. Both directions are pinned; the
+    # second is a DELIBERATE deny-widening and must not be read as a regression.
+
+    def test_rewire_TO_an_exempt_owner_is_carved_out(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """disk=backend-coder -> wire=secretary. The task WILL be secretary-
+        owned, so it is exempt. Refusing it would be a new over-block created
+        by the fix for an over-block."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="backend-coder")
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update("42", owner="secretary"),
+        ) is None
+
+    def test_rewire_AWAY_from_an_exempt_owner_now_DENIES(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """disk=secretary -> wire=backend-coder. INTENDED DENY-WIDENING.
+
+        Keying on the stale DISK owner would let a write that assigns a real
+        specialist inherit the departing secretary's exemption — an unstamped
+        dispatch landing on a live coder in one ordinary-looking write. The
+        post-write model asks who the task WILL be owned by, so it denies."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(tmp_path, monkeypatch, TEAM)
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="secretary")
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update("42", owner="backend-coder"),
+        ) is not None
+
+    def test_overlay_does_NOT_widen_the_exempt_AGENT_TYPE_set(
+        self, tmp_path, monkeypatch, pact_context,
+    ):
+        """A signal-shaped task whose metadata.type is ABSENT satisfies NEITHER
+        exemption surface: pact-auditor is not in SELF_COMPLETE_EXEMPT_AGENT_TYPES
+        and surface 2 needs type in {blocker, algedonic}. No owner overlay can
+        reach it, and it MUST NOT — granting it would mean enlarging the exempt
+        agentType set, which is a security change with its own review."""
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_team_config(
+            tmp_path, monkeypatch, TEAM,
+            members=_DEFAULT_MEMBERS + [
+                {"name": "auditor", "agentType": "pact-auditor"},
+            ],
+        )
+        _seed_task(tmp_path, TEAM, "42", subject="impl foo", owner="",
+                   metadata={"completion_type": "signal"})
+        assert gate._evaluate_dispatch_variety(
+            _wiring_update("42", owner="auditor"),
+        ) is not None
+
+
+# =============================================================================
 # The disk/incoming OVERLAY — the cardinal over-block fix.
 # =============================================================================
 def _wiring_update_with_metadata(task_id, metadata, **kw):

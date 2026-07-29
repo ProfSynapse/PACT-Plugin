@@ -357,8 +357,31 @@ def _evaluate_dispatch_variety(input_data: dict) -> str | None:
     # is_self_complete_exempt carve-out is LOAD-BEARING here — it suppresses
     # the secretary + signal tasks. is_teachback_subject suppresses the Task-A
     # teachback gate by subject.
+    #
+    # THE OWNER AS OF THIS WRITE, for the same reason the STAMP is read as of
+    # this write below. This gate ADMITS on ``tool_input["owner"]`` (the
+    # is_pact_specialist_owner check above) but the exemption predicate resolves
+    # ``task["owner"]`` from DISK — and at the terminal wiring write the disk
+    # owner is still empty, because THIS write is what sets it. Resolving the
+    # admit from one source and the exemption from the other means the carve-out
+    # cannot see the owner that admitted the write: ``_is_exempt_agent_type``
+    # returns False on an empty owner, so every exempt owner fell through to
+    # enforcement. That is an OVER-BLOCK, and it shipped on a deny default.
+    #
+    # The overlay is READ-ONLY on ``task`` — a new dict, so nothing downstream
+    # sees a mutated record — and it is deliberately NOT a change to
+    # ``is_self_complete_exempt``. That predicate is shared with the
+    # task_lifecycle_gate self-completion advisory and audit tooling, and its
+    # docstring carries a trust-boundary argument about ``owner`` being
+    # teammate-writable; redefining "the owner" inside it would edit that
+    # argument for consumers this change never examined. The gate owns which
+    # owner it is asking about; the predicate owns what exemption means.
     subject = task.get("subject") or ""
-    if is_self_complete_exempt(task, team_name) or is_teachback_subject(subject):
+    task_as_of_this_write = {**task, "owner": owner}
+    if (
+        is_self_complete_exempt(task_as_of_this_write, team_name)
+        or is_teachback_subject(subject)
+    ):
         return None
 
     # STRUCTURAL READ: does the linked Task B carry a resolvable variety total?
