@@ -26,7 +26,7 @@ _HOOKS = Path(__file__).resolve().parent.parent / "hooks"
 if str(_HOOKS) not in sys.path:
     sys.path.insert(0, str(_HOOKS))
 
-from pin_caps import parse_pins  # noqa: E402
+from pin_caps import PIN_COUNT_CAP, parse_pins  # noqa: E402
 from shared.claude_md_manager import (  # noqa: E402
     MANAGED_END_MARKER,
     MANAGED_START_MARKER,
@@ -87,12 +87,39 @@ def measure(content: str) -> tuple[int, bool]:
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    """A project dir whose CLAUDE.md the repair will resolve and write."""
+    """A project dir whose CLAUDE.md the repair will resolve and write.
+
+    ISOLATION IS BY `CLAUDE_PROJECT_DIR`, NOT BY PATCHING THE RESOLVER, and
+    the difference is not stylistic. `session_init` binds
+    `_get_project_claude_md_path` at MODULE IMPORT, so a
+    `monkeypatch.setattr(staleness, ...)` never reaches the SessionStart
+    directive — while `claude_md_manager` imports the same name INSIDE the
+    function, where the identical patch does take effect. One target is
+    correct for one consumer and dead for the other in the same test file,
+    and the dead half reads exactly like the live half. The environment
+    variable is read at call time on every path, so it removes the accident
+    instead of detecting it.
+
+    THE CONTROL BELOW IS BINDING AND IT IS HERE RATHER THAN IN A TEST OF ITS
+    OWN. If the resolver escapes the temp directory, every consumer of this
+    fixture silently measures the REAL repository CLAUDE.md — which reports
+    a clean, plausible, entirely false result. Asserting it on the path that
+    PRODUCES the fixture means a miss raises before any verdict exists,
+    rather than annotating one that has already been believed.
+    """
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
     claude_md = tmp_path / "CLAUDE.md"
 
     def write(content: str) -> Path:
         claude_md.write_text(content, encoding="utf-8")
+
+        import staleness
+        resolved = staleness.get_project_claude_md_path()
+        assert resolved is not None and resolved == claude_md, (
+            f"BINDING CONTROL FAILED: the project CLAUDE.md resolved to "
+            f"{resolved}, not to {claude_md}. The test would measure a file "
+            f"outside the temp directory and report a verdict about it."
+        )
         return claude_md
 
     write.path = claude_md  # type: ignore[attr-defined]
@@ -656,14 +683,23 @@ class TestFrameTypeDoesNotChangeTheOutcome:
 # out sat under the second heading, synced and pruned by nothing.
 # ---------------------------------------------------------------------------
 
+#
+# THE PIN COUNT IS SIZED FROM `REAL_PINS` AND `NOTES`, NOT HAND-WRITTEN, and
+# that is what keeps `test_the_gate_declines_on_the_refused_file` honest. An
+# earlier three-note version parsed 5 phantom pins against a cap of 12 — UNDER
+# the cap, where an ENFORCING gate allows as well. Its `assert reason is None`
+# therefore PASSED under a removed decline (measured, not supposed), so the
+# classification assertion beside it carried the whole discriminating power.
+# Sharing the constants with `case_5` puts the count above the cap and keeps it
+# there as those constants move.
 WM_HEADING_ABOVE_PINS = (
     "# PACT Framework and Managed Project Memory\n\n"
     f"{MANAGED_START_MARKER}\n"
     f"{PINNED_TERMINATOR_HEADING}\n"
     "- an existing note\n\n"
     "## Pinned Context\n\n"
-    + "".join(_REAL_PIN.format(n=i) for i in (1, 2))
-    + "".join(_NOTE.format(d=d) for d in range(1, 4))
+    + "".join(_REAL_PIN.format(n=i) for i in range(1, REAL_PINS + 1))
+    + "".join(_NOTE.format(d=d) for d in range(1, NOTES + 1))
     + f"{MANAGED_END_MARKER}\n"
 )
 
@@ -678,7 +714,18 @@ class TestGuard3ExistingWorkingMemoryHeading:
         """
         assert WM_HEADING_ABOVE_PINS.count(PINNED_TERMINATOR_HEADING) == 1
         count, bounded = measure(WM_HEADING_ABOVE_PINS)
-        assert (count, bounded) == (5, False)
+        assert (count, bounded) == (REAL_PINS + NOTES, False)
+        # The cap comparison is not decoration. It is the property that keeps
+        # the decline test's VERDICT assertion alive: below the cap an
+        # enforcing gate allows too. Shrink the fixture, or raise the cap
+        # above it, and this reddens HERE rather than going quietly vacuous
+        # one class down.
+        assert count > PIN_COUNT_CAP, (
+            f"the fixture parses {count} phantom pins against a cap of "
+            f"{PIN_COUNT_CAP}. It must sit ABOVE the cap, or an enforcing "
+            f"gate allows on it and the decline cannot be told apart from a "
+            f"clean evaluation."
+        )
 
     def test_the_repair_refuses_and_writes_nothing(self, project):
         path = project(WM_HEADING_ABOVE_PINS)
@@ -740,19 +787,19 @@ class TestGuard3ExistingWorkingMemoryHeading:
         """THE ASSERTION THAT MATTERS, and it is not the refusal.
 
         A refusal that left the gate ENFORCING would be the impossible-cure
-        over-block again: the region still parses 5 pins against a real 2,
-        and a curator would be denied for pins they do not have. So the
-        refusal is only safe because the gate declines on it. Assert the
-        DECLINE, not the refusal.
+        over-block again: the region still parses REAL_PINS + NOTES pins
+        against a real REAL_PINS, over the cap, and a curator would be denied
+        for pins they do not have. So the refusal is only safe because the
+        gate declines on it. Assert the DECLINE, not the refusal.
+
+        BOTH assertions below are independently live, and that is a property
+        of the FIXTURE rather than of the assertions. Binding control 2 holds
+        it.
         """
         pact_context(
             team_name="test-team",
             session_id="session-guard3",
             project_dir=str(project.path.parent),
-        )
-        import staleness
-        monkeypatch.setattr(
-            staleness, "get_project_claude_md_path", lambda: project.path
         )
 
         failures: list[dict] = []
@@ -767,13 +814,28 @@ class TestGuard3ExistingWorkingMemoryHeading:
         path = project(WM_HEADING_ABOVE_PINS)
         assert ensure_pinned_terminator() is not None, "precondition: refused"
 
-        # BINDING CONTROL: without this the gate short-circuits on a
+        # BINDING CONTROL 1, REACH: without this the gate short-circuits on a
         # non-matching path and reports ALLOW for a reason unrelated to
         # boundedness. Placed before the verdict so a miss withholds it.
         canonical = match_project_claude_md(str(path))
         assert canonical is not None and path.parent in canonical.parents, (
             "BINDING CONTROL FAILED: the gate would short-circuit before "
             "reaching the boundedness decline."
+        )
+
+        # BINDING CONTROL 2, DISCRIMINABILITY: the refused file must parse
+        # ABOVE the cap, or `reason is None` below is equally true of an
+        # ENFORCING gate and certifies nothing. Not hypothetical — on the
+        # earlier under-cap fixture that assertion passed with the decline
+        # deleted. Placed before the verdict so a fixture that drifts back
+        # under the cap WITHHOLDS the verdict rather than reporting a false
+        # clean one.
+        count, bounded = measure(path.read_text(encoding="utf-8"))
+        assert bounded is False and count > PIN_COUNT_CAP, (
+            f"BINDING CONTROL FAILED: the refused file parses {count} pins "
+            f"(bounded={bounded}) against a cap of {PIN_COUNT_CAP}. Under "
+            f"the cap an enforcing gate also allows, so the verdict below "
+            f"cannot tell a decline from an enforcement."
         )
 
         reason = pin_caps_gate._check_tool_allowed({
@@ -791,9 +853,153 @@ class TestGuard3ExistingWorkingMemoryHeading:
         })
         assert reason is None, (
             f"the refused file must be DECLINED, not enforced. The region "
-            f"still parses 5 pins against a real 2, so enforcing here denies "
-            f"a curator for pins they do not have. Got {reason!r}"
+            f"still parses {count} pins against a real {REAL_PINS}, so "
+            f"enforcing here denies a curator for pins they do not have. "
+            f"Got {reason!r}"
         )
         assert [f["classification"] for f in failures] == [
             "pin_caps_gate_declined_unbounded_both"
         ], "the allow must come from the boundedness decline, not from a clean evaluation"
+
+
+# ---------------------------------------------------------------------------
+# Guard 3, SUBSTRING CASE: a pin BODY that mentions the terminator literal.
+#
+# Guard 3 tests `PINNED_TERMINATOR_HEADING in region_text` — a substring test,
+# not a heading test. So a pin whose body mentions "## Working Memory" in prose
+# trips it, and the repair refuses on a file that carries no such heading.
+#
+# THAT IS THE SAFE DIRECTION, AND THIS FIXTURE ASSERTS THE DIRECTION RATHER
+# THAN MERELY THE REFUSAL. Refusing leaves the region UNBOUNDED, and the gate
+# declines on an unbounded region — so the caps stay off and no curator is
+# denied for phantom pins. Over-caution costs one unenforced file. The opposite
+# error costs a curator a deny they cannot cure, which is the whole defect this
+# PR removes.
+#
+# THE MENTION MUST NOT SIT AT THE START OF A LINE, and that is what makes this
+# a substring case at all. `_find_terminator_offset` matches `#{1,2}\s` against
+# each line, so a line-initial mention IS a real terminator: the region would
+# read bounded, the repair would no-op at the earlier check, and guard 3 would
+# never be reached. An inline mention is invisible to the line scan and visible
+# to the substring test, which is exactly the gap.
+# ---------------------------------------------------------------------------
+
+_PIN_BODY_MENTIONS_TERMINATOR = (
+    "<!-- pinned: 2026-07-30 -->\n"
+    "### Real pin 1\n"
+    f"Keep the `{PINNED_TERMINATOR_HEADING}` heading below the pins.\n\n"
+)
+
+TERMINATOR_INSIDE_A_PIN_BODY = (
+    "# PACT Framework and Managed Project Memory\n\n"
+    f"{MANAGED_START_MARKER}\n"
+    "## Pinned Context\n\n"
+    + _PIN_BODY_MENTIONS_TERMINATOR
+    + "".join(_REAL_PIN.format(n=i) for i in range(2, REAL_PINS + 1))
+    + "".join(_NOTE.format(d=d) for d in range(1, NOTES + 1))
+    + f"{MANAGED_END_MARKER}\n"
+)
+
+
+class TestGuard3TerminatorLiteralInsideAPinBody:
+
+    def test_the_mention_is_a_substring_and_not_a_heading(self):
+        """PRECONDITION CONTROL, and it is what makes this class about the
+        substring test rather than about an ordinary heading.
+
+        RED input: move the mention to the start of a line. The line scan
+        then finds a real terminator, the region reads bounded, and every
+        assertion below stops being about guard 3.
+        """
+        assert PINNED_TERMINATOR_HEADING in TERMINATOR_INSIDE_A_PIN_BODY
+        assert not any(
+            line.startswith(PINNED_TERMINATOR_HEADING)
+            for line in TERMINATOR_INSIDE_A_PIN_BODY.splitlines()
+        ), (
+            "the mention sits at the start of a line, so it is a REAL "
+            "terminator and the region is bounded. This class would then "
+            "test the bounded no-op, not the substring guard."
+        )
+        count, bounded = measure(TERMINATOR_INSIDE_A_PIN_BODY)
+        assert bounded is False, (
+            "the region must be unbounded, or the repair no-ops at the "
+            "earlier bounded check and never reaches guard 3"
+        )
+        assert count > PIN_COUNT_CAP, (
+            f"the fixture parses {count} phantom pins against a cap of "
+            f"{PIN_COUNT_CAP}. Below the cap an enforcing gate allows too, "
+            f"and the decline assertion below would certify nothing."
+        )
+
+    def test_the_repair_refuses_and_writes_nothing(self, project):
+        """The substring test wins over the absent heading, and refusing is
+        the direction that leaves the safe state."""
+        path = project(TERMINATOR_INSIDE_A_PIN_BODY)
+        status = ensure_pinned_terminator()
+
+        assert status is not None and "skipped" in status.lower(), (
+            f"expected a refusal. A SUCCESS here would mean the repair "
+            f"placed a terminator on a file whose only mention of one is "
+            f"prose inside a pin body. Got {status!r}"
+        )
+        assert path.read_text(encoding="utf-8") == TERMINATOR_INSIDE_A_PIN_BODY, (
+            "guard 3 must not write"
+        )
+
+    def test_refusing_leaves_the_region_unbounded_so_the_caps_stay_off(
+        self, project, monkeypatch, pact_context
+    ):
+        """THE DIRECTION, ASSERTED. A refusal is only safe because the gate
+        declines on what it leaves behind."""
+        pact_context(
+            team_name="test-team",
+            session_id="session-guard3-substring",
+            project_dir=str(project.path.parent),
+        )
+
+        failures: list[dict] = []
+        import pin_caps_gate
+        monkeypatch.setattr(
+            pin_caps_gate,
+            "append_failure",
+            lambda classification, error=None, cwd=None, source=None:
+                failures.append({"classification": classification}),
+        )
+
+        path = project(TERMINATOR_INSIDE_A_PIN_BODY)
+        assert ensure_pinned_terminator() is not None, "precondition: refused"
+
+        # BINDING CONTROL 1, REACH.
+        canonical = match_project_claude_md(str(path))
+        assert canonical is not None and path.parent in canonical.parents, (
+            "BINDING CONTROL FAILED: the gate would short-circuit before "
+            "reaching the boundedness decline."
+        )
+        # BINDING CONTROL 2, DISCRIMINABILITY.
+        count, bounded = measure(path.read_text(encoding="utf-8"))
+        assert bounded is False and count > PIN_COUNT_CAP, (
+            f"BINDING CONTROL FAILED: {count} pins, bounded={bounded}. "
+            f"Under the cap an enforcing gate also allows."
+        )
+
+        reason = pin_caps_gate._check_tool_allowed({
+            "tool_name": "Edit",
+            "agent_type": "pact-orchestrator",
+            "tool_input": {
+                "file_path": str(path),
+                "old_string": "### Real pin 2\nShort body.\n",
+                "new_string": (
+                    "### Real pin 2\nShort body.\n\n"
+                    "<!-- pinned: 2026-07-31 -->\n### Real pin new\nBody.\n"
+                ),
+                "replace_all": False,
+            },
+        })
+        assert reason is None, (
+            f"the refused file must be DECLINED. It parses {count} pins "
+            f"against a real {REAL_PINS}, so enforcing denies a curator for "
+            f"pins they do not have. Got {reason!r}"
+        )
+        assert [f["classification"] for f in failures] == [
+            "pin_caps_gate_declined_unbounded_both"
+        ], "the allow must come from the decline, not from a clean evaluation"

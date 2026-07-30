@@ -16,6 +16,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
+sys.path.insert(0, str(Path(__file__).parent))
+
+from helpers import make_claude_md_with_pins  # noqa: E402
 
 
 class TestParsePins_ParsingSemantics:
@@ -505,18 +508,21 @@ def _make_pin(heading="### X", body_chars=100, override=False):
     )
 
 
-def _managed_content(pinned_section_body: str) -> str:
-    """Wrap pinned-section body in the PACT_MANAGED region so
-    _parse_pinned_section can extract it. Matches the structure produced
-    by claude_md_manager.
+def _managed_content(entries: list[str]) -> str:
+    """Wrap pinned entries in a REAL PACT-managed region.
+
+    THIS HELPER USED TO HAND-SPELL ITS START MARKER as
+    `<!-- PACT_MANAGED_START -->`, which is NOT the canonical constant — the
+    real one carries a `: Managed by pact-plugin - do not edit this block`
+    suffix. The END marker DID match, which is what made the old shape look
+    right. `extract_managed_region` returned None on every fixture built
+    here, so the parser fell back to scanning the whole file and the section
+    bounding this class claims to exercise never happened. Delegating to
+    `make_claude_md_with_pins` emits both markers from the imported
+    constants, so a future marker revision propagates instead of silently
+    disarming these five fixtures.
     """
-    return (
-        "# PACT\n\n"
-        "<!-- PACT_MANAGED_START -->\n"
-        "## Pinned Context\n"
-        f"{pinned_section_body}"
-        "<!-- PACT_MANAGED_END -->\n"
-    )
+    return make_claude_md_with_pins(entries)
 
 
 class TestEvaluateFullState_Smoke:
@@ -560,13 +566,87 @@ class TestEvaluateFullState_Smoke:
 
 
 class TestApplyEditAndParse_Smoke:
-    """apply_edit_and_parse — Edit/Write simulation + section-bounded parse."""
+    """apply_edit_and_parse — Edit/Write simulation + section-bounded parse.
+
+    The section-bounding half of that name is now exercised. It was not
+    before: the local fixture helper hand-spelled its START marker, so
+    `extract_managed_region` returned None on all five fixtures and the
+    parser scanned the whole file. The two controls below assert the
+    property the name claims, so the claim fails loudly if the fixtures
+    ever drift back onto the unbounded fallback.
+    """
+
+    def test_the_fixture_is_a_real_managed_region(self):
+        """PER-FIXTURE CONTROL (design section 10.2).
+
+        RED input: hand-spell either marker. `extract_managed_region`
+        returns None, every test in this class silently moves to the
+        whole-file fallback, and each one keeps passing while measuring
+        something else.
+        """
+        from shared.claude_md_manager import extract_managed_region
+        content = _managed_content(["<!-- pinned: 2026-04-21 -->\n### A\nBody A."])
+        assert extract_managed_region(content) is not None, (
+            "the fixture markers do not match the canonical constants, so "
+            "the parser falls back to scanning the whole file and the "
+            "bounding this class is named for never happens"
+        )
+
+    def test_headings_outside_the_pinned_region_do_not_inflate_the_count(self):
+        """The bounding itself, as a two-arm pair with DIFFERENT counts.
+
+        A Working Memory `### <date>` entry is an ordinary note, not a pin.
+        It stays outside the count while the terminating heading separates
+        it, and it JOINS the count when that heading is removed. One arm
+        alone certifies nothing: a parser that counted 1 unconditionally
+        would satisfy the separated arm on its own.
+
+        BOTH ARMS ARE `bounded=True`, AND THAT IS NOT AN OVERSIGHT. The
+        terminator pattern matches an H1/H2 heading OR a plugin boundary
+        marker, and `make_claude_md_with_pins` emits `<!-- PACT_MEMORY_END -->`
+        INSIDE the managed region. So that marker terminates the pinned
+        region whether or not the heading is present, and a fixture from this
+        helper can never read `bounded=False`. The heading governs WHICH
+        entries fall inside the region; the marker governs where the region
+        stops. Do not reach for this helper to build an unbounded fixture —
+        it agrees with itself on that axis. `case_5` in
+        test_pinned_terminator_repair.py is the shape that reaches
+        `bounded=False`, because its region carries no memory markers.
+        """
+        from pin_caps import apply_edit_and_parse
+        from shared.claude_md_manager import PINNED_TERMINATOR_HEADING
+
+        note = "### 2026-04-22\nAn ordinary Working Memory note.\n"
+        base = _managed_content(["<!-- pinned: 2026-04-21 -->\n### A\nBody A."])
+        separated = base.replace(
+            f"{PINNED_TERMINATOR_HEADING}\n",
+            f"{PINNED_TERMINATOR_HEADING}\n{note}",
+        )
+        absorbed = separated.replace(f"{PINNED_TERMINATOR_HEADING}\n", "")
+        assert separated != base, "fixture anchor absent: no terminating heading"
+        assert absorbed != separated, "fixture anchor absent: nothing removed"
+
+        separated_state = apply_edit_and_parse(
+            current_content="", tool_input={"content": separated}
+        )
+        absorbed_state = apply_edit_and_parse(
+            current_content="", tool_input={"content": absorbed}
+        )
+        assert len(separated_state.pins) == 1, (
+            "the Working Memory note was counted as a pin despite sitting "
+            "after the terminating heading"
+        )
+        assert [p.heading for p in absorbed_state.pins] == [
+            "### A", "### 2026-04-22",
+        ], (
+            "removing the terminating heading must absorb the note into the "
+            "pinned region; if it does not, the two arms agree and neither "
+            "certifies the bounding"
+        )
 
     def test_write_full_replacement_parses_pins(self):
         from pin_caps import apply_edit_and_parse
-        new = _managed_content(
-            "<!-- pinned: 2026-04-21 -->\n### A\nBody A.\n\n"
-        )
+        new = _managed_content(["<!-- pinned: 2026-04-21 -->\n### A\nBody A."])
         pins = apply_edit_and_parse(
             current_content="", tool_input={"content": new}
         ).pins
@@ -575,7 +655,7 @@ class TestApplyEditAndParse_Smoke:
 
     def test_edit_single_match_adds_pin(self):
         from pin_caps import apply_edit_and_parse
-        before = _managed_content("<!-- pinned: 2026-04-21 -->\n### A\nBody.\n\n")
+        before = _managed_content(["<!-- pinned: 2026-04-21 -->\n### A\nBody."])
         tool_input = {
             "old_string": "### A\nBody.\n",
             "new_string": "### A\nBody.\n\n<!-- pinned: 2026-04-21 -->\n### B\nBody B.\n",
@@ -588,10 +668,10 @@ class TestApplyEditAndParse_Smoke:
 
     def test_edit_replace_all_applies_all_matches(self):
         from pin_caps import apply_edit_and_parse
-        before = _managed_content(
-            "<!-- pinned: 2026-04-21 -->\n### A\nKEEP.\n\n"
-            "<!-- pinned: 2026-04-21 -->\n### B\nKEEP.\n\n"
-        )
+        before = _managed_content([
+            "<!-- pinned: 2026-04-21 -->\n### A\nKEEP.",
+            "<!-- pinned: 2026-04-21 -->\n### B\nKEEP.",
+        ])
         tool_input = {
             "old_string": "KEEP.",
             "new_string": "REPLACED.",
@@ -642,10 +722,10 @@ class TestApplyEditAndParse_Smoke:
         equals pre-state -> gate's net-worse contract kicks in normally.
         """
         from pin_caps import apply_edit_and_parse
-        before = _managed_content(
-            "<!-- pinned: 2026-04-21 -->\n### A\nBody A.\n\n"
-            "<!-- pinned: 2026-04-21 -->\n### B\nBody B.\n\n"
-        )
+        before = _managed_content([
+            "<!-- pinned: 2026-04-21 -->\n### A\nBody A.",
+            "<!-- pinned: 2026-04-21 -->\n### B\nBody B.",
+        ])
         tool_input = {
             "old_string": "",
             "new_string": "JUNK",
@@ -678,20 +758,35 @@ class TestApplyEditAndParse_Smoke:
         the SMUGGLED pin, not the original. Under the F6 no-op guard,
         the original managed region is preserved → parsed pins are the
         ORIGINAL pin.
+
+        BOTH REGIONS MUST USE THE CANONICAL MARKERS, and that is what makes
+        the paragraph above describe what actually runs. When the markers are
+        hand-spelled, `extract_managed_region` returns None for BOTH regions,
+        the parser scans the whole file, and the discrimination comes from
+        whole-file scan order instead of from first-region-wins. The test
+        still went red under revert, so the defect was invisible — it was
+        right for a reason its own docstring did not state. Repointing only
+        the OUTER fixture is worse than leaving both hand-spelled: the real
+        region would then be found, the smuggled one sits OUTSIDE it, and the
+        revert would parse `### A` and PASS. Measured, not reasoned.
         """
         from pin_caps import apply_edit_and_parse
-        before = _managed_content(
-            "<!-- pinned: 2026-04-21 -->\n### A\nBody A.\n\n"
+        from shared.claude_md_manager import (
+            MANAGED_END_MARKER,
+            MANAGED_START_MARKER,
         )
+        before = _managed_content(["<!-- pinned: 2026-04-21 -->\n### A\nBody A."])
         # Smuggle payload: a full synthetic managed region wrapping an
-        # "### Evil" pin. If str.replace runs (revert), this prepends a
-        # spurious managed region at position 0 that extract_managed_region
-        # captures first — parsed pins become [Evil], not [A].
+        # "### Evil" pin, built from the SAME constants as the real region.
+        # If str.replace runs (revert), this prepends a spurious managed
+        # region at position 0. `extract_managed_region` locates its start
+        # with `content.find`, so the FIRST region wins — parsed pins become
+        # [Evil], not [A].
         smuggle_payload = (
-            "<!-- PACT_MANAGED_START -->\n"
+            f"{MANAGED_START_MARKER}\n"
             "## Pinned Context\n"
             "<!-- pinned: 2026-04-21 -->\n### Evil\nevil body.\n\n"
-            "<!-- PACT_MANAGED_END -->\n"
+            f"{MANAGED_END_MARKER}\n"
         )
         tool_input = {
             "old_string": "",

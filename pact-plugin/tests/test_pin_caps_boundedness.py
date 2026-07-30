@@ -527,6 +527,88 @@ class TestBoundednessDecline:
             "pin_caps_gate_declined_unbounded"
         )
 
+    def test_long_prose_on_unbounded_region_is_allowed(self, gate_env):
+        """ARM 3 OF SECTION 2.1 — the SIZE axis, through the real gate.
+
+        This is the arm the plan recorded, and it was the only one of the
+        three with no gate-level test. The two probes that carried it run no
+        gate at all: they reimplement the call sequence by hand, so a guard
+        placed correctly INSIDE `_check_tool_allowed` is invisible to them.
+
+        On an unbounded region a Working Memory note parses as a pin, so
+        appending ordinary prose to that note pushes a "pin" past
+        PIN_SIZE_CAP and denies on the size axis. The curator is told to
+        shrink a pin they do not have.
+        """
+        from pin_caps import PIN_SIZE_CAP
+
+        content = _claude_md(real_pins=2, notes=12, bounded=False)
+        anchor = "### 2026-07-12\n**Context**: routine session note.\n"
+        assert anchor in content, "fixture anchor not present"
+        long_prose = {
+            "old_string": anchor,
+            "new_string": anchor + "x" * (PIN_SIZE_CAP + 500) + "\n",
+            "replace_all": False,
+        }
+        reason, failures = _verdict(gate_env, content, long_prose)
+        assert reason is None, (
+            f"cardinal over-block on the size axis: ordinary prose appended "
+            f"to a Working Memory note denied as an oversized pin. "
+            f"Got {reason!r}"
+        )
+        assert [f["classification"] for f in failures] == [
+            "pin_caps_gate_declined_unbounded_both"
+        ], (
+            "the allow must come from the boundedness decline. ALLOW is also "
+            "what a gate that never reached this arm returns, so the verdict "
+            "alone cannot tell the two apart."
+        )
+
+    def test_the_bounded_controls_allow_by_evaluating_not_by_declining(
+        self, gate_env
+    ):
+        """THE BOUNDED CONTROLS for arms 1 and 3, and the reason they need a
+        different observable from the verdict.
+
+        Section 2.1 gives every arm a bounded control that ALLOWS. After the
+        fix the unbounded arm allows too, so an ALLOW/ALLOW pair is one arm
+        twice and a gate deleted outright satisfies it. What still separates
+        them is HOW the allow was reached: the unbounded arm allows by
+        DECLINING and writes a decline classification; the bounded arm allows
+        by EVALUATING the state and finding it clean, and writes nothing.
+
+        The failure log is a bounded ring buffer, so "writes nothing" is a
+        real requirement and not merely a convenient discriminator.
+        """
+        from pin_caps import PIN_SIZE_CAP
+
+        bounded = _claude_md(real_pins=2, notes=12, bounded=True)
+        note_anchor = "### 2026-07-12\n**Context**: routine session note.\n"
+        assert note_anchor in bounded, "fixture anchor not present"
+
+        arm1 = {
+            "old_string": note_anchor,
+            "new_string": note_anchor + "\n### 2026-07-31\n**Context**: today.\n",
+            "replace_all": False,
+        }
+        arm3 = {
+            "old_string": note_anchor,
+            "new_string": note_anchor + "x" * (PIN_SIZE_CAP + 500) + "\n",
+            "replace_all": False,
+        }
+        for label, tool_input in (("arm 1", arm1), ("arm 3", arm3)):
+            reason, failures = _verdict(gate_env, bounded, tool_input)
+            assert reason is None, (
+                f"{label} bounded control: a trustworthy region holding 2 "
+                f"real pins denied an ordinary Working Memory edit. "
+                f"Got {reason!r}"
+            )
+            assert failures == [], (
+                f"{label} bounded control allowed by DECLINING, not by "
+                f"evaluating. A gate that declines on every input passes the "
+                f"unbounded arms and is wrong. Got {failures!r}"
+            )
+
     def test_repair_edit_is_allowed_and_classified_pre(self, gate_env):
         """The curator repairs the file by hand: pre unbounded, post bounded.
 
