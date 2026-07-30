@@ -399,9 +399,10 @@ def _check_tool_allowed(input_data: dict) -> Optional[str]:
     # WHY IT SITS HERE AND NOT LOWER. There are THREE deny paths, and the
     # FIRST to fire is the embedded-pin check inside `compute_deny_reason`,
     # which returns before either cap axis is consulted. So this block must
-    # precede the CALL to `compute_deny_reason`. Guarding only the count and
-    # size axes leaves 2 of the 3 over-blocks live; guarding only the size
-    # axis leaves 2 live as well.
+    # precede the CALL to `compute_deny_reason`. Measured through the real
+    # gate: guarding only the count and size axes leaves ONE over-block live
+    # (the embedded-pin arm, which is the most ordinary action of the three);
+    # guarding only the size axis leaves TWO live (embedded-pin and count).
     #
     # WHY THE MEASURE IS FALSE. An unbounded region runs to the end of the
     # scanned text, so `parse_pins` absorbs every `### ` heading in the tail.
