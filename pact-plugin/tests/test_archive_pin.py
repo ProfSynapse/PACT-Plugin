@@ -98,7 +98,7 @@ def _pinned_body(content):
     """Extract the Pinned Context section body from a full CLAUDE.md."""
     parsed = staleness._parse_pinned_section(content)
     assert parsed is not None, "fixture has no Pinned Context section"
-    return parsed[2]
+    return parsed.content
 
 
 def _two_pin_file():

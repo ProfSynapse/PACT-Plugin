@@ -356,8 +356,7 @@ def _parse_baseline(content: str):
     parsed = _parse_pinned_section(content)
     if parsed is None:
         return []
-    _, _, pinned_content = parsed
-    return parse_pins(pinned_content)
+    return parse_pins(parsed.content)
 
 
 def _evaluate_write_as_fresh_start(tool_input: dict) -> Optional[str]:

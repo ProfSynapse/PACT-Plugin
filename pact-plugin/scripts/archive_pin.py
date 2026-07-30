@@ -800,7 +800,7 @@ def archive_pin(index: int, db_path=None) -> dict:
         raise _Unevaluable("no Pinned Context section",
                            claude_md_path=claude_md_path)
 
-    _, _, pinned_content = parsed
+    pinned_content = parsed.content
     try:
         pins = parse_pins(pinned_content)
     except Exception as exc:  # noqa: BLE001 -- parse fault is unevaluable

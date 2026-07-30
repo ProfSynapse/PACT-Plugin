@@ -633,8 +633,7 @@ def apply_edit_and_parse(current_content: str, tool_input: dict) -> List[Pin]:
         # "no pins" — caps cannot be violated when the section is absent.
         return []
 
-    _, _, pinned_content = parsed
-    return parse_pins(pinned_content)
+    return parse_pins(parsed.content)
 
 
 def compute_deny_reason(

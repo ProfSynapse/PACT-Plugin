@@ -683,7 +683,8 @@ class TestParsePinnedSectionMarkerBoundary:
 
         result = _parse_pinned_section(content)
         assert result is not None
-        pinned_start, pinned_end, pinned_content = result
+        pinned_end = result.end
+        pinned_content = result.content
 
         # The returned pinned_content must contain the pin body but must
         # STOP before the marker line. The marker itself must NOT appear
@@ -719,7 +720,8 @@ class TestParsePinnedSectionMarkerBoundary:
 
         result = _parse_pinned_section(content)
         assert result is not None
-        _, pinned_end, pinned_content = result
+        pinned_end = result.end
+        pinned_content = result.content
 
         assert "Pin one" in pinned_content
         assert "<!-- PACT_MANAGED_END -->" not in pinned_content
@@ -752,7 +754,8 @@ class TestParsePinnedSectionMarkerBoundary:
 
         result = _parse_pinned_section(content)
         assert result is not None
-        _, pinned_end, pinned_content = result
+        pinned_end = result.end
+        pinned_content = result.content
 
         assert "Pin two" in pinned_content
         assert "<!-- PACT_ROUTING_END -->" not in pinned_content
@@ -778,7 +781,8 @@ class TestParsePinnedSectionMarkerBoundary:
 
         result = _parse_pinned_section(content)
         assert result is not None
-        _, pinned_end, pinned_content = result
+        pinned_end = result.end
+        pinned_content = result.content
 
         assert "Pre-migration pin" in pinned_content
         assert "## Working Memory" not in pinned_content
@@ -1201,7 +1205,8 @@ class TestParsePinnedSectionTerminator:
 
         result = _parse_pinned_section(content)
         assert result is not None
-        _pinned_start, pinned_end, pinned_content = result
+        pinned_end = result.end
+        pinned_content = result.content
 
         assert "Regular pin" in pinned_content
         # The marker is the terminator — pinned_content must NOT contain it
@@ -1242,7 +1247,8 @@ class TestParsePinnedSectionManagedRegionBounding:
 
         result = _parse_pinned_section(content)
         assert result is not None
-        pinned_start, pinned_end, pinned_content = result
+        pinned_start = result.start
+        pinned_content = result.content
 
         # Offsets must be in the full content, not managed-region-relative
         assert pinned_start > len(preamble), (
@@ -1268,7 +1274,7 @@ class TestParsePinnedSectionManagedRegionBounding:
 
         result = _parse_pinned_section(content)
         assert result is not None
-        _, _, pinned_content = result
+        pinned_content = result.content
         assert "Old content." in pinned_content
 
 

@@ -74,7 +74,7 @@ def _two_pin_file():
 def _pinned_body(content):
     parsed = staleness._parse_pinned_section(content)
     assert parsed is not None, "fixture has no Pinned Context section"
-    return parsed[2]
+    return parsed.content
 
 
 def _expected_block(content, index):

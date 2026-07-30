@@ -257,7 +257,7 @@ def _resolve_pins():
     if parsed is None:
         return [], "no pinned section"
 
-    _, _, pinned_content = parsed
+    pinned_content = parsed.content
     try:
         pins = parse_pins(pinned_content)
     except Exception:  # noqa: BLE001 — fail-open by construction

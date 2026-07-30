@@ -242,9 +242,8 @@ def check_pin_slot_status() -> Optional[str]:
             # so the orchestrator sees pin headroom from session start.
             return format_slot_status([])
 
-        _, _, pinned_content = parsed
         try:
-            pins = parse_pins(pinned_content)
+            pins = parse_pins(parsed.content)
         except Exception:  # noqa: BLE001 — fail-open by construction
             return None
 

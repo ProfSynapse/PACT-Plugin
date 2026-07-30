@@ -22,7 +22,7 @@ import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, NamedTuple, Optional, Tuple
 
 from shared.claude_md_manager import (
     PACT_BOUNDARY_PREFIXES,
@@ -51,6 +51,38 @@ PINNED_STALENESS_DAYS = 30
 # exceeded, a warning comment is added (no auto-deletion).
 # This is the sole definition of this constant; session_init.py imports it.
 PINNED_CONTEXT_TOKEN_BUDGET = 1200
+
+
+class PinnedSection(NamedTuple):
+    """The Pinned Context section extract, plus whether it is TERMINATED.
+
+    Returned by `_parse_pinned_section`. The first three fields carry the
+    same values the former 3-tuple carried, in the same order, so a
+    positional unpack of three names fails loudly (`ValueError`) rather
+    than binding the wrong value.
+
+    `bounded` answers one question: did the scan find a terminator line
+    after the pins, or did it run off the end of the scanned text? When a
+    curator removes the `## Working Memory` heading that follows the
+    pins, the section extends to the end of the region and every later
+    `### ` heading -- ordinary Working Memory entries included -- parses
+    as a Pin. Consumers that enforce a cap MUST know that, because the
+    inflated count is not the curator's pin count.
+
+    THIS CLASS IS THE ONE DEFINITION OF BOUNDEDNESS. Do not recompute the
+    property at a consumer: two computations that must agree drift apart.
+
+    Fields:
+        start:   absolute offset of the section body in the full content
+        end:     absolute offset of the section end in the full content
+        content: the section body text
+        bounded: True when a terminator line closes the section
+    """
+
+    start: int
+    end: int
+    content: str
+    bounded: bool
 
 
 def _find_existing_claude_md(base: Path) -> Optional[Path]:
@@ -240,7 +272,7 @@ def _find_terminator_offset(
     return len(content)
 
 
-def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
+def _parse_pinned_section(content: str) -> Optional[PinnedSection]:
     """
     Extract the Pinned Context section from CLAUDE.md content.
 
@@ -253,13 +285,25 @@ def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
     is unnecessary. If the managed region is not present (pre-migration
     file), falls back to scanning the full content.
 
+    BOUNDEDNESS -- COMPUTE IT ON THE SCAN-RELATIVE LOCALS, NEVER ON THE
+    RETURNED OFFSETS. `_find_terminator_offset` reports "no terminator" by
+    returning `len(scan_text)`, so the test for a terminator is
+    `pinned_end < len(scan_text)` BEFORE `offset` is added. The returned
+    `start` and `end` are offset-adjusted into the full file, and
+    `end < len(content)` is a DIFFERENT and WRONG test: on a file that
+    carries the managed markers, `extract_managed_region` slices the text
+    BEFORE `PACT_MANAGED_END`, so the closing marker always follows the
+    scanned text and the full-file form reads True whether or not a
+    terminator exists. That form is wrong on exactly the population this
+    field exists to detect, and right everywhere else.
+
     Args:
         content: Full CLAUDE.md file content.
 
     Returns:
-        Tuple of (pinned_start, pinned_end, pinned_content) or None if
-        no Pinned Context section exists or it is empty. Offsets are
-        absolute positions in the original `content` string.
+        A `PinnedSection`, or None if no Pinned Context section exists or
+        it is empty. Offsets are absolute positions in the original
+        `content` string.
     """
     # Bound to managed region if available (round 10). Offset adjustment
     # converts managed-region-relative positions back to full-file positions.
@@ -290,7 +334,15 @@ def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
     if not pinned_content.strip():
         return None
 
-    return pinned_start + offset, pinned_end + offset, pinned_content
+    # Scan-relative, pre-offset. See the BOUNDEDNESS note in the docstring.
+    bounded = pinned_end < len(scan_text)
+
+    return PinnedSection(
+        start=pinned_start + offset,
+        end=pinned_end + offset,
+        content=pinned_content,
+        bounded=bounded,
+    )
 
 
 def detect_stale_entries(
@@ -497,7 +549,9 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
     if parsed is None:
         return None
 
-    pinned_start, pinned_end, pinned_content = parsed
+    pinned_start = parsed.start
+    pinned_end = parsed.end
+    pinned_content = parsed.content
 
     entry_pattern = re.compile(r'^### ', re.MULTILINE)
     entry_starts = [m.start() for m in entry_pattern.finditer(pinned_content)]
@@ -601,7 +655,7 @@ def check_pinned_block_signal(
     if parsed is None:
         return None
 
-    _, _, pinned_content = parsed
+    pinned_content = parsed.content
 
     try:
         pins = parse_pins(pinned_content)
