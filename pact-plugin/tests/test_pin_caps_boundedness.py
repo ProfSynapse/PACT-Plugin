@@ -396,7 +396,7 @@ def gate_env(tmp_path, monkeypatch, pact_context):
     return {"claude_md": claude_md, "failures": failures, "tmp_path": tmp_path}
 
 
-def _verdict(env, content: str, tool_input: dict):
+def _verdict(env, content: str, tool_input: dict, tool_name: str = "Edit"):
     """Run the gate and return (deny_reason, failures).
 
     THE BINDING CONTROL LIVES HERE, NOT IN A TEST OF ITS OWN, and that
@@ -429,7 +429,7 @@ def _verdict(env, content: str, tool_input: dict):
     from pin_caps_gate import _check_tool_allowed
     env["failures"].clear()
     reason = _check_tool_allowed({
-        "tool_name": "Edit",
+        "tool_name": tool_name,
         "agent_type": "pact-orchestrator",
         "tool_input": {"file_path": str(env["claude_md"]), **tool_input},
     })
@@ -649,3 +649,132 @@ class TestRegionStateContract:
 
         state = _parse_baseline(content)
         assert 0 < state.region_chars < len(content)
+
+
+# ---------------------------------------------------------------------------
+# The fresh-start arm: Write with an UNREADABLE baseline.
+#
+# REACHABILITY, because the obvious route does not exist. A NEW-FILE Write
+# cannot reach this arm: the resolver returns only a file that EXISTS, so with
+# no project CLAUDE.md the gate short-circuits and a genuinely new file is not
+# gated at all. The arm needs the file to EXIST and the READ to FAIL. The
+# fixture below models exactly that, rather than the missing-file route, so it
+# cannot certify behaviour on a path production never takes.
+#
+# The conjunct `pre.bounded` has NO REFERENT on this arm — there is no
+# pre-state. The gate therefore tests `post.bounded` alone.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def unreadable_baseline(gate_env, monkeypatch):
+    """The file EXISTS; the baseline READ fails. The real precondition."""
+    import pin_caps_gate
+
+    monkeypatch.setattr(
+        pin_caps_gate,
+        "_read_baseline",
+        lambda _path: (None, pin_caps_gate._FAIL_BASELINE_READ),
+    )
+    return gate_env
+
+
+def _write_verdict(env, written: str):
+    """Issue a Write of `written` against an existing-but-unreadable file."""
+    return _verdict(
+        env, written, {"content": written}, tool_name="Write"
+    )
+
+
+class TestFreshStartArmBoundedness:
+
+    def test_phantom_over_cap_is_allowed(self, unreadable_baseline):
+        """2 real pins measured as 14 must not deny on this arm either."""
+        written = _claude_md(real_pins=2, notes=12, bounded=False)
+        reason, failures = _write_verdict(unreadable_baseline, written)
+        assert reason is None, (
+            f"the fresh-start arm enforced on a phantom count: {reason!r}"
+        )
+        assert "pin_caps_gate_declined_unbounded_no_baseline" in [
+            f["classification"] for f in failures
+        ]
+
+    def test_genuine_over_cap_still_denies(self, unreadable_baseline):
+        """POSITIVE CONTROL, and it is what makes this suite non-vacuous.
+
+        The verdict is bound to `_WRITE_BASELINE_DENY_REASON`, which is
+        returned at NO other site in the module. A bare "it denied" would be
+        satisfied by any of the three other deny paths; this exact string
+        proves the test reached the arm it names.
+        """
+        from pin_caps_gate import _WRITE_BASELINE_DENY_REASON
+
+        written = _claude_md(real_pins=13, notes=0, bounded=True)
+        reason, _ = _write_verdict(unreadable_baseline, written)
+        assert reason == _WRITE_BASELINE_DENY_REASON, (
+            "the Sec N7 asymmetric fail-CLOSED posture must survive: a "
+            "GENUINE above-cap Write with no readable baseline still denies. "
+            "Declining unconditionally would delete this row, and this row "
+            "is the entire reason the fix is safe."
+        )
+
+    def test_clean_content_is_allowed(self, unreadable_baseline):
+        written = _claude_md(real_pins=2, notes=0, bounded=True)
+        reason, _ = _write_verdict(unreadable_baseline, written)
+        assert reason is None
+
+    def test_the_two_arms_disagree(self, unreadable_baseline):
+        """Mandatory anti-vacuity control.
+
+        Both writes are over the count cap BY MEASUREMENT (14 and 13). They
+        differ only in whether the measurement can be trusted.
+        """
+        phantom, _ = _write_verdict(
+            unreadable_baseline, _claude_md(real_pins=2, notes=12, bounded=False)
+        )
+        genuine, _ = _write_verdict(
+            unreadable_baseline, _claude_md(real_pins=13, notes=0, bounded=True)
+        )
+        assert (phantom is None) != (genuine is None)
+
+    def test_a_readable_baseline_does_not_take_this_arm(self, gate_env):
+        """The third certification row: with a readable baseline the normal
+        path runs and this arm is not taken. Bound by the unique string."""
+        from pin_caps_gate import _WRITE_BASELINE_DENY_REASON
+
+        written = _claude_md(real_pins=13, notes=0, bounded=True)
+        reason, _ = _write_verdict(gate_env, written)
+        assert reason != _WRITE_BASELINE_DENY_REASON
+
+    def test_the_deny_string_is_returned_at_no_other_site(self):
+        """The control that LICENSES the positive control above.
+
+        `test_genuine_over_cap_still_denies` proves it reached the fresh-start
+        arm only while this string is unique to that arm. If a later change
+        returns it from somewhere else, that proof silently degrades to a
+        bare "something denied" — so the uniqueness is asserted, not assumed.
+        """
+        import ast
+        import inspect
+
+        import pin_caps_gate
+
+        source = Path(pin_caps_gate.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        owners = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for inner in ast.walk(node):
+                if (
+                    isinstance(inner, ast.Return)
+                    and isinstance(inner.value, ast.Name)
+                    and inner.value.id == "_WRITE_BASELINE_DENY_REASON"
+                ):
+                    owners.add(node.name)
+        assert owners == {"_evaluate_write_as_fresh_start"}, (
+            f"the deny string is no longer unique to the fresh-start arm; "
+            f"returned from {sorted(owners)}. The positive control that "
+            f"binds a verdict to this arm is now vacuous."
+        )
+        assert inspect.isfunction(pin_caps_gate._evaluate_write_as_fresh_start)

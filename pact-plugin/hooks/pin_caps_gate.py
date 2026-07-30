@@ -145,6 +145,14 @@ _DECLINED_UNBOUNDED_BOTH = "pin_caps_gate_declined_unbounded_both"
 _DECLINED_UNBOUNDED_POST = "pin_caps_gate_declined_unbounded_post"
 _DECLINED_UNBOUNDED_PRE = "pin_caps_gate_declined_unbounded_pre"
 
+# FOURTH VALUE, and it is NOT one of the three above reused. The fresh-start
+# arm has NO pre-state at all — the baseline was unreadable, which is the
+# reason that arm exists. So the pre/post pair has only one half, and none of
+# the three names is TRUE of it: `_POST` in particular would assert that the
+# pre-state was BOUNDED, which is not merely unknown but unmeasurable here.
+# An operator reading `_post` would conclude a baseline had been read.
+_DECLINED_UNBOUNDED_NO_BASELINE = "pin_caps_gate_declined_unbounded_no_baseline"
+
 
 def _decline_classification(pre_bounded: bool, post_bounded: bool) -> str:
     """Map a pre/post boundedness pair to its decline classification.
@@ -475,6 +483,37 @@ def _evaluate_write_as_fresh_start(tool_input: dict) -> Optional[str]:
     evaluate the Write's content against an empty pre-state and apply
     the strict post-state predicate. If the Write itself over-caps, we
     deny; if it's clean, we allow (nothing to compare against).
+
+    BOUNDEDNESS ON THIS ARM IS GATED ON `post.bounded` ALONE, and that is
+    the rule of section 3 applied consistently rather than a new trade.
+    The conjunct `pre.bounded` has NO REFERENT here — there is no pre-state,
+    which is the whole reason this arm exists — so the faithful extension
+    keeps the half that has one. The rule is "decline when the MEASURE is
+    untrustworthy", and on this arm the code measures the WRITTEN CONTENT
+    alone, so that content's boundedness is the entire measure.
+
+    IT DOES NOT CONVERT THE FAIL-CLOSED INTO A FAIL-OPEN. Measured with the
+    baseline unreadable in every row: a PHANTOM above-cap (unbounded content,
+    2 real pins measured as 14) goes DENY -> ALLOW, which is the fix; a
+    GENUINE above-cap (bounded content, 13 real pins) stays DENY -> DENY;
+    a clean file stays ALLOW. The Sec N7 asymmetric posture survives intact
+    — only the denies driven by a measure known to be false are removed.
+    THE NAIVE FIX, DECLINING UNCONDITIONALLY, DELETES THE MIDDLE ROW and is
+    the wrong fix; that row is the whole reason this one is safe.
+
+    REACHABILITY, because the obvious route does not work: a NEW-FILE Write
+    CANNOT reach this arm. `_find_existing_claude_md` returns only a file
+    that EXISTS, so with no project CLAUDE.md the resolver returns None and
+    the gate short-circuits before it gets here — a genuinely new CLAUDE.md
+    is not gated at all. The arm needs the file to EXIST and the read or the
+    parse to FAIL.
+
+    Severity is LOW in both directions, because both sit behind that same
+    rare precondition. The reason to fix it is CONSISTENCY, not urgency: an
+    arm that enforces on a phantom count contradicts this module's own rule
+    that the gate declines when the measure is untrustworthy, and a
+    contradiction inside a control is how the next reader talks themselves
+    into the wrong branch.
     """
     try:
         # Best-effort simulation against an empty baseline. If apply_edit
@@ -484,14 +523,25 @@ def _evaluate_write_as_fresh_start(tool_input: dict) -> Optional[str]:
     except Exception:  # noqa: BLE001 — bounded
         return _WRITE_BASELINE_DENY_REASON
 
+    # Decline when the WRITTEN content's own region is unbounded: its pin
+    # count is inflated by every `### ` heading in its tail, so enforcing on
+    # it denies a curator for pins they do not have. See the docstring for
+    # why `post.bounded` alone is the faithful test on this arm.
+    if not post_state.bounded:
+        append_failure(
+            classification=_DECLINED_UNBOUNDED_NO_BASELINE,
+            error="pinned region unbounded in written content, baseline unreadable",
+            # This arm is reached ONLY on the `is_write` branch, so the
+            # tool is a Write by construction; no parameter is needed to
+            # carry a value that is already fixed by the call site.
+            source="Write",
+        )
+        return None
+
     # `.pins` is a MECHANICAL shape adaptation, not a behaviour change: the
     # helper now returns a RegionState and this arm consumes the same pin
     # list it consumed before. Passing the RegionState itself would evaluate
     # a NamedTuple as a pin list and silently mis-count.
-    #
-    # THIS ARM'S BOUNDEDNESS GATE IS A SEPARATE CHANGE with a separate
-    # justification, and is deliberately NOT made here. Keeping the two
-    # apart is what lets a reviewer certify either one.
     violation = evaluate_full_state(post_state.pins)
     if violation is None:
         # Write produces a state within caps — allow despite the
