@@ -407,10 +407,26 @@ DENY_REASON_SIZE = (
     "if the content is verbatim load-bearing."
 )
 
+# AUGMENTED, not replaced. The old text named ONE remedy — "use `#### ` or
+# bold" — which is right only when the heading was meant as in-body structure.
+# When the curator meant to add a PIN, that advice prescribes the very
+# construct that makes the block un-prunable (a `#### ` block never becomes a
+# Pin, so /PACT:prune-memory cannot reach it), and it gives no path at all
+# from the deny to the fix. Both remedies are named below, each with the
+# question that selects it.
+#
+# IT DELIBERATELY DOES NOT PROMISE THE EDIT WILL THEN BE ALLOWED. Adding the
+# date comment turns the heading into a real pin, which consumes a slot — so
+# a curator at the cap converts an embedded-pin deny into a count deny. The
+# text says what to DO, never what will HAPPEN.
 DENY_REASON_EMBEDDED_PIN = (
-    "Candidate body contains an embedded pin structure "
-    "(a `### ` heading). On reload this would be counted as an extra pin "
-    "and defeat the count cap. Use `#### ` or bold for in-body structure."
+    "Candidate body contains an embedded pin structure — a `### ` heading "
+    "with no `<!-- pinned: DATE -->` comment on the line above it. On reload "
+    "that heading parses as an extra pin and defeats the count cap. Which "
+    "fix applies depends on what you meant. If the heading IS a new pin, add "
+    "a `<!-- pinned: YYYY-MM-DD -->` comment directly above it; that makes it "
+    "a real pin and consumes a pin slot, so check your remaining slots first. "
+    "If it is structure INSIDE a pin body, use `#### ` or bold instead."
 )
 
 DENY_REASON_OVERRIDE_MISSING = (
