@@ -567,7 +567,9 @@ class TestApplyEditAndParse_Smoke:
         new = _managed_content(
             "<!-- pinned: 2026-04-21 -->\n### A\nBody A.\n\n"
         )
-        pins = apply_edit_and_parse(current_content="", tool_input={"content": new})
+        pins = apply_edit_and_parse(
+            current_content="", tool_input={"content": new}
+        ).pins
         assert len(pins) == 1
         assert pins[0].heading == "### A"
 
@@ -579,7 +581,9 @@ class TestApplyEditAndParse_Smoke:
             "new_string": "### A\nBody.\n\n<!-- pinned: 2026-04-21 -->\n### B\nBody B.\n",
             "replace_all": False,
         }
-        pins = apply_edit_and_parse(current_content=before, tool_input=tool_input)
+        pins = apply_edit_and_parse(
+            current_content=before, tool_input=tool_input
+        ).pins
         assert [p.heading for p in pins] == ["### A", "### B"]
 
     def test_edit_replace_all_applies_all_matches(self):
@@ -593,7 +597,9 @@ class TestApplyEditAndParse_Smoke:
             "new_string": "REPLACED.",
             "replace_all": True,
         }
-        pins = apply_edit_and_parse(current_content=before, tool_input=tool_input)
+        pins = apply_edit_and_parse(
+            current_content=before, tool_input=tool_input
+        ).pins
         assert all("REPLACED" in p.body for p in pins)
 
     def test_missing_pinned_section_returns_empty(self):
@@ -602,7 +608,7 @@ class TestApplyEditAndParse_Smoke:
         pins = apply_edit_and_parse(
             current_content="",
             tool_input={"content": "# Some\nRandom content.\n"},
-        )
+        ).pins
         assert pins == []
 
     def test_write_non_string_content_raises(self):
@@ -645,7 +651,9 @@ class TestApplyEditAndParse_Smoke:
             "new_string": "JUNK",
             "replace_all": True,
         }
-        pins = apply_edit_and_parse(current_content=before, tool_input=tool_input)
+        pins = apply_edit_and_parse(
+            current_content=before, tool_input=tool_input
+        ).pins
         # Pre-state has 2 pins; post-state must match.
         assert len(pins) == 2
         assert [p.heading for p in pins] == ["### A", "### B"]
@@ -690,7 +698,9 @@ class TestApplyEditAndParse_Smoke:
             "new_string": smuggle_payload,
             "replace_all": False,
         }
-        pins = apply_edit_and_parse(current_content=before, tool_input=tool_input)
+        pins = apply_edit_and_parse(
+            current_content=before, tool_input=tool_input
+        ).pins
         assert len(pins) == 1
         # Load-bearing assertion: the ORIGINAL pin heading survives, NOT
         # the smuggled one. Under revert, this assertion fails because

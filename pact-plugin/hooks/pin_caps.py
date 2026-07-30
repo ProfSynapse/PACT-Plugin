@@ -113,6 +113,25 @@ class Pin(NamedTuple):
     is_stale: bool                   # whether a STALE marker is present
 
 
+class RegionState(NamedTuple):
+    """A parsed pinned region: its pins, its size, and whether it is bounded.
+
+    Returned by `apply_edit_and_parse` and by the gate's `_parse_baseline`,
+    so the gate can decide whether the pin measurement is trustworthy before
+    it enforces on it. No region STRING crosses a frame — `region_chars`
+    carries the size, which is all any consumer needs.
+
+    `bounded` MUST be COPIED from `staleness.PinnedSection.bounded`, never
+    recomputed here. `_parse_pinned_section` is the one definition of
+    boundedness; a second computation is a twin that drifts, and a warning
+    that disagrees with a deny is worse than either alone.
+    """
+
+    pins: List[Pin]
+    region_chars: int
+    bounded: bool
+
+
 class CapViolation(NamedTuple):
     """A cap-enforcement refusal result."""
 
@@ -554,8 +573,8 @@ def _violation_for_kind(pins: List[Pin], kind: str) -> Optional[CapViolation]:
     return None
 
 
-def apply_edit_and_parse(current_content: str, tool_input: dict) -> List[Pin]:
-    """Simulate the post-tool CLAUDE.md state and return parsed pins.
+def apply_edit_and_parse(current_content: str, tool_input: dict) -> RegionState:
+    """Simulate the post-tool CLAUDE.md state and return its `RegionState`.
 
     For Edit:
       Applies `old_string → new_string` via `str.replace(...)`. When
@@ -570,11 +589,24 @@ def apply_edit_and_parse(current_content: str, tool_input: dict) -> List[Pin]:
       replacement.
 
     After producing the simulated post-edit content, extracts the
-    Pinned Context section via `_parse_pinned_section` and returns
-    `parse_pins(pinned_content)`. Section-bounded by construction so
-    `### ` headings elsewhere (Working Memory, user prose) do NOT
-    inflate the count. If the post-edit content has no Pinned Context
-    section, returns [] (no pins → below every cap).
+    Pinned Context section via `_parse_pinned_section` and returns a
+    `RegionState` carrying the parsed pins, the region size, and the
+    region's boundedness.
+
+    SECTION-BOUNDING IS A PRECONDITION, NOT A GUARANTEE. An earlier form
+    of this docstring claimed the parse was "section-bounded by
+    construction so `### ` headings elsewhere (Working Memory, user prose)
+    do NOT inflate the count". That holds only while the region HAS a
+    terminating heading. When it does not, `_find_terminator_offset`
+    returns the end of the scanned text, the whole tail is handed to
+    `parse_pins`, and every `### ` heading in it becomes a Pin — which is
+    the inflation the sentence promised was impossible. `bounded` is how a
+    caller now tells the two states apart; the caller MUST consult it
+    before it acts on `pins`.
+
+    If the post-edit content has no Pinned Context section, returns a
+    RegionState with no pins, zero chars, and bounded=True — see the
+    branch comment for why True is load-bearing there.
 
     Raises on malformed tool_input (missing required keys, non-string
     values). The caller (pin_caps_gate.main) is responsible for wrapping
@@ -631,9 +663,22 @@ def apply_edit_and_parse(current_content: str, tool_input: dict) -> List[Pin]:
     if parsed is None:
         # No Pinned Context section in the post-edit state. Treat as
         # "no pins" — caps cannot be violated when the section is absent.
-        return []
+        #
+        # bounded=True IS LOAD-BEARING AND IT IS NOT A GUESS. The gate
+        # declines to enforce when bounded is False, so bounded=False here
+        # would silently switch the whole control OFF for every file that
+        # has no Pinned Context section — a large population, and one with
+        # no defect. "Absent" is not "untrustworthy": there is nothing to
+        # measure, the measurement of nothing is exact, and the caps cannot
+        # be violated by it. Enforcement on this path stays exactly as it
+        # is today.
+        return RegionState(pins=[], region_chars=0, bounded=True)
 
-    return parse_pins(parsed.content)
+    return RegionState(
+        pins=parse_pins(parsed.content),
+        region_chars=len(parsed.content),
+        bounded=parsed.bounded,
+    )
 
 
 def compute_deny_reason(

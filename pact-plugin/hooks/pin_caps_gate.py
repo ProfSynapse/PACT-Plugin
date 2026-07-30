@@ -100,6 +100,7 @@ try:
     from pin_caps import (
         OVERRIDE_COMMENT_RE,
         OVERRIDE_RATIONALE_MAX,
+        RegionState,
         apply_edit_and_parse,
         compute_deny_reason,
         evaluate_full_state,
@@ -127,6 +128,53 @@ _FAIL_BASELINE_READ = "pin_caps_gate_baseline_read"
 _FAIL_BASELINE_PARSE = "pin_caps_gate_baseline_parse"
 _FAIL_SIMULATE = "pin_caps_gate_simulate"
 _FAIL_UNEXPECTED = "pin_caps_gate_unexpected"
+
+# Boundedness-decline classifications. DELIBERATELY NOT `_FAIL_*`.
+#
+# A `_FAIL_*` code means the gate hit a fault it could not evaluate. An
+# unbounded pinned region is not a fault of the gate: the gate measured the
+# region correctly, found the measure untrustworthy, and declined on purpose.
+# Reusing a `_FAIL_*` value would merge a correct decline into the fault
+# population that an operator reads to find real gate bugs.
+#
+# The pre/post pair is recorded rather than a single flag because the three
+# states have different meanings to an operator. `_PRE` in particular is the
+# REPAIR case: the curator's own edit bounds a region that was unbounded, and
+# the gate MUST allow it. A single "unbounded" code cannot show that.
+_DECLINED_UNBOUNDED_BOTH = "pin_caps_gate_declined_unbounded_both"
+_DECLINED_UNBOUNDED_POST = "pin_caps_gate_declined_unbounded_post"
+_DECLINED_UNBOUNDED_PRE = "pin_caps_gate_declined_unbounded_pre"
+
+
+def _decline_classification(pre_bounded: bool, post_bounded: bool) -> str:
+    """Map a pre/post boundedness pair to its decline classification.
+
+    Takes two bools rather than the two region states, so the mapping is
+    testable on its own and carries no dependency on the caller's types.
+
+    Each branch is keyed on the side that is actually UNBOUNDED, so every
+    returned value is true of its input. Three of the four inputs decline:
+
+      pre unbounded, post unbounded -> `_DECLINED_UNBOUNDED_BOTH`
+      pre bounded,   post unbounded -> `_DECLINED_UNBOUNDED_POST`
+      pre unbounded, post bounded   -> `_DECLINED_UNBOUNDED_PRE`  (the repair)
+
+    The fourth input, both bounded, DOES NOT DECLINE, so it has no true
+    classification. The caller tests boundedness before it calls, so that
+    input does not occur on the gate path. It returns `_DECLINED_UNBOUNDED_BOTH`
+    rather than raising, because no helper on this path may raise a new
+    exception class into the SACROSANCT fail-open catch. Do not read that
+    value as a statement about the input: it is an unreachable default, and
+    `test_both_bounded_is_not_a_decline` pins it so a future reader who
+    routes a bounded pair here finds a test rather than a silent wrong code.
+    """
+    if not pre_bounded and not post_bounded:
+        return _DECLINED_UNBOUNDED_BOTH
+    if not post_bounded:
+        return _DECLINED_UNBOUNDED_POST
+    if not pre_bounded:
+        return _DECLINED_UNBOUNDED_PRE
+    return _DECLINED_UNBOUNDED_BOTH
 
 _WRITE_BASELINE_DENY_REASON = (
     "Refusing Write: could not read or parse the current CLAUDE.md to "
@@ -314,7 +362,7 @@ def _check_tool_allowed(input_data: dict) -> Optional[str]:
     # baseline_content is now known to be `str` (narrowed above). Parse
     # pre-state pins from the baseline.
     try:
-        pre_pins = _parse_baseline(baseline_content)
+        pre_state = _parse_baseline(baseline_content)
     except Exception:  # noqa: BLE001 — bounded fail-open per contract
         append_failure(
             classification=_FAIL_BASELINE_PARSE,
@@ -326,11 +374,48 @@ def _check_tool_allowed(input_data: dict) -> Optional[str]:
     # Simulate post-edit state. Helper raises on malformed tool_input;
     # caller (main) catches and fail-opens.
     try:
-        post_pins = apply_edit_and_parse(baseline_content, tool_input)
+        post_state = apply_edit_and_parse(baseline_content, tool_input)
     except Exception:  # noqa: BLE001 — bounded fail-open per contract
         append_failure(
             classification=_FAIL_SIMULATE,
             error=f"simulate failed for {claude_md_path}",
+            source=tool_name,
+        )
+        return None
+
+    # ── Boundedness decline. DO NOT MOVE THIS BLOCK DOWN. ────────────────
+    #
+    # When either region lacks a terminating heading, the pin measurement is
+    # KNOWN FALSE and the gate declines the WHOLE deny decision.
+    #
+    # WHY IT SITS HERE AND NOT LOWER. There are THREE deny paths, and the
+    # FIRST to fire is the embedded-pin check inside `compute_deny_reason`,
+    # which returns before either cap axis is consulted. So this block must
+    # precede the CALL to `compute_deny_reason`. Guarding only the count and
+    # size axes leaves 2 of the 3 over-blocks live; guarding only the size
+    # axis leaves 2 live as well.
+    #
+    # WHY THE MEASURE IS FALSE. An unbounded region runs to the end of the
+    # scanned text, so `parse_pins` absorbs every `### ` heading in the tail.
+    # This repository writes Working Memory entries as `### <date>`, so a
+    # curator holding 2 real pins measures as 14 and is denied at 15/12 —
+    # and told to prune pins they do not have. The offered cure cannot work.
+    # An unbounded region ALSO makes an ordinary undated Working Memory
+    # entry read as the embedded-pin smuggle signature, which is why the
+    # most ordinary action of the three denies first.
+    #
+    # THE TRADE, STATED PLAINLY. On an unbounded file the caps stop, so a
+    # curator can exceed them there. That fail-open is intended. The
+    # opposite trade is not available: enforcing on a false measure denies
+    # honest edits with no escape, and an over-block is the cardinal sin.
+    # The curator is not left in silence — SessionStart carries the repair
+    # directive, which can explain the cause and give a cure that works.
+    if not (pre_state.bounded and post_state.bounded):
+        append_failure(
+            classification=_decline_classification(
+                pre_state.bounded, post_state.bounded
+            ),
+            error=f"pinned region unbounded for {claude_md_path}",
             source=tool_name,
         )
         return None
@@ -340,23 +425,47 @@ def _check_tool_allowed(input_data: dict) -> Optional[str]:
     # a smuggle-heading body identically for Write and Edit (#529); see
     # its docstring for the fallback hierarchy.
     new_body = _extract_new_body(
-        tool_input, pre_pins=pre_pins, post_pins=post_pins
+        tool_input, pre_pins=pre_state.pins, post_pins=post_state.pins
     )
-    return compute_deny_reason(pre_pins, post_pins, new_body=new_body)
+    return compute_deny_reason(
+        pre_state.pins, post_state.pins, new_body=new_body
+    )
 
 
-def _parse_baseline(content: str):
-    """Parse the current CLAUDE.md into a pin list via the bounded parser.
+def _parse_baseline(content: str) -> RegionState:
+    """Parse the current CLAUDE.md into a `RegionState` via the section parser.
 
-    Section-bounded via staleness._parse_pinned_section so Working Memory
-    `### ` subheadings do NOT inflate the count (backend-coder-6 R3).
+    THE SECTION-BOUNDING CLAIM THAT USED TO SIT HERE WAS FALSE, and the
+    correction is the reason this function returns a RegionState.
+
+    It read: "Section-bounded via staleness._parse_pinned_section so Working
+    Memory `### ` subheadings do NOT inflate the count". Bounding holds only
+    while the pinned region has a TERMINATING heading. Without one the
+    parser hands the whole file tail to `parse_pins`, and Working Memory
+    `### <date>` entries — which is how this repository writes them — each
+    become a Pin. So the exact inflation the sentence ruled out is the
+    live defect, and a curator with 2 pins was denied at 15/12.
+
+    The tag on the original sentence marked it as a REMEDIATION of that same
+    defect class. It was repaired once, and it REOPENS whenever the
+    terminator is absent. Boundedness is therefore reported, not asserted:
+    `bounded` tells the caller whether the pin count means anything, and
+    the caller must consult it before enforcing.
+
+    The empty case returns bounded=True for the reason given in
+    `apply_edit_and_parse` — an absent section is exactly measurable, not
+    untrustworthy, so enforcement on it is unchanged.
     """
     from staleness import _parse_pinned_section
 
     parsed = _parse_pinned_section(content)
     if parsed is None:
-        return []
-    return parse_pins(parsed.content)
+        return RegionState(pins=[], region_chars=0, bounded=True)
+    return RegionState(
+        pins=parse_pins(parsed.content),
+        region_chars=len(parsed.content),
+        bounded=parsed.bounded,
+    )
 
 
 def _evaluate_write_as_fresh_start(tool_input: dict) -> Optional[str]:
@@ -371,11 +480,19 @@ def _evaluate_write_as_fresh_start(tool_input: dict) -> Optional[str]:
         # Best-effort simulation against an empty baseline. If apply_edit
         # raises (malformed tool_input), we cannot evaluate → return the
         # generic Write-baseline deny-reason so the user sees why.
-        post_pins = apply_edit_and_parse(current_content="", tool_input=tool_input)
+        post_state = apply_edit_and_parse(current_content="", tool_input=tool_input)
     except Exception:  # noqa: BLE001 — bounded
         return _WRITE_BASELINE_DENY_REASON
 
-    violation = evaluate_full_state(post_pins)
+    # `.pins` is a MECHANICAL shape adaptation, not a behaviour change: the
+    # helper now returns a RegionState and this arm consumes the same pin
+    # list it consumed before. Passing the RegionState itself would evaluate
+    # a NamedTuple as a pin list and silently mis-count.
+    #
+    # THIS ARM'S BOUNDEDNESS GATE IS A SEPARATE CHANGE with a separate
+    # justification, and is deliberately NOT made here. Keeping the two
+    # apart is what lets a reviewer certify either one.
+    violation = evaluate_full_state(post_state.pins)
     if violation is None:
         # Write produces a state within caps — allow despite the
         # baseline read failure. (The failure_log entry already recorded
