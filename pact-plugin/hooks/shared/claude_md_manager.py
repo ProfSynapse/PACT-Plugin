@@ -1043,6 +1043,178 @@ def migrate_to_managed_structure() -> str | None:
 
 
 
+PINNED_TERMINATOR_HEADING = "## Working Memory"
+
+_REPAIR_OK = (
+    "Repaired project CLAUDE.md: inserted a `{heading}` heading to close the "
+    "Pinned Context section. Entries below it are notes again, not pins."
+)
+_REPAIR_REFUSED_NO_DATED_PIN = (
+    "Pinned-region repair skipped: no entry in the Pinned Context section "
+    "carries a `<!-- pinned: DATE -->` comment, so there is no signal that "
+    "separates a pin from a note. Add the heading by hand."
+)
+_REPAIR_REFUSED_NOTHING_ABSORBED = (
+    "Pinned-region repair skipped: the Pinned Context section has no undated "
+    "`### ` entry after a dated one, so there is no absorbed content to put "
+    "outside it. Add the heading by hand."
+)
+_REPAIR_REFUSED_PARSER_DISAGREEMENT = (
+    "Pinned-region repair skipped: the pin parser and the heading scan "
+    "disagree on the entry count. Add the heading by hand."
+)
+
+
+def ensure_pinned_terminator() -> str | None:
+    """Insert a `## Working Memory` heading when the pinned region is unbounded.
+
+    A pinned region with no terminating heading runs to the end of the
+    scanned text, so every `### ` heading in the tail parses as a Pin. The
+    pin-cap gate then measures a count the curator does not have. This
+    function restores the boundary.
+
+    PLACEMENT IS THE WHOLE DESIGN, AND THE OBVIOUS PLACEMENT IS WRONG.
+    Appending the heading at the END of the region bounds the region at the
+    end it ALREADY had. The absorbed entries stay inside, `bounded` flips to
+    True, and the gate resumes enforcing on the SAME inflated count — so the
+    repair CAUSES the over-block it exists to prevent, which is measurably
+    worse than not running at all. Measured on a 2-real-pin file: no repair
+    gives 14 pins and a safe decline, END placement gives 14 pins and a deny
+    at 15/12, correct placement gives 2 pins.
+
+    So the heading goes immediately BEFORE the first `### ` entry that has NO
+    date comment and that FOLLOWS at least one dated entry. The discriminator
+    is the plugin's own pin grammar: a legitimately added pin always carries
+    `<!-- pinned: DATE -->`, and the gate's own smuggle check relies on the
+    same rule. An undated `### ` sitting after the dated pins is absorbed
+    content, and it was never a pin — it became one only when the terminator
+    went missing.
+
+    TWO REFUSAL GUARDS, BOTH MANDATORY. A refusal is not a failure: the file
+    stays unbounded, which is the SAFE state (the gate declines rather than
+    enforcing on a false measure), and the SessionStart directive tells the
+    curator what to do.
+      1. No dated entry anywhere. The file is hand-maintained and carries no
+         signal separating pins from notes. Inserting before the first `### `
+         would push EVERY pin out of the region.
+      2. No undated entry after a dated one. Nothing was absorbed.
+
+    ORDERING: the caller MUST run this BEFORE `migrate_to_managed_structure`.
+    The migration bounds the region without fixing the placement, so after it
+    runs this function sees a bounded file, declines to act, and the phantom
+    entries are locked inside permanently.
+
+    KNOWN EDGE, low risk and unrepaired: a file whose `## Working Memory`
+    heading sits BEFORE `## Pinned Context`, with nothing after the pins,
+    gains a SECOND Working Memory heading.
+
+    Returns:
+        A status string on repair or refusal (refusals contain "skipped" so
+        the caller routes them to systemMessages), or None for a no-op —
+        bounded region, no region, no file, or any error. Never raises.
+    """
+    # TOTAL BY CONSTRUCTION. Every raisable step lives inside this wrapper,
+    # including the path resolution and the function-level imports below —
+    # an ImportError from the cross-package import is exactly the kind of
+    # fault that must degrade to "did nothing", not propagate into
+    # SessionStart.
+    try:
+        return _ensure_pinned_terminator_inner()
+    except Exception:  # noqa: BLE001 — fail-open: SessionStart must not break.
+        return None
+
+
+def _ensure_pinned_terminator_inner() -> str | None:
+    """Body of `ensure_pinned_terminator`. May raise; the caller is total."""
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    if not project_dir:
+        return None
+
+    target_file, source = resolve_project_claude_md_path(project_dir)
+    if source == "new_default":
+        return None  # File does not exist; ensure_project_memory_md creates it.
+
+    # Function-level imports: this module lives in shared/ and these live in
+    # hooks/. A module-level import would create a cycle — staleness.py
+    # already function-level-imports THIS module for the same reason.
+    from staleness import _parse_pinned_section
+    from pin_caps import _PIN_HEADING_RE, parse_pins
+
+    try:
+        with file_lock(target_file):
+            try:
+                content = target_file.read_text(encoding="utf-8")
+            except OSError:
+                return None
+
+            parsed = _parse_pinned_section(content)
+            if parsed is None or parsed.bounded:
+                # Idempotency: a bounded region is the goal state. A second
+                # run after a successful repair lands here and writes nothing.
+                return None
+
+            pins = parse_pins(parsed.content)
+            heading_starts = [
+                m.start() for m in _PIN_HEADING_RE.finditer(parsed.content)
+            ]
+            # parse_pins builds one Pin per heading start, in order, from this
+            # same regex over this same string, so the two lists align by
+            # index. Verify it rather than assume it: if they ever disagree,
+            # the offsets would be attributed to the wrong entries and the
+            # heading would land in the middle of someone's pin body.
+            if len(pins) != len(heading_starts):
+                return _REPAIR_REFUSED_PARSER_DISAGREEMENT
+
+            first_dated = next(
+                (i for i, pin in enumerate(pins) if pin.date_comment is not None),
+                None,
+            )
+            if first_dated is None:
+                return _REPAIR_REFUSED_NO_DATED_PIN  # Guard 1.
+
+            target_index = next(
+                (
+                    i
+                    for i in range(first_dated + 1, len(pins))
+                    if pins[i].date_comment is None
+                ),
+                None,
+            )
+            if target_index is None:
+                return _REPAIR_REFUSED_NOTHING_ABSORBED  # Guard 2.
+
+            # `parsed.start` is already absolute; `heading_starts` are relative
+            # to `parsed.content`, which begins at `parsed.start`.
+            insert_at = parsed.start + heading_starts[target_index]
+            new_content = (
+                content[:insert_at]
+                + f"{PINNED_TERMINATOR_HEADING}\n\n"
+                + content[insert_at:]
+            )
+
+            try:
+                _atomic_write_text(target_file, new_content, Path(project_dir))
+            except ContainmentError:
+                return (
+                    "Pinned-region repair skipped: project CLAUDE.md path "
+                    "precondition not met."
+                )
+            except OSError as exc:
+                return f"Pinned-region repair failed: {str(exc)[:50]}"
+
+            return _REPAIR_OK.format(heading=PINNED_TERMINATOR_HEADING)
+    except TimeoutError:
+        return (
+            "Pinned-region repair skipped: could not acquire the lock on "
+            "project CLAUDE.md within 5s; will retry on next session start."
+        )
+    except OSError:
+        return (
+            "Pinned-region repair skipped: could not acquire the lock on "
+            "project CLAUDE.md (path precondition not met)."
+        )
+
+
 def _build_migrated_content(content: str) -> str:
     """
     Transform old-format CLAUDE.md content into the new managed structure.

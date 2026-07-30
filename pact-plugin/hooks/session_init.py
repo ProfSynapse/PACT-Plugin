@@ -102,6 +102,7 @@ from shared.paths import get_claude_config_dir
 # Import extracted modules (decomposed for maintainability per M5 audit finding).
 from shared.symlinks import setup_plugin_symlinks
 from shared.claude_md_manager import (
+    ensure_pinned_terminator,
     ensure_project_memory_md,
     file_lock,
     migrate_to_managed_structure,
@@ -249,6 +250,82 @@ def check_pin_slot_status() -> Optional[str]:
 
         return format_slot_status(pins)
     except Exception:  # noqa: BLE001 — outer fail-open
+        return None
+
+
+def check_pinned_region_unbounded_directive(
+    input_data: dict, repair_status: Optional[str] = None
+) -> Optional[str]:
+    """Return a repair directive for additionalContext, or None.
+
+    Fires when the project CLAUDE.md has a Pinned Context section with NO
+    terminating heading. In that state the pin-cap gate DECLINES to enforce,
+    because the pin count it measures is inflated by every `### ` heading in
+    the file tail. The caps are off on that file, and nothing else tells the
+    curator so — the gate's correct silence is why this directive exists.
+
+    SIGNATURE NOTE: the design sketch took no parameter. It needs one. The
+    first trigger condition is `is_lead`, and that predicate reads the
+    harness-set `agent_type` off the input dict.
+
+    SCOPED TO THE LEAD, AND THE SCOPE IS LOAD-BEARING, NOT TIDINESS.
+    SessionStart runs for EVERY frame, teammates included. The pin-cap gate
+    returns early for a teammate, so a teammate is not gated at all. An
+    unscoped directive would therefore instruct exactly the actors the gate
+    does not control to edit a file they are not expected to touch. This
+    predicate has caused one silent-scope failure at this same branch before,
+    with the sign reversed: the gate was silently DEAD for the lead. Same
+    cause both times — the scope of the predicate read differently from how
+    it behaved.
+
+    CANNOT DENY, structurally, on three independent layers: SessionStart must
+    never exit 2 (it would break /clear and /resume), the function returns a
+    string and a string cannot deny, and the body is wrapped in a blanket
+    try/except returning None. Both sibling directives use this pattern.
+
+    Args:
+        input_data: the SessionStart stdin payload, for the `is_lead` test.
+        repair_status: what `ensure_pinned_terminator()` reported this
+            session, or None if it did not run. Surfaced verbatim so the
+            directive can say what the plugin ALREADY DID rather than ask
+            the curator to repeat it. When the automatic repair succeeded
+            this function does not fire at all, because the region is bounded
+            by then — so a status reaching here is a refusal, and the reason
+            is the part the curator needs.
+    """
+    try:
+        if not is_lead(input_data):
+            return None
+
+        path = _get_project_claude_md_path()
+        if path is None:
+            return None
+
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (IOError, OSError, UnicodeDecodeError):
+            return None
+
+        parsed = _parse_pinned_section(content)
+        if parsed is None or parsed.bounded:
+            return None
+
+        plugin_action = (
+            f" The plugin tried to repair it automatically and could not: "
+            f"{repair_status}"
+            if repair_status
+            else " The plugin did not repair it automatically this session."
+        )
+        return (
+            "Pinned context: the `## Pinned Context` section of the project "
+            "CLAUDE.md has no heading after it, so it runs to the end of the "
+            "file and every `### ` heading below it counts as a pin. The pin "
+            "caps are NOT being enforced on this file while that is true."
+            f"{plugin_action} "
+            "You MUST add a `## Working Memory` heading immediately after the "
+            "last real pin to close the section."
+        )
+    except Exception:  # noqa: BLE001 — outer fail-open; SessionStart cannot deny.
         return None
 
 
@@ -890,6 +967,44 @@ def main():
             else:
                 context_parts.append(project_md_msg)
 
+        # 3a-bis. Close an unbounded Pinned Context section BEFORE the
+        # migration below. THE ORDER IS LOAD-BEARING AND IT IS MEASURED, NOT
+        # PREFERRED. On a file whose pinned region lost its terminating
+        # heading, the migration alone yields 14 pins; this repair followed
+        # by the migration yields 2. Reversed, the migration bounds the
+        # region WITHOUT correcting the placement, this repair then sees a
+        # bounded file, declines to act, and the absorbed entries are locked
+        # inside the pinned region permanently — where they inflate the count
+        # on every later session.
+        #
+        # DELIBERATELY NOT LEAD-SCOPED, and the asymmetry with the directive
+        # below is the point rather than an oversight.
+        #
+        # The lead-scope rule exists for a surface that TELLS AN ACTOR to edit
+        # a file that actor does not own and the pin gate does not control for
+        # them. That is the DIRECTIVE, and it stays scoped. THIS IS A WRITER.
+        # It instructs nobody, so it has no actor to mis-address — and the
+        # migration immediately below already writes to this same file from
+        # ANY frame, which is the precedent.
+        #
+        # Scoping the repair while leaving the migration unscoped made the
+        # outcome depend on WHICH FRAME TYPE HAPPENED TO START FIRST, and the
+        # losing branch was permanent: a non-lead frame ran the migration
+        # alone, which bounds the region WITHOUT correcting the placement, so
+        # the absorbed entries were locked inside at 14 pins with
+        # `bounded=True`. A later lead frame then declines, because the file
+        # is bounded by then, and the boundedness decline never fires either —
+        # so the over-block is re-armed with no way back. `is_lead` is False
+        # for a teammate, for a typo'd agent_type, AND for a plain session
+        # launched with no `--agent` flag, so that was not a rare frame.
+        pinned_repair_msg = ensure_pinned_terminator()
+        if pinned_repair_msg:
+            if ("failed" in pinned_repair_msg.lower()
+                    or "skipped" in pinned_repair_msg.lower()):
+                system_messages.append(pinned_repair_msg)
+            else:
+                context_parts.append(pinned_repair_msg)
+
         # 3b. One-time migration: wrap existing project CLAUDE.md in
         # PACT_MANAGED boundary and add PACT_MEMORY markers (#404).
         # Runs after ensure_project_memory_md() so newly created files
@@ -961,6 +1076,19 @@ def main():
         stale_block_msg = check_pin_stale_block_directive()
         if stale_block_msg and frame_role != "teammate":
             context_parts.append(stale_block_msg)
+
+        # 4b-bis. Tell the curator when the pinned region has no terminating
+        # heading. In that state the pin-cap gate DECLINES rather than
+        # enforcing on a count it knows is inflated, so the caps are off and
+        # the gate is correctly silent about it. This is the only surface that
+        # reports it. The helper scopes itself to the lead — it is NOT gated
+        # on `frame_role` here, because is_lead is the stricter predicate and
+        # the design names it specifically.
+        unbounded_msg = check_pinned_region_unbounded_directive(
+            input_data, repair_status=pinned_repair_msg
+        )
+        if unbounded_msg:
+            context_parts.append(unbounded_msg)
 
         # 4c. Surface plugin manifest diagnostic (#500). Tier-0 additionalContext —
         # total-function banner; always emits, even on read/parse failure.
