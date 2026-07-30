@@ -32,6 +32,7 @@ from shared.claude_md_manager import (  # noqa: E402
     MANAGED_START_MARKER,
     PINNED_TERMINATOR_HEADING,
     ensure_pinned_terminator,
+    match_project_claude_md,
     migrate_to_managed_structure,
 )
 from staleness import _parse_pinned_section  # noqa: E402
@@ -639,3 +640,160 @@ class TestFrameTypeDoesNotChangeTheOutcome:
             f"{(REAL_PINS, True)}. Convergence alone is not the property — "
             f"two frames agreeing on 14 phantom pins would also be equal."
         )
+
+
+# ---------------------------------------------------------------------------
+# Guard 3: a `## Working Memory` heading already exists in the managed region.
+#
+# THE REPAIR CREATED THIS DEFECT; IT DID NOT INHERIT IT. Measured before the
+# guard existed: on a file whose Working Memory heading sits ABOVE
+# `## Pinned Context`, the repair inserted a SECOND one. The pin outcome was
+# correct (5 pins to 2, bounded) and the repair was idempotent, so nothing in
+# the cap suite could see it. The damage showed up in a DIFFERENT module:
+# `working_memory._parse_working_memory_section` locates its section with
+# `re.search`, which takes the FIRST match, so the pact-memory writer kept
+# maintaining the heading above the pins while the entries the repair moved
+# out sat under the second heading, synced and pruned by nothing.
+# ---------------------------------------------------------------------------
+
+WM_HEADING_ABOVE_PINS = (
+    "# PACT Framework and Managed Project Memory\n\n"
+    f"{MANAGED_START_MARKER}\n"
+    f"{PINNED_TERMINATOR_HEADING}\n"
+    "- an existing note\n\n"
+    "## Pinned Context\n\n"
+    + "".join(_REAL_PIN.format(n=i) for i in (1, 2))
+    + "".join(_NOTE.format(d=d) for d in range(1, 4))
+    + f"{MANAGED_END_MARKER}\n"
+)
+
+
+class TestGuard3ExistingWorkingMemoryHeading:
+
+    def test_the_fixture_is_the_measured_broken_input(self, project):
+        """Precondition control, pinning the three rows I measured.
+
+        Without this the guard could be passing because the fixture stopped
+        reproducing the condition rather than because the guard works.
+        """
+        assert WM_HEADING_ABOVE_PINS.count(PINNED_TERMINATOR_HEADING) == 1
+        count, bounded = measure(WM_HEADING_ABOVE_PINS)
+        assert (count, bounded) == (5, False)
+
+    def test_the_repair_refuses_and_writes_nothing(self, project):
+        path = project(WM_HEADING_ABOVE_PINS)
+        status = ensure_pinned_terminator()
+
+        assert status is not None and "skipped" in status.lower()
+        after = path.read_text(encoding="utf-8")
+        assert after == WM_HEADING_ABOVE_PINS, "guard 3 must not write"
+        assert after.count(PINNED_TERMINATOR_HEADING) == 1, (
+            "the second heading reappeared. Without the guard the repair "
+            "inserts one, and the pact-memory writer then maintains the "
+            "heading ABOVE the pins while the moved entries sit under the "
+            "one below it, maintained by nothing."
+        )
+
+    def test_the_refusal_is_reported_not_silent(self, project):
+        """A SILENT refusal is worse than the duplicate heading.
+
+        The region stays unbounded, so the caps stay off on this file. If
+        nothing says why, the curator has no way to learn the state — which
+        is the condition the SessionStart directive exists to answer.
+        """
+        project(WM_HEADING_ABOVE_PINS)
+        status = ensure_pinned_terminator()
+        assert status, "the refusal must be reported, not returned as None"
+        # "skipped" is load-bearing, not decoration. Without it this test
+        # passes when the guard is REMOVED: the repair then succeeds and
+        # returns a status that also names the heading. Asserting the
+        # refusal KIND is what makes the arm discriminate.
+        assert "skipped" in status.lower(), (
+            f"expected a refusal, got a success status: {status!r}"
+        )
+        assert PINNED_TERMINATOR_HEADING in status, (
+            "the message must name the heading the curator has to move"
+        )
+
+    def test_the_refusal_reaches_the_curator_through_the_directive(
+        self, project, monkeypatch
+    ):
+        """End of the chain: refusal -> repair_status -> directive text."""
+        from session_init import check_pinned_region_unbounded_directive
+
+        import staleness
+        monkeypatch.setattr(
+            staleness, "get_project_claude_md_path", lambda: project.path
+        )
+        project(WM_HEADING_ABOVE_PINS)
+        status = ensure_pinned_terminator()
+
+        message = check_pinned_region_unbounded_directive(
+            {"agent_type": "pact-orchestrator"}, repair_status=status
+        )
+        assert message is not None
+        assert "already has a `## Working Memory` heading" in message
+
+    def test_the_gate_declines_on_the_refused_file(
+        self, project, monkeypatch, pact_context
+    ):
+        """THE ASSERTION THAT MATTERS, and it is not the refusal.
+
+        A refusal that left the gate ENFORCING would be the impossible-cure
+        over-block again: the region still parses 5 pins against a real 2,
+        and a curator would be denied for pins they do not have. So the
+        refusal is only safe because the gate declines on it. Assert the
+        DECLINE, not the refusal.
+        """
+        pact_context(
+            team_name="test-team",
+            session_id="session-guard3",
+            project_dir=str(project.path.parent),
+        )
+        import staleness
+        monkeypatch.setattr(
+            staleness, "get_project_claude_md_path", lambda: project.path
+        )
+
+        failures: list[dict] = []
+        import pin_caps_gate
+        monkeypatch.setattr(
+            pin_caps_gate,
+            "append_failure",
+            lambda classification, error=None, cwd=None, source=None:
+                failures.append({"classification": classification}),
+        )
+
+        path = project(WM_HEADING_ABOVE_PINS)
+        assert ensure_pinned_terminator() is not None, "precondition: refused"
+
+        # BINDING CONTROL: without this the gate short-circuits on a
+        # non-matching path and reports ALLOW for a reason unrelated to
+        # boundedness. Placed before the verdict so a miss withholds it.
+        canonical = match_project_claude_md(str(path))
+        assert canonical is not None and path.parent in canonical.parents, (
+            "BINDING CONTROL FAILED: the gate would short-circuit before "
+            "reaching the boundedness decline."
+        )
+
+        reason = pin_caps_gate._check_tool_allowed({
+            "tool_name": "Edit",
+            "agent_type": "pact-orchestrator",
+            "tool_input": {
+                "file_path": str(path),
+                "old_string": "### Real pin 1\nShort body.\n",
+                "new_string": (
+                    "### Real pin 1\nShort body.\n\n"
+                    "<!-- pinned: 2026-07-31 -->\n### Real pin new\nBody.\n"
+                ),
+                "replace_all": False,
+            },
+        })
+        assert reason is None, (
+            f"the refused file must be DECLINED, not enforced. The region "
+            f"still parses 5 pins against a real 2, so enforcing here denies "
+            f"a curator for pins they do not have. Got {reason!r}"
+        )
+        assert [f["classification"] for f in failures] == [
+            "pin_caps_gate_declined_unbounded_both"
+        ], "the allow must come from the boundedness decline, not from a clean evaluation"

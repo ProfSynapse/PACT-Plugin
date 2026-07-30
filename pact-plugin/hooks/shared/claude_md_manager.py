@@ -1063,6 +1063,12 @@ _REPAIR_REFUSED_PARSER_DISAGREEMENT = (
     "Pinned-region repair skipped: the pin parser and the heading scan "
     "disagree on the entry count. Add the heading by hand."
 )
+_REPAIR_REFUSED_HEADING_EXISTS = (
+    "Pinned-region repair skipped: this file already has a "
+    "`## Working Memory` heading above the Pinned Context section, so "
+    "inserting another would leave two. Move the existing heading to sit "
+    "after the last real pin instead."
+)
 
 
 def ensure_pinned_terminator() -> str | None:
@@ -1152,6 +1158,31 @@ def _ensure_pinned_terminator_inner() -> str | None:
                 # Idempotency: a bounded region is the goal state. A second
                 # run after a successful repair lands here and writes nothing.
                 return None
+
+            # GUARD 3, and its POSITION is load-bearing. It sits AFTER the
+            # bounded check above, so a file this function has already
+            # repaired returns None there as a no-op and never reaches here
+            # — otherwise every later session would report a refusal on a
+            # file that is already correct.
+            #
+            # An unbounded region plus an existing `## Working Memory`
+            # heading implies the heading sits BEFORE `## Pinned Context`:
+            # a heading AFTER the pins would have terminated the region and
+            # it would not be unbounded. So this is exactly the
+            # wrong-heading-order file, and inserting a second heading is
+            # what the guard prevents.
+            #
+            # WHY REFUSE RATHER THAN REUSE THE EXISTING HEADING. Reuse would
+            # mean MOVING a heading the curator wrote, which is a bigger
+            # edit than this function is authorised to make — its constraint
+            # is to add one heading and alter nothing else. Refusing leaves
+            # the region unbounded, which is the SAFE state: the pin gate
+            # declines rather than enforcing on a false measure, and the
+            # SessionStart directive tells the curator what to do by hand.
+            region = extract_managed_region(content)
+            region_text = region[0] if region is not None else content
+            if PINNED_TERMINATOR_HEADING in region_text:
+                return _REPAIR_REFUSED_HEADING_EXISTS
 
             pins = parse_pins(parsed.content)
             heading_starts = [
