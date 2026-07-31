@@ -127,10 +127,9 @@ curator keeps, collect a one-line reason and extend its date comment in place:
 <!-- pinned: 2026-05-26, reconfirmed: 2026-07-25 because {concrete reason} -->
 ```
 
-The reason MUST be single-line and MUST NOT contain `>` — the parser reads the
-comment as `<!--\s*pinned:\s*[^>]+?-->`, so a `>` truncates it. Re-confirming
-resets the clock: age computes from the `reconfirmed:` date once present. The
-reason is free text and is subject to the same concreteness rule above.
+The reason MUST be single-line. Re-confirming resets the clock: age computes
+from the `reconfirmed:` date once present. The reason is free text and is
+subject to the same concreteness rule above.
 
 Scope note: justification is asked for the pin being evicted and for
 age-flagged borderline pins only — **not for every retained pin**. At 12 pins

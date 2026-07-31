@@ -41,28 +41,50 @@ PIN_STALE_BLOCK_THRESHOLD = 2
 # rationale from itself becoming a back-channel for oversized pins.
 OVERRIDE_RATIONALE_MAX = 120
 
-# Strict regex for the combined pin date + size-override comment.
-# Live form (CLAUDE.md:69):
-#   <!-- pinned: 2026-04-11, pin-size-override: verbatim dispatch form... -->
-# Capture group 1 = rationale text — matches any character EXCEPT a run
-# that terminates the HTML comment (`-->`). Reluctant `.+?` was sufficient
-# under .fullmatch() but is vulnerable to future .search()/.match() misuse
-# by a downstream consumer. Self-anchoring via \A...\Z + a rationale
-# pattern that positively refuses to consume `-->` closes both a
-# latent-misuse vector (Sec-M2) and call-convention drift (Sec-F5).
+# Single source for the pin-comment grammar. Both oracles below are built
+# from these four fragments, so the strip path and the attribution path
+# cannot drift apart on the shape of a comment.
 #
-# Rationale pattern: `(?:[^-]|-(?!->))+` — one or more chars that are
-# either not `-` at all, or `-` NOT followed by `->`. Equivalent to "any
-# char except the `-->` terminator" without resorting to reluctant
-# backtracking.
+# `_COMMENT_CHAR` is one character of a comment interior: either a character
+# that is not `-`, or a `-` that does not start `-->`. A run of this class
+# cannot contain `-->`, so no match can cross the end of a closed comment.
+# This is the positive terminator refusal the override pattern already used.
+# It replaces the older `[^>]` class, which refused EVERY `>` and so made the
+# strip path blind to a comment that held one, while attribution still saw it.
+#
+# `_COMMENT_CHAR_NO_COMMA` is the same rule for the date field, which the
+# comma delimits. It refuses the terminator too, so attribution cannot accept
+# a line whose override clause sits after an early `-->`.
+#
+# The property these fragments deliver is DOMINANCE: every line that
+# attribution accepts, the strip removes in full. The strip may remove more.
+# It must never remove less, because less is a charge against the neighbour.
+#
+# Every fragment is NON-CAPTURING. `OVERRIDE_COMMENT_RE.groups` must stay 1,
+# because `parse_pins` reads the rationale as `group(1)`.
+_COMMENT_CHAR = r'(?:[^-]|-(?!->))'
+_COMMENT_CHAR_NO_COMMA = r'(?:[^-,]|-(?!->))'
+_PIN_COMMENT_OPEN = r'<!--\s*pinned:\s*'
+_PIN_COMMENT_CLOSE = r'-->'
+
+# Strict regex for the combined pin date + size-override comment.
+# Live form:
+#   <!-- pinned: 2026-04-11, pin-size-override: verbatim dispatch form... -->
+# Capture group 1 = rationale text. Self-anchoring via \A...\Z plus a body
+# class that positively refuses `-->` closes both a latent-misuse vector
+# (Sec-M2) and call-convention drift (Sec-F5).
 OVERRIDE_COMMENT_RE = re.compile(
-    r'\A<!--\s*pinned:\s*[^,]+,\s*pin-size-override:\s*((?:[^-]|-(?!->))+?)\s*-->\Z',
+    rf'\A{_PIN_COMMENT_OPEN}{_COMMENT_CHAR_NO_COMMA}+,\s*'
+    rf'pin-size-override:\s*({_COMMENT_CHAR}+?)\s*{_PIN_COMMENT_CLOSE}\Z',
     re.IGNORECASE,
 )
 
 # Standalone <!-- pinned: YYYY-MM-DD[, ...] --> comment without override.
+# Unanchored BY DESIGN: `_extract_body_chars` runs it with `.sub` over a whole
+# pin body, so it cannot be anchored. Terminator refusal, not anchoring, is
+# what keeps it safe under every call convention (Sec-M2).
 _DATE_COMMENT_RE = re.compile(
-    r'<!--\s*pinned:\s*[^>]+?-->',
+    rf'{_PIN_COMMENT_OPEN}{_COMMENT_CHAR}+?{_PIN_COMMENT_CLOSE}',
     re.IGNORECASE,
 )
 
