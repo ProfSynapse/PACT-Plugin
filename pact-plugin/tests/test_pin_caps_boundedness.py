@@ -952,37 +952,103 @@ class TestUnboundedButExactCountStillEnforces:
         assert (exact is None) != (phantom is None)
 
 
-class TestUntrustworthyPredicateIsShared:
-    """One definition, four consumers. A second copy is how the next
-    correction lands in one place and not the others."""
+class TestGateIsStricterThanStaleness:
+    """REWRITTEN, NOT DELETED. This class previously asserted that all
+    consumers import ONE predicate. That invariant was deliberately broken:
+    the gate and the staleness surfaces now resolve the uniformly-undated
+    class in OPPOSITE directions, because their remedies differ in kind.
 
-    def test_every_consumer_imports_the_same_symbol(self):
+    Deleting the test to let that change pass would have certified nothing.
+    It now encodes the NEW invariant, so it still fails if a future reader
+    collapses the two predicates together OR inverts which surface is
+    stricter.
+    """
+
+    @staticmethod
+    def _pin(dated):
+        from pin_caps import Pin
+
+        return Pin(
+            heading="### X",
+            body="b",
+            body_chars=1,
+            date_comment="<!-- pinned: 2026-07-30 -->" if dated else None,
+            override_rationale=None,
+            is_stale=False,
+        )
+
+    def test_gate_declines_wherever_staleness_does(self):
+        """The gate is a SUPERSET. Any input the staleness form calls
+        untrustworthy, the gate must too."""
+        from pin_caps import (
+            gate_count_is_untrustworthy,
+            region_count_is_untrustworthy,
+        )
+
+        p = self._pin
+        shapes = [
+            [], [p(True)], [p(False)], [p(False), p(False)],
+            [p(True), p(False)], [p(False), p(True)],
+            [p(True), p(True)], [p(True), p(False), p(True)],
+        ]
+        for bounded in (True, False):
+            for pins in shapes:
+                narrow = region_count_is_untrustworthy(bounded, pins)
+                wide = gate_count_is_untrustworthy(bounded, pins)
+                assert not (narrow and not wide), (
+                    f"gate is LESS strict than staleness on bounded={bounded} "
+                    f"{[x.date_comment is not None for x in pins]}"
+                )
+
+    def test_the_two_predicates_actually_differ(self):
+        """ANTI-VACUITY. If the two became identical the superset test would
+        still pass and the split would have been silently undone."""
+        from pin_caps import (
+            gate_count_is_untrustworthy,
+            region_count_is_untrustworthy,
+        )
+
+        undated_only = [self._pin(False)]
+        assert region_count_is_untrustworthy(False, undated_only) is False
+        assert gate_count_is_untrustworthy(False, undated_only) is True
+
+    def test_each_surface_imports_its_own_predicate(self):
+        """Pin WHICH predicate each surface uses, so an edit cannot quietly
+        swap one for the other."""
         import ast
         from pathlib import Path as _P
 
         hooks = _P(__file__).resolve().parent.parent / "hooks"
-        consumers = {
-            "pin_caps_gate.py": hooks / "pin_caps_gate.py",
-            "staleness.py": hooks / "staleness.py",
-            "session_init.py": hooks / "session_init.py",
+        expected = {
+            "pin_caps_gate.py": "gate_count_is_untrustworthy",
+            "session_init.py": "gate_count_is_untrustworthy",
+            "staleness.py": "region_count_is_untrustworthy",
         }
-        for label, path in consumers.items():
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            imported = any(
-                isinstance(n, ast.ImportFrom)
-                and any(a.name == "region_count_is_untrustworthy" for a in n.names)
-                for n in ast.walk(tree)
+        for filename, wanted in expected.items():
+            tree = ast.parse((hooks / filename).read_text(encoding="utf-8"))
+            names = {
+                a.name for n in ast.walk(tree)
+                if isinstance(n, ast.ImportFrom) for a in n.names
+            }
+            assert wanted in names, f"{filename} must import {wanted}"
+            other = (
+                "region_count_is_untrustworthy"
+                if wanted.startswith("gate")
+                else "gate_count_is_untrustworthy"
             )
-            assert imported, f"{label} does not import the shared predicate"
+            assert other not in names, (
+                f"{filename} imports {other}; the surfaces must not be crossed"
+            )
 
-    def test_no_consumer_reimplements_the_predicate(self):
-        """The predicate is defined ONCE. A redefinition anywhere else is a
-        twin that will drift — this predicate has already been wrong twice."""
+    def test_each_predicate_is_defined_exactly_once(self):
         import ast
         from pathlib import Path as _P
 
         root = _P(__file__).resolve().parent.parent
-        definers = []
+        found = {
+            "region_count_is_untrustworthy": [],
+            "gate_count_is_untrustworthy": [],
+        }
         for path in root.rglob("*.py"):
             if ".git" in path.parts:
                 continue
@@ -991,12 +1057,49 @@ class TestUntrustworthyPredicateIsShared:
             except (OSError, UnicodeDecodeError, SyntaxError):
                 continue
             for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.FunctionDef)
-                    and node.name == "region_count_is_untrustworthy"
-                ):
-                    definers.append(str(path.relative_to(root)))
-        assert definers == ["hooks/pin_caps.py"], (
-            f"the shared predicate is defined in {definers}; it must be "
-            f"defined exactly once"
+                if isinstance(node, ast.FunctionDef) and node.name in found:
+                    found[node.name].append(str(path.relative_to(root)))
+        for name, where in found.items():
+            assert where == ["hooks/pin_caps.py"], f"{name} defined in {where}"
+
+
+class TestBlockingFourUniformlyUndatedRegion:
+    """A region of absorbed notes with NO dated pin is uniformly undated, and
+    there the curator holds ZERO real pins. PR 1 fixed this; the first
+    remediation re-introduced it by adopting the staleness predicate at the
+    gate. The gate must DECLINE here."""
+
+    def test_curator_holding_zero_pins_may_add_a_note(self, gate_env):
+        content = _claude_md(real_pins=0, notes=14, bounded=False)
+        add_note = {
+            "old_string": "### 2026-07-14\n**Context**: routine session note.\n",
+            "new_string": (
+                "### 2026-07-14\n**Context**: routine session note.\n\n"
+                "### 2026-07-31\n**Context**: today's note.\n"
+            ),
+            "replace_all": False,
+        }
+        assert add_note["old_string"] in content, "fixture anchor missing"
+        reason, failures = _verdict(gate_env, content, add_note)
+        assert reason is None, (
+            f"cardinal over-block: the curator holds ZERO dated pins and was "
+            f"denied over 14 absorbed notes. Got {reason!r}"
         )
+        assert failures and failures[0]["classification"].startswith(
+            "pin_caps_gate_declined_unbounded"
+        )
+
+    def test_the_staleness_surface_still_enforces_here(self, gate_env):
+        """THE ASYMMETRY, asserted directly. The same region that makes the
+        GATE decline must leave the STALENESS predicate enforcing, because
+        this repository's legacy pins are uniformly undated and marking them
+        stale is correct."""
+        from pin_caps import parse_pins, region_count_is_untrustworthy
+        from staleness import _parse_pinned_section
+
+        content = _claude_md(real_pins=0, notes=14, bounded=False)
+        parsed = _parse_pinned_section(content)
+        assert parsed is not None and parsed.bounded is False
+        assert region_count_is_untrustworthy(
+            parsed.bounded, parse_pins(parsed.content)
+        ) is False

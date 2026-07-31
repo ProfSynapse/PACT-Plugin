@@ -1254,8 +1254,23 @@ def _ensure_pinned_terminator_inner() -> str | None:
             # everything from `target_index` onward, so a dated pin at or after
             # it is exactly a dated pin about to be lost.
             #
-            # KNOWN RESIDUAL, recorded rather than filed because it is
-            # undecidable rather than unfixed: a `### ` inside the LAST dated
+            # RESIDUAL 1, AND THE SAME CORPUS FACT THAT SHAPED THE SHARED
+            # PREDICATE INVALIDATES THIS ONE TOO -- it was applied to that
+            # predicate and NOT carried here, which is the propagation failure
+            # worth naming. This guard tests for a DATED pin after the
+            # insertion point. This repository's LEGACY pins are UNDATED: they
+            # carry their date in the heading, `### Old Feature (PR #99,
+            # merged 2026-01-02)`, with no `<!-- pinned: -->` comment. So a
+            # legacy pin at or after the insertion point does NOT trip this
+            # guard, and gets expelled -- BLOCKING 2's exact harm, in the shape
+            # the corpus says is common here. NOT FIXED, deliberately:
+            # pre-existing, genuinely undecidable at that position, and every
+            # live file measured is bounded, so the repair does not run on
+            # them. Reasoning carefully about legacy pins in one predicate and
+            # not carrying it to its sibling is how this survived.
+            #
+            # RESIDUAL 2, and its consequence is now traced rather than
+            # assumed: a `### ` inside the LAST dated
             # pin's body has no dated pin after it, so this guard allows the
             # repair and the body tail falls outside the region. At that
             # position "the tail of a pin body" and "the first absorbed note"
@@ -1264,6 +1279,11 @@ def _ensure_pinned_terminator_inner() -> str | None:
             # show a size-cap consequence FAILED: `parse_pins` already splits
             # that body at the embedded heading BEFORE the repair runs, so the
             # under-measure pre-exists this function and is upstream of it.
+            # /PACT:prune-memory was traced too: it operates on the REGION, so
+            # a truncated pin's tail sits outside it. Prune archives the
+            # truncated body, removes the pin block, and the tail remains as
+            # un-owned prose below the terminator. NO CONTENT IS LOST -- it is
+            # orphaned and de-associated, which is the whole of the harm.
             if any(
                 pin.date_comment is not None for pin in pins[target_index:]
             ):

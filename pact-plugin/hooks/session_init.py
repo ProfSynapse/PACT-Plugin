@@ -75,7 +75,7 @@ from pin_caps import (  # noqa: F401
     PIN_COUNT_CAP,
     format_slot_status,
     parse_pins,
-    region_count_is_untrustworthy,
+    gate_count_is_untrustworthy,
 )
 
 from shared import BOOTSTRAP_MARKER_NAME, SESSION_ID_CONTROL_CHARS_RE, build_session_path
@@ -253,7 +253,14 @@ def check_pin_slot_status() -> Optional[str]:
         # "15/12 used (FULL)" as fact, in the same payload as the directive
         # saying the caps are off, tells the curator two contradictory things
         # about one file -- and the 15 is not a number they can act on.
-        if region_count_is_untrustworthy(parsed.bounded, pins):
+        #
+        # THIS REPORTER FOLLOWS THE GATE'S PREDICATE, NOT THE STALENESS ONE,
+        # and the choice is forced. It reports the CAP state, so it must go
+        # silent on exactly the files where the cap declines. Using the
+        # narrower staleness form would restore the contradiction on the
+        # uniformly-undated class: the gate declining while this line reports
+        # "14/12 used (FULL)" about the same file, in the same payload.
+        if gate_count_is_untrustworthy(parsed.bounded, pins):
             return None
 
         return format_slot_status(pins)

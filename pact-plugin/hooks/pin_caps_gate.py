@@ -105,7 +105,7 @@ try:
         compute_deny_reason,
         evaluate_full_state,
         parse_pins,
-        region_count_is_untrustworthy,
+        gate_count_is_untrustworthy,
     )
 except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catch-all
     _emit_load_failure_deny("module imports", _module_load_error)
@@ -420,10 +420,10 @@ def _check_tool_allowed(input_data: dict) -> Optional[str]:
     # honest edits with no escape, and an over-block is the cardinal sin.
     # The curator is not left in silence — SessionStart carries the repair
     # directive, which can explain the cause and give a cure that works.
-    pre_untrusted = region_count_is_untrustworthy(
+    pre_untrusted = gate_count_is_untrustworthy(
         pre_state.bounded, pre_state.pins
     )
-    post_untrusted = region_count_is_untrustworthy(
+    post_untrusted = gate_count_is_untrustworthy(
         post_state.bounded, post_state.pins
     )
     if pre_untrusted or post_untrusted:
@@ -535,7 +535,7 @@ def _evaluate_write_as_fresh_start(tool_input: dict) -> Optional[str]:
     # count is inflated by every `### ` heading in its tail, so enforcing on
     # it denies a curator for pins they do not have. See the docstring for
     # why `post.bounded` alone is the faithful test on this arm.
-    if region_count_is_untrustworthy(post_state.bounded, post_state.pins):
+    if gate_count_is_untrustworthy(post_state.bounded, post_state.pins):
         append_failure(
             classification=_DECLINED_UNBOUNDED_NO_BASELINE,
             error="pinned region unbounded in written content, baseline unreadable",

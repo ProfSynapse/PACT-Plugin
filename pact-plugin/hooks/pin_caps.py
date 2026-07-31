@@ -309,11 +309,11 @@ def region_count_is_untrustworthy(bounded: bool, pins: List[Pin]) -> bool:
     it, and the later, comment-less ones are content the parser swept in after
     the real pins ended. That is the phantom.
 
-    THE RESIDUAL THIS LEAVES, stated so nobody re-derives it as a defect: a
-    region of uniformly undated entries is genuinely AMBIGUOUS — legacy pins
-    and absorbed notes are byte-identical there — and this predicate resolves
-    it toward ENFORCE. That is a real choice, not an oversight, and the
-    corpus is the evidence for it.
+    A REGION OF UNIFORMLY UNDATED ENTRIES IS GENUINELY AMBIGUOUS — legacy pins
+    and absorbed notes are byte-identical there — and THIS predicate resolves
+    it toward ENFORCE, on the corpus evidence above. THE GATE RESOLVES IT THE
+    OTHER WAY: see `gate_count_is_untrustworthy`. The two surfaces differ on
+    purpose and the asymmetry is the point, not an oversight.
 
     Args:
         bounded: the region's `PinnedSection.bounded` / `RegionState.bounded`.
@@ -330,6 +330,46 @@ def region_count_is_untrustworthy(bounded: bool, pins: List[Pin]) -> bool:
     if first_dated is None:
         return False
     return any(pin.date_comment is None for pin in pins[first_dated + 1:])
+
+
+def gate_count_is_untrustworthy(bounded: bool, pins: List[Pin]) -> bool:
+    """The GATE's form of the same question. STRICTLY WIDER than the staleness
+    form, and the difference is one input class.
+
+    THE GATE DECLINES ON A UNIFORMLY UNDATED REGION; THE STALENESS SURFACES
+    ENFORCE THERE. That input is genuinely ambiguous — with no dated entry
+    anywhere, a region of legacy pins and a region of absorbed notes are
+    byte-identical — so the two surfaces are choosing which way to be wrong,
+    and they choose differently BECAUSE THEIR REMEDIES DIFFER IN KIND.
+
+    Declining at the gate costs a pause that the SessionStart directive
+    already explains: a cure the curator can perform. ENFORCING at the gate
+    hands out one they cannot — measured, a curator holding ZERO pins adding
+    one ordinary note is denied over fourteen, and told to demote pins they do
+    not have. An impossible cure on the most ordinary action there is, with no
+    construction, is the cardinal sin this control exists to avoid.
+
+    The staleness surfaces have no such asymmetry: marking a legacy pin stale
+    is correct, and the corpus this repository actually contains is built on
+    uniformly undated regions that ARE real pins. Enforcing there is right for
+    the same reason declining here is.
+
+    SO: GATE STRICTER THAN STALENESS. `gate_count_is_untrustworthy` returns
+    True everywhere `region_count_is_untrustworthy` does, plus on the
+    uniformly-undated class. Do not collapse them back into one predicate, and
+    do not invert the direction: `TestGateIsStricterThanStaleness` fails on
+    either.
+
+    Args:
+        bounded: the region's `RegionState.bounded`.
+        pins: the parsed entries of that same region.
+
+    Returns:
+        True when the GATE must decline rather than enforce.
+    """
+    if bounded:
+        return False
+    return any(pin.date_comment is None for pin in pins)
 
 
 def has_size_override(pin: Pin) -> bool:
