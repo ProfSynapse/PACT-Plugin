@@ -35,6 +35,15 @@ from shared.claude_md_manager import (  # noqa: E402
     match_project_claude_md,
     migrate_to_managed_structure,
 )
+# IDENTIFY A REFUSAL BY CONSTANT IDENTITY, NEVER BY MATCHING ITS TEXT. A
+# message-text assertion reddens on the next legitimate reword — which this
+# module has already had once — and that churn is what teaches people to
+# weaken assertions rather than to fix code. Importing the private names is
+# deliberate: the constant IS the contract between the guard and its test.
+from shared.claude_md_manager import (  # noqa: E402
+    _REPAIR_REFUSED_NO_DATED_PIN,
+    _REPAIR_REFUSED_NOTHING_ABSORBED,
+)
 from staleness import _parse_pinned_section  # noqa: E402
 
 _REAL_PIN = "<!-- pinned: 2026-07-30 -->\n### Real pin {n}\nShort body.\n\n"
@@ -208,15 +217,56 @@ class TestRefusalGuards:
             + "".join(_NOTE.format(d=d) for d in range(1, 4))
             + f"{MANAGED_END_MARKER}\n"
         )
+        assert measure(hand_maintained)[1] is False, (
+            "control: the fixture must be UNBOUNDED, or this refusal is "
+            "indistinguishable from the bounded no-op"
+        )
         path = project(hand_maintained)
         status = ensure_pinned_terminator()
 
-        assert status is not None and "skipped" in status.lower()
+        assert status == _REPAIR_REFUSED_NO_DATED_PIN, (
+            f"expected the no-dated-pin refusal by CONSTANT IDENTITY. "
+            f"Got {status!r}"
+        )
         assert path.read_text(encoding="utf-8") == hand_maintained, (
             "guard 1 must not write. Refusing leaves the file unbounded, "
             "which is the SAFE state: the gate declines rather than "
             "enforcing on a false measure."
         )
+
+    def test_guard_1_also_fires_when_the_section_holds_no_entries_at_all(
+        self, project
+    ):
+        """SECOND REACHABLE INPUT for the same refusal, measured not assumed.
+
+        A Pinned Context section holding prose and ZERO `### ` entries reaches
+        guard 1 as well: both the pin list and the heading scan come back
+        empty, their lengths agree, and no entry is dated. The wording holds
+        here only VACUOUSLY — "no entry carries a date comment" when there are
+        no entries — which is true rather than false, and the cure it names
+        stays followable. That is the distinction from the heading-exists
+        refusal, whose old wording asserted the existence of something absent.
+        """
+        prose_only = (
+            "# PACT Framework and Managed Project Memory\n\n"
+            f"{MANAGED_START_MARKER}\n"
+            "## Pinned Context\n\n"
+            "Some ordinary prose that carries no headings at all.\n\n"
+            f"{MANAGED_END_MARKER}\n"
+        )
+        assert measure(prose_only) == (0, False), (
+            "control: zero parsed entries AND unbounded. With entries "
+            "present this is class (a) again; bounded, and the repair "
+            "no-ops before reaching any guard."
+        )
+        path = project(prose_only)
+        status = ensure_pinned_terminator()
+
+        assert status == _REPAIR_REFUSED_NO_DATED_PIN, (
+            f"expected the no-dated-pin refusal by CONSTANT IDENTITY. "
+            f"Got {status!r}"
+        )
+        assert path.read_text(encoding="utf-8") == prose_only
 
     def test_guard_2_refuses_when_nothing_was_absorbed(self, project):
         """No undated entry after a dated one — there is nothing to exclude."""
@@ -227,8 +277,50 @@ class TestRefusalGuards:
         path = project(only_real_pins)
         status = ensure_pinned_terminator()
 
-        assert status is not None and "skipped" in status.lower()
+        assert status == _REPAIR_REFUSED_NOTHING_ABSORBED, (
+            f"expected the nothing-absorbed refusal by CONSTANT IDENTITY. "
+            f"Got {status!r}"
+        )
         assert path.read_text(encoding="utf-8") == only_real_pins
+
+    def test_guard_2_also_fires_when_the_undated_entry_precedes_the_dated_one(
+        self, project
+    ):
+        """SECOND REACHABLE INPUT for the same refusal, measured not assumed.
+
+        The predicate is not "there are no undated entries" but "no undated
+        entry follows a dated one". So a section whose undated entry sits
+        BEFORE the first dated pin reaches the same refusal, with an undated
+        entry plainly present. THE WORDING SURVIVES THIS because it restates
+        that predicate — "no undated `### ` entry AFTER a dated one" — rather
+        than claiming there are none. A wording that had said "every entry is
+        dated" would be FALSE here, which is the shape that made the
+        heading-exists message wrong.
+        """
+        undated_first = (
+            "# PACT Framework and Managed Project Memory\n\n"
+            f"{MANAGED_START_MARKER}\n"
+            "## Pinned Context\n\n"
+            + _NOTE.format(d=1)
+            + _REAL_PIN.format(n=1)
+            + f"{MANAGED_END_MARKER}\n"
+        )
+        count, bounded = measure(undated_first)
+        assert (count, bounded) == (2, False), (
+            "control: both entries must parse and the region stay unbounded, "
+            "or this is not the input class it claims to be"
+        )
+        path = project(undated_first)
+        status = ensure_pinned_terminator()
+
+        assert status == _REPAIR_REFUSED_NOTHING_ABSORBED, (
+            f"expected the nothing-absorbed refusal by CONSTANT IDENTITY. "
+            f"Got {status!r}"
+        )
+        assert path.read_text(encoding="utf-8") == undated_first, (
+            "guard 2 must not write. Inserting before the undated entry here "
+            "would push the dated pin OUT of the region and under-count it."
+        )
 
     def test_the_two_refusals_give_different_reasons(self, project):
         """Anti-vacuity: two guards that emit one string cannot be told
