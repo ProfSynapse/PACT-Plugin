@@ -958,8 +958,10 @@ def migrate_to_managed_structure() -> str | None:
 
     Called from session_init.py on every SessionStart. Idempotent no-op when
     PACT_MANAGED_START marker is already present. Follows the same hardening
-    pattern as the other managed-file writers: file_lock, symlink guard inside
-    the lock, fail-open on timeout/error.
+    pattern as the other managed-file writers: file_lock, containment
+    enforced inside `_atomic_write_text`, fail-open on timeout/error. The
+    former leaf symlink guard was RETIRED and replaced by that containment
+    check; it is no longer a mechanism this function carries.
 
     Idempotency guard: if PACT_MANAGED_START is already present, the
     function returns None without touching the file.
@@ -1077,6 +1079,12 @@ _REPAIR_REFUSED_PARSER_DISAGREEMENT = (
 # NAMES BOTH CURES AND PROMISES NOTHING. Neither branch says the edit will
 # then be allowed. The repair is refused either way, and the caps stay off
 # this file until a human closes the region.
+_REPAIR_REFUSED_WOULD_EXPEL_A_PIN = (
+    "Pinned-region repair skipped: the only place the terminator could go "
+    "sits before a dated pin, so inserting it would push a real pin out of "
+    "the Pinned Context section. Move the stray `### ` heading out of the "
+    "pin body above it, or add the terminator by hand."
+)
 _REPAIR_REFUSED_HEADING_EXISTS = (
     "Pinned-region repair skipped: the managed region already contains the "
     f"text `{PINNED_TERMINATOR_HEADING}`, so inserting another could leave "
@@ -1228,6 +1236,38 @@ def _ensure_pinned_terminator_inner() -> str | None:
             )
             if target_index is None:
                 return _REPAIR_REFUSED_NOTHING_ABSORBED  # Guard 2.
+
+            # GUARD 4. The insertion point was chosen by "first undated entry
+            # after a dated one" -- and that discriminator is the SAME
+            # signature the gate uses for a smuggled pin, so it cannot tell an
+            # absorbed note from a `### ` sitting inside a real pin's BODY.
+            # When the candidate is body content, the terminator lands INSIDE
+            # that pin and every pin after it falls OUTSIDE the region, where
+            # neither the caps nor /PACT:prune-memory can reach it. Measured:
+            # a genuine dated pin silently expelled, while the repair reported
+            # SUCCESS.
+            #
+            # This guard does NOT consult the candidate's own datedness, so it
+            # does not inherit that blindness. It asks a different question, of
+            # the SUFFIX rather than the candidate: would this insertion strand
+            # a DATED pin? Inserting before index `target_index` expels
+            # everything from `target_index` onward, so a dated pin at or after
+            # it is exactly a dated pin about to be lost.
+            #
+            # KNOWN RESIDUAL, recorded rather than filed because it is
+            # undecidable rather than unfixed: a `### ` inside the LAST dated
+            # pin's body has no dated pin after it, so this guard allows the
+            # repair and the body tail falls outside the region. At that
+            # position "the tail of a pin body" and "the first absorbed note"
+            # are structurally identical -- same line shape, no date comment on
+            # either -- so no rule can separate them. An adversarial attempt to
+            # show a size-cap consequence FAILED: `parse_pins` already splits
+            # that body at the embedded heading BEFORE the repair runs, so the
+            # under-measure pre-exists this function and is upstream of it.
+            if any(
+                pin.date_comment is not None for pin in pins[target_index:]
+            ):
+                return _REPAIR_REFUSED_WOULD_EXPEL_A_PIN  # Guard 4.
 
             # `parsed.start` is already absolute; `heading_starts` are relative
             # to `parsed.content`, which begins at `parsed.start`.

@@ -33,6 +33,7 @@ from pin_caps import (
     CapViolation,
     check_stale_block,
     parse_pins,
+    region_count_is_untrustworthy,
 )
 
 # Boundary prefix alternation used by _parse_pinned_section. Built from
@@ -549,6 +550,19 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
     if parsed is None:
         return None
 
+    # The count may be inflated by entries the curator never pinned.
+    # Enforcing here would mark ordinary Working Memory notes STALE -- and
+    # this path WRITES that marking into the user's file.
+    #
+    # The parse is guarded: this function's contract is fail-open, and a
+    # raising parser must not become a raise out of a SessionStart path.
+    try:
+        _region_pins = parse_pins(parsed.content)
+    except Exception:  # noqa: BLE001 — fail-open by construction
+        return None
+    if region_count_is_untrustworthy(parsed.bounded, _region_pins):
+        return None
+
     pinned_start = parsed.start
     pinned_end = parsed.end
     pinned_content = parsed.content
@@ -660,6 +674,12 @@ def check_pinned_block_signal(
     try:
         pins = parse_pins(pinned_content)
     except Exception:  # noqa: BLE001 — fail-open by construction
+        return None
+
+    # Never arm the stale-block gate on a count that may include entries
+    # the curator never pinned. Uses the pins parsed above rather than a
+    # second parse, so the fail-open on a raising parser still covers it.
+    if region_count_is_untrustworthy(parsed.bounded, pins):
         return None
 
     return check_stale_block(pins, threshold=PIN_STALE_BLOCK_THRESHOLD)

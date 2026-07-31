@@ -860,3 +860,126 @@ class TestFreshStartArmBoundedness:
             f"binds a verdict to this arm is now vacuous."
         )
         assert inspect.isfunction(pin_caps_gate._evaluate_write_as_fresh_start)
+
+
+# ---------------------------------------------------------------------------
+# BLOCKING 3: unboundedness ALONE must not switch the caps off.
+#
+# The decline originally read `not (pre.bounded and post.bounded)`. A
+# `## Pinned Context` that is genuinely the LAST section of the file is
+# unbounded — and if every entry in it carries a `<!-- pinned: -->` comment,
+# every entry is a real pin and the count is EXACT. The blunt predicate
+# declined there, so the gate ALLOWED a 14th pin onto a file already holding
+# 13 real ones, and it did so PERMANENTLY: that file has no undated entry
+# after a dated one, so `ensure_pinned_terminator` refuses on it every run.
+#
+# The arms below are the same shape as the phantom arms above and must read
+# the OPPOSITE way. That opposition is the whole test — a predicate that
+# declines on everything passes the phantom arms and fails these.
+# ---------------------------------------------------------------------------
+
+
+class TestUnboundedButExactCountStillEnforces:
+
+    def test_section_last_file_with_real_pins_is_unbounded(self, gate_env):
+        """Precondition control. If this fixture were BOUNDED the arms below
+        would pass for a reason that has nothing to do with the predicate."""
+        content = _claude_md(real_pins=13, notes=0, bounded=False)
+        from staleness import _parse_pinned_section
+
+        parsed = _parse_pinned_section(content)
+        assert parsed is not None
+        assert parsed.bounded is False, "fixture must reproduce the unbounded shape"
+
+    def test_thirteen_real_pins_still_denies(self, gate_env):
+        """The count is EXACT, so the cap must still enforce."""
+        content = _claude_md(real_pins=13, notes=0, bounded=False)
+        reason, failures = _verdict(gate_env, content, _ADD_A_PIN)
+        assert reason is not None, (
+            "the caps were switched OFF on a file whose count is exact: 13 "
+            "real dated pins, no absorbed content. Unboundedness alone is "
+            "NECESSARY BUT NOT SUFFICIENT for a phantom count."
+        )
+        assert failures == [], (
+            "an exact count must take the ENFORCING path, which writes no "
+            "decline entry"
+        )
+
+    def test_the_phantom_arm_still_declines(self, gate_env):
+        """Counter-control, and it is what stops the fix over-correcting.
+
+        Same unbounded region, but carrying absorbed notes after the dated
+        pins. A predicate that simply stopped declining would pass the arm
+        above and fail this one.
+        """
+        content = _claude_md(real_pins=2, notes=12, bounded=False)
+        reason, failures = _verdict(gate_env, content, _ADD_A_PIN)
+        assert reason is None
+        assert [f["classification"] for f in failures] == [
+            "pin_caps_gate_declined_unbounded_both"
+        ]
+
+    def test_the_two_unbounded_arms_disagree(self, gate_env):
+        """Mandatory anti-vacuity control.
+
+        BOTH files are unbounded and BOTH are over the count cap by
+        measurement. They differ only in whether the entries above the cap
+        are real. If they read the same verdict, the pair certifies nothing.
+        """
+        exact, _ = _verdict(
+            gate_env, _claude_md(real_pins=13, notes=0, bounded=False), _ADD_A_PIN
+        )
+        phantom, _ = _verdict(
+            gate_env, _claude_md(real_pins=2, notes=12, bounded=False), _ADD_A_PIN
+        )
+        assert (exact is None) != (phantom is None)
+
+
+class TestUntrustworthyPredicateIsShared:
+    """One definition, four consumers. A second copy is how the next
+    correction lands in one place and not the others."""
+
+    def test_every_consumer_imports_the_same_symbol(self):
+        import ast
+        from pathlib import Path as _P
+
+        hooks = _P(__file__).resolve().parent.parent / "hooks"
+        consumers = {
+            "pin_caps_gate.py": hooks / "pin_caps_gate.py",
+            "staleness.py": hooks / "staleness.py",
+            "session_init.py": hooks / "session_init.py",
+        }
+        for label, path in consumers.items():
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            imported = any(
+                isinstance(n, ast.ImportFrom)
+                and any(a.name == "region_count_is_untrustworthy" for a in n.names)
+                for n in ast.walk(tree)
+            )
+            assert imported, f"{label} does not import the shared predicate"
+
+    def test_no_consumer_reimplements_the_predicate(self):
+        """The predicate is defined ONCE. A redefinition anywhere else is a
+        twin that will drift — this predicate has already been wrong twice."""
+        import ast
+        from pathlib import Path as _P
+
+        root = _P(__file__).resolve().parent.parent
+        definers = []
+        for path in root.rglob("*.py"):
+            if ".git" in path.parts:
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, SyntaxError):
+                continue
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.FunctionDef)
+                    and node.name == "region_count_is_untrustworthy"
+                ):
+                    definers.append(str(path.relative_to(root)))
+        assert definers == ["hooks/pin_caps.py"], (
+            f"the shared predicate is defined in {definers}; it must be "
+            f"defined exactly once"
+        )

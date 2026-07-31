@@ -15,7 +15,9 @@ the directive.
 Gate triggers only when ALL hold:
   1. Tool is Edit or Write (enforced by hooks.json matcher)
   2. Target file path resolves to the project CLAUDE.md
-  3. Edit locus is within the Pinned Context section (line-bounded)
+  3. The edit is ADD-shaped -- `_is_add_shaped_edit` compares the pin-comment
+     count of new_string against old_string. NOTE: this is NOT a locus check;
+     the gate does not test where in the file the edit lands.
   4. Stale-pins-pending marker exists in session_dir
   5. Not a teammate session (teammates bypass; CLAUDE.md edits are scoped to the team-lead session)
 

@@ -268,6 +268,70 @@ def parse_pins(pinned_content: str) -> List[Pin]:
     return pins
 
 
+def region_count_is_untrustworthy(bounded: bool, pins: List[Pin]) -> bool:
+    """Return True when the parsed pin count may not be the curator's real one.
+
+    THE ONE DEFINITION. Four surfaces consult it — the pin-cap gate's decline,
+    both staleness surfaces, and the slot-status reporter. Do not write a
+    second copy: this predicate has already been wrong once in a blunter form,
+    and a duplicated predicate makes the next correction land in one place and
+    not the others.
+
+    UNBOUNDEDNESS ALONE IS NECESSARY BUT NOT SUFFICIENT, and that is the whole
+    reason this function exists. A `## Pinned Context` section that is
+    genuinely the LAST section of the file is unbounded, yet if every entry in
+    it carries a `<!-- pinned: DATE -->` comment then every entry is a real
+    pin and the count is EXACT. Declining there switches the caps off on a
+    file where they were correct. The blunt `not bounded` form did exactly
+    that: it broke ten staleness tests built on that shape, and it silently
+    allowed a 14th pin onto a file holding 13 real ones.
+
+    WHAT MAKES A COUNT UNTRUSTWORTHY IS AN UNDATED ENTRY, because the pin
+    grammar gives every legitimately added pin a date comment. So an undated
+    `### ` inside the region is something the parser counted as a pin that the
+    curator never created as one — an absorbed Working Memory note, or a
+    heading inside another pin's body. Either way the count is inflated and
+    enforcing on it can deny a curator over pins they do not hold.
+
+    THE TEST IS "AN UNDATED ENTRY AFTER A DATED ONE", NOT "ANY UNDATED ENTRY",
+    AND THE DIFFERENCE IS LOAD-BEARING IN THE OPPOSITE DIRECTION TO THE ONE A
+    READER WILL EXPECT. An undated entry is NOT by itself evidence of a
+    non-pin: this repository's older pins carry their date in the HEADING
+    (`### Old Feature (PR #99, merged 2026-01-02)`) and no `<!-- pinned: -->`
+    comment at all. A region of uniformly undated entries is therefore
+    SELF-CONSISTENT and may be entirely real legacy pins; treating it as
+    untrustworthy switches the caps and the staleness pass off on that whole
+    population. Measured: the "any undated entry" form fails 14 tests in the
+    existing staleness corpus, which is built on exactly that shape.
+
+    What the mixture shows is what a single convention cannot: a region where
+    SOME entries carry the comment and later ones do NOT has two grammars in
+    it, and the later, comment-less ones are content the parser swept in after
+    the real pins ended. That is the phantom.
+
+    THE RESIDUAL THIS LEAVES, stated so nobody re-derives it as a defect: a
+    region of uniformly undated entries is genuinely AMBIGUOUS — legacy pins
+    and absorbed notes are byte-identical there — and this predicate resolves
+    it toward ENFORCE. That is a real choice, not an oversight, and the
+    corpus is the evidence for it.
+
+    Args:
+        bounded: the region's `PinnedSection.bounded` / `RegionState.bounded`.
+        pins: the parsed entries of that same region.
+
+    Returns:
+        True when the caller MUST NOT enforce on the count.
+    """
+    if bounded:
+        return False
+    first_dated = next(
+        (i for i, pin in enumerate(pins) if pin.date_comment is not None), None
+    )
+    if first_dated is None:
+        return False
+    return any(pin.date_comment is None for pin in pins[first_dated + 1:])
+
+
 def has_size_override(pin: Pin) -> bool:
     """Return True if this pin carries a valid pin-size-override rationale."""
     return pin.override_rationale is not None

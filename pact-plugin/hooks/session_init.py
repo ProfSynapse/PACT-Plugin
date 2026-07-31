@@ -75,6 +75,7 @@ from pin_caps import (  # noqa: F401
     PIN_COUNT_CAP,
     format_slot_status,
     parse_pins,
+    region_count_is_untrustworthy,
 )
 
 from shared import BOOTSTRAP_MARKER_NAME, SESSION_ID_CONTROL_CHARS_RE, build_session_path
@@ -246,6 +247,13 @@ def check_pin_slot_status() -> Optional[str]:
         try:
             pins = parse_pins(parsed.content)
         except Exception:  # noqa: BLE001 — fail-open by construction
+            return None
+
+        # Do not report a count the gate itself will not enforce on. Stating
+        # "15/12 used (FULL)" as fact, in the same payload as the directive
+        # saying the caps are off, tells the curator two contradictory things
+        # about one file -- and the 15 is not a number they can act on.
+        if region_count_is_untrustworthy(parsed.bounded, pins):
             return None
 
         return format_slot_status(pins)
