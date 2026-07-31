@@ -1063,11 +1063,26 @@ _REPAIR_REFUSED_PARSER_DISAGREEMENT = (
     "Pinned-region repair skipped: the pin parser and the heading scan "
     "disagree on the entry count. Add the heading by hand."
 )
+# WORDED FOR BOTH INPUTS THAT REACH THIS GUARD, because the guard is a
+# SUBSTRING test and not a heading test. An earlier wording asserted that the
+# file "already has a `## Working Memory` heading above the Pinned Context
+# section" and told the curator to move it. That is false on the second input:
+# a file with NO such heading, whose only occurrence of the text is prose
+# INSIDE a pin body, trips the same guard and was told to move a heading that
+# does not exist. An unfollowable cure is the defect class this work removes.
+#
+# The literal comes from PINNED_TERMINATOR_HEADING so the message cannot drift
+# from the constant the guard actually tests.
+#
+# NAMES BOTH CURES AND PROMISES NOTHING. Neither branch says the edit will
+# then be allowed. The repair is refused either way, and the caps stay off
+# this file until a human closes the region.
 _REPAIR_REFUSED_HEADING_EXISTS = (
-    "Pinned-region repair skipped: this file already has a "
-    "`## Working Memory` heading above the Pinned Context section, so "
-    "inserting another would leave two. Move the existing heading to sit "
-    "after the last real pin instead."
+    "Pinned-region repair skipped: the managed region already contains the "
+    f"text `{PINNED_TERMINATOR_HEADING}`, so inserting another could leave "
+    "two headings. If that text is a heading above the Pinned Context "
+    "section, move it to sit after the last real pin. If it is inside a pin "
+    "body, reword the mention."
 )
 
 

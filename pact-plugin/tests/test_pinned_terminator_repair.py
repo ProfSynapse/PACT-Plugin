@@ -779,7 +779,20 @@ class TestGuard3ExistingWorkingMemoryHeading:
             {"agent_type": "pact-orchestrator"}, repair_status=status
         )
         assert message is not None
-        assert "already has a `## Working Memory` heading" in message
+        # POSITIVE about the CURRENT property, not merely silent about the
+        # former one. The old wording asserted the file "already has a
+        # `## Working Memory` heading"; the guard is a SUBSTRING test, so that
+        # claim is false on the pin-body input. This asserts the containment
+        # framing, which the old wording could not satisfy — so a revert to
+        # the heading-presence claim reddens here rather than passing quietly.
+        assert "contains the text" in message, (
+            f"the directive must carry the containment framing. A message "
+            f"claiming a heading EXISTS is false for the pin-body input that "
+            f"reaches the same guard. Got: {message!r}"
+        )
+        assert PINNED_TERMINATOR_HEADING in message, (
+            "the message must still name the text the curator has to act on"
+        )
 
     def test_the_gate_declines_on_the_refused_file(
         self, project, monkeypatch, pact_context
@@ -901,39 +914,56 @@ TERMINATOR_INSIDE_A_PIN_BODY = (
 )
 
 
+def _require_midline_mention() -> None:
+    """WITHHOLDING PRECONDITION for the substring class. Raises rather than
+    warns, and every behavioural test calls it BEFORE it acts.
+
+    THE MENTION MUST BE MID-LINE OR THIS CLASS TESTS SOMETHING ELSE ENTIRELY,
+    and it does so while still passing. `_find_terminator_offset` matches
+    `#{1,2}\\s` against each LINE, so a line-initial mention is a genuine
+    terminator: the region reads bounded, `ensure_pinned_terminator` no-ops at
+    the earlier bounded check, and guard 3 is never reached. Every assertion
+    downstream would then be about the bounded no-op while appearing to be
+    about the guard. A mid-line mention is invisible to the line scan and
+    visible to the substring test, which is the whole gap under test.
+    """
+    assert PINNED_TERMINATOR_HEADING in TERMINATOR_INSIDE_A_PIN_BODY, (
+        "PRECONDITION FAILED: the fixture no longer mentions the terminator "
+        "text at all, so guard 3 cannot fire and nothing below is about it."
+    )
+    assert not any(
+        line.startswith(PINNED_TERMINATOR_HEADING)
+        for line in TERMINATOR_INSIDE_A_PIN_BODY.splitlines()
+    ), (
+        "PRECONDITION FAILED: the mention sits at the start of a line, so it "
+        "is a REAL terminator. The region is bounded, the repair no-ops "
+        "before guard 3, and this class silently becomes a test of the "
+        "bounded no-op."
+    )
+    count, bounded = measure(TERMINATOR_INSIDE_A_PIN_BODY)
+    assert bounded is False, (
+        "PRECONDITION FAILED: the region is bounded, so the repair no-ops at "
+        "the earlier check and never reaches guard 3."
+    )
+    assert count > PIN_COUNT_CAP, (
+        f"PRECONDITION FAILED: the fixture parses {count} phantom pins "
+        f"against a cap of {PIN_COUNT_CAP}. Below the cap an enforcing gate "
+        f"allows too, so a decline cannot be told from an enforcement."
+    )
+
+
 class TestGuard3TerminatorLiteralInsideAPinBody:
 
     def test_the_mention_is_a_substring_and_not_a_heading(self):
-        """PRECONDITION CONTROL, and it is what makes this class about the
-        substring test rather than about an ordinary heading.
-
-        RED input: move the mention to the start of a line. The line scan
-        then finds a real terminator, the region reads bounded, and every
-        assertion below stops being about guard 3.
-        """
-        assert PINNED_TERMINATOR_HEADING in TERMINATOR_INSIDE_A_PIN_BODY
-        assert not any(
-            line.startswith(PINNED_TERMINATOR_HEADING)
-            for line in TERMINATOR_INSIDE_A_PIN_BODY.splitlines()
-        ), (
-            "the mention sits at the start of a line, so it is a REAL "
-            "terminator and the region is bounded. This class would then "
-            "test the bounded no-op, not the substring guard."
-        )
-        count, bounded = measure(TERMINATOR_INSIDE_A_PIN_BODY)
-        assert bounded is False, (
-            "the region must be unbounded, or the repair no-ops at the "
-            "earlier bounded check and never reaches guard 3"
-        )
-        assert count > PIN_COUNT_CAP, (
-            f"the fixture parses {count} phantom pins against a cap of "
-            f"{PIN_COUNT_CAP}. Below the cap an enforcing gate allows too, "
-            f"and the decline assertion below would certify nothing."
-        )
+        """The precondition, asserted on its own so a fixture regression
+        names itself instead of surfacing as a confusing behavioural
+        failure three tests later."""
+        _require_midline_mention()
 
     def test_the_repair_refuses_and_writes_nothing(self, project):
         """The substring test wins over the absent heading, and refusing is
         the direction that leaves the safe state."""
+        _require_midline_mention()
         path = project(TERMINATOR_INSIDE_A_PIN_BODY)
         status = ensure_pinned_terminator()
 
@@ -946,11 +976,68 @@ class TestGuard3TerminatorLiteralInsideAPinBody:
             "guard 3 must not write"
         )
 
+    def test_the_refusal_does_not_claim_a_heading_that_is_absent(self, project):
+        """THE MESSAGE MUST BE TRUE OF THIS INPUT, not only of the other one.
+
+        Guard 3 is reached by two different files: one with a real
+        `## Working Memory` heading above the pins, and this one, which has
+        NO such heading and only prose mentioning the text. Both receive the
+        SAME constant, so the wording has to hold for both. An earlier
+        version asserted the file "already has a ... heading" and told the
+        curator to move it — an instruction nobody can follow here, which is
+        the same unfollowable-cure shape this work exists to remove.
+        """
+        _require_midline_mention()
+        content = project(TERMINATOR_INSIDE_A_PIN_BODY).read_text(encoding="utf-8")
+        headings_present = sum(
+            1 for line in content.splitlines()
+            if line.startswith(PINNED_TERMINATOR_HEADING)
+        )
+        assert headings_present == 0, (
+            "BINDING CONTROL FAILED: this fixture is supposed to carry NO "
+            "terminator heading. With one present the message's heading "
+            "claim would be true and this test would certify nothing."
+        )
+
+        status = ensure_pinned_terminator()
+        assert status is not None
+
+        # POSITIVE: the trigger is described as text CONTAINMENT, which is
+        # what the guard actually tests, and BOTH cures are named — the
+        # pin-body cure is the one the old wording had no way to express.
+        assert "contains the text" in status, (
+            f"the message must describe the trigger as containment. Got {status!r}"
+        )
+        assert "reword the mention" in status, (
+            f"the message must name the cure for THIS input. Without it a "
+            f"curator holding this file has no action to take. Got {status!r}"
+        )
+        # NEGATIVE: the specific false claim must not come back.
+        assert "already has a" not in status, (
+            f"the message asserts a heading EXISTS. It does not, on this "
+            f"input. Got {status!r}"
+        )
+
+        # 7a DISCIPLINE: state the remedy, promise no allowance. The detector
+        # is asserted able to FIRE on a doctored string, so its silence on the
+        # real one is evidence rather than an untested absence.
+        promises = ("will then be allowed", "will be allowed", "then succeed",
+                    "and the edit will", "unblocks", "will pass")
+        doctored = status + " The edit will then be allowed."
+        assert any(p in doctored for p in promises), (
+            "the promise detector cannot fire at all; its silence below "
+            "would certify nothing"
+        )
+        assert not any(p in status for p in promises), (
+            f"the refusal promises an outcome it does not control. Got {status!r}"
+        )
+
     def test_refusing_leaves_the_region_unbounded_so_the_caps_stay_off(
         self, project, monkeypatch, pact_context
     ):
         """THE DIRECTION, ASSERTED. A refusal is only safe because the gate
         declines on what it leaves behind."""
+        _require_midline_mention()
         pact_context(
             team_name="test-team",
             session_id="session-guard3-substring",
