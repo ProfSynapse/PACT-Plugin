@@ -792,6 +792,23 @@ class TestFreshStartArmBoundedness:
         from pin_caps_gate import _WRITE_BASELINE_DENY_REASON
 
         written = _claude_md(real_pins=13, notes=0, bounded=True)
+
+        # THE STRING BINDS THE ARM, NOT THE CAUSE. `_WRITE_BASELINE_DENY_REASON`
+        # is returned from TWO sites inside this arm: the cap-violation path,
+        # and an `except Exception` that fires when `apply_edit_and_parse`
+        # RAISES -- before any cap is evaluated at all. A fixture with
+        # malformed tool_input would satisfy a bare string match while proving
+        # nothing about the cap logic. This control excludes that branch by
+        # showing the content parses cleanly, so the deny below can only have
+        # come from the cap.
+        from pin_caps import apply_edit_and_parse
+
+        probe = apply_edit_and_parse(current_content="", tool_input={"content": written})
+        assert len(probe.pins) == 13, (
+            f"precondition: the written content must PARSE, so the deny cannot "
+            f"come from the except-branch. Parsed {len(probe.pins)} pins."
+        )
+
         reason, _ = _write_verdict(unreadable_baseline, written)
         assert reason == _WRITE_BASELINE_DENY_REASON, (
             "the Sec N7 asymmetric fail-CLOSED posture must survive: a "
