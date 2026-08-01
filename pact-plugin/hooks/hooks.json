@@ -24,6 +24,15 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/missed_wake_scan.py\""
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pin_marker_writer.py\"",
+            "async": true
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -222,6 +231,16 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/bootstrap_marker_writer.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pin_marker_writer.py\"",
+            "async": true
           }
         ]
       }

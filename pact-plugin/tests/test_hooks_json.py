@@ -54,6 +54,12 @@ MUST_BE_SYNC = {
 SHOULD_BE_ASYNC = {
     "session_end.py",     # Fire-and-forget cleanup
     "file_tracker.py",    # Advisory tracking only
+    # async is LOAD-BEARING here, not a performance choice. The platform
+    # backgrounds an async hook and reports success before the child exits, so
+    # the marker writer cannot block a user prompt whatever it does. Listing it
+    # turns a silent removal of that flag into a red test rather than a quiet
+    # loss of the guard.
+    "pin_marker_writer.py",
 }
 
 
