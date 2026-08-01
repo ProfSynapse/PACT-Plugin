@@ -944,8 +944,11 @@ class TestIdempotenceOnASingleMarker:
         whole-file substring search treats a document merely MENTIONING the
         marker as already migrated, and refuses it permanently.
 
-        The contract is now positional. Only the shape `apply_insertion` emits
-        counts, so a copy anywhere else leaves the document writable.
+        The contract is now positional, and it is the PLANNER'S contract. Only
+        the shape `apply_insertion` emits counts as already-migrated, so a copy
+        anywhere else no longer suppresses the plan. Whether the WRITE then
+        happens is a separate stage with its own answer -- see the comment on
+        the loop below.
         """
         old = build_claude_md()
         planned = plan_insertion(old)
@@ -955,10 +958,19 @@ class TestIdempotenceOnASingleMarker:
         # The writer's own position: marked.
         assert plan_insertion(marked) is SkipReason.ALREADY_MARKED
 
-        # Every other position: the write PROCEEDS. Asserted as
-        # `isinstance(..., Insertion)` and deliberately NOT as `is not
-        # ALREADY_MARKED` -- "not the old wrong answer" is satisfied by ANY
-        # refusal, including a wrong one, and is not the same claim as "the
+        # Every other position: the PLANNER no longer refuses them as
+        # already-migrated, so a write is PLANNED. The WRITER may still refuse
+        # a planned write -- each stray copy here sits on its own line followed
+        # by a newline, so it trips the certificate and reports a collision.
+        # THIS ASSERTS THE PLANNER'S CONTRACT, NOT THE WRITER'S OUTCOME, and an
+        # earlier version of this comment claimed the write proceeds, which is
+        # false at the writer level. That is a single-stage claim about a
+        # two-stage pipeline -- the same shape as the design-document claim
+        # this change set corrects, committed inside the correction itself.
+        #
+        # Asserted as `isinstance(..., Insertion)` and deliberately NOT as
+        # `is not ALREADY_MARKED` -- "not the old wrong answer" is satisfied by
+        # ANY refusal, including a wrong one, and is not the same claim as "the
         # right answer". An earlier draft of this test used the weak form.
         for label, placed in [
             ("prepended to the file", f"{PINNED_START_MARKER}\n" + old),
