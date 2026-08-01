@@ -235,11 +235,16 @@ class SkipReason(str, Enum):
     # The pinned body contains a fenced code block. See `_body_contains_a_fence`.
     FENCED_BODY = "noop_fenced_body"
     ALREADY_MARKED = "already_marked"
-    # A document that CONTAINS the marker somewhere, but not in the position
-    # this writer emits, and whose write was therefore refused by the
-    # certificate. Split out of ALREADY_MARKED, which reported it under a
-    # SUCCESS-shaped label -- a refused migration and a completed one were the
-    # same journal entry, so the collision was unobservable.
+    # A document carrying the marker on its OWN LINE, or at the END of a line,
+    # somewhere other than the position this writer emits -- so the certificate
+    # refused the write. NARROWER THAN `contains the marker anywhere`: a
+    # MID-LINE copy passes the certificate, the write proceeds, and no
+    # collision is reported. That is the correct outcome and it means this
+    # count UNDERCOUNTS documents that merely mention the marker.
+    #
+    # Split out of ALREADY_MARKED, which reported it under a SUCCESS-shaped
+    # label -- a refused migration and a completed one were the same journal
+    # entry, so the collision was unobservable.
     #
     # THIS IS RESTORED OBSERVABILITY, NOT A NEW FEATURE, and the history is the
     # reason it is worth an enum member. `unpaired` and `inverted_pair` were
@@ -369,11 +374,14 @@ def apply_insertion(content: str, ins: Insertion) -> str:
     so the heading and its body stay exactly where they already sit. One splice
     at one point: nothing is read between offsets, and nothing is rewritten.
 
-    THIS IS THE FUNCTION THE CERTIFICATE ACTUALLY GUARDS. With a single splice
-    point no offset can drop bytes, so a defect here can no longer come from
-    choosing the wrong place -- it can only come from mis-assembling the pieces.
-    Any edit to this expression is therefore the thing to certify, and the
-    certificate's mutation arm exists to prove it can still catch one.
+    THE CERTIFICATE GUARDS THIS FUNCTION -- but this is not the only place a
+    defect can enter, and an earlier wording of this paragraph implied it was.
+    With a single splice point no offset can drop bytes, so a defect HERE can
+    no longer come from choosing the wrong place; it can only come from
+    mis-assembling the pieces, and the certificate's mutation arm proves it
+    still catches that. A defect in `_is_already_marked` is a different matter
+    entirely: the certificate cannot see it, and the four-pass count is what
+    covers it.
     """
     return (
         content[:ins.start_offset]
@@ -436,8 +444,19 @@ def certify_expel_nothing(old: str, new: str, ins: Insertion) -> bool:
     - CAUGHT: a mis-assembled composition. Dropping a byte, duplicating one,
       inserting the marker twice, omitting the newline and reordering the tail
       are each refused, with a correct assembly accepted as the control. So the
-      certificate is not vacuous -- it guards `apply_insertion`, which is now
-      the only place a defect can enter.
+      certificate is not vacuous -- it guards `apply_insertion`.
+
+      IT DOES NOT GUARD THE DETECTOR. `_is_already_marked` is a SECOND logic
+      site -- it slices the gap, selects the last line and compares it stripped
+      -- and a defect there causes re-insertion or permanent suppression,
+      NEITHER of which this function can observe. It only ever inspects a
+      composition it was handed; it never asks whether that composition should
+      have been produced. THE FOUR-PASS COUNT IS WHAT COVERS THAT.
+
+      This sentence previously read `the only place a defect can enter`, which
+      was true when the detector was a one-line substring search and which the
+      adjacency change falsified BY ADDING A SECOND SITE, in the same commit
+      that left this claim reading as blanket coverage.
     - CAUGHT: the marker literal already present in `old` on its OWN line, or
       at the END of a line. Both put a `marker + newline` in `old`, so the
       unbounded replace strips two occurrences, the equality fails, and the
