@@ -45,6 +45,7 @@ from shared.pin_markers import (
     SkipReason,
     apply_insertion,
     certify_expel_nothing,
+    marker_line_present,
     plan_insertion,
 )
 
@@ -1530,6 +1531,107 @@ class TestCollisionIsDistinguishableFromCompletedMigration:
         planned = plan_insertion(old)
         assert isinstance(planned, Insertion), "FIXTURE INVALID"
         assert plan_insertion(apply_insertion(old, planned)) is SkipReason.ALREADY_MARKED
+
+
+class TestTheGuardHoldsUnderEveryLineTerminator:
+    """CRLF TWINS. The corpus that missed this held line endings CONSTANT
+    across every arm, so no number of arms could see it. Each test here states
+    a boundary property and then asserts it under more than one terminator.
+
+    THE DEFECT WAS AN EMERGENT GUARD. Nothing implemented `refuse a document
+    that already carries a marker`. It fell out of the certificate's unbounded
+    replace stripping two copies when both ended LF. A guard that exists only
+    as a byte accident stops existing when the bytes change.
+    """
+
+    def _doc(self, newline, pinned_body):
+        return build_claude_md(pinned_body=pinned_body).replace("\n", newline)
+
+    @pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+    def test_a_document_already_carrying_a_marker_line_is_refused(self, newline):
+        """THE FIX. Under LF this was refused by accident; under CRLF it was
+        not refused at all and a second marker was written.
+
+        FAILING INPUT: restoring the accident -- deleting the collision clause
+        from the certificate. The `crlf` arm reddens; the `lf` arm does NOT,
+        because the replace still catches it there. The lf arm is the CONTROL
+        that shows the crlf arm is measuring the terminator and not the rule.
+        """
+        original = self._doc(newline, f"### A pin\n{PINNED_START_MARKER}\nmore\n\n")
+        assert marker_line_present(original), "FIXTURE INVALID: no marker line"
+        planned = plan_insertion(original)
+        assert isinstance(planned, Insertion), (
+            "FIXTURE INVALID: the planner refused, so the certificate is never "
+            "consulted and the result below is a clean negative"
+        )
+        composed = apply_insertion(original, planned)
+        assert composed.count(PINNED_START_MARKER) == 2, (
+            "FIXTURE INVALID: the composition does not carry the second marker "
+            "this test exists to refuse"
+        )
+        assert certify_expel_nothing(original, composed, planned) is False
+
+    @pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+    def test_a_mid_line_mention_still_writes_under_either_terminator(self, newline):
+        """THE OVER-REACH GUARD, and it is the reason the fix is a line
+        predicate rather than a substring test. Prose naming the marker must
+        still be written into.
+
+        FAILING INPUT: widening the collision clause to `marker in old`. Both
+        arms redden, which is what distinguishes over-reach from the defect --
+        the fix reddens one arm, over-reach reddens both.
+        """
+        original = self._doc(
+            newline, f"### A pin\nProse naming the {PINNED_START_MARKER} inline.\n\n"
+        )
+        assert PINNED_START_MARKER in original, "FIXTURE INVALID: no mention"
+        assert not marker_line_present(original), (
+            "FIXTURE INVALID: the mention occupies a line, so this is the "
+            "collision case rather than the mid-line case"
+        )
+        planned = plan_insertion(original)
+        assert isinstance(planned, Insertion), "FIXTURE INVALID: planner refused"
+        assert certify_expel_nothing(
+            original, apply_insertion(original, planned), planned
+        ) is True
+
+    def test_marker_line_present_is_terminator_agnostic(self):
+        """The property is `occupies a line`, not `is followed by one specific
+        byte sequence`. CR is included because `splitlines` splits on it, so
+        excluding it would be an untested asymmetry rather than a decision.
+
+        FAILING INPUT: reimplementing the predicate as `START_LINE in text`.
+        The crlf and cr cases go False and this reddens.
+        """
+        for newline in ("\n", "\r\n", "\r"):
+            text = f"above{newline}{PINNED_START_MARKER}{newline}below{newline}"
+            assert marker_line_present(text) is True, f"missed {newline!r}"
+        assert marker_line_present(f"prose {PINNED_START_MARKER} inline\n") is False
+        assert marker_line_present("no marker here\r\n") is False
+
+    def test_the_shipped_terminator_pattern_carries_no_end_anchor(self):
+        """A SWEEP RESULT PINNED, because the site is safe by its CALLERS
+        rather than by construction.
+
+        `_find_terminator_offset` matches a compiled pattern against lines that
+        RETAIN a trailing carriage return. An end-anchored pattern therefore
+        fails to match on CRLF and the scan returns `len(content)`, its
+        NOT-FOUND sentinel -- silently extending the region to end of file.
+        Measured: `^## Working Memory$` returns 24 on LF and the sentinel on
+        CRLF, while the unanchored twin is correct on both.
+
+        The shipped pattern is unanchored, so nothing is broken today. This
+        pins the property so a future end-anchor is caught by a test rather
+        than by a region that quietly swallows the rest of the document.
+
+        FAILING INPUT: appending `$` to `_PINNED_TERMINATOR`.
+        """
+        from shared.pin_markers import _PINNED_TERMINATOR
+
+        assert not _PINNED_TERMINATOR.pattern.rstrip().endswith("$"), (
+            "an end-anchored terminator pattern silently fails on CRLF and "
+            "extends the pinned region to end of file"
+        )
 
 
 class TestRegistration:

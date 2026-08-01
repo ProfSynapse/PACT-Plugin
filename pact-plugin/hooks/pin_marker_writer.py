@@ -234,6 +234,7 @@ def _plan_and_write() -> str:
             SkipReason,
             apply_insertion,
             certify_expel_nothing,
+            marker_line_present,
             plan_insertion,
         )
         from staleness import _resolve_project_claude_md_with_base
@@ -251,34 +252,41 @@ def _plan_and_write() -> str:
             return planned.value
 
         new_content = apply_insertion(content, planned)
+        # `collision` is computed for the LABEL ONLY -- the certificate already
+        # refuses a document carrying a marker line, and does so explicitly
+        # rather than by the byte accident that failed on CRLF. Re-testing it
+        # here as a refusal condition would be unreachable code.
+        collision = marker_line_present(content)
         if not certify_expel_nothing(content, new_content, planned):
-            # The composition could not be proven byte-identical to the
-            # original plus the marker line. Refusing is the safe direction and
-            # there is no repair attempt.
+            # EITHER the document already carries a marker, OR the composition
+            # could not be proven byte-identical to the original plus the
+            # marker line. Refusing is the safe direction for both and there is
+            # no repair attempt.
             #
-            # THE TWO REASONS THIS CAN FAIL ARE REPORTED SEPARATELY, because
-            # they call for opposite responses. Reporting both as one outcome
-            # is what let the collision hide under a success-shaped label
-            # before the detector was narrowed.
+            # THE TWO REASONS ARE REPORTED SEPARATELY, because they call for
+            # opposite responses. Reporting both as one outcome is what let the
+            # collision hide under a success-shaped label before the detector
+            # was narrowed.
             #
-            # COLLISION -- the document already carries START_LINE, the marker
-            # followed by a newline, which is exactly what the certificate's
-            # unbounded replace strips. That is an own-line or end-of-line copy
-            # the writer did not put there: expected, benign, and worth
+            # COLLISION -- the document already carries the marker on a line of
+            # its own under any terminator, or carries START_LINE, which also
+            # covers a marker at the END of a line of prose. Either way it is a
+            # copy the writer did not put there: expected, benign, and worth
             # counting.
             #
-            # THE TEST IS `START_LINE`, NOT THE BARE MARKER. A mid-line mention
-            # is invisible to that replace, so it cannot cause this failure at
-            # all. Testing for the bare marker would label a genuine assembly
-            # defect as a benign collision on any document that merely mentions
-            # the marker in running text.
+            # NEITHER TEST IS THE BARE MARKER, and that is the load-bearing
+            # part. A mid-line mention neither occupies a line nor puts
+            # START_LINE in the document, so prose discussing the marker is not
+            # a collision. Testing for the bare marker would label a genuine
+            # assembly defect as a benign collision on any document that merely
+            # names the marker in running text.
             #
-            # ASSEMBLY DEFECT -- anything else. This branch is reachable only
-            # if apply_insertion assembles a document the certificate rejects
-            # for some reason OTHER than a pre-existing marker line. It is
+            # ASSEMBLY DEFECT -- anything else. Reachable only when the
+            # certificate refuses a document that carries no marker at all,
+            # which means apply_insertion assembled something wrong. It is
             # defensive, not dead: deleting it means arguing that
             # apply_insertion cannot be wrong.
-            if START_LINE in content:
+            if collision or START_LINE in content:
                 return SkipReason.MARKER_COLLISION.value
             return "certificate_failed"
 

@@ -194,6 +194,44 @@ def _is_already_marked(region_text: str, heading_start: int) -> bool:
     return gap_lines[-1].strip() == PINNED_START_MARKER
 
 
+def marker_line_present(text: str) -> bool:
+    """True when the marker OCCUPIES A LINE anywhere in `text`, under ANY line
+    terminator.
+
+    WHY THIS EXISTS AS A NAMED PREDICATE RATHER THAN A SIDE EFFECT. The guard
+    that stopped a second marker being written was never implemented. It was
+    EMERGENT: `certify_expel_nothing` strips `START_LINE`, so a document that
+    already carried `marker + LF` made the unbounded replace remove two copies
+    and the equality fail. That is a byte accident of an unrelated comparison,
+    and it stops working the moment the bytes differ -- on a CRLF document the
+    existing copy is `marker + CRLF`, the replace does not reach it, and the
+    write proceeds onto a document that already has one.
+
+    AN EMERGENT GUARD BREAKS SILENTLY WHEN THE BYTES CHANGE, because nothing
+    names the property it was protecting. This function names it.
+
+    THE PROPERTY IS `the marker occupies a line`, not `the marker is followed
+    by one specific byte sequence`. `splitlines()` supplies that directly: it
+    splits on LF, CRLF and CR alike, so the predicate is stated once and holds
+    for every terminator rather than enumerating them. The same call at
+    `_is_already_marked` is why that sibling was CRLF-safe all along while this
+    property was not.
+
+    `.strip()` MATCHES THE SIBLING DELIBERATELY. A whitespace-padded marker
+    line is a marker line by any reading, and the argument for it is set out in
+    `_is_already_marked` above. Keeping the two predicates on the same footing
+    is what stops a document being marked by one reading and unmarked by the
+    other.
+
+    A MID-LINE MENTION IS CORRECTLY EXCLUDED, and that is load-bearing rather
+    than incidental. A line reading `prose naming the <marker> inline` does not
+    strip to the marker, so prose that merely discusses the marker is not a
+    collision. Widening this to a bare substring test would resurrect exactly
+    the over-broad predicate this module removed.
+    """
+    return any(line.strip() == PINNED_START_MARKER for line in text.splitlines())
+
+
 @dataclass(frozen=True)
 class Insertion:
     """Where the marker line goes, as an absolute offset into the FULL file.
@@ -509,6 +547,18 @@ def certify_expel_nothing(old: str, new: str, ins: Insertion) -> bool:
     try:
         if len(new) != len(old) + len(ins.start_line):
             return False
-        return new.replace(ins.start_line, "") == old
+        if new.replace(ins.start_line, "") != old:
+            return False
+        # THE COLLISION CLAUSE IS EXPLICIT BECAUSE IT USED TO BE AN ACCIDENT.
+        # The two checks above are a pure composition proof and they are
+        # SATISFIED by a document that already carries a marker: nothing is
+        # expelled, one line is added, and the arithmetic holds. Such a document
+        # was refused only because the unbounded replace ABOVE happened to strip
+        # two copies when both ended LF -- a property of the bytes, not of the
+        # rule. On CRLF the existing copy ends `\r\n`, the replace never reaches
+        # it, and the composition certified cleanly onto a document that already
+        # had one. `marker_line_present` is terminator-agnostic, so the refusal
+        # now follows from the property rather than from the encoding.
+        return not marker_line_present(old)
     except Exception:  # noqa: BLE001 -- a certificate must refuse, never raise
         return False
