@@ -574,6 +574,106 @@ class TestPinCommentCorruptedMarker_RuledAcceptance:
             )
 
 
+class TestPinCommentMixedLine_RuledAcceptance:
+    """RULED ACCEPTANCE for a comment that SHARES A LINE WITH PROSE.
+
+    Attribution reads only whole lines: `parse_pins` runs `fullmatch` on the
+    STRIPPED line, so a line carrying prose either side of a comment is NEVER
+    attributed — it sets no date and grants no override. The strip is a
+    `.sub`, so it removes that comment's substring from the line anyway.
+
+    SO THE STRIP REMOVES WHAT ATTRIBUTION NEVER ATTRIBUTES, and the counted
+    body comes out LOWER than an attribution-consistent count. A lower charge
+    is a lower bar for the post state to clear, which is the same mechanism as
+    the stray-opener fault above.
+
+    Measured on one mixed line, comment interior varied:
+
+      comment holds `>`     previous code  charges it in full (its `[^>]`
+                            class cannot cross the `>`, so it never matches)
+                            per-line strip REMOVES it
+      comment holds no `>`  BOTH remove it — so this is PRE-EXISTING on the
+                            previous code and not introduced here
+
+    The widening EXTENDED an existing asymmetry to `>`-bearing comments; it
+    did not create one. A line bound cannot reach it, because the whole shape
+    lives inside a single line.
+
+    WHY IT IS ACCEPTED RATHER THAN CLOSED. Closing it means making the strip
+    agree with attribution about what a comment IS — a per-line `fullmatch`
+    instead of a `sub`. That RAISES charges, and raising charges is the
+    direction measured to push pins over the cap and manufacture fresh denies.
+    It would trade a known, bounded residual for an unmeasured one. Live
+    reachability was measured at ZERO across 50 project files, behind a
+    positive control of 41 pin-comment openers, so no real file reaches it.
+
+    DO NOT "FIX" THIS. It reads like an oversight and it is a decision.
+
+    STANDING ORDER: if these tests ever fail, RE-OPEN THE RULING. Do not
+    adjust the test to match new behaviour — a failure here means the strip
+    and the attribution path have changed their relationship, which is the
+    thing the ruling was made about.
+    """
+
+    LEAD = "lead prose "
+    TRAIL = " trail prose"
+    COMMENT_GT = "<!-- pinned: 2026-02-02, note > threshold -->"
+    COMMENT_PLAIN = "<!-- pinned: 2026-02-02, note ok here -->"
+    MIXED_GT = LEAD + COMMENT_GT + TRAIL
+    MIXED_PLAIN = LEAD + COMMENT_PLAIN + TRAIL
+    ALONE = COMMENT_GT
+
+    def test_the_strip_removes_a_mixed_line_comment_anyway(self):
+        """The accepted behaviour, asserted as a DIRECT OBSERVATION.
+
+        The residue is the prose ALONE. Deliberately not compared against a
+        computed attribution-consistent count: computing one would put a
+        SECOND IMPLEMENTATION of the code under test inside this file, and
+        the test would then check two implementations against each other
+        rather than check correctness.
+
+        Deliberately no verdict and no character budget either — whether a
+        given pin is denied depends on where it sits relative to the cap, so
+        pinning a verdict would make an unrelated size change look like a
+        regression.
+        """
+        from pin_caps import _DATE_COMMENT_RE
+
+        for line in (self.MIXED_GT, self.MIXED_PLAIN):
+            assert _DATE_COMMENT_RE.sub("", line) == self.LEAD + self.TRAIL, (
+                f"expected the strip to remove the embedded comment from "
+                f"{line!r} and leave the prose alone, which is the accepted "
+                f"behaviour recorded above"
+            )
+
+    def test_attribution_refuses_a_mixed_line(self):
+        """The ruling's PREMISE, checked rather than remembered.
+
+        The acceptance rests on attribution never attributing a mixed line.
+        If that stopped being true the two paths would agree and the residual
+        would not exist, so the ruling would need re-reading rather than
+        re-asserting.
+        """
+        from pin_caps import OVERRIDE_COMMENT_RE, _DATE_COMMENT_RE
+
+        for line in (self.MIXED_GT, self.MIXED_PLAIN):
+            stripped = line.strip()
+            assert _DATE_COMMENT_RE.fullmatch(stripped) is None
+            assert OVERRIDE_COMMENT_RE.fullmatch(stripped) is None
+
+    def test_the_same_comment_alone_on_its_line_is_attributed(self):
+        """CONTROL, and it must PASS for the class above to mean anything.
+
+        Same comment text, nothing else on the line. Attribution accepts it
+        and the strip removes it completely. Without this the two assertions
+        above would also hold for a pattern that simply matched nothing.
+        """
+        from pin_caps import _DATE_COMMENT_RE, _extract_body_chars
+
+        assert _DATE_COMMENT_RE.fullmatch(self.ALONE) is not None
+        assert _extract_body_chars(self.ALONE) == 0
+
+
 class TestPinCommentMultiLine_Characterization:
     """CHARACTERIZATION OF CURRENT BEHAVIOUR. This is NOT a requirement.
 

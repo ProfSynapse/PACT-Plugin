@@ -160,6 +160,23 @@ def _extract_body_chars(body: str) -> int:
     is a lower bar for POST to clear and DENIES an edit that repairs the file.
     Splitting first gives the strip the same notion of a line the attribution
     path already has.
+
+    The rejoin is a single "\\n" ON PURPOSE, and it is a NORMALISATION rather
+    than a side effect. `splitlines()` recognises more codepoints than "\\n",
+    so the rejoin folds every one of them to a single newline. CRLF is the only
+    fold that changes the LENGTH; every other separator it recognises (\\v, \\f,
+    FS, NEL, U+2028, U+2029) is one character before and after.
+
+    Measured on one body of identical prose, varying only the line ending:
+
+        whole-body strip   LF 1238    CRLF 1246   (+8, one per line break)
+        per-line strip     LF 1199    CRLF 1199   (+0)
+
+    So the previous whole-body strip charged a CRLF author eight characters
+    more for the same text, and the per-line strip charges them the same as
+    everyone else. The fold does not introduce a distortion, it REMOVES one.
+    Do NOT "repair" this join to preserve the original separators: that would
+    restore the per-line-ending penalty those numbers measure.
     """
     kept = []
     for line in body.splitlines():
