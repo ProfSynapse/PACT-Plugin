@@ -162,10 +162,14 @@ def _extract_body_chars(body: str) -> int:
     path already has.
 
     The rejoin is a single "\\n" ON PURPOSE, and it is a NORMALISATION rather
-    than a side effect. `splitlines()` recognises more codepoints than "\\n",
+    than a side effect. `splitlines()` recognises more separators than "\\n",
     so the rejoin folds every one of them to a single newline. CRLF is the only
-    fold that changes the LENGTH; every other separator it recognises (\\v, \\f,
-    FS, NEL, U+2028, U+2029) is one character before and after.
+    fold that changes the LENGTH, and the reason is structural rather than a
+    list to memorise: CRLF is the only separator that is TWO characters. Every
+    other separator `splitlines()` recognises is a single codepoint, so it is
+    one character before the fold and one character after. (The sibling comment
+    on `_FORBIDDEN_TERMINATOR_TABLE` above enumerates the set, and that is the
+    place to look it up — an enumeration repeated here would drift.)
 
     Measured on one body of identical prose, varying only the line ending:
 
