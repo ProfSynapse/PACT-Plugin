@@ -171,16 +171,37 @@ def _extract_body_chars(body: str) -> int:
     on `_FORBIDDEN_TERMINATOR_TABLE` above enumerates the set, and that is the
     place to look it up — an enumeration repeated here would drift.)
 
-    Measured on one body of identical prose, varying only the line ending:
+    THE CLAIM IS A DELTA, NOT A PAIR OF TOTALS, AND IT IS STATED THAT WAY SO
+    IT CAN BE RE-DERIVED. Take any body whose lines are joined once with LF
+    and once with CRLF — identical text, only the separator differs — and
+    measure the charge under each:
 
-        whole-body strip   LF 1238    CRLF 1246   (+8, one per line break)
-        per-line strip     LF 1199    CRLF 1199   (+0)
+        before (base)     CRLF minus LF  =  +1 PER LINE BREAK
+        after (shipped)   CRLF minus LF  =   0
 
-    So the previous whole-body strip charged a CRLF author eight characters
-    more for the same text, and the per-line strip charges them the same as
-    everyone else. The fold does not introduce a distortion, it REMOVES one.
+    On an eight-break body that is +8 and +0. The absolute totals depend
+    entirely on how long the filler happens to be, so they are not quoted
+    here: a reader who reproduces this with different prose gets different
+    totals and the SAME two deltas, which is the whole point.
+
+    READ THE COLUMNS, NOT THE ROWS. The claim is the LF-versus-CRLF difference
+    WITHIN a row: base charges a CRLF author one character more per line for
+    the same text, and the shipped code charges them the same as everyone
+    else. That difference IS the fold, and it is what the rejoin fixes.
+
+    THE ROW DELTA IS NOT THE FOLD, AND THE LABELS DELIBERATELY DO NOT CLAIM IT
+    IS. On a pure-LF body the split-and-rejoin is IDENTITY — splitting on
+    newlines and rejoining with a newline cannot change anything — so the
+    arity change contributes ZERO there. Any drop between the two rows comes
+    entirely from the widened body class stripping a comment the old class
+    could not — measurable by running the base class and the shipped class
+    over the same pure-LF body.
+    An earlier version of this table labelled its rows by mechanism and so
+    attributed that drop to the rejoin, which would tell a reader the join is
+    doing something it is not.
+
     Do NOT "repair" this join to preserve the original separators: that would
-    restore the per-line-ending penalty those numbers measure.
+    restore the per-line-ending penalty the COLUMNS measure.
     """
     kept = []
     for line in body.splitlines():

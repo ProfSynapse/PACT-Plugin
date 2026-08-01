@@ -64,6 +64,19 @@ CORPUS_OPENERS = [
     "<!--pinned:",
     "<!--  PINNED:  ",
     "<!-- Pinned: ",
+    # The opener's separators are `\s*`, which accepts 28 characters, 18 of
+    # them INLINE rather than line separators. All 18 are attributed by the
+    # shipped pattern, and the four openers above express exactly ONE of them
+    # — the plain space. A corpus built only from shapes a curator TYPES
+    # cannot see a change to what the pattern TOLERATES, so narrowing `\s*`
+    # to ` *` used to leave every number here identical.
+    #
+    # TAB is ordinary. NBSP is what a paste from a rendered document or a word
+    # processor inserts, and it is INVISIBLE IN EVERY EDITOR — which is why it
+    # is written here as an escape and MUST STAY one. A literal would be a
+    # character nobody can see in the fixture that exists to make it visible.
+    "<!--\tpinned:\t",
+    "<!--\u00a0pinned:\u00a0",
 ]
 
 CORPUS_DATES = [
@@ -100,14 +113,22 @@ CORPUS_CLOSERS = [
 # reaches zero violations for the wrong reason, and a passing test cannot tell
 # the difference. This floor makes the antecedent load-bearing.
 #
-# Measured attributed count with the shipped patterns: 539 of 648 generated
-# lines. The floor sits at 500, so the measured headroom is 39 lines. A change
+# Measured attributed count with the shipped patterns: 809 of 972 generated
+# lines. The floor sits at 750, so the measured headroom is 59 lines. A change
 # that narrows attribution past that trips this floor instead of quietly
 # emptying the property.
 #
+# THE FLOOR MOVED WITH THE CORPUS, ON PURPOSE. Adding the TAB and NBSP openers
+# took the corpus from 648 lines to 972 and the attributed count from 539 to
+# 809. Leaving the floor at its old 500 would have widened the headroom from
+# 39 to 309 — the guard would still have passed, and it would have stopped
+# detecting anything short of a two-thirds collapse. A floor is only as good
+# as its distance from the measurement, so widening the corpus without moving
+# the floor SILENTLY WEAKENS it.
+#
 # The floor is itself a predicate, so it is proved by mutation in
 # TestPinCommentDominance_FloorGuard rather than asserted.
-MIN_ATTRIBUTED = 500
+MIN_ATTRIBUTED = 750
 
 
 def build_corpus(openers, dates, clauses, closers):
@@ -457,6 +478,54 @@ class TestPinCommentFragments_NonCapturing:
         found = OVERRIDE_COMMENT_RE.fullmatch(line)
         assert found is not None
         assert found.group(1) == "keep a -> b"
+
+    def test_the_override_anchors_hold_against_a_search_caller(self):
+        """`\\A...\\Z` must not be loosened to `^...$`.
+
+        The module documents the self-anchor as protection against a FUTURE
+        `.search` or `.match` caller. `\\Z` matches only at the very end of the
+        string; `$` also matches before a trailing newline, so the caret form
+        would let a `.search` caller accept a line with a newline after the
+        terminator. Nothing in the dominance corpus can see that, because the
+        property is quantified over `fullmatch` and fullmatch is False on BOTH
+        forms for every trailing-newline input.
+
+        *** THE EXACT INPUT IS LOAD-BEARING AND THE OBVIOUS ONE IS VACUOUS. ***
+        `$` matches only before a SINGLE trailing newline sitting IMMEDIATELY
+        after the terminator. Measured on both forms:
+
+            terminator flush then \\n   shipped False   caret TRUE   <- the only
+                                                                       discriminator
+            a SPACE before the \\n      shipped False   caret False
+            two newlines               shipped False   caret False
+            no newline (control)       shipped True    caret True
+
+        TWO OF THE THREE CORPUS CLOSERS BEGIN WITH A SPACE, so copying one and
+        appending a newline — the natural way to write this test — produces an
+        input that passes on both forms and looks like a guard. Do NOT "tidy"
+        the spacing below: adding a space or a second newline silently disarms
+        this test.
+        """
+        from pin_caps import OVERRIDE_COMMENT_RE
+
+        flush = "<!-- pinned: 2026-01-01, pin-size-override: r -->\n"
+        assert OVERRIDE_COMMENT_RE.search(flush) is None, (
+            "a `.search` caller accepted a line with a newline after the "
+            "terminator, which means the self-anchor has been loosened from "
+            "`\\A...\\Z` to `^...$`"
+        )
+
+    def test_the_search_anchor_probe_is_not_vacuous(self):
+        """CONTROL. The same string WITHOUT the trailing newline must match.
+
+        Without this, the assertion above also passes for a pattern that
+        matches nothing at all.
+        """
+        from pin_caps import OVERRIDE_COMMENT_RE
+
+        assert OVERRIDE_COMMENT_RE.search(
+            "<!-- pinned: 2026-01-01, pin-size-override: r -->"
+        ) is not None
 
     def test_both_patterns_stay_case_insensitive(self):
         import re
