@@ -775,7 +775,6 @@ class TestStartMarkerSurvivesRetrievedContextRotation:
             "demonstration no longer shows the delayed death it describes"
         )
         assert run["steps"][-1]["start_marker"] is False
-        assert run["saves"] if False else True  # readability guard, no-op
 
     def test_the_marker_does_not_change_the_fate_of_gap_content(
         self, rotation_runs
