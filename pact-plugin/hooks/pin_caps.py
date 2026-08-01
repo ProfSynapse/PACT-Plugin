@@ -41,28 +41,50 @@ PIN_STALE_BLOCK_THRESHOLD = 2
 # rationale from itself becoming a back-channel for oversized pins.
 OVERRIDE_RATIONALE_MAX = 120
 
-# Strict regex for the combined pin date + size-override comment.
-# Live form (CLAUDE.md:69):
-#   <!-- pinned: 2026-04-11, pin-size-override: verbatim dispatch form... -->
-# Capture group 1 = rationale text — matches any character EXCEPT a run
-# that terminates the HTML comment (`-->`). Reluctant `.+?` was sufficient
-# under .fullmatch() but is vulnerable to future .search()/.match() misuse
-# by a downstream consumer. Self-anchoring via \A...\Z + a rationale
-# pattern that positively refuses to consume `-->` closes both a
-# latent-misuse vector (Sec-M2) and call-convention drift (Sec-F5).
+# Single source for the pin-comment grammar. Both oracles below are built
+# from these four fragments, so the strip path and the attribution path
+# cannot drift apart on the shape of a comment.
 #
-# Rationale pattern: `(?:[^-]|-(?!->))+` — one or more chars that are
-# either not `-` at all, or `-` NOT followed by `->`. Equivalent to "any
-# char except the `-->` terminator" without resorting to reluctant
-# backtracking.
+# `_COMMENT_CHAR` is one character of a comment interior: either a character
+# that is not `-`, or a `-` that does not start `-->`. A run of this class
+# cannot contain `-->`, so no match can cross the end of a closed comment.
+# This is the positive terminator refusal the override pattern already used.
+# It replaces the older `[^>]` class, which refused EVERY `>` and so made the
+# strip path blind to a comment that held one, while attribution still saw it.
+#
+# `_COMMENT_CHAR_NO_COMMA` is the same rule for the date field, which the
+# comma delimits. It refuses the terminator too, so attribution cannot accept
+# a line whose override clause sits after an early `-->`.
+#
+# The property these fragments deliver is DOMINANCE: every line that
+# attribution accepts, the strip removes in full. The strip may remove more.
+# It must never remove less, because less is a charge against the neighbour.
+#
+# Every fragment is NON-CAPTURING. `OVERRIDE_COMMENT_RE.groups` must stay 1,
+# because `parse_pins` reads the rationale as `group(1)`.
+_COMMENT_CHAR = r'(?:[^-]|-(?!->))'
+_COMMENT_CHAR_NO_COMMA = r'(?:[^-,]|-(?!->))'
+_PIN_COMMENT_OPEN = r'<!--\s*pinned:\s*'
+_PIN_COMMENT_CLOSE = r'-->'
+
+# Strict regex for the combined pin date + size-override comment.
+# Live form:
+#   <!-- pinned: 2026-04-11, pin-size-override: verbatim dispatch form... -->
+# Capture group 1 = rationale text. Self-anchoring via \A...\Z plus a body
+# class that positively refuses `-->` closes both a latent-misuse vector
+# (Sec-M2) and call-convention drift (Sec-F5).
 OVERRIDE_COMMENT_RE = re.compile(
-    r'\A<!--\s*pinned:\s*[^,]+,\s*pin-size-override:\s*((?:[^-]|-(?!->))+?)\s*-->\Z',
+    rf'\A{_PIN_COMMENT_OPEN}{_COMMENT_CHAR_NO_COMMA}+,\s*'
+    rf'pin-size-override:\s*({_COMMENT_CHAR}+?)\s*{_PIN_COMMENT_CLOSE}\Z',
     re.IGNORECASE,
 )
 
 # Standalone <!-- pinned: YYYY-MM-DD[, ...] --> comment without override.
+# Unanchored BY DESIGN: `_extract_body_chars` runs it with `.sub` over a whole
+# pin body, so it cannot be anchored. Terminator refusal, not anchoring, is
+# what keeps it safe under every call convention (Sec-M2).
 _DATE_COMMENT_RE = re.compile(
-    r'<!--\s*pinned:\s*[^>]+?-->',
+    rf'{_PIN_COMMENT_OPEN}{_COMMENT_CHAR}+?{_PIN_COMMENT_CLOSE}',
     re.IGNORECASE,
 )
 
@@ -126,10 +148,65 @@ def _extract_body_chars(body: str) -> int:
     """Count body chars excluding auto-generated markers.
 
     The date comment and STALE marker are plugin-managed — they MUST NOT
-    count against the user's 1500-char budget. Prevents self-referential
-    inflation from override rationale + tool-generated markers.
+    count against the user's 1500-char budget.
+
+    The date-comment strip runs PER LINE. `parse_pins` attributes a comment
+    only after `splitlines()`, so a comment that spans a line break is not a
+    comment to the attribution path. An unanchored strip across the whole body
+    does not share that discipline: it runs from an unterminated marker
+    forward to the next `-->`, which may belong to a different pin, and
+    removes real prose from the count. A lower charge is not a safe error —
+    `compute_deny_reason` compares PRE against POST, so an under-counted PRE
+    is a lower bar for POST to clear and DENIES an edit that repairs the file.
+    Splitting first gives the strip the same notion of a line the attribution
+    path already has.
+
+    The rejoin is a single "\\n" ON PURPOSE, and it is a NORMALISATION rather
+    than a side effect. `splitlines()` recognises more separators than "\\n",
+    so the rejoin folds every one of them to a single newline. CRLF is the only
+    fold that changes the LENGTH, and the reason is structural rather than a
+    list to memorise: CRLF is the only separator that is TWO characters. Every
+    other separator `splitlines()` recognises is a single codepoint, so it is
+    one character before the fold and one character after. (The sibling comment
+    on `_FORBIDDEN_TERMINATOR_TABLE` above enumerates the set, and that is the
+    place to look it up — an enumeration repeated here would drift.)
+
+    THE CLAIM IS A DELTA, NOT A PAIR OF TOTALS, AND IT IS STATED THAT WAY SO
+    IT CAN BE RE-DERIVED. Take any body whose lines are joined once with LF
+    and once with CRLF — identical text, only the separator differs — and
+    measure the charge under each:
+
+        before (base)     CRLF minus LF  =  +1 PER LINE BREAK
+        after (shipped)   CRLF minus LF  =   0
+
+    On an eight-break body that is +8 and +0. The absolute totals depend
+    entirely on how long the filler happens to be, so they are not quoted
+    here: a reader who reproduces this with different prose gets different
+    totals and the SAME two deltas, which is the whole point.
+
+    READ THE COLUMNS, NOT THE ROWS. The claim is the LF-versus-CRLF difference
+    WITHIN a row: base charges a CRLF author one character more per line for
+    the same text, and the shipped code charges them the same as everyone
+    else. That difference IS the fold, and it is what the rejoin fixes.
+
+    THE ROW DELTA IS NOT THE FOLD, AND THE LABELS DELIBERATELY DO NOT CLAIM IT
+    IS. On a pure-LF body the split-and-rejoin is IDENTITY — splitting on
+    newlines and rejoining with a newline cannot change anything — so the
+    arity change contributes ZERO there. Any drop between the two rows comes
+    entirely from the widened body class stripping a comment the old class
+    could not — measurable by running the base class and the shipped class
+    over the same pure-LF body.
+    An earlier version of this table labelled its rows by mechanism and so
+    attributed that drop to the rejoin, which would tell a reader the join is
+    doing something it is not.
+
+    Do NOT "repair" this join to preserve the original separators: that would
+    restore the per-line-ending penalty the COLUMNS measure.
     """
-    stripped = _DATE_COMMENT_RE.sub("", body)
+    kept = []
+    for line in body.splitlines():
+        kept.append(_DATE_COMMENT_RE.sub("", line))
+    stripped = "\n".join(kept)
     stripped = _STALE_MARKER_RE.sub("", stripped)
     return len(stripped.strip())
 

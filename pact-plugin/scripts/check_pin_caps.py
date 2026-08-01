@@ -139,8 +139,9 @@ PINNED_STALENESS_DAYS = _staleness.PINNED_STALENESS_DAYS
 # Both are `search`, not `fullmatch`, because the comment legitimately carries
 # trailing content after the date — a size-override rationale
 # (`, pin-size-override: ...`) or a re-confirmation clause
-# (`, reconfirmed: YYYY-MM-DD because ...`). The upstream pattern is `[^>]+?`,
-# so that trailing content parses with no regex change anywhere.
+# (`, reconfirmed: YYYY-MM-DD because ...`). The upstream body class refuses
+# the `-->` terminator and nothing else, so that trailing content reaches
+# these two patterns intact and parses with no regex change anywhere.
 _PINNED_DATE_RE = re.compile(r"pinned:\s*(\d{4}-\d{2}-\d{2})", re.IGNORECASE)
 _RECONFIRMED_DATE_RE = re.compile(
     r"reconfirmed:\s*(\d{4}-\d{2}-\d{2})", re.IGNORECASE
