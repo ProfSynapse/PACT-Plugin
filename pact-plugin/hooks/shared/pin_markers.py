@@ -436,10 +436,28 @@ def certify_expel_nothing(old: str, new: str, ins: Insertion) -> bool:
     proven byte-identical never reaches the disk. Failure is the safe
     direction.
 
+    SCOPE, AND IT IS NARROWER THAN THE NAME SUGGESTS. THIS CERTIFIES TWO
+    STRINGS, NOT A FILE. The writer obtains `old` from `Path.read_text`, which
+    performs universal-newline translation: a CRLF document arrives here
+    already converted to LF, and the composition is written back byte-faithful.
+    So a pin command on a CRLF file rewrites every line ending in it, and BOTH
+    ARGUMENTS HERE ARE ALREADY NORMALISED BEFORE THE COMPARISON BEGINS -- this
+    function cannot see that change and never could.
+
+    That conversion is NOT introduced by this module. Measured at the revision
+    this work branched from: every existing writer of the file pairs the same
+    normalising read with a byte-faithful write, and two of them were driven
+    end to end against a CRLF file and converted it. The conversion is
+    inherited; what is new is a function named for a guarantee. STATE THE
+    SCOPE RATHER THAN WEAKEN THE GUARANTEE: this proves nothing was expelled
+    FROM THE TEXT IT WAS GIVEN, and it is not a byte-level guarantee about the
+    file on disk.
+
     Two assertions, and the second is not redundant with the first:
 
     - the length grew by exactly the marker line, which catches a dropped or
-      duplicated byte anywhere in the file;
+      duplicated byte anywhere in the STRING -- see the scope note above, which
+      is why this does not say `in the file`;
     - removing every occurrence of that line from `new` reproduces `old`
       exactly, which catches a byte that moved without the length changing.
 
