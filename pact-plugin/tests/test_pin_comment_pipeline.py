@@ -318,36 +318,36 @@ class TestPinCommentTwoState_Pipeline:
         post = parse_pins(self._region(None))
         return compute_deny_reason(pre, post, "")
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "OPEN FINDING, reported and not yet dispositioned. The curator "
-            "deletes a stray unterminated pin-comment opener, which removes "
-            "characters and adds none, and the edit is DENIED. The widened "
-            "strip reaches past the `>` to the next terminator, so the "
-            "PRE-state charge falls, and the net-worse predicate then reads "
-            "the unchanged post state as a regression. The previous code "
-            "allowed this repair."
-        ),
-    )
     def test_repairing_a_stray_opener_is_not_denied(self):
+        """The fault this file was written for. It is fixed; keep it fixed.
+
+        A curator deletes a stray unterminated pin-comment opener. The edit
+        removes characters and adds none, so no pin grew. Before the per-line
+        strip the whole-body strip ran past the `>` to a terminator belonging
+        to the NEXT pin, which under-counted the PRE state and made the
+        unchanged POST state look like a regression.
+        """
         stray = "<!-- pinned: 2026-02-02, note > threshold"
         assert self._verdict(stray) is None, (
             "the curator's repair of their own file was denied. The edit only "
             "removes characters, so no pin grew."
         )
 
-    def test_a_stray_opener_without_a_greater_than_denies_on_both_versions(self):
-        """CONTROL, and it denies. That is the point.
+    def test_a_stray_opener_without_a_greater_than_is_also_not_denied(self):
+        """The PRE-EXISTING half of the same fault, and it is fixed too.
 
         This case shares every ingredient with the one above EXCEPT the `>`.
-        Without the `>` the previous body class also strips the region, so
-        both code versions read the same pre-state and both deny. The deny is
-        therefore not new, and the `>` is isolated as the one ingredient that
-        makes the two verdicts diverge.
+        That difference used to decide everything: without a `>` the older
+        body class also ran forward, so BOTH code versions under-counted the
+        pre-state and BOTH denied this repair. It was therefore not a
+        regression introduced by the `>` widening — it was already there.
+
+        The per-line strip closes both halves at once, which is why the
+        remediation was scoped to the root cause rather than to the widening.
+        The two tests now agree, and the `>` no longer decides the verdict.
         """
         stray = "<!-- pinned: 2026-02-02, note above threshold"
-        assert self._verdict(stray) is not None
+        assert self._verdict(stray) is None
 
     def test_removing_a_wellformed_comment_holding_a_greater_than_is_allowed(self):
         """The repair this change exists to make does NOT open a deny.
@@ -368,6 +368,256 @@ class TestPinCommentTwoState_Pipeline:
         """
         stray = "<!-- note: 2026-02-02, count > threshold"
         assert self._verdict(stray) is None
+
+
+class TestPinCommentTwoStateWellFormed_Pipeline:
+    """The same two-state SHAPE reached from a WELL-FORMED pre-state.
+
+    The sibling class above needs a malformed pre-state. This one does not,
+    and the two look identical until you ask WHICH SIDE IS MIS-MEASURING.
+
+    The shared condition is that the stripping ADVANTAGE must SHRINK across
+    the edit. That is NECESSARY for the two versions to disagree, and it is
+    NOT SUFFICIENT for the disagreement to be a fault. A fault also needs the
+    version holding the advantage to be the one measuring WRONGLY:
+
+      * malformed route: the advantage comes from running past an
+        unterminated marker and swallowing REAL PROSE. The current code is
+        the wrong one, and its refusal is a defect.
+      * this route: the advantage comes from correctly excluding a
+        PLUGIN-MANAGED comment. The previous code is the wrong one, and the
+        refusal is the cap working.
+
+    So a repair should remove the first advantage and KEEP the second. This
+    class therefore holds a RULED ACCEPTANCE rather than a pin on a defect.
+
+    WHY IT REMAINS A SEPARATE CLASS. It was staged as a second tripwire
+    because a repair could close the malformed route and leave this one, at
+    which point the sibling marker would come off and this behaviour would
+    ship unexamined. That is exactly what happened. The pin did its job, the
+    behaviour was examined and then ruled correct, and the pin stays as a
+    live record of the decision rather than being deleted.
+    """
+
+    PROSE = "Alpha prose that belongs to pin A. " * 22
+    TAIL = "Beta prose that also belongs to pin A. " * 18
+    COMMENT = "<!-- pinned: 2026-02-02, note > threshold -->"
+
+    def _region(self, comment):
+        return (
+            "<!-- pinned: 2026-01-01 -->\n"
+            f"### PinA\n{self.PROSE}\n"
+            f"{comment}\n"
+            f"{self.TAIL}\n"
+            "### PinB\nshort\n"
+        )
+
+    def _verdict(self, post_comment):
+        from pin_caps import compute_deny_reason, parse_pins
+
+        pre = parse_pins(self._region(self.COMMENT))
+        post = parse_pins(self._region(post_comment))
+        return compute_deny_reason(pre, post, "")
+
+    def test_demoting_a_pin_comment_to_a_plain_comment_is_denied(self):
+        """RULED ACCEPTANCE. This deny is CORRECT and is kept deliberately.
+
+        A curator renames the marker so a pin comment becomes an ordinary
+        comment. The file gets two characters shorter and the edit is refused.
+        That reads like an over-block and is not one, for a reason that only
+        appears when the two charges are compared:
+
+        Before the edit the comment is PLUGIN-MANAGED, and
+        `_extract_body_chars` documents that managed markers MUST NOT count
+        against the curator's budget. The comment holds a `>`, so the previous
+        code failed to strip it and counted it; the current code strips it.
+        The current pre-state figure is therefore the CORRECT one and the
+        previous figure was inflated by a mis-measurement.
+
+        After the edit the text is no longer a pin comment, so both versions
+        agree it counts. The pin then genuinely sits above the cap with no
+        override, and the refusal is the cap doing its job. The previous
+        version allowed the edit only because its inflated pre-state figure
+        made the post-state look no worse.
+
+        So this is a RULED ACCEPTANCE and not a tolerated defect. It was
+        reported, measured, and decided. If a later change makes this test
+        fail, the pin has stopped being refused — re-open the ruling rather
+        than adjusting the test.
+        """
+        verdict = self._verdict("<!-- note: 2026-02-02, note > threshold -->")
+        assert verdict is not None, (
+            "the ruled acceptance no longer holds: this edit is now allowed"
+        )
+
+    def test_renaming_a_marker_on_a_comment_without_a_greater_than_denies_alike(self):
+        """CONTROL, and it denies. The `>` is again the discriminator.
+
+        Without a `>` the previous code also stripped the comment, so both
+        code versions read the same pre-state and neither treats the rename
+        as a regression peculiar to one of them.
+        """
+        from pin_caps import compute_deny_reason, parse_pins
+
+        pre = parse_pins(self._region("<!-- pinned: 2026-02-02, note ok -->"))
+        post = parse_pins(self._region("<!-- note: 2026-02-02, note ok -->"))
+        assert compute_deny_reason(pre, post, "") is not None
+
+    def test_editing_the_rationale_without_removing_the_marker_is_allowed(self):
+        """CONTROL. The advantage must SHRINK, not merely change.
+
+        Editing the rationale leaves the comment a pin comment, so it is
+        stripped in both states, the advantage is unchanged, and no deny
+        appears. This is what separates the fault from ordinary comment edits.
+        """
+        assert self._verdict(
+            "<!-- pinned: 2026-02-02, note gt threshold -->"
+        ) is None
+
+
+class TestPinCommentCorruptedMarker_RuledAcceptance:
+    """RULED ACCEPTANCE for a deny that NOTHING SHIPPING TODAY produces.
+
+    The curator deletes the terminator of a well-formed comment holding a
+    `>`, and a LATER terminator exists further down the same pin. Three
+    arms, and the two that exist today allow for DIFFERENT WRONG REASONS:
+
+      previous code   pre 2050  post 2046  ALLOW  — pre is WRONG. It counts
+                      an intact plugin-managed comment against the curator.
+      current code    pre 1996  post 1019  ALLOW  — post is WRONG. Once the
+                      terminator is gone it runs forward to the LATER
+                      terminator and eats about a thousand characters of
+                      real prose.
+      per-line strip  pre 1996  post 2046  DENY   — correct in BOTH states.
+
+    So the refusal is correct enforcement. The comment's 54 characters were
+    exempt while it was plugin-managed; corrupting the marker makes them
+    ordinary text, and the counted body genuinely reaches 2046 against a cap
+    of 1500 with no override.
+
+    THIS WAS RULED, NOT ASSUMED, AND THE RULING WAS NOT OBVIOUS. Unlike the
+    sibling acceptance above, this deny is new relative to BOTH the previous
+    code AND the current branch — nothing in existence produces it today. It
+    was measured, escalated twice, and decided deliberately.
+
+    DO NOT "FIX" THIS DENY. It looks like a bug pinned by accident and it is
+    not. If you are about to relax it, read the three-arm arithmetic above
+    first: any change that makes this pair allowed again is re-introducing
+    one of the two measurement errors it was chosen over.
+
+    THE PER-LINE STRIP HAS LANDED, so this now asserts live behaviour. It
+    was written as a strict xfail while the arm was still a proposal, and the
+    marker came off in the same change that made it pass — a ruling and the
+    tripwire recording it must not ship one commit apart.
+    """
+
+    PROSE = "Alpha prose that belongs to pin A. " * 37
+    TAIL = "Beta prose that also belongs to pin A. " * 18
+    WELL_FORMED = "<!-- pinned: 2026-02-02, note > threshold -->"
+
+    def _region(self, comment):
+        return (
+            "<!-- pinned: 2026-01-01 -->\n"
+            f"### PinA\n{self.PROSE}\n"
+            f"{comment}\n"
+            f"{self.TAIL}\n"
+            "<!-- pinned: 2026-03-03 -->\n"
+            "### PinB\nshort\n"
+        )
+
+    def test_corrupting_a_managed_marker_is_denied(self):
+        from pin_caps import compute_deny_reason, parse_pins
+
+        unterminated = self.WELL_FORMED.replace(" -->", "")
+        assert len(self.WELL_FORMED) - len(unterminated) == 4
+
+        pre = parse_pins(self._region(self.WELL_FORMED))
+        post = parse_pins(self._region(unterminated))
+        assert compute_deny_reason(pre, post, "") is not None, (
+            "the corrupted marker's characters are counted, so the body grew "
+            "past the cap and the edit must be refused"
+        )
+
+    def test_the_current_code_allows_it_only_by_running_forward(self):
+        """The ruling's premise, checked rather than remembered.
+
+        The current code allows the pair ONLY because its post-state charge
+        FALLS — and a four-character deletion cannot legitimately reduce a
+        counted body by hundreds. That fall IS the forward run over real
+        prose, and it is the measurement error the ruling weighed.
+
+        Deliberately asserted on the CHARGES rather than on the verdict, and
+        deliberately tolerant of both arms: it holds while the forward run
+        exists and holds again once a per-line strip removes it. So it
+        records the premise without adding a second red at remediation time.
+        The single intended red is the XPASS above.
+        """
+        from pin_caps import parse_pins
+
+        unterminated = self.WELL_FORMED.replace(" -->", "")
+        pre = parse_pins(self._region(self.WELL_FORMED))[0].body_chars
+        post = parse_pins(self._region(unterminated))[0].body_chars
+        deleted = len(self.WELL_FORMED) - len(unterminated)
+
+        if post < pre:
+            # Forward run present: the drop must be far larger than the edit.
+            assert pre - post > deleted, (
+                "a fall of only the deleted characters would not be a "
+                "forward run, and the ruling's premise would not hold"
+            )
+        else:
+            # Forward run removed. The body may only grow by the characters
+            # that stopped being exempt, never by more.
+            assert post - pre == len(self.WELL_FORMED) - deleted, (
+                "the growth must equal exactly the characters that lost their "
+                "managed exemption"
+            )
+
+
+class TestPinCommentMultiLine_Characterization:
+    """CHARACTERIZATION OF CURRENT BEHAVIOUR. This is NOT a requirement.
+
+    The cross-oracle property in the sibling file is quantified over `every
+    single-line string L`, but nothing ENFORCES single-line-ness, and the
+    patterns do match a multi-line string. The property is therefore silent
+    about multi-line input, and this class records what the code does there
+    TODAY so a later change has a shared reference to compare against.
+
+    A REMEDIATION IS EXPECTED TO CHANGE THESE VALUES. A repair that stops the
+    pattern matching across a newline CLOSES this blind spot and is correct.
+    If these assertions fail, do NOT treat that as a regression: review the
+    delta, confirm it is the intended change, and update this class as part
+    of the same commit. Written as a requirement it would be a false tripwire
+    that a correct fix has to break.
+    """
+
+    MULTI_LINE = (
+        "<!-- pinned: 2026-01-01, opener here\n"
+        "a middle line of real prose\n"
+        "and another -->"
+    )
+
+    def test_strip_pattern_currently_matches_across_newlines(self):
+        from pin_caps import _DATE_COMMENT_RE
+
+        assert _DATE_COMMENT_RE.fullmatch(self.MULTI_LINE) is not None
+
+    def test_strip_currently_removes_a_multi_line_comment_entirely(self):
+        from pin_caps import _DATE_COMMENT_RE
+
+        assert _DATE_COMMENT_RE.sub("", self.MULTI_LINE) == ""
+
+    def test_the_per_line_discipline_lives_in_the_caller_not_the_pattern(self):
+        """The distinction that decides what a line-bounded repair must bind.
+
+        `parse_pins` splits with `splitlines()` before it matches, so the
+        attribution PATH is per-line. The pattern is not. A repair may bind
+        either one, and the two are different changes.
+        """
+        from pin_caps import parse_pins
+
+        pins = parse_pins(f"### P\n{self.MULTI_LINE}\n")
+        assert pins[0].date_comment is None
 
 
 class TestPinCommentBacktracking_Pipeline:

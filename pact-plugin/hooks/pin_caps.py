@@ -148,10 +148,23 @@ def _extract_body_chars(body: str) -> int:
     """Count body chars excluding auto-generated markers.
 
     The date comment and STALE marker are plugin-managed — they MUST NOT
-    count against the user's 1500-char budget. Prevents self-referential
-    inflation from override rationale + tool-generated markers.
+    count against the user's 1500-char budget.
+
+    The date-comment strip runs PER LINE. `parse_pins` attributes a comment
+    only after `splitlines()`, so a comment that spans a line break is not a
+    comment to the attribution path. An unanchored strip across the whole body
+    does not share that discipline: it runs from an unterminated marker
+    forward to the next `-->`, which may belong to a different pin, and
+    removes real prose from the count. A lower charge is not a safe error —
+    `compute_deny_reason` compares PRE against POST, so an under-counted PRE
+    is a lower bar for POST to clear and DENIES an edit that repairs the file.
+    Splitting first gives the strip the same notion of a line the attribution
+    path already has.
     """
-    stripped = _DATE_COMMENT_RE.sub("", body)
+    kept = []
+    for line in body.splitlines():
+        kept.append(_DATE_COMMENT_RE.sub("", line))
+    stripped = "\n".join(kept)
     stripped = _STALE_MARKER_RE.sub("", stripped)
     return len(stripped.strip())
 
