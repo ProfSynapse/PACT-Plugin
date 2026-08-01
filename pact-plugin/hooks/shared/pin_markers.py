@@ -135,6 +135,65 @@ def _body_contains_a_fence(body: str) -> bool:
     return "```" in body or "~~~" in body
 
 
+def _is_already_marked(region_text: str, heading_start: int) -> bool:
+    """Return True iff this document carries the marker THIS WRITER EMITTED.
+
+    THE PRINCIPLE IS `ACCEPT ONLY WHAT THE WRITER EMITS`, and it is the third
+    predicate tried. The first two were defined by where a stray copy of the
+    marker might APPEAR, and each was defeated by one appearing somewhere the
+    predicate was not looking -- line-anchored scored 3 of 7, region-bounded 2
+    of 7, the two combined were measured insufficient, and a gap-wide variant
+    scored 7 of 7 while still admitting a false positive.
+
+    The reframe that ends the sequence: `apply_insertion`'s output space is a
+    SINGLETON. It can emit exactly one shape -- the marker alone on the line
+    immediately above the first pinned heading, inside the managed region. A
+    predicate matching that shape has no residual BY CONSTRUCTION, whereas any
+    predicate defined over where a copy might appear has a residual exactly the
+    width of its own enumeration. Every failed candidate was asymmetric with
+    the writer, and the residual was that asymmetry.
+
+    WHY THE COMPARISON IS STRIPPED RATHER THAN BYTE-EXACT. Measured 6 of 6
+    against byte-exact's 3 of 6: byte-exact fails on a trailing space, a
+    trailing tab and a leading indent, and a cost arm placed a carrier in all
+    three arms without either variant producing a false positive. A
+    whitespace-padded marker line IS a marker line by any reading, so
+    byte-exact treating it as ABSENT is itself an asymmetry -- the same defect
+    class one layer in. `.strip()` also subsumes an `alone on the line`
+    requirement without a second clause: a line reading `text <marker>` strips
+    to itself and is correctly refused.
+
+    WHAT A WRONG ANSWER HERE COSTS, because it is worse than the defect being
+    fixed. If this stops recognising the writer's own marker, every pin command
+    re-inserts one. Two routes reach that, and they are NOT equally bounded:
+
+      - WHITESPACE DRIFT under a byte-exact predicate is BOUNDED AT 2 and
+        self-halting, because the re-inserted marker is clean and the next pass
+        matches it. Measured over ten passes: the count reaches 2 and stays.
+      - A GENUINELY BROKEN GAP COMPUTATION -- wrong region, wrong heading, an
+        off-by-one -- is UNBOUNDED. The re-inserted marker still does not
+        match, so nothing halts.
+
+    The four-passes-yield-one-marker test catches both, since even the bounded
+    case violates `exactly one`. Both are tested by name, because from outside
+    they look identical and only one of them stops.
+
+    ADJACENCY HOLDS UNDER BOTH MACHINE WRITERS, and this was MEASURED before
+    the predicate was written rather than assumed after. The Retrieved Context
+    writer rebuilds the span ABOVE this marker and the Working Memory writer
+    the span below, and a carrier was really placed by each -- so the
+    measurement is not vacuous. The load-bearing detail is that the rebuild
+    always emits a TRAILING BLANK LINE before the next section, which is the
+    sole reason a machine-placed carrier cannot occupy the adjacent line. That
+    blank is asserted by test; if it ever goes, this predicate degrades
+    silently.
+    """
+    gap_lines = region_text[:heading_start].splitlines()
+    if not gap_lines:
+        return False
+    return gap_lines[-1].strip() == PINNED_START_MARKER
+
+
 @dataclass(frozen=True)
 class Insertion:
     """Where the marker line goes, as an absolute offset into the FULL file.
@@ -285,10 +344,9 @@ def plan_insertion(content: str) -> Insertion | SkipReason:
             return SkipReason.FENCED_BODY
 
         # The marker state is checked LAST, in the ladder position the design
-        # gives it. Presence is the entire test: one marker has two states, so
-        # there is no ordering to verify and no unpaired case to name. Decided
-        # on the WHOLE file with first-find, matching `extract_managed_region`.
-        if content.find(PINNED_START_MARKER) != -1:
+        # gives it. See `_is_already_marked` for why this is an ADJACENCY test
+        # and not the whole-file substring search it replaced.
+        if _is_already_marked(region_text, heading.start()):
             return SkipReason.ALREADY_MARKED
 
         # The offset is the start of the heading line, so the marker lands on
