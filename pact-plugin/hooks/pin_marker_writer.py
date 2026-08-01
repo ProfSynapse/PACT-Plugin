@@ -2,11 +2,16 @@
 """
 Location: pact-plugin/hooks/pin_marker_writer.py
 
-Summary: Inserts the declared `## Pinned Context` marker pair into the project
+Summary: Inserts the declared `## Pinned Context` START marker into the project
 CLAUDE.md when, and only when, one of the two pin commands is invoked. Owns
 every side effect for that write -- stdin, path resolution, the file lock, the
-atomic write and the journal event. The decision of WHERE the markers go, and
-WHETHER they go in at all, belongs to `shared/pin_markers.py`, which is pure.
+atomic write and the journal event. The decision of WHERE the marker goes, and
+WHETHER it goes in at all, belongs to `shared/pin_markers.py`, which is pure.
+
+ONE MARKER, NOT A PAIR. There is no declared END marker. Its absence is the
+intended shipped state rather than an unfinished pair, so a file carrying this
+marker alone is CORRECT -- nothing here or downstream may read a missing end
+marker as an error or a repair opportunity.
 
 Used by: hooks.json, under TWO events running this same body, mirroring
 `bootstrap_marker_writer`'s dual registration:

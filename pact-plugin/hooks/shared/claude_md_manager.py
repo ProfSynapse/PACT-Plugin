@@ -156,14 +156,27 @@ MANAGED_END_MARKER = "<!-- PACT_MANAGED_END -->"
 MEMORY_START_MARKER = "<!-- PACT_MEMORY_START -->"
 MEMORY_END_MARKER = "<!-- PACT_MEMORY_END -->"
 
-# Declared boundary of the `## Pinned Context` section. The pinned region's
-# extent is INFERRED today -- every reader guesses where the section ends from
-# a terminator pattern. These two literals let the extent be DECLARED instead.
-# Nothing reads them yet; the writer that inserts them is pin_marker_writer.py.
+# Declared START boundary of the `## Pinned Context` section. The pinned
+# region's extent is INFERRED today -- every reader guesses where the section
+# ends from a terminator pattern. This literal declares where it BEGINS.
+# Nothing reads it yet; the writer that inserts it is pin_marker_writer.py.
 #
-# TWO PROPERTIES OF THESE EXACT NAMES ARE LOAD-BEARING, both measured:
+# THERE IS DELIBERATELY NO MATCHING END MARKER, and the reason is a measured
+# defect rather than an omission. A declared END that the terminator
+# alternation MATCHES stops the pinned scan AT the marker, so a pin appended
+# between it and the next heading is charged against no cap at all -- reachable
+# by an ordinary good-faith append, and durable, because the write then reports
+# the file as already marked and never revisits it. Renaming that END out of
+# the alternation fixes the hole and opens a worse one: the marker lands inside
+# the last pin's span and RAISES its charge, which is the mechanism that
+# manufactures a threshold deny. Both namings fail and the second fails in the
+# cardinal direction. A declared END is safe only alongside the strip that
+# uncharges it and a reader that treats it as a FLOOR rather than a ceiling, so
+# marker and strip are one unit and ship together, later.
 #
-# 1. BOTH names carry a `PACT_MEMORY_` prefix, so BOTH are matched by every
+# TWO PROPERTIES OF THIS EXACT NAME ARE LOAD-BEARING, both measured:
+#
+# 1. The name carries a `PACT_MEMORY_` prefix, so it is matched by every
 #    scan-terminator alternation built from PACT_BOUNDARY_PREFIXES below. That
 #    is not decoration. Canonical section order puts `## Retrieved Context`
 #    ABOVE `## Pinned Context`, so a start marker on a new line above the
@@ -172,20 +185,22 @@ MEMORY_END_MARKER = "<!-- PACT_MEMORY_END -->"
 #    match fails to terminate that scan, rides the last dated entry as a
 #    passenger, and is deleted when rotation evicts that entry -- or at the
 #    first save when the section holds no dated entry. A matched marker
-#    terminates the scan at the true end of Retrieved Context and lands in the
-#    span the rebuild preserves verbatim.
+#    terminates the scan at the true end of Retrieved Context.
 #
-# 2. NEITHER literal CONTAINS an existing marker literal as a substring, and
-#    the qualifier sits BEFORE the START and END words for that reason.
-#    `<!-- PACT_MEMORY_END_PINNED -->` would NOT contain `<!-- PACT_MEMORY_END
-#    -->` either, because of the trailing ` -->`, but that is a near miss
-#    rather than a margin. Containment matters because `extract_managed_region`
-#    uses first-find on both managed markers and session_resume runs an
-#    UNBOUNDED `content.replace(MEMORY_START_MARKER, ...)`: a literal that
-#    contained the memory start marker would collect a session block on every
-#    SessionStart.
+#    This marker cannot open the hole its absent END counterpart would, because
+#    its gap lies ABOVE the `## Pinned Context` heading and the pinned scan
+#    BEGINS at that heading. Gap content there is outside the pinned region by
+#    every reading, with a marker or without one. A boundary marker can only
+#    open an enforcement hole on the side where the section's content
+#    legitimately lives, and nothing above the heading calls itself a pin.
+#
+# 2. The literal CONTAINS no existing marker literal as a substring, and the
+#    qualifier sits BEFORE the START word for that reason. Containment matters
+#    because `extract_managed_region` uses first-find on both managed markers
+#    and session_resume runs an UNBOUNDED
+#    `content.replace(MEMORY_START_MARKER, ...)`: a literal that contained the
+#    memory start marker would collect a session block on every SessionStart.
 PINNED_START_MARKER = "<!-- PACT_MEMORY_PINNED_START -->"
-PINNED_END_MARKER = "<!-- PACT_MEMORY_PINNED_END -->"
 
 # Canonical H1 title for the managed block. Extracted as a constant so
 # the three template sites (ensure_project_memory_md, _build_migrated_content,

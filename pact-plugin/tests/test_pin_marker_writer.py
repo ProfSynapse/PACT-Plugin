@@ -1,7 +1,7 @@
 """
 Location: pact-plugin/tests/test_pin_marker_writer.py
 
-Summary: Pins the declared pinned-region marker pair, its pure planner, and the
+Summary: Pins the declared pinned-region START marker, its pure planner, and the
 hook that writes it. Two properties are merge gates and are proven
 MECHANICALLY rather than by reading the code:
 
@@ -37,11 +37,9 @@ from shared.claude_md_manager import (
     MEMORY_END_MARKER,
     MEMORY_START_MARKER,
     PACT_BOUNDARY_PREFIXES,
-    PINNED_END_MARKER,
     PINNED_START_MARKER,
 )
 from shared.pin_markers import (
-    END_LINE,
     START_LINE,
     Insertion,
     SkipReason,
@@ -102,8 +100,8 @@ def build_claude_md(
 class TestMarkerLiterals:
     """The names are load-bearing, so their properties are pinned, not assumed."""
 
-    def test_both_markers_join_every_terminator_alternation(self):
-        """Both names must be MATCHED by all three scanners that infer a
+    def test_the_marker_joins_every_terminator_alternation(self, monkeypatch):
+        """The name must be MATCHED by all three scanners that infer a
         section end.
 
         An unmatched start marker does not terminate the Retrieved Context
@@ -117,8 +115,12 @@ class TestMarkerLiterals:
         for the skills side -- so this measures the real rule rather than a
         copy of it.
         """
-        sys.path.insert(
-            0, str(Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts")
+        # `syspath_prepend` is reverted by pytest when the test ends. A bare
+        # `sys.path.insert(0, ...)` here would OUTLIVE this test and re-order
+        # imports for everything after it in the session -- the shape that
+        # produced a full-suite-only failure elsewhere in this suite.
+        monkeypatch.syspath_prepend(
+            str(Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts")
         )
         from working_memory import _PACT_BOUNDARY_ALT
 
@@ -134,7 +136,7 @@ class TestMarkerLiterals:
                 rf'(#\s|##\s(?!Retrieved Context)|---|<!-- (?:{_PACT_BOUNDARY_ALT}))'
             ),
         }
-        for marker in (PINNED_START_MARKER, PINNED_END_MARKER):
+        for marker in (PINNED_START_MARKER,):
             for name, pattern in alternations.items():
                 assert pattern.match(marker), (
                     f"{marker} is NOT matched by the {name}. An unmatched "
@@ -165,13 +167,12 @@ class TestMarkerLiterals:
         a literal containing THAT would collect a session block on every
         SessionStart.
         """
-        for new in (PINNED_START_MARKER, PINNED_END_MARKER):
+        for new in (PINNED_START_MARKER,):
             assert existing not in new
             assert new not in existing
 
-    def test_marker_lines_are_the_markers_plus_one_newline(self):
+    def test_marker_line_is_the_marker_plus_one_newline(self):
         assert START_LINE == PINNED_START_MARKER + "\n"
-        assert END_LINE == PINNED_END_MARKER + "\n"
 
 
 # --------------------------------------------------------------------------
@@ -214,76 +215,129 @@ class TestExpelNothing:
 
         # Restated independently of the function under test, so a certificate
         # that silently degraded to `return True` cannot carry this test.
-        assert len(new) == len(old) + len(START_LINE) + len(END_LINE)
-        assert new.replace(START_LINE, "").replace(END_LINE, "") == old
+        assert len(new) == len(old) + len(START_LINE)
+        assert new.replace(START_LINE, "") == old
 
         # Every original character survives in its original order.
-        stripped = new.replace(START_LINE, "").replace(END_LINE, "")
-        assert stripped == old
-        assert old in new.replace(START_LINE, "").replace(END_LINE, "")
+        assert old in new.replace(START_LINE, "")
 
     @pytest.mark.parametrize("label,pinned_body", PIN_TABLE, ids=[r[0] for r in PIN_TABLE])
-    def test_markers_land_in_the_right_place(self, label, pinned_body):
-        """Placement is pinned SEPARATELY, because the certificate does not
-        prove it.
+    def test_the_marker_lands_in_the_right_place(self, label, pinned_body):
+        """Placement is pinned SEPARATELY, and it is now the ONLY thing
+        constraining the offset at all.
 
-        Measured: the certificate passes for ANY well-ordered offset pair --
-        splicing the two lines at offsets 5 and 6 satisfies both of its
-        assertions. It proves nothing was expelled; it says nothing about
-        where the markers went. So the placement contract needs its own
-        assertions or it is unpinned.
+        MEASURED: with a single splice point the certificate returns True at
+        EVERY offset from 0 to len(old) -- a splice point cannot cross itself,
+        so no offset can drop a byte. Before the end marker was removed the
+        offset had two independent constraints, the certificate refusing
+        crossed offsets and these assertions. Now it has one. If this test is
+        weakened or deleted, nothing anywhere checks where the marker went.
         """
         old = build_claude_md(pinned_body=pinned_body)
         planned = plan_insertion(old)
         new = apply_insertion(old, planned)
 
-        # The start marker sits immediately ABOVE the pinned heading.
-        after_start = new.split(START_LINE, 1)[1]
-        assert after_start.startswith("## Pinned Context"), (
-            f"{label}: the line after the start marker is not the pinned heading"
+        # The marker sits immediately ABOVE the pinned heading, on its own line.
+        after_marker = new.split(START_LINE, 1)[1]
+        assert after_marker.startswith("## Pinned Context"), (
+            f"{label}: the line after the marker is not the pinned heading"
         )
 
-        # The end marker sits immediately ABOVE the terminator, and on the
-        # measured corpus that terminator is the Working Memory heading.
-        after_end = new.split(END_LINE, 1)[1]
-        assert after_end.startswith("## Working Memory"), (
-            f"{label}: the line after the end marker is not the terminator"
+        # It sits BELOW the retrieved-context section it terminates, so the
+        # heading it declares is the pinned one and not some earlier section.
+        before_marker = new.split(START_LINE, 1)[0]
+        assert before_marker.endswith("\n"), (
+            f"{label}: the marker does not begin its own line"
+        )
+        assert "## Retrieved Context" in before_marker
+
+        # The whole pinned body still follows it, unmoved.
+        assert pinned_body.strip()[:20] in after_marker
+
+    def test_placement_assertions_can_actually_fail(self):
+        """NON-VACUITY FOR PLACEMENT, and it exists because of what the END
+        removal took away.
+
+        The retired crossed-offset arm proved the CERTIFICATE could refuse a
+        bad offset. With one splice point that arm is unconstructible -- there
+        is no second offset to cross -- and the certificate accepts every
+        offset. So placement became the sole offset constraint, and it was the
+        only guard in this file with nothing proving it can redden.
+
+        This is the heir to that arm. It builds a deliberately wrong placement,
+        shows the CERTIFICATE ACCEPTS it, and shows the placement assertion
+        REJECTS it. Do NOT read this as a duplicate of the happy-path placement
+        test above and delete it: that test proves the good case passes, this
+        one proves the bad case is caught, and only together do they constrain
+        anything.
+        """
+        old = build_claude_md()
+        wrong = Insertion(start_offset=0, start_line=START_LINE)
+        damaged = apply_insertion(old, wrong)
+
+        # The certificate is perfectly happy with it.
+        assert certify_expel_nothing(old, damaged, wrong) is True, (
+            "if this ever fails, the certificate has regained an offset "
+            "constraint and placement is no longer the sole guard"
         )
 
-        # The pair is ordered, and the whole pinned body sits between them.
-        assert new.index(PINNED_START_MARKER) < new.index(PINNED_END_MARKER)
-        between = new.split(START_LINE, 1)[1].split(END_LINE, 1)[0]
-        assert "## Pinned Context" in between
-        assert pinned_body.strip()[:20] in between
+        # The placement assertion is not.
+        after_marker = damaged.split(START_LINE, 1)[1]
+        assert not after_marker.startswith("## Pinned Context"), (
+            "the deliberately wrong placement was not detectable, so the "
+            "placement assertions cannot catch a misplaced marker"
+        )
 
     def test_certificate_refuses_a_composition_that_drops_bytes(self):
-        """NON-VACUITY. The certificate must REFUSE a real defect, or its
-        green means nothing.
+        """NON-VACUITY for the certificate. It must REFUSE a real defect, or
+        its green means nothing.
 
-        Crossed offsets are the reachable planner bug: they splice over the
-        bytes between the two points and drop them. This is the mutation arm
-        for merge gate 1 -- if the certificate ever degrades to a constant
-        True, this test reddens.
+        The defect it can still catch is a MIS-ASSEMBLED composition, not a bad
+        offset. `apply_insertion` is now the only place a byte-losing bug can
+        enter, so the mutation is applied there: this splice drops one byte.
         """
         old = build_claude_md()
         good = plan_insertion(old)
         assert isinstance(good, Insertion)
 
-        crossed = Insertion(
-            start_offset=good.end_offset,
-            end_offset=good.start_offset,
-            start_line=START_LINE,
-            end_line=END_LINE,
-        )
-        damaged = apply_insertion(old, crossed)
+        # A byte-dropping splice -- the shape a careless edit to
+        # `apply_insertion` would produce.
+        o = good.start_offset
+        damaged = old[:o] + START_LINE + old[o + 1:]
 
         # The damage is real: content was actually lost.
-        assert len(damaged) != len(old) + len(START_LINE) + len(END_LINE)
-        assert certify_expel_nothing(old, damaged, crossed) is False
+        assert len(damaged) != len(old) + len(START_LINE)
+        assert certify_expel_nothing(old, damaged, good) is False
+
+    @pytest.mark.parametrize("label,mutate", [
+        ("drops a byte", lambda c, o: c[:o] + START_LINE + c[o + 1:]),
+        ("duplicates a byte", lambda c, o: c[:o + 1] + START_LINE + c[o:]),
+        ("inserts the marker twice", lambda c, o: c[:o] + START_LINE + START_LINE + c[o:]),
+        ("omits the newline", lambda c, o: c[:o] + START_LINE.rstrip("\n") + c[o:]),
+        ("reorders the tail", lambda c, o: c[:o] + START_LINE + c[o:][::-1]),
+    ])
+    def test_every_assembly_mutation_is_refused(self, label, mutate):
+        """The certificate's real remaining scope, enumerated.
+
+        Each of these is a way `apply_insertion` could be broken by a future
+        edit. All must be refused; the correct assembly is the control below.
+        """
+        old = build_claude_md()
+        good = plan_insertion(old)
+        assert certify_expel_nothing(
+            old, mutate(old, good.start_offset), good
+        ) is False, f"{label} was NOT refused"
+
+    def test_the_correct_assembly_is_accepted(self):
+        """CONTROL for the mutation table above. Without it, a certificate that
+        refused everything would pass every row while blocking every write."""
+        old = build_claude_md()
+        good = plan_insertion(old)
+        assert certify_expel_nothing(old, apply_insertion(old, good), good) is True
 
     def test_certificate_refuses_when_the_file_already_quotes_a_marker(self):
-        """Driven DIRECTLY, because in the assembled write the ordered-pair
-        check refuses this file earlier.
+        """Driven DIRECTLY, because in the assembled write the presence check
+        in `plan_insertion` refuses this file earlier.
 
         The two mechanisms are independent on purpose and neither may be
         removed on the ground that the other covers it, so each is pinned on
@@ -292,12 +346,12 @@ class TestExpelNothing:
         old = build_claude_md(
             pinned_body="### A pin\nI wrote " + START_LINE + "in my notes\n\n"
         )
-        forced = Insertion(0, len(old), START_LINE, END_LINE)
+        forced = Insertion(0, START_LINE)
         new = apply_insertion(old, forced)
         assert certify_expel_nothing(old, new, forced) is False
 
     def test_certificate_never_raises(self):
-        forced = Insertion(0, 0, START_LINE, END_LINE)
+        forced = Insertion(0, START_LINE)
         assert certify_expel_nothing(None, None, forced) is False
         assert certify_expel_nothing(1, 2, forced) is False
 
@@ -470,8 +524,25 @@ class TestTerminatorParityWithTheReader:
     @pytest.mark.parametrize(
         "label,tail", TERMINATOR_CORPUS, ids=[r[0] for r in TERMINATOR_CORPUS]
     )
-    def test_declared_end_equals_the_readers_inferred_end(self, label, tail):
+    def test_the_planners_body_extent_equals_the_readers(self, label, tail):
+        """RE-ANCHORED after the END marker was removed, and the re-anchoring
+        is the point.
+
+        This guard used to compare the offset the write DECLARED against the
+        offset the reader INFERRED. There is no declared end any more, so that
+        comparison has no left-hand side. The twin-drift RISK did not go away
+        with it: this planner still compiles its own terminator, and still uses
+        it to decide whether the body is empty and whether it is fenced. What
+        changed is the CONSEQUENCE of drift, not its possibility.
+
+        So the property moves to the extent both implementations measure. If
+        the two terminators ever disagree, the planner and the live reader see
+        different pinned bodies, and this reddens.
+        """
         from staleness import _parse_pinned_section
+        from shared.claude_md_manager import extract_managed_region
+        from shared.pin_markers import _PINNED_HEADING, _PINNED_TERMINATOR
+        from staleness import _find_terminator_offset
 
         doc = (
             "# User heading\n\n"
@@ -480,28 +551,29 @@ class TestTerminatorParityWithTheReader:
             + tail
             + MANAGED_END_MARKER + "\ntrailing\n"
         )
-        planned = plan_insertion(doc)
         parsed = _parse_pinned_section(doc)
         assert parsed is not None, f"{label}: the reader found no pinned section"
-        assert isinstance(planned, Insertion), f"{label}: planner refused"
 
-        _reader_start, reader_end, _content = parsed
-        assert planned.end_offset == reader_end, (
-            f"{label}: the write would DECLARE the section ending at "
-            f"{planned.end_offset} while the reader INFERS {reader_end}. The "
-            "two terminator definitions have drifted."
+        region_text, _start = extract_managed_region(doc)
+        heading = _PINNED_HEADING.search(region_text)
+        planner_body = region_text[
+            heading.end():
+            _find_terminator_offset(region_text, heading.end(), _PINNED_TERMINATOR)
+        ]
+        assert planner_body == parsed[2], (
+            f"{label}: the planner measures a different pinned body than the "
+            "reader infers. The two terminator definitions have drifted."
         )
 
     def test_the_parity_check_can_actually_fail(self, monkeypatch):
         """NON-VACUITY, by mutating the twin rather than the caller.
 
-        If the planner's terminator is changed so the two implementations
-        genuinely disagree, the parity assertion above must redden. Without
-        this arm, a parity test that compared a value to itself would pass
-        forever while guarding nothing.
+        Without this arm a parity test that compared a value to itself would
+        pass forever while guarding nothing.
         """
         import shared.pin_markers as pin_markers
-        from staleness import _parse_pinned_section
+        from staleness import _parse_pinned_section, _find_terminator_offset
+        from shared.claude_md_manager import extract_managed_region
 
         doc = (
             "# User heading\n\n"
@@ -510,22 +582,40 @@ class TestTerminatorParityWithTheReader:
             + "## Working Memory\n\nentry\n"
             + MANAGED_END_MARKER + "\ntrailing\n"
         )
+
+        def planner_body():
+            region_text, _s = extract_managed_region(doc)
+            h = pin_markers._PINNED_HEADING.search(region_text)
+            return region_text[
+                h.end():
+                _find_terminator_offset(
+                    region_text, h.end(), pin_markers._PINNED_TERMINATOR
+                )
+            ]
+
         # Sanity: they agree before the mutation.
-        assert plan_insertion(doc).end_offset == _parse_pinned_section(doc)[1]
+        assert planner_body() == _parse_pinned_section(doc)[2]
 
         # Mutate the planner's terminator so it no longer stops on an H2.
         monkeypatch.setattr(
             pin_markers, "_PINNED_TERMINATOR",
             re.compile(r'(?:<!-- (?:PACT_MEMORY_|PACT_MANAGED_|PACT_ROUTING_))'),
         )
-        drifted = plan_insertion(doc)
-        assert drifted.end_offset != _parse_pinned_section(doc)[1], (
+        assert planner_body() != _parse_pinned_section(doc)[2], (
             "the mutated planner still agreed with the reader, so the parity "
             "assertion cannot detect drift"
         )
 
 
-class TestOrderedPairIdempotence:
+class TestIdempotenceOnASingleMarker:
+    """Idempotence for ONE marker is a PRESENCE check and nothing more.
+
+    The state space is exactly two -- the marker is in the file or it is not.
+    There is no ordering to verify and no unpaired case to name, because
+    ordering needs two things to order. The former `inverted_pair` and
+    `unpaired` outcomes described states only a pair could occupy and were
+    DELETED rather than left unreachable behind a comment.
+    """
 
     def test_second_pass_is_a_noop(self):
         old = build_claude_md()
@@ -538,35 +628,42 @@ class TestOrderedPairIdempotence:
         assert plan_insertion(once) is SkipReason.ALREADY_MARKED
         assert plan_insertion(once) is SkipReason.ALREADY_MARKED
 
-    def test_inverted_pair_is_detected_and_not_repaired(self):
-        """A presence-only check reports an inverted pair as correct, and the
-        second write then adds nothing -- silently, in the direction that looks
-        like success. Migration can produce this state by re-emitting the
-        sections in canonical order.
+    def test_repeated_application_never_doubles_the_marker(self):
+        old = build_claude_md()
+        text = old
+        for _ in range(4):
+            planned = plan_insertion(text)
+            if isinstance(planned, Insertion):
+                text = apply_insertion(text, planned)
+        assert text.count(PINNED_START_MARKER) == 1
+
+    def test_a_lone_marker_is_the_intended_state_not_an_error(self):
+        """A file carrying this marker and no closing one is CORRECT.
+
+        Pinned explicitly because the previous shape treated exactly this
+        document as `unpaired` -- an error state. Anything that reintroduces
+        that reading is now wrong, so this test names the reversal rather than
+        relying on the absent branch being noticed.
         """
         old = build_claude_md()
-        inverted = old.replace(
-            "## Pinned Context\n", END_LINE + "## Pinned Context\n"
-        ).replace("## Working Memory\n", START_LINE + "## Working Memory\n")
-        assert plan_insertion(inverted) is SkipReason.INVERTED_PAIR
+        marked = apply_insertion(old, plan_insertion(old))
+        assert marked.count(PINNED_START_MARKER) == 1
+        outcome = plan_insertion(marked)
+        assert outcome is SkipReason.ALREADY_MARKED
+        assert outcome is not SkipReason.PLAN_FAILED
+        assert not hasattr(SkipReason, "UNPAIRED")
+        assert not hasattr(SkipReason, "INVERTED_PAIR")
 
-    @pytest.mark.parametrize("line", [START_LINE, END_LINE])
-    def test_unpaired_marker_is_detected_and_not_repaired(self, line):
+    def test_presence_is_detected_wherever_the_marker_sits(self):
+        """NON-VACUITY for the presence check: a marker anywhere in the file
+        must be seen, so the check cannot be an accident of position."""
         old = build_claude_md()
-        unpaired = old.replace("## Pinned Context\n", line + "## Pinned Context\n")
-        assert plan_insertion(unpaired) is SkipReason.UNPAIRED
-
-    def test_presence_only_would_have_passed_the_inverted_case(self):
-        """NON-VACUITY for the ordering half. Proves the inverted document
-        really does satisfy the weaker check that was rejected, so the test
-        above is measuring the ordering and not merely presence.
-        """
-        old = build_claude_md()
-        inverted = old.replace(
-            "## Pinned Context\n", END_LINE + "## Pinned Context\n"
-        ).replace("## Working Memory\n", START_LINE + "## Working Memory\n")
-        assert PINNED_START_MARKER in inverted and PINNED_END_MARKER in inverted
-        assert inverted.index(PINNED_END_MARKER) < inverted.index(PINNED_START_MARKER)
+        for placed in (
+            START_LINE + old,
+            old.replace("## Working Memory", START_LINE + "## Working Memory"),
+            old + START_LINE,
+        ):
+            assert plan_insertion(placed) is SkipReason.ALREADY_MARKED
 
 
 # --------------------------------------------------------------------------
@@ -811,7 +908,7 @@ class TestEndToEnd:
         (tmp_path / "CLAUDE.md").write_text(content, encoding="utf-8")
         return tmp_path / "CLAUDE.md"
 
-    def test_pin_command_writes_the_pair_and_changes_nothing_else(self, tmp_path):
+    def test_pin_command_writes_the_marker_and_changes_nothing_else(self, tmp_path):
         original = build_claude_md()
         target = self._project(tmp_path, original)
 
@@ -824,10 +921,9 @@ class TestEndToEnd:
         written = target.read_text(encoding="utf-8")
         assert written != original, "the write did not happen"
         assert PINNED_START_MARKER in written
-        assert PINNED_END_MARKER in written
         # The same certificate the writer applies, re-applied from outside.
-        assert len(written) == len(original) + len(START_LINE) + len(END_LINE)
-        assert written.replace(START_LINE, "").replace(END_LINE, "") == original
+        assert len(written) == len(original) + len(START_LINE)
+        assert written.replace(START_LINE, "") == original
 
     def test_an_ordinary_prompt_does_not_touch_the_file(self, tmp_path):
         original = build_claude_md()
@@ -861,7 +957,7 @@ class TestEndToEnd:
         assert target.read_text(encoding="utf-8") == original
         assert "## Pinned Context" not in target.read_text(encoding="utf-8")
 
-    def test_running_twice_writes_the_pair_exactly_once(self, tmp_path):
+    def test_running_twice_writes_the_marker_exactly_once(self, tmp_path):
         original = build_claude_md()
         target = self._project(tmp_path, original)
         for _ in range(3):
@@ -873,7 +969,6 @@ class TestEndToEnd:
             assert rc == 0
         written = target.read_text(encoding="utf-8")
         assert written.count(PINNED_START_MARKER) == 1
-        assert written.count(PINNED_END_MARKER) == 1
 
     def test_a_fenced_pinned_body_is_left_untouched(self, tmp_path):
         original = build_claude_md(
@@ -1033,5 +1128,4 @@ def test_no_reader_is_wired_to_the_markers():
     """
     staleness_source = (HOOKS_DIR / "staleness.py").read_text(encoding="utf-8")
     assert "PINNED_START_MARKER" not in staleness_source
-    assert "PINNED_END_MARKER" not in staleness_source
     assert "pin_markers" not in staleness_source

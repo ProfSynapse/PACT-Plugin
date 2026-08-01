@@ -2,10 +2,16 @@
 """
 Location: pact-plugin/hooks/shared/pin_markers.py
 
-Summary: Pure planner for the declared `## Pinned Context` marker pair. Decides
-WHERE the two markers go and WHETHER they go in at all, composes the new file
+Summary: Pure planner for the declared `## Pinned Context` START marker. Decides
+WHERE the marker goes and WHETHER it goes in at all, composes the new file
 content, and certifies that the composition expelled nothing. No I/O, no
 filesystem, no hook frame, no exceptions.
+
+ONE MARKER, NOT A PAIR. There is no declared END, and its absence is the
+intended state rather than a half-finished pair -- see `claude_md_manager` at
+the constant for the measured reason. Everything here is written for a single
+insertion point: one offset, one literal, and a presence check rather than an
+ordering check.
 
 Used by: `hooks/pin_marker_writer.py`, which owns every side effect -- stdin,
 path resolution, the file lock, the atomic write and the journal. That split is
@@ -19,12 +25,13 @@ hook process and no disk. Folding these three functions into the hook script
 would satisfy every other constraint on this feature and still lose that.
 
 THE SHAPE OF THE WRITE IS THE SAFETY ARGUMENT. The insertion is PURE OFFSET
-INSERTION: two literals are spliced in at two computed offsets and no existing
+INSERTION: one literal is spliced in at one computed offset and no existing
 byte is parsed, rewritten, reordered or dropped. The alternative shape -- parse
 the region into entries and rebuild the text from them -- silently deletes
 whatever it does not recognise, and the target file is gitignored and
 unrecoverable. Pure insertion also supports a MECHANICAL certificate, which a
-rebuild cannot satisfy: see `certify_expel_nothing`.
+rebuild cannot satisfy: see `certify_expel_nothing`, and read its scope note
+before trusting it to cover placement, because it does not.
 """
 
 from __future__ import annotations
@@ -35,7 +42,6 @@ from enum import Enum
 
 from shared.claude_md_manager import (
     PACT_BOUNDARY_PREFIXES,
-    PINNED_END_MARKER,
     PINNED_START_MARKER,
     extract_managed_region,
 )
@@ -86,11 +92,10 @@ _PINNED_TERMINATOR = re.compile(rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}))')
 # second one is ignored, which matches every existing reader of this region.
 _PINNED_HEADING = re.compile(r'^## Pinned Context\s*\n', re.MULTILINE)
 
-# The literal lines that get spliced in. The trailing newline is part of the
-# unit: the certificate below is stated over these LINES, not over the bare
-# markers, so a marker and its newline can never be accounted separately.
+# The literal line that gets spliced in. The trailing newline is part of the
+# unit: the certificate below is stated over this LINE, not over the bare
+# marker, so the marker and its newline can never be accounted separately.
 START_LINE = PINNED_START_MARKER + "\n"
-END_LINE = PINNED_END_MARKER + "\n"
 
 
 def _body_contains_a_fence(body: str) -> bool:
@@ -132,17 +137,19 @@ def _body_contains_a_fence(body: str) -> bool:
 
 @dataclass(frozen=True)
 class Insertion:
-    """Where the two marker lines go, in absolute offsets into the FULL file.
+    """Where the marker line goes, as an absolute offset into the FULL file.
 
-    Carries the literals but NOT the new content. The writer composes the new
+    ONE offset and ONE literal. There is no end-side pair, so there is also no
+    ordering between two offsets to get wrong -- and, as the certificate's
+    scope note records, no offset the certificate can reject either.
+
+    Carries the literal but NOT the new content. The writer composes the new
     content through `apply_insertion`, so exactly one site in the codebase
     assembles these bytes and the certificate can wrap that one site.
     """
 
     start_offset: int   # start of the `## Pinned Context` heading line
-    end_offset: int     # start of the terminator line that ends the body
     start_line: str
-    end_line: str
 
 
 class SkipReason(str, Enum):
@@ -150,8 +157,17 @@ class SkipReason(str, Enum):
     precondition refused rather than only that nothing occurred.
 
     `plan_insertion` returns one of these instead of None for that reason: a
-    bare None collapses six distinct outcomes into one and makes a test unable
+    bare None collapses the distinct outcomes into one and makes a test unable
     to assert the ladder step that was reached.
+
+    THERE IS NO `inverted_pair` AND NO `unpaired`, and their absence is
+    deliberate. Both described states that only a two-marker pair can occupy.
+    With one marker the state space is exactly two -- present or absent -- so
+    those members became unreachable, and an unreachable enum member is the
+    dead reference a later reader takes as live. They were deleted rather than
+    kept behind a comment: unreachable is fine, silently unreachable is not,
+    and a deleted member cannot be misread while a commented one relies on the
+    comment being read.
     """
 
     NOT_MIGRATED = "noop_not_migrated"
@@ -160,9 +176,7 @@ class SkipReason(str, Enum):
     # The pinned body contains a fenced code block. See `_body_contains_a_fence`.
     FENCED_BODY = "noop_fenced_body"
     ALREADY_MARKED = "already_marked"
-    INVERTED_PAIR = "inverted_pair"
-    UNPAIRED = "unpaired"
-    # Totality guard. The six above enumerate every DESIGNED outcome; this one
+    # Totality guard. The five above enumerate every DESIGNED outcome; this one
     # exists so the function can promise it never raises without that promise
     # depending on a saturated type. Every operation in `plan_insertion` is a
     # string or regex operation on a `str` and none of them can raise for a
@@ -177,30 +191,35 @@ def plan_insertion(content: str) -> Insertion | SkipReason:
 
     The precondition order is load-bearing and is checked in this sequence:
 
-    1. The file carries a PACT-managed region. A file migration has not
-       processed is REFUSED, because migration re-emits the three memory
-       sections in canonical order and can therefore emit an end marker before
-       a start marker on a file whose sections currently sit in another order.
-       Refusing here is the cheap remedy; the alternative changes migration
-       itself. It costs no coverage, and costs none STRUCTURALLY rather than by
-       luck: migration emits the `## Pinned Context` heading and the managed
-       marker by the same mechanism, so no file can carry the heading without
-       the marker.
+    1. The file carries a PACT-managed region. This is REQUIRED MECHANICALLY,
+       not merely prudent: the region is the coordinate system the offset is
+       expressed in, and a file migration has not processed supplies none. Its
+       coverage cost is zero STRUCTURALLY rather than by luck, because
+       migration emits the `## Pinned Context` heading and the managed marker
+       by the same mechanism, so no file can carry the heading without the
+       marker.
+
+       NOTE FOR ANYONE REVISITING THIS STEP: it once carried a second
+       justification -- that migration re-emits sections in canonical order and
+       could therefore emit an END marker before a START marker, inverting a
+       byte-correct pair. That reason RETIRED WITH THE PAIR. One marker cannot
+       be inverted. The step survives on the mechanical ground alone, which is
+       sufficient on its own.
     2. A `## Pinned Context` heading exists inside that region. Most files do
-       not have one. Placing a pair there would mean CREATING the section,
+       not have one. Placing a marker there would mean CREATING the section,
        which is an insert above pre-existing content and is exactly the
        destructive shape this write is forbidden to perform.
     3. The pinned body is non-empty. An empty section reads as ABSENT to the
-       only current reader of this region, which returns None for it, so a pair
-       around it would declare a boundary that no consumer believes in. Such a
+       only current reader of this region, which returns None for it, so a
+       boundary declared around it is one no consumer believes in. Such a
        section is a migration-emitted heading with nothing under it, so no-op
        here skips a heading the plugin itself wrote, never a user's content.
     4. The measured body contains NO fenced-code marker. The terminator scan is
-       not fence aware, so on a fenced body the offset it returns cannot be
+       not fence aware, so on a fenced body the extent it reports cannot be
        trusted and the write refuses rather than guesses. See
        `_body_contains_a_fence` for why the predicate is a bare substring test
        and why nothing cleverer is safe.
-    5. Both markers are absent.
+    5. The marker is absent.
 
     NO READER IS CHANGED BY ANY OF THIS. The fence-blindness lives in
     `_find_terminator_offset`, which every existing consumer of this region
@@ -210,13 +229,20 @@ def plan_insertion(content: str) -> Insertion | SkipReason:
     over-block introduced BY the repair. So this planner refuses the shapes it
     cannot read safely and leaves the reader exactly as it found it.
 
-    IDEMPOTENCE IS AN ORDERED CHECK, NOT A PRESENCE CHECK. A presence-only test
-    reports an INVERTED pair as correct, and the second write then adds nothing
-    -- silently, in the direction that looks like success. So the start marker
-    must be found BEFORE the end marker, and every other combination is a
-    reported no-op. This function never repairs a boundary: moving or deleting
-    an existing marker mutates existing bytes, which the pure-insertion shape
-    excludes and the certificate cannot cover.
+    IDEMPOTENCE IS A PRESENCE CHECK, AND FOR ONE MARKER THAT IS THE WHOLE OF
+    IT. The state space is exactly two: the marker is in the file, or it is
+    not. Absent, the write runs. Present, the file is already marked and the
+    write is a no-op. There is no third state to name, because ordering needs
+    two things to order and pairing needs two things to pair.
+
+    A FILE CARRYING THIS MARKER AND NO CLOSING ONE IS CORRECT, NOT BROKEN. That
+    is the intended shipped shape. Nothing here may treat a missing end marker
+    as an error, an incomplete write, or a repair opportunity -- there is no
+    end marker to miss.
+
+    This function never repairs a boundary: moving or deleting an existing
+    marker mutates existing bytes, which the pure-insertion shape excludes and
+    the certificate cannot cover.
     """
     try:
         region = extract_managed_region(content)
@@ -244,32 +270,20 @@ def plan_insertion(content: str) -> Insertion | SkipReason:
             return SkipReason.FENCED_BODY
 
         # The marker state is checked LAST, in the ladder position the design
-        # gives it. On an already-marked file the checks above all pass -- the
-        # end marker matches the terminator alternation, so the body measured
-        # here is the real body and is non-empty -- and this branch reports
-        # `already_marked`. The order only changes WHICH no-op reason is
-        # journalled in states that combine a marker with a missing region or
-        # section, and every one of those outcomes is a no-op either way.
-        #
-        # Decided on the WHOLE file with first-find on each literal, matching
-        # `extract_managed_region`.
-        start_at = content.find(PINNED_START_MARKER)
-        end_at = content.find(PINNED_END_MARKER)
-        if start_at != -1 and end_at != -1:
-            return (
-                SkipReason.ALREADY_MARKED if start_at < end_at
-                else SkipReason.INVERTED_PAIR
-            )
-        if start_at != -1 or end_at != -1:
-            return SkipReason.UNPAIRED
+        # gives it. Presence is the entire test: one marker has two states, so
+        # there is no ordering to verify and no unpaired case to name. Decided
+        # on the WHOLE file with first-find, matching `extract_managed_region`.
+        if content.find(PINNED_START_MARKER) != -1:
+            return SkipReason.ALREADY_MARKED
 
-        # `heading.end() > heading.start()` and the terminator is found at or
-        # after `body_from`, so the start offset is always below the end one.
+        # The offset is the start of the heading line, so the marker lands on
+        # its own line immediately above it. `rel_end` above bounded the body
+        # for the emptiness and fence checks; it is deliberately NOT used as an
+        # offset, because this write declares where the region BEGINS and takes
+        # no position on where it ends.
         return Insertion(
             start_offset=region_start + heading.start(),
-            end_offset=region_start + rel_end,
             start_line=START_LINE,
-            end_line=END_LINE,
         )
     except Exception:  # noqa: BLE001 -- totality guard; see SkipReason.PLAN_FAILED
         return SkipReason.PLAN_FAILED
@@ -278,25 +292,25 @@ def plan_insertion(content: str) -> Insertion | SkipReason:
 def apply_insertion(content: str, ins: Insertion) -> str:
     """Compose the new content. The ONLY site that assembles these bytes.
 
-    The start marker line goes ABOVE the `## Pinned Context` heading and the end
-    marker line goes on its own line immediately above the terminator, so the
-    pair wraps the heading and the body where they already sit. Nothing between
-    the two offsets is read, and nothing outside them is touched.
+    The marker line goes ABOVE the `## Pinned Context` heading, on its own line,
+    so the heading and its body stay exactly where they already sit. One splice
+    at one point: nothing is read between offsets, and nothing is rewritten.
 
-    The body may end in blank lines. The end offset stays the terminator line's
-    start, so the end marker lands after those blank lines and they survive.
+    THIS IS THE FUNCTION THE CERTIFICATE ACTUALLY GUARDS. With a single splice
+    point no offset can drop bytes, so a defect here can no longer come from
+    choosing the wrong place -- it can only come from mis-assembling the pieces.
+    Any edit to this expression is therefore the thing to certify, and the
+    certificate's mutation arm exists to prove it can still catch one.
     """
     return (
         content[:ins.start_offset]
         + ins.start_line
-        + content[ins.start_offset:ins.end_offset]
-        + ins.end_line
-        + content[ins.end_offset:]
+        + content[ins.start_offset:]
     )
 
 
 def certify_expel_nothing(old: str, new: str, ins: Insertion) -> bool:
-    """Return True iff `new` is `old` plus exactly the two marker lines.
+    """Return True iff `new` is `old` plus exactly the one marker line.
 
     THIS IS A REFUSAL, NOT A TEST. The writer runs it before the write and
     skips the write when it returns False, so a composition that cannot be
@@ -305,43 +319,49 @@ def certify_expel_nothing(old: str, new: str, ins: Insertion) -> bool:
 
     Two assertions, and the second is not redundant with the first:
 
-    - the length grew by exactly the two lines, which catches a dropped or
+    - the length grew by exactly the marker line, which catches a dropped or
       duplicated byte anywhere in the file;
-    - removing every occurrence of both lines from `new` reproduces `old`
+    - removing every occurrence of that line from `new` reproduces `old`
       exactly, which catches a byte that moved without the length changing.
 
-    THE `.replace` IS DELIBERATELY UNBOUNDED. If `old` quotes one of these
-    marker literals in the user's own prose, an unbounded replace strips that
+    THE `.replace` IS DELIBERATELY UNBOUNDED. If `old` quotes the marker
+    literal in the user's own prose, an unbounded replace strips that
     occurrence from `new` while the one in `old` remains, the equality fails,
     and the write is refused. A count-limited replace would mask exactly that
     case. This guard therefore needs no census of how often such prose occurs.
 
-    WHAT THIS DOES AND DOES NOT CERTIFY -- measured, not reasoned, because the
-    honest scope is narrower than the word "certificate" suggests:
+    ITS SCOPE NARROWED WHEN THE SECOND MARKER WENT, AND THE NARROWING IS
+    MEASURED RATHER THAN ARGUED. Run at EVERY offset from 0 to len(old), on
+    documents of several shapes, the certificate returned True in every single
+    case -- 160 offsets on a realistic file, and every offset of an empty
+    string, a newlines-only string and a near-miss prefix.
 
-    - CAUGHT: offsets that cross, or an end offset pulled back before its
-      start. Those splice over the bytes between the two points and DROP them,
-      and the length arm refuses. This is the reachable failure: it is a bug in
-      the planner or in a future edit to `apply_insertion`, and it is precisely
-      the class that silently destroys user content.
-    - CAUGHT when driven directly: a marker literal already present in `old`.
-      In the assembled write this is refused EARLIER, by the ordered-pair check
-      in `plan_insertion`, which sees the stray literal and returns `unpaired`.
-      The two mechanisms are independent on purpose -- this one does not depend
-      on the planner being correct -- so neither may be removed on the ground
-      that the other covers it.
-    - NOT CAUGHT: any well-ordered offset pair. Splicing the two lines at
-      offsets 5 and 6, or at 0 and end-of-file, passes both assertions. THIS
-      CERTIFICATE PROVES THAT NOTHING WAS EXPELLED. IT DOES NOT PROVE THE
-      MARKERS LANDED IN THE RIGHT PLACE. Placement is a separate property and
-      is pinned by tests that assert what sits on either side of each marker.
+    - NOT CAUGHT: ANY offset whatsoever. A single splice point cannot cross
+      itself, so no choice of offset can drop a byte. Splicing the marker at
+      offset 5, or 0, or end-of-file, passes both assertions.
+      **THIS CERTIFICATE PROVES BYTE PRESERVATION OF THE ASSEMBLY. IT DOES NOT
+      PROVE THE MARKER LANDED IN THE RIGHT PLACE, AND IT DOES NOT EVEN PROVE
+      THE OFFSET IS SANE.** A reader who knows only that it "certifies the
+      write" will assume placement is covered. That assumption was survivable
+      when a second offset existed to be crossed. It is not survivable now.
+      Placement is constrained by tests, and by NOTHING ELSE.
+    - CAUGHT: a mis-assembled composition. Dropping a byte, duplicating one,
+      inserting the marker twice, omitting the newline and reordering the tail
+      are each refused, with a correct assembly accepted as the control. So the
+      certificate is not vacuous -- it guards `apply_insertion`, which is now
+      the only place a defect can enter.
+    - CAUGHT when driven directly: the marker literal already present in `old`.
+      In the assembled write that document is refused EARLIER, by the presence
+      check in `plan_insertion`. The two mechanisms are independent on purpose
+      -- this one does not depend on the planner being correct -- so neither
+      may be removed on the ground that the other covers it.
 
     Returns False rather than raising on any anomaly, including a non-`str`
     argument: every failure of this function must land on the refuse side.
     """
     try:
-        if len(new) != len(old) + len(ins.start_line) + len(ins.end_line):
+        if len(new) != len(old) + len(ins.start_line):
             return False
-        return new.replace(ins.start_line, "").replace(ins.end_line, "") == old
+        return new.replace(ins.start_line, "") == old
     except Exception:  # noqa: BLE001 -- a certificate must refuse, never raise
         return False

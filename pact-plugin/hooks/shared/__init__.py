@@ -39,7 +39,6 @@ from .claude_md_manager import (
     MEMORY_START_MARKER,
     MEMORY_END_MARKER,
     PINNED_START_MARKER,
-    PINNED_END_MARKER,
     MANAGED_TITLE,
     PACT_BOUNDARY_PREFIXES,
 )
@@ -140,7 +139,6 @@ __all__ = [
     "MEMORY_START_MARKER",
     "MEMORY_END_MARKER",
     "PINNED_START_MARKER",
-    "PINNED_END_MARKER",
     "MANAGED_TITLE",
     "PACT_BOUNDARY_PREFIXES",
     "append_failure",
