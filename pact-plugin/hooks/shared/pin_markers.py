@@ -444,19 +444,26 @@ def certify_expel_nothing(old: str, new: str, ins: Insertion) -> bool:
     - CAUGHT: a mis-assembled composition. Dropping a byte, duplicating one,
       inserting the marker twice, omitting the newline and reordering the tail
       are each refused, with a correct assembly accepted as the control. So the
-      certificate is not vacuous -- it guards `apply_insertion`.
+      certificate is not vacuous -- it guards `apply_insertion`, which is the
+      only place a COMPOSITION defect can enter.
 
       IT DOES NOT GUARD THE DETECTOR. `_is_already_marked` is a SECOND logic
       site -- it slices the gap, selects the last line and compares it stripped
       -- and a defect there causes re-insertion or permanent suppression,
       NEITHER of which this function can observe. It only ever inspects a
       composition it was handed; it never asks whether that composition should
-      have been produced. THE FOUR-PASS COUNT IS WHAT COVERS THAT.
+      have been produced. THE FOUR-PASS COUNT IS WHAT COVERS THAT. See the
+      complementarity note below for the exact division.
 
-      This sentence previously read `the only place a defect can enter`, which
-      was true when the detector was a one-line substring search and which the
-      adjacency change falsified BY ADDING A SECOND SITE, in the same commit
-      that left this claim reading as blanket coverage.
+      The qualifier `COMPOSITION` is doing real work and is not padding. This
+      sentence once read `the only place a defect can enter`, which was true
+      when the detector was a one-line substring search and which the adjacency
+      change falsified by ADDING A SECOND SITE. Unqualified, it also
+      CONTRADICTED the complementarity note twelve lines below -- that note
+      says a mid-line quote is caught by `_is_already_marked` and only by it,
+      and a sole guard is by definition a place a defect can enter. Restoring
+      the missing word makes the sentence true again rather than deleting a
+      claim that was right about its own subject.
     - CAUGHT: the marker literal already present in `old` on its OWN line, or
       at the END of a line. Both put a `marker + newline` in `old`, so the
       unbounded replace strips two occurrences, the equality fails, and the
@@ -485,7 +492,16 @@ def certify_expel_nothing(old: str, new: str, ins: Insertion) -> bool:
     refuse first, and under the adjacency predicate an own-line quote falls
     through to here. The change that falsified it edited a different function
     four hundred lines away and never touched this line, so no diff review
-    could surface it. When you change the detector, re-read this.
+    could surface it. WHEN YOU CHANGE THE DETECTOR, RE-READ THIS WHOLE
+    DOCSTRING -- not this paragraph.
+
+    The scope of that instruction is not a detail. It first read `re-read
+    this`, meaning this note, and the very next claim it failed to catch sat
+    four hundred words ABOVE it in this same docstring: `the only place a
+    defect can enter`, which the detector change had falsified in exactly the
+    way this note describes. A REMEDY WHOSE SCOPE IS NARROWER THAN THE HAZARD
+    REPRODUCES THE HAZARD, and this one demonstrated it inside one docstring
+    within minutes of being written.
 
     Returns False rather than raising on any anomaly, including a non-`str`
     argument: every failure of this function must land on the refuse side.
