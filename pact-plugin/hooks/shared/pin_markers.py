@@ -438,11 +438,35 @@ def certify_expel_nothing(old: str, new: str, ins: Insertion) -> bool:
       are each refused, with a correct assembly accepted as the control. So the
       certificate is not vacuous -- it guards `apply_insertion`, which is now
       the only place a defect can enter.
-    - CAUGHT when driven directly: the marker literal already present in `old`.
-      In the assembled write that document is refused EARLIER, by the presence
-      check in `plan_insertion`. The two mechanisms are independent on purpose
-      -- this one does not depend on the planner being correct -- so neither
-      may be removed on the ground that the other covers it.
+    - CAUGHT: the marker literal already present in `old` on its OWN line, or
+      at the END of a line. Both put a `marker + newline` in `old`, so the
+      unbounded replace strips two occurrences, the equality fails, and the
+      write is refused.
+
+    THE DETECTOR AND THIS CERTIFICATE ARE COMPLEMENTARY, NOT OVERLAPPING, AND
+    THE DIVISION IS EXACT. Stated for these two mechanisms by name, because it
+    is the sentence a future reader is most likely to delete as redundant
+    defence-in-depth:
+
+      - A MID-LINE quote is caught by `_is_already_marked` AND ONLY BY IT. This
+        certificate PASSES a mid-line quote, measured, because `old` then holds
+        no `marker + newline` at all.
+      - An OWN-LINE quote is caught by THIS CERTIFICATE AND ONLY BY IT. The
+        adjacency detector does not match it -- an own-line copy anywhere other
+        than immediately above the pinned heading is not the shape the writer
+        emits -- so the plan proceeds and this is the only remaining guard.
+
+    NEITHER COVERS THE OTHER'S CASE, so removing either on the ground that the
+    other handles it opens a hole with a named shape.
+
+    A NOTE ON WHAT THIS PARAGRAPH REPLACED, because the error is instructive.
+    It used to say the collision was `refused EARLIER, by the presence check in
+    plan_insertion`. THAT WAS TRUE WHEN WRITTEN AND WAS FALSIFIED BY THE
+    DETECTOR CHANGE -- under the whole-file substring search the planner did
+    refuse first, and under the adjacency predicate an own-line quote falls
+    through to here. The change that falsified it edited a different function
+    four hundred lines away and never touched this line, so no diff review
+    could surface it. When you change the detector, re-read this.
 
     Returns False rather than raising on any anomaly, including a non-`str`
     argument: every failure of this function must land on the refuse side.
