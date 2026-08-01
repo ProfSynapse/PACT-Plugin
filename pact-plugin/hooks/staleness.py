@@ -26,6 +26,7 @@ from typing import List, Optional, Tuple
 
 from shared.claude_md_manager import (
     PACT_BOUNDARY_PREFIXES,
+    PINNED_END_MARKER,
     extract_managed_region,
 )
 from pin_caps import (
@@ -39,6 +40,14 @@ from pin_caps import (
 # PACT_BOUNDARY_PREFIXES (round 5, item 1) so the three-prefix union is
 # defined in one place.
 _BOUNDARY_ALT = "|".join(PACT_BOUNDARY_PREFIXES)
+
+# H1/H2 heading only, WITHOUT the boundary-marker alternation. Used by the
+# well-formedness gate in _parse_pinned_section, which asks a narrower question
+# than the terminator scan does: "does a foreign SECTION begin before the
+# declared end". A PACT boundary comment is not a foreign section, and folding
+# one in here would refuse the declared end on documents where the pair is
+# perfectly well formed.
+_HEADING_ONLY = re.compile(r'#{1,2}\s')
 
 
 # Staleness detection constants
@@ -240,6 +249,61 @@ def _find_terminator_offset(
     return len(content)
 
 
+def _find_declared_end_offset(content: str, start: int, literal: str) -> Optional[int]:
+    """
+    Find the offset of the first line that IS `literal`, scanning from `start`.
+
+    Line-anchored, and deliberately NOT a bare `find()`. `extract_managed_region`
+    can use a bare find because the managed region holds only plugin-generated
+    content, and its docstring states that guarantee. The pinned region does NOT
+    have it, because a user writes the pins. Measured on a pin whose body quotes
+    the marker mid-line: a bare find reports a 30-character body and LOSES a pin,
+    where a line-wise compare reports 118 and keeps them all.
+
+    TRAILING WHITESPACE IS TOLERATED. LEADING WHITESPACE IS NOT. That asymmetry
+    is the whole correctness argument of this function, so do not "tidy" it into
+    a `.strip()`:
+
+      - `_find_terminator_offset` matches the RAW line via `.match`, so it does
+        not match an indented marker line.
+      - A `.strip()` compare here WOULD match one. The two locators then
+        disagree about which line ends the region, the declared offset lands
+        INSIDE the pinned body, and the region TRUNCATES.
+      - Measured, on a document whose first pin quotes the marker on an indented
+        line: `.strip()` reports 1 pin where the current parse reports 2.
+        `.rstrip()` reports 2. A dropped pin is a cap that fails OPEN.
+
+    THE SIBLING PREDICATES IN `pin_markers` USE `.strip()` AND THAT IS CORRECT
+    THERE, which is exactly why this one is easy to get wrong. `marker_line_present`
+    and `_is_already_marked` decide whether to REFUSE a write, so over-matching
+    is fail-safe. This function decides where a cap stops counting, so
+    over-matching is fail-open. Same-looking predicates, OPPOSITE failure
+    directions. Tolerance must follow the direction, not the resemblance.
+
+    Args:
+        content: Text to scan (typically the managed region extract).
+        start: Offset in `content` where scanning begins.
+        literal: The exact marker text the line must carry.
+
+    Returns:
+        Offset of the first matching line, or None when no line matches.
+    """
+    pos = start
+    while pos < len(content):
+        nl = content.find("\n", pos)
+        if nl == -1:
+            line, line_end = content[pos:], len(content)
+        else:
+            line, line_end = content[pos:nl], nl + 1
+
+        if line.rstrip() == literal:
+            return pos
+
+        pos = line_end
+
+    return None
+
+
 def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
     """
     Extract the Pinned Context section from CLAUDE.md content.
@@ -252,6 +316,38 @@ def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
     content (no user-authored fenced code blocks), so fence-aware scanning
     is unnecessary. If the managed region is not present (pre-migration
     file), falls back to scanning the full content.
+
+    THE END OF THE REGION IS DECLARED WHEN A MARKER SAYS SO, AND INFERRED
+    OTHERWISE:
+
+        inferred   := first terminator line at or after the heading
+        declared   := first PINNED_END_MARKER line at or after the heading
+        region_end := inferred   when declared is absent
+                   := inferred   when an H1/H2 heading lies before declared
+                   := declared   otherwise
+
+    THIS IS A NO-OP ON EVERY DOCUMENT CARRYING THE CANONICAL MARKER NAME, and
+    that is by design rather than by accident. `PINNED_END_MARKER` carries the
+    `PACT_MEMORY_` prefix, so the inferred scan already stops at its line and
+    the two offsets coincide. Measured across eleven document shapes, the
+    declared and inferred parses agree in every one. The declared parse earns
+    its place against a RENAME: take the marker out of the boundary family and
+    the inferred scan overruns it and charges the marker text, while this parse
+    still excludes it. That is the only shape where the two differ.
+
+    UNMARKED AND HALF-MARKED FILES FAIL OPEN TO THE INFERRED SCAN. No marker at
+    all, or a START with no END, is a correct and expected state -- not an
+    error, not an incomplete write, not a repair opportunity. Such a document
+    parses exactly as it did before this pair existed, and nothing here raises.
+
+    THE H1/H2 GATE GUARDS OVER-REACH, WHICH IS THE DIRECTION A MATCHED MARKER
+    MAKES REACHABLE. A foreign `## Interloper` section between the body and a
+    declared end would otherwise be pulled INTO the pinned span by the declared
+    offset. Note what the gate does NOT cover: a `### ` pin heading is not H1 or
+    H2, so a marker quoted inside a pin body reaches the declared offset with no
+    heading in front of it. `_find_declared_end_offset` is what covers that, by
+    refusing to match an indented line -- read its docstring before changing
+    either mechanism, because they cover adjacent halves of one hazard.
 
     Args:
         content: Full CLAUDE.md file content.
@@ -285,6 +381,35 @@ def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
     pinned_end = _find_terminator_offset(
         scan_text, pinned_start, next_section_pattern
     )
+
+    # The declared end overrides the inferred one, subject to the gate below.
+    # Absent marker -> `declared_end` is None and the inferred scan stands.
+    declared_end = _find_declared_end_offset(
+        scan_text, pinned_start, PINNED_END_MARKER
+    )
+    if declared_end is not None:
+        # WELL-FORMEDNESS GATE. An H1 or H2 heading between the body start and
+        # the declared end means the pair straddles a section boundary. The
+        # pairing is MALFORMED, and honouring the declared offset would swallow
+        # that foreign section into the pinned span. Keep the inferred scan.
+        #
+        # The probe is bounded to `scan_text[:declared_end]`, so a miss returns
+        # that slice's length, which IS `declared_end` -- hence `>=` reads as
+        # "no heading found before the declared end".
+        #
+        # The probe pattern is H1/H2 ONLY, not the full terminator alternation.
+        # A PACT boundary comment before the declared end already stopped the
+        # inferred scan, so `pinned_end` is at or before it either way and the
+        # gate has nothing left to decide.
+        heading_before_declared = _find_terminator_offset(
+            scan_text[:declared_end], pinned_start, _HEADING_ONLY
+        )
+        if heading_before_declared >= declared_end:
+            pinned_end = declared_end
+        # else: MALFORMED. `pinned_end` keeps the inferred offset untouched.
+        # That offset is provably at or before the interloping heading, because
+        # the inferred alternation matches H1/H2 too, so no clamp is needed here
+        # and a `min()` would be a no-op dressed as a safeguard.
 
     pinned_content = scan_text[pinned_start:pinned_end]
     if not pinned_content.strip():

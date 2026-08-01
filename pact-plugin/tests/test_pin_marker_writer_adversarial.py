@@ -115,6 +115,7 @@ from pin_caps import (
 from shared.claude_md_manager import (
     MANAGED_END_MARKER,
     MANAGED_START_MARKER,
+    PINNED_END_MARKER,
     PINNED_START_MARKER,
     extract_managed_region,
 )
@@ -495,33 +496,83 @@ class TestNoCaughtTerminatorEndsThePinnedRegion:
     terminate at the INFERRED heading and not at any marker.
     """
 
-    def test_the_pinned_region_terminates_at_the_inferred_heading(self):
+    def test_the_pinned_region_terminates_at_the_declared_end_marker(self):
+        """SUPERSEDES `test_the_pinned_region_terminates_at_the_inferred
+        _heading`, whose CLAIM the marker pair retires.
+
+        That test asserted the region ends at the inferred heading, because the
+        remedy of the day was to have NO end marker. The user retired that:
+        every marker that bounds a region in PACT is a pair. So the region now
+        ends AT the declared END marker, which sits above the heading.
+        """
         marked_doc = marked(claude_md(n_pins=3))
         assert_is_shipping_shape(marked_doc)
         parsed = _parse_pinned_section(marked_doc)
         assert parsed is not None, "the reader must find the section at all"
 
         _start, end, _content = parsed
-        assert marked_doc[end:].startswith(WORKING_MEMORY_HEADING), (
-            "the pinned region no longer ends at the inferred heading. A "
-            "marker whose name joins the terminator alternation now sits "
-            "below the pins, which re-opens the uncharged span: content "
-            "between that marker and the heading is charged against neither "
-            "cap while reading as part of the section."
+        assert marked_doc[end:].startswith(PINNED_END_MARKER), (
+            "the pinned region no longer ends at the declared END marker, so "
+            "the pair is not the delimiter the parse uses"
         )
 
-    def test_an_appended_pin_is_still_charged(self):
-        """The behavioural half, stated as the consequence rather than the
-        shape. This is what actually went wrong, so it is asserted directly
-        rather than left implied by the offset check above."""
+    def test_a_pin_placed_above_the_end_marker_is_charged(self):
+        """THE COMPLIANT WRITE PATH. `commands/pin-memory.md` instructs the
+        writer to insert above the END marker, and a pin placed there is inside
+        the region and charged against the count cap."""
         doc = marked(claude_md(n_pins=PIN_COUNT_CAP))
-        append = {
+        insert_above = {
+            "old_string": PINNED_END_MARKER,
+            "new_string": a_pin(99) + PINNED_END_MARKER,
+        }
+        assert gate_verdict(doc, insert_above) is not None, (
+            "a pin inserted ABOVE the END marker was not charged against the "
+            "count cap; the compliant write path is not measured"
+        )
+
+    def test_a_pin_appended_below_the_end_marker_is_NOT_charged(self):
+        """THE RESIDUAL, PINNED AS A RESIDUAL RATHER THAN LEFT IMPLICIT.
+
+        This test asserts a GAP, not a guarantee, and that is deliberate. A pin
+        appended below the END marker sits outside the region, so no cap
+        measures it. The pair CREATES this span -- it does not exist without an
+        end marker -- and nothing in the hook layer closes it.
+
+        WHAT CLOSES IT IS AN INSTRUCTION, NOT A MECHANISM. `commands/pin-memory
+        .md` tells the writer to insert above the marker. That file is executed
+        by an LLM, so no test can prove compliance at run time; the sibling test
+        above measures what happens WHEN it complies, and this one measures what
+        happens when it does not.
+
+        SO THE INSTRUCTION'S EXISTENCE IS ASSERTED HERE TOO. It is the only
+        mitigation this span has, and a mitigation that lives in prose can be
+        deleted by anyone tidying a command file without a single test going
+        red. This assertion is that red.
+
+        If a future change adds a MECHANICAL guard -- a gate refusal for edits
+        below the marker -- this test must be inverted, not deleted.
+        """
+        doc = marked(claude_md(n_pins=PIN_COUNT_CAP))
+        append_below = {
             "old_string": WORKING_MEMORY_HEADING,
             "new_string": a_pin(99) + WORKING_MEMORY_HEADING,
         }
-        assert gate_verdict(doc, append) is not None, (
-            "a pin appended immediately above the inferred heading is no "
-            "longer charged against the count cap on a MARKED file"
+        assert gate_verdict(doc, append_below) is None, (
+            "a pin appended below the END marker was charged after all. If a "
+            "mechanical guard now closes this span, INVERT this test rather "
+            "than deleting it -- the residual it documents would be gone."
+        )
+
+        pin_command = (
+            Path(__file__).parent.parent / "commands" / "pin-memory.md"
+        ).read_text(encoding="utf-8")
+        assert PINNED_END_MARKER in pin_command, (
+            "commands/pin-memory.md no longer names the END marker, so the "
+            "ONLY mitigation for the uncharged span above has been removed"
+        )
+        assert "ABOVE" in pin_command, (
+            "commands/pin-memory.md names the END marker but no longer tells "
+            "the writer which side of it to insert on"
         )
 
     def test_the_canary_can_fire(self):
@@ -1021,7 +1072,14 @@ class TestOnlyTheAdjacentLineSuppressesTheWrite:
             "## Pinned Context\n", f"{PINNED_START_MARKER}\n## Pinned Context\n", 1
         )
         assert_is_shipping_shape(doc)
-        assert plan_insertion(doc) is SkipReason.ALREADY_MARKED, (
+        # UNPAIRED, not ALREADY_MARKED, and the difference is the marker pair.
+        # The START sits on the adjacent line -- the writer's own position --
+        # so the detector DID recognise it. What this document lacks is the
+        # END half, so it is HALF-marked. Either outcome proves the point this
+        # control exists for: the write is SUPPRESSED, so no second marker is
+        # emitted. Asserting the specific label keeps the control honest about
+        # WHY it was suppressed.
+        assert plan_insertion(doc) is SkipReason.UNPAIRED, (
             "a marker on the adjacent line was not recognised as the writer's "
             "own, so the next pin command would insert a second one"
         )

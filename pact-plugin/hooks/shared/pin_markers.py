@@ -2,16 +2,23 @@
 """
 Location: pact-plugin/hooks/shared/pin_markers.py
 
-Summary: Pure planner for the declared `## Pinned Context` START marker. Decides
-WHERE the marker goes and WHETHER it goes in at all, composes the new file
+Summary: Pure planner for the declared `## Pinned Context` marker PAIR. Decides
+WHERE the two markers go and WHETHER they go in at all, composes the new file
 content, and certifies that the composition expelled nothing. No I/O, no
 filesystem, no hook frame, no exceptions.
 
-ONE MARKER, NOT A PAIR. There is no declared END, and its absence is the
-intended state rather than a half-finished pair -- see `claude_md_manager` at
-the constant for the measured reason. Everything here is written for a single
-insertion point: one offset, one literal, and a presence check rather than an
-ordering check.
+A PAIR, EMITTED IN ONE COMPOSITION. Both marker lines go in together or neither
+does. The state space is therefore four -- neither, both in order, both
+inverted, exactly one -- and the ladder in `plan_insertion` names all four.
+
+THE PAIR AND THE MARKER-AWARE WRITER ARE ONE UNIT, and that is the safety
+argument rather than a preference. An END marker with a marker-BLIND pin writer
+CREATES a gap it did not have before: the writer anchors on the heading, appends
+at the end of the section, and lands the new pin BELOW the END marker where no
+cap measures it. Measured at a cap of 12 with a 13th pin appended -- no markers
+DENIES, a pair with the insertion INSIDE DENIES, a pair with an append BELOW the
+END is ALLOWED. So `commands/pin-memory.md` must place new pins above the END
+marker, and this module is only half of that story.
 
 Used by: `hooks/pin_marker_writer.py`, which owns every side effect -- stdin,
 path resolution, the file lock, the atomic write and the journal. That split is
@@ -25,7 +32,7 @@ hook process and no disk. Folding these three functions into the hook script
 would satisfy every other constraint on this feature and still lose that.
 
 THE SHAPE OF THE WRITE IS THE SAFETY ARGUMENT. The insertion is PURE OFFSET
-INSERTION: one literal is spliced in at one computed offset and no existing
+INSERTION: two literals are spliced in at two computed offsets and no existing
 byte is parsed, rewritten, reordered or dropped. The alternative shape -- parse
 the region into entries and rebuild the text from them -- silently deletes
 whatever it does not recognise, and the target file is gitignored and
@@ -42,6 +49,7 @@ from enum import Enum
 
 from shared.claude_md_manager import (
     PACT_BOUNDARY_PREFIXES,
+    PINNED_END_MARKER,
     PINNED_START_MARKER,
     extract_managed_region,
 )
@@ -92,10 +100,11 @@ _PINNED_TERMINATOR = re.compile(rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}))')
 # second one is ignored, which matches every existing reader of this region.
 _PINNED_HEADING = re.compile(r'^## Pinned Context\s*\n', re.MULTILINE)
 
-# The literal line that gets spliced in. The trailing newline is part of the
-# unit: the certificate below is stated over this LINE, not over the bare
-# marker, so the marker and its newline can never be accounted separately.
+# The literal lines that get spliced in. The trailing newline is part of each
+# unit: the certificate below is stated over these LINES, not over the bare
+# markers, so a marker and its newline can never be accounted separately.
 START_LINE = PINNED_START_MARKER + "\n"
+END_LINE = PINNED_END_MARKER + "\n"
 
 
 def _body_contains_a_fence(body: str) -> bool:
@@ -194,8 +203,99 @@ def _is_already_marked(region_text: str, heading_start: int) -> bool:
     return gap_lines[-1].strip() == PINNED_START_MARKER
 
 
-def marker_line_present(text: str) -> bool:
-    """True when the marker OCCUPIES A LINE anywhere in `text`, under ANY line
+def is_line_start(text: str, offset: int) -> bool:
+    """True when `offset` begins a line of `text`.
+
+    THE PROPERTY THIS NAMES WAS PREVIOUSLY UNNAMED, AND THAT IS THE WHOLE
+    REASON THE FUNCTION EXISTS. Every insertion offset this module produces
+    happens to be a line start: the START offset is a `re.MULTILINE` heading
+    match, and the END offset is a terminator line start by construction of
+    `_find_terminator_offset`. Nothing stated that, no test asserted it, and no
+    docstring mentioned it -- so it held as an accident of the bytes.
+
+    An accident is not reviewable. It has no site to inspect and no failure
+    mode to enumerate, and it stops holding silently the moment a computation
+    upstream of it changes. This module already shipped one guard of exactly
+    that shape past five instruments, three reviewers and two certifiers. A
+    PAIR adds a SECOND offset under the same property, so the accident is now
+    load-bearing twice over. Naming it costs one function.
+
+    WHY IT MATTERS FOR THE COMPOSITION. If an offset falls mid-line, the splice
+    cuts a user's line in two and leaves a mangled fragment on either side of
+    the marker. The certificate cannot see that: the composition is still
+    byte-preserving, the length arithmetic still holds, and the unbounded
+    replace still reproduces the original. Byte preservation and textual sanity
+    are different claims, and only the first was ever proven.
+
+    OFFSET 0 IS A LINE START BY DEFINITION, AND IT IS HANDLED FIRST FOR A
+    MEASURED REASON. Written as a bare `text[offset - 1] == "\\n"`, offset 0
+    reads `text[-1]` -- the LAST character of the file. Measured: on `'abc\\n'`
+    that returns True for entirely the wrong reason, and on `'abcX'` it returns
+    False. Neither raises. A guard that answers confidently and wrongly at its
+    own boundary is worse than no guard.
+    """
+    if offset <= 0:
+        return offset == 0
+    if offset > len(text):
+        return False
+    return text[offset - 1] == "\n"
+
+
+def marker_line_offset(text: str, literal: str) -> int | None:
+    """Offset of the first line of `text` that IS `literal`, else None.
+
+    THE SINGLE DEFINITION OF `the marker occupies a line`. `marker_line_present`
+    below is this function's boolean shadow, and the planner's pair ladder uses
+    the offsets. Keeping one implementation is what stops a document being
+    marked by one reading and unmarked by another -- the exact drift that a
+    second, independently-written predicate produced here once already.
+
+    `splitlines()` is deliberate: it splits on LF, CRLF and CR alike, so the
+    property is stated once and holds for every terminator rather than
+    enumerating them.
+
+    THE COMPARISON IS STRIPPED, AND HERE THAT IS THE SAFE DIRECTION -- unlike
+    `staleness._find_declared_end_offset`, which tolerates trailing whitespace
+    ONLY. The two look alike and must not be unified. This predicate decides
+    whether to REFUSE a write, so over-matching costs a skipped write and is
+    fail-safe. That one decides where a cap stops counting, so over-matching
+    drops a pin out of the counted span and fails OPEN. Tolerance follows the
+    direction of failure, never the resemblance of the code.
+    """
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        if line.strip() == literal:
+            return offset
+        offset += len(line)
+    return None
+
+
+def _is_end_marked(region_text: str, body_end: int) -> bool:
+    """Return True iff the END marker occupies the line THIS WRITER EMITS IT ON.
+
+    THE POSITIONAL TWIN OF `_is_already_marked`, and it is positional for the
+    identical reason: a predicate defined over where a copy MIGHT appear has a
+    residual exactly the width of its own enumeration, while a predicate
+    matching the writer's own output shape has none by construction.
+
+    `body_end` is the terminator offset that closes the pinned body. On a
+    document this writer has already marked, the forward scan STOPS AT the END
+    marker itself -- the literal carries the `PACT_MEMORY_` prefix, so it is a
+    scan terminator -- which is why the same offset identifies the marker line
+    on a written document and the insertion point on an unwritten one.
+
+    The comparison is stripped, matching the START sibling. See
+    `marker_line_offset` for why that is the safe direction HERE and the unsafe
+    one in `staleness._find_declared_end_offset`.
+    """
+    tail = region_text[body_end:]
+    if not tail:
+        return False
+    return tail.splitlines()[0].strip() == PINNED_END_MARKER
+
+
+def marker_line_present(text: str, literal: str) -> bool:
+    """True when `literal` OCCUPIES A LINE anywhere in `text`, under ANY line
     terminator.
 
     WHY THIS EXISTS AS A NAMED PREDICATE RATHER THAN A SIDE EFFECT. The guard
@@ -228,25 +328,38 @@ def marker_line_present(text: str) -> bool:
     strip to the marker, so prose that merely discusses the marker is not a
     collision. Widening this to a bare substring test would resurrect exactly
     the over-broad predicate this module removed.
+
+    THE LITERAL IS AN ARGUMENT RATHER THAN A CONSTANT, so the pair gets one
+    predicate instead of two. A second copy specialised to the END marker would
+    be the twin that drifts.
     """
-    return any(line.strip() == PINNED_START_MARKER for line in text.splitlines())
+    return marker_line_offset(text, literal) is not None
 
 
 @dataclass(frozen=True)
 class Insertion:
-    """Where the marker line goes, as an absolute offset into the FULL file.
+    """Where the two marker lines go, as absolute offsets into the FULL file.
 
-    ONE offset and ONE literal. There is no end-side pair, so there is also no
-    ordering between two offsets to get wrong -- and, as the certificate's
-    scope note records, no offset the certificate can reject either.
+    TWO offsets and TWO literals, and the ORDER BETWEEN THEM IS A REAL STATE
+    THAT CAN BE WRONG. That is a gain, not a cost: crossed offsets duplicate
+    bytes, so the certificate's length assertion catches them. With a single
+    splice point no choice of offset could drop a byte, which meant NO offset
+    was rejectable and placement was constrained by tests alone. The pair gives
+    the certificate its offset power back.
 
-    Carries the literal but NOT the new content. The writer composes the new
+    BOTH OFFSETS MUST BE LINE STARTS. The certificate enforces it through
+    `is_line_start`; read that function for why the property is named here
+    rather than left to hold by accident.
+
+    Carries the literals but NOT the new content. The writer composes the new
     content through `apply_insertion`, so exactly one site in the codebase
     assembles these bytes and the certificate can wrap that one site.
     """
 
     start_offset: int   # start of the `## Pinned Context` heading line
+    end_offset: int     # start of the terminator line that ends the body
     start_line: str
+    end_line: str
 
 
 class SkipReason(str, Enum):
@@ -257,14 +370,14 @@ class SkipReason(str, Enum):
     bare None collapses the distinct outcomes into one and makes a test unable
     to assert the ladder step that was reached.
 
-    THERE IS NO `inverted_pair` AND NO `unpaired`, and their absence is
-    deliberate. Both described states that only a two-marker pair can occupy.
-    With one marker the state space is exactly two -- present or absent -- so
-    those members became unreachable, and an unreachable enum member is the
-    dead reference a later reader takes as live. They were deleted rather than
-    kept behind a comment: unreachable is fine, silently unreachable is not,
-    and a deleted member cannot be misread while a commented one relies on the
-    comment being read.
+    `INVERTED_PAIR` AND `UNPAIRED` ARE BACK, and the round trip is worth one
+    sentence because it is a lesson about enum hygiene rather than churn. They
+    were deleted when the END marker was removed, correctly: both describe
+    states that only a two-marker pair can occupy, and with one marker the
+    state space was exactly two -- present or absent. The pair restores the
+    states, so it restores the members. Deleting them rather than commenting
+    them out is what made this restoration a clean re-add instead of an
+    archaeology exercise.
     """
 
     NOT_MIGRATED = "noop_not_migrated"
@@ -273,7 +386,22 @@ class SkipReason(str, Enum):
     # The pinned body contains a fenced code block. See `_body_contains_a_fence`.
     FENCED_BODY = "noop_fenced_body"
     ALREADY_MARKED = "already_marked"
-    # A document carrying the marker on its OWN LINE, or at the END of a line,
+    # Both markers occupy lines, but the END sits ABOVE the START. The document
+    # is marked, and marked WRONGLY. This writer will not repair it: moving or
+    # deleting an existing marker mutates existing bytes, which the pure-
+    # insertion shape excludes and the certificate cannot cover. Reported so a
+    # reader can tell a wrong pair from a missing one.
+    INVERTED_PAIR = "inverted_pair"
+    # Exactly ONE of the two markers occupies a line. Skip rather than complete
+    # the pair, for the same reason: this writer emits both lines in ONE
+    # composition or none. Adding the missing half would be a repair, and a
+    # repair is a shape the certificate was never written to prove.
+    #
+    # NOT AN ERROR STATE. A START with no END is exactly what a reader must
+    # tolerate, and `staleness._parse_pinned_section` does tolerate it by
+    # falling through to the inferred scan.
+    UNPAIRED = "unpaired"
+    # A document carrying a marker on its OWN LINE, or at the END of a line,
     # somewhere other than the position this writer emits -- so the certificate
     # refused the write. NARROWER THAN `contains the marker anywhere`: a
     # MID-LINE copy passes the certificate, the write proceeds, and no
@@ -338,24 +466,26 @@ def plan_insertion(content: str) -> Insertion | SkipReason:
        and why nothing cleverer is safe.
     5. The marker is absent.
 
-    NO READER IS CHANGED BY ANY OF THIS. The fence-blindness lives in
-    `_find_terminator_offset`, which every existing consumer of this region
-    shares, and repairing it there would be an extent-contract change: on a
-    currently-truncated pinned region a more complete reader RAISES the
-    observed pin count, which can cross a count threshold and produce an
+    THE FENCE BLINDNESS IS LEFT EXACTLY AS FOUND, and that is a separate claim
+    from "no reader is changed", which this paragraph used to make and which is
+    now false -- `staleness._parse_pinned_section` reads `PINNED_END_MARKER`.
+    What is unchanged is `_find_terminator_offset`, which every consumer of this
+    region shares. Repairing its fence blindness would be an extent-contract
+    change: on a currently-truncated pinned region a more complete reader RAISES
+    the observed pin count, which can cross a count threshold and produce an
     over-block introduced BY the repair. So this planner refuses the shapes it
-    cannot read safely and leaves the reader exactly as it found it.
+    cannot read safely rather than teaching the scanner to read them.
 
-    IDEMPOTENCE IS A PRESENCE CHECK, AND FOR ONE MARKER THAT IS THE WHOLE OF
-    IT. The state space is exactly two: the marker is in the file, or it is
-    not. Absent, the write runs. Present, the file is already marked and the
-    write is a no-op. There is no third state to name, because ordering needs
-    two things to order and pairing needs two things to pair.
+    IDEMPOTENCE IS A POSITIONAL PAIR CHECK. The state space is four, and the
+    ladder names all four: neither marker in the writer's own positions (write),
+    both (already marked), exactly one (unpaired), and both present somewhere
+    with the END above the START (inverted). Ordering and pairing are real
+    questions again, because there are two things to order and two to pair.
 
-    A FILE CARRYING THIS MARKER AND NO CLOSING ONE IS CORRECT, NOT BROKEN. That
-    is the intended shipped shape. Nothing here may treat a missing end marker
-    as an error, an incomplete write, or a repair opportunity -- there is no
-    end marker to miss.
+    A FILE CARRYING ONE MARKER AND NOT THE OTHER IS HALF-MARKED. It is not an
+    error and nothing here raises on it, but it is not the finished shape
+    either, and it must not be reported as one. Readers must tolerate it: a
+    START with no END parses exactly as an unmarked file does.
 
     This function never repairs a boundary: moving or deleting an existing
     marker mutates existing bytes, which the pure-insertion shape excludes and
@@ -387,19 +517,64 @@ def plan_insertion(content: str) -> Insertion | SkipReason:
             return SkipReason.FENCED_BODY
 
         # The marker state is checked LAST, in the ladder position the design
-        # gives it. See `_is_already_marked` for why this is an ADJACENCY test
-        # and not the whole-file substring search it replaced.
-        if _is_already_marked(region_text, heading.start()):
+        # gives it. The writer's OWN shape is checked first, by adjacency --
+        # see `_is_already_marked` for why that is not a whole-file search.
+        # THE PAIR LADDER IS POSITIONAL, NOT A WHOLE-FILE SEARCH, and that
+        # distinction is the whole reason this ladder is shaped as it is.
+        #
+        # A whole-file search for either marker is the predicate this module
+        # ALREADY REMOVED once. It blocks the write forever on any document
+        # that happens to carry a copy anywhere -- the "carrier in the gap"
+        # defect -- and it hides a stray copy under a skip instead of routing
+        # it to the certificate, which is what makes a collision countable.
+        # Restoring the pair must not restore that.
+        #
+        # So both halves are judged by POSITION, against the two places this
+        # writer emits: the START on the line above the pinned heading, the END
+        # on the terminator line that closes the body. A copy anywhere else is
+        # NOT this writer's output, and it must fall through to the certificate.
+        start_marked = _is_already_marked(region_text, heading.start())
+        end_marked = _is_end_marked(region_text, rel_end)
+        if start_marked and end_marked:
             return SkipReason.ALREADY_MARKED
+        if start_marked or end_marked:
+            # HALF-MARKED, and it gets its own label rather than the
+            # success-shaped one. Reporting `already_marked` here would file a
+            # document that still needs its other half under the outcome that
+            # means "nothing to do" -- the same shape that once hid a marker
+            # collision inside a completed-migration count. This writer emits
+            # both lines in ONE composition, so it will not complete the pair
+            # either: adding the missing half is a repair, and the certificate
+            # was never written to prove a repair.
+            return SkipReason.UNPAIRED
 
-        # The offset is the start of the heading line, so the marker lands on
-        # its own line immediately above it. `rel_end` above bounded the body
-        # for the emptiness and fence checks; it is deliberately NOT used as an
-        # offset, because this write declares where the region BEGINS and takes
-        # no position on where it ends.
+        # AN INVERTED PAIR IS NAMED HERE rather than left to the certificate,
+        # because it asks a different question from a collision. A collision is
+        # a stray copy the writer must not duplicate. An inversion is a pair
+        # that is already complete and already WRONG, and no write can improve
+        # it. Whole-file, but reached only when BOTH markers occupy lines -- so
+        # a single stray copy still falls through to the certificate and stays
+        # countable.
+        start_at = marker_line_offset(content, PINNED_START_MARKER)
+        end_at = marker_line_offset(content, PINNED_END_MARKER)
+        if start_at is not None and end_at is not None and end_at < start_at:
+            return SkipReason.INVERTED_PAIR
+
+        # BOTH offsets are line starts, and neither is a coincidence:
+        #   START -- `heading.start()` is a `re.MULTILINE` match, so it sits
+        #            immediately after a newline.
+        #   END   -- `_find_terminator_offset` walks line by line, so every
+        #            offset it returns begins a line.
+        # `rel_end` bounded the body for the emptiness and fence checks above;
+        # it is now ALSO the end offset, because this write declares both
+        # boundaries in one composition rather than only where the region
+        # begins. The certificate re-checks the line-start property rather than
+        # trusting these two sentences.
         return Insertion(
             start_offset=region_start + heading.start(),
+            end_offset=region_start + rel_end,
             start_line=START_LINE,
+            end_line=END_LINE,
         )
     except Exception:  # noqa: BLE001 -- totality guard; see SkipReason.PLAN_FAILED
         return SkipReason.PLAN_FAILED
@@ -412,19 +587,22 @@ def apply_insertion(content: str, ins: Insertion) -> str:
     so the heading and its body stay exactly where they already sit. One splice
     at one point: nothing is read between offsets, and nothing is rewritten.
 
-    THE CERTIFICATE GUARDS THIS FUNCTION -- but this is not the only place a
-    defect can enter, and an earlier wording of this paragraph implied it was.
-    With a single splice point no offset can drop bytes, so a defect HERE can
-    no longer come from choosing the wrong place; it can only come from
-    mis-assembling the pieces, and the certificate's mutation arm proves it
-    still catches that. A defect in `_is_already_marked` is a different matter
-    entirely: the certificate cannot see it, and the four-pass count is what
-    covers it.
+    THE CERTIFICATE GUARDS THIS FUNCTION, and with a PAIR it guards more of it
+    than it could before. Two splice points CAN cross: if `end_offset` precedes
+    `start_offset`, the middle slice runs backwards, comes back empty, and the
+    tail is emitted twice -- so the length assertion catches it. While there was
+    one splice point no offset was rejectable at all, and placement rested on
+    tests alone.
+
+    A defect in `_is_already_marked` remains a different matter: the certificate
+    cannot see it, and the four-pass count is what covers it.
     """
     return (
         content[:ins.start_offset]
         + ins.start_line
-        + content[ins.start_offset:]
+        + content[ins.start_offset:ins.end_offset]
+        + ins.end_line
+        + content[ins.end_offset:]
     )
 
 
@@ -563,10 +741,32 @@ def certify_expel_nothing(old: str, new: str, ins: Insertion) -> bool:
     argument: every failure of this function must land on the refuse side.
     """
     try:
-        if len(new) != len(old) + len(ins.start_line):
+        # THE LINE-START GATE, FIRST, because it is the only clause here that
+        # judges PLACEMENT rather than bytes. A mid-line offset splits a user's
+        # line and strands a fragment, and every clause below would still pass:
+        # the composition is byte-preserving, the arithmetic holds, and the
+        # replace reproduces `old`. Byte preservation and textual sanity are
+        # different claims and only the first was ever proven here.
+        #
+        # MEASURED, so the gate is not theoretical: both offsets are line starts
+        # on a well-formed document, but on a document whose managed END marker
+        # is NOT preceded by a newline the END offset is mid-line. The property
+        # is therefore real and NOT universal, which is exactly the case for
+        # checking it rather than asserting it in a comment.
+        #
+        # This REFUSES rather than raises, like every other clause.
+        if not is_line_start(old, ins.start_offset):
             return False
-        if new.replace(ins.start_line, "") != old:
+        if not is_line_start(old, ins.end_offset):
             return False
+        if len(new) != len(old) + len(ins.start_line) + len(ins.end_line):
+            return False
+        if new.replace(ins.start_line, "").replace(ins.end_line, "") != old:
+            return False
+        # BOTH markers are tested, not just the START. An `old` that already
+        # carries the END on a line of its own is just as much a document this
+        # writer must not add a second copy to.
+        #
         # THE COLLISION CLAUSE IS EXPLICIT BECAUSE IT USED TO BE AN ACCIDENT.
         # The two checks above are a pure composition proof and they are
         # SATISFIED by a document that already carries a marker: nothing is
@@ -577,6 +777,9 @@ def certify_expel_nothing(old: str, new: str, ins: Insertion) -> bool:
         # it, and the composition certified cleanly onto a document that already
         # had one. `marker_line_present` is terminator-agnostic, so the refusal
         # now follows from the property rather than from the encoding.
-        return not marker_line_present(old)
+        return not (
+            marker_line_present(old, PINNED_START_MARKER)
+            or marker_line_present(old, PINNED_END_MARKER)
+        )
     except Exception:  # noqa: BLE001 -- a certificate must refuse, never raise
         return False

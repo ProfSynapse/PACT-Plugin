@@ -2,16 +2,16 @@
 """
 Location: pact-plugin/hooks/pin_marker_writer.py
 
-Summary: Inserts the declared `## Pinned Context` START marker into the project
+Summary: Inserts the declared `## Pinned Context` marker PAIR into the project
 CLAUDE.md when, and only when, one of the two pin commands is invoked. Owns
 every side effect for that write -- stdin, path resolution, the file lock, the
-atomic write and the journal event. The decision of WHERE the marker goes, and
-WHETHER it goes in at all, belongs to `shared/pin_markers.py`, which is pure.
+atomic write and the journal event. The decision of WHERE the markers go, and
+WHETHER they go in at all, belongs to `shared/pin_markers.py`, which is pure.
 
-ONE MARKER, NOT A PAIR. There is no declared END marker. Its absence is the
-intended shipped state rather than an unfinished pair, so a file carrying this
-marker alone is CORRECT -- nothing here or downstream may read a missing end
-marker as an error or a repair opportunity.
+A PAIR, EMITTED IN ONE COMPOSITION. Both lines go in together or neither does.
+A document carrying exactly one of them is HALF-MARKED: not an error, and not
+repaired here -- completing the pair would mutate a file this writer only ever
+inserts into -- but reported as `unpaired` rather than as a success.
 
 Used by: hooks.json, under TWO events running this same body, mirroring
 `bootstrap_marker_writer`'s dual registration:
@@ -229,7 +229,12 @@ def _plan_and_write() -> str:
             _atomic_write_text,
             file_lock,
         )
+        from shared.claude_md_manager import (
+            PINNED_END_MARKER,
+            PINNED_START_MARKER,
+        )
         from shared.pin_markers import (
+            END_LINE,
             START_LINE,
             SkipReason,
             apply_insertion,
@@ -256,7 +261,12 @@ def _plan_and_write() -> str:
         # refuses a document carrying a marker line, and does so explicitly
         # rather than by the byte accident that failed on CRLF. Re-testing it
         # here as a refusal condition would be unreachable code.
-        collision = marker_line_present(content)
+        # EITHER marker counts. A document already carrying the END on a line
+        # of its own is as much a collision as one carrying the START.
+        collision = (
+            marker_line_present(content, PINNED_START_MARKER)
+            or marker_line_present(content, PINNED_END_MARKER)
+        )
         if not certify_expel_nothing(content, new_content, planned):
             # EITHER the document already carries a marker, OR the composition
             # could not be proven byte-identical to the original plus the
@@ -286,7 +296,7 @@ def _plan_and_write() -> str:
             # which means apply_insertion assembled something wrong. It is
             # defensive, not dead: deleting it means arguing that
             # apply_insertion cannot be wrong.
-            if collision or START_LINE in content:
+            if collision or START_LINE in content or END_LINE in content:
                 return SkipReason.MARKER_COLLISION.value
             return "certificate_failed"
 
