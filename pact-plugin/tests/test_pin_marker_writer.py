@@ -393,6 +393,290 @@ class TestPreconditionLadder:
         assert "## Pinned Context" not in doc
 
 
+class TestTheDetectorAcceptsOnlyWhatTheWriterEmits:
+    """LOAD-BEARING. These fail before the detector is narrowed and must pass
+    after. The predicate compares the last gap line above the pinned heading,
+    STRIPPED, against the symbol.
+
+    Every fixture here is COMPOSED from the imported symbol via f-strings, so
+    the marker's value is never typed as a literal anywhere in this file. That
+    is not a workaround for the hygiene rule -- it satisfies it exactly, and
+    weakening the corpus to avoid the apparent conflict would remove the very
+    fixtures that prove the fix.
+    """
+
+    def _marked(self, **kw):
+        old = build_claude_md(**kw)
+        planned = plan_insertion(old)
+        # AMENDMENT 1: fixture validity, asserted BEFORE any result is read. A
+        # SkipReason here means the arm measured nothing while looking clean.
+        assert isinstance(planned, Insertion), (
+            f"FIXTURE INVALID: plan_insertion returned {planned!r}"
+        )
+        return apply_insertion(old, planned)
+
+    def test_the_writers_own_output_is_recognised(self):
+        assert plan_insertion(self._marked()) is SkipReason.ALREADY_MARKED
+
+    @pytest.mark.parametrize("label,drift", [
+        ("trailing spaces", lambda m: f"{m}   \n"),
+        ("trailing tab", lambda m: f"{m}\t\n"),
+        ("leading indent", lambda m: f"  {m}\n"),
+        ("leading and trailing", lambda m: f"  {m}  \n"),
+    ])
+    def test_whitespace_drift_is_tolerated(self, label, drift):
+        """STRIPPED, not byte-exact. A whitespace-padded marker line IS a
+        marker line by any reading, so treating it as absent would itself be an
+        asymmetry with the writer -- the same defect class one layer in.
+        """
+        marked = self._marked()
+        drifted = marked.replace(START_LINE, drift(PINNED_START_MARKER))
+        assert plan_insertion(drifted) is SkipReason.ALREADY_MARKED, (
+            f"{label}: drift made the detector stop recognising its own marker"
+        )
+
+    @pytest.mark.parametrize("label,shape", [
+        ("prefixed on the same line", lambda m: f"text {m}\n"),
+        ("suffixed on the same line", lambda m: f"{m} trailing text\n"),
+    ])
+    def test_a_marker_sharing_its_line_is_NOT_recognised(self, label, shape):
+        """`.strip()` subsumes an `alone on the line` requirement without a
+        second clause: a line with other content strips to itself."""
+        marked = self._marked()
+        shared = marked.replace(START_LINE, shape(PINNED_START_MARKER))
+        assert plan_insertion(shared) is not SkipReason.ALREADY_MARKED
+
+    def test_a_carrier_in_the_gap_no_longer_blocks_the_write(self):
+        """THE DEFECT ITSELF. A document merely MENTIONING the marker above the
+        heading used to read as already migrated and was refused permanently.
+        """
+        doc = build_claude_md(
+            retrieved=f"\n### 2026-01-01\n**Context**: one\n{PINNED_START_MARKER}\nthree\n\n"
+        )
+        assert isinstance(plan_insertion(doc), Insertion), (
+            "a gap carrier still blocks the write; the defect is not fixed"
+        )
+
+    def test_a_mention_inside_the_pinned_body_does_not_block_the_write(self):
+        doc = build_claude_md(
+            pinned_body=f"### A pin\n{PINNED_START_MARKER}\nmore\n\n"
+        )
+        assert isinstance(plan_insertion(doc), Insertion)
+
+
+class TestAdjacencySurvivesBothMachineWriters:
+    """The machine path is why this is not a documentation problem: the
+    pact-memory formatters interpolate free-text fields into CLAUDE.md through
+    bare f-strings, so a harvested memory DISCUSSING the marker creates a
+    carrier with no human involved.
+
+    TWO WRITERS, ON OPPOSITE SIDES OF THE PINNED HEADING, AND THEY READ
+    DIFFERENT FIELD SETS. Pairing a writer with a field it does not read is a
+    silent no-op: the carrier is never placed and the arm returns a clean
+    negative.
+
+      - Retrieved Context, ABOVE the heading: reads query / score / context /
+        goal / memory_id. It does NOT read lessons_learned.
+      - Working Memory, BELOW the heading: reads the seven content fields
+        including lessons_learned.
+
+    A MULTI-LINE value is required. Each field renders as `**Field**: {value}`,
+    so a single-line value puts the marker MID-LINE where it cannot reach the
+    failure, and only a multi-line value gets it to line start.
+    """
+
+    def _project(self, tmp_path, monkeypatch):
+        monkeypatch.syspath_prepend(
+            str(Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts")
+        )
+        old = build_claude_md()
+        planned = plan_insertion(old)
+        assert isinstance(planned, Insertion), "FIXTURE INVALID"
+        marked = apply_insertion(old, planned)
+        target = tmp_path / "CLAUDE.md"
+        target.write_text(marked, encoding="utf-8")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+        return target
+
+    def _adjacent(self, text):
+        from shared.claude_md_manager import extract_managed_region
+        from shared.pin_markers import _PINNED_HEADING, _is_already_marked
+        region = extract_managed_region(text)
+        assert region is not None
+        heading = _PINNED_HEADING.search(region[0])
+        assert heading is not None
+        return _is_already_marked(region[0], heading.start())
+
+    def test_the_above_heading_writer_cannot_break_adjacency(self, tmp_path, monkeypatch):
+        import working_memory as wm
+        target = self._project(tmp_path, monkeypatch)
+        before = target.read_text(encoding="utf-8")
+
+        # MULTI-LINE, in `goal`: a field this writer actually reads AND does
+        # not truncate. `context` is also read but is CUT AT 197 CHARACTERS, so
+        # a carrier placed beyond that offset is silently dropped and the arm
+        # returns a clean negative. That truncation is a FIXTURE TRAP, not a
+        # mitigation -- `goal` here and every field of the entry writer are
+        # untruncated, so the machine path is not bounded by it.
+        carrier = f"line one\n{PINNED_START_MARKER}\nline three"
+        wm.sync_retrieved_to_claude_md(
+            memories=[{"context": "c", "goal": carrier}],
+            query="q", scores=[0.9], memory_ids=["mid"])
+
+        after = target.read_text(encoding="utf-8")
+        assert after != before, "the writer did not run; this arm measured nothing"
+        assert after.count(PINNED_START_MARKER) > 1, (
+            "the carrier was never placed, so adjacency held trivially"
+        )
+        assert self._adjacent(after) is True
+
+    def test_the_below_heading_writer_cannot_break_adjacency(self, tmp_path, monkeypatch):
+        import working_memory as wm
+        target = self._project(tmp_path, monkeypatch)
+        before = target.read_text(encoding="utf-8")
+
+        wm.sync_to_claude_md(
+            memory={"context": "c", "goal": "g",
+                    "lessons_learned": f"first\n{PINNED_START_MARKER}\nthird"},
+            target=target)
+
+        after = target.read_text(encoding="utf-8")
+        assert after != before, "the writer did not run; this arm measured nothing"
+        assert after.count(PINNED_START_MARKER) > 1, (
+            "the carrier was never placed, so adjacency held trivially"
+        )
+        assert self._adjacent(after) is True
+
+    def test_the_join_cannot_FUSE_the_marker_onto_another_line(self, tmp_path, monkeypatch):
+        """AMENDMENT 4. Adjacency rests on TWO structural properties of the
+        rebuild, not one, and this is the second: `section_text` ends with a
+        newline, so joining it to an `after_section` that begins at the marker
+        cannot produce `...text<marker>` on a single line.
+
+        THE INTUITION HERE IS INVERTED, AND THE PREDICATE MUST NOT BE ALLOWED
+        TO STAND IN FOR THIS TEST. If the join ever fused, the STRIPPED
+        comparison would CORRECTLY REFUSE the fused line -- `text marker`
+        strips to itself, which is not the marker -- so the detector would
+        report not-marked AND RE-INSERT. The comparison being right is exactly
+        what makes fusion dangerous; it is not what protects against it. The
+        protection is structural, so it needs a structural assertion.
+
+        (It is also a third reason not to use `endswith`: that variant would
+        silently ACCEPT a fused line, reporting marked while the marker is not
+        where the writer puts it.)
+        """
+        import working_memory as wm
+        from shared.claude_md_manager import extract_managed_region
+        from shared.pin_markers import _PINNED_HEADING
+        target = self._project(tmp_path, monkeypatch)
+        wm.sync_retrieved_to_claude_md(
+            memories=[{"context": "c", "goal": f"one\n{PINNED_START_MARKER}\nthree"}],
+            query="q", scores=[0.9], memory_ids=["mid"])
+
+        region, _ = extract_managed_region(target.read_text(encoding="utf-8"))
+        heading = _PINNED_HEADING.search(region)
+        marker_line = region[:heading.start()].splitlines()[-1]
+        assert marker_line == marker_line.strip() == PINNED_START_MARKER, (
+            "the marker line has fused with adjacent content; the detector "
+            "will stop recognising it and re-insert"
+        )
+
+    def test_the_structural_trailing_blank_is_present(self, tmp_path, monkeypatch):
+        """THE SOLE REASON a machine-placed carrier cannot reach adjacency, and
+        nothing else tests it. The Retrieved Context rebuild always emits a
+        trailing blank line before the next section; if a future change drops
+        it, a carrier could occupy the adjacent line and adjacency would
+        degrade SILENTLY with no other failing test.
+        """
+        import working_memory as wm
+        from shared.claude_md_manager import extract_managed_region
+        from shared.pin_markers import _PINNED_HEADING
+        target = self._project(tmp_path, monkeypatch)
+        wm.sync_retrieved_to_claude_md(
+            memories=[{"context": "c", "goal": f"one\n{PINNED_START_MARKER}\nthree"}],
+            query="q", scores=[0.9], memory_ids=["mid"])
+
+        region, _ = extract_managed_region(target.read_text(encoding="utf-8"))
+        heading = _PINNED_HEADING.search(region)
+        gap_lines = region[:heading.start()].splitlines()
+        # The line immediately above the marker line must be blank -- that is
+        # the structural separator the rebuild emits.
+        assert gap_lines[-1].strip() == PINNED_START_MARKER
+        assert gap_lines[-2].strip() == "", (
+            "the structural trailing blank is gone; a machine-placed carrier "
+            "can now reach the adjacent line"
+        )
+
+
+class TestCardinalRegression:
+    """THE LIKELIEST WAY THIS FIX GOES WRONG, and it is strictly worse than the
+    defect being fixed: if the detector stops recognising the plugin's own
+    marker, every pin command re-inserts one.
+
+    TWO ROUTES REACH IT AND ONLY ONE IS BOUNDED. They look identical from
+    outside, which is why both are tested by name rather than one standing in
+    for the other.
+    """
+
+    def test_four_passes_yield_exactly_one_marker(self):
+        """The gate. Catches BOTH routes, because even the bounded one violates
+        `exactly one`."""
+        text = build_claude_md()
+        assert isinstance(plan_insertion(text), Insertion), "FIXTURE INVALID"
+        for _ in range(4):
+            planned = plan_insertion(text)
+            if isinstance(planned, Insertion):
+                text = apply_insertion(text, planned)
+        assert text.count(PINNED_START_MARKER) == 1, (
+            f"cardinal regression: {text.count(PINNED_START_MARKER)} markers "
+            "after four passes"
+        )
+
+    def test_whitespace_drift_does_not_accumulate_under_the_shipped_predicate(self):
+        """ROUTE 1, bounded even when it fails. Under a BYTE-EXACT predicate a
+        drifted marker line is unrecognised, one clean marker is re-inserted,
+        and the next pass matches THAT -- so the count reaches 2 and STOPS.
+        Under the shipped STRIPPED predicate it never reaches 2 at all.
+        """
+        text = build_claude_md()
+        planned = plan_insertion(text)
+        assert isinstance(planned, Insertion), "FIXTURE INVALID"
+        text = apply_insertion(text, planned).replace(
+            START_LINE, f"{PINNED_START_MARKER}   \n"
+        )
+        for _ in range(10):
+            p = plan_insertion(text)
+            if isinstance(p, Insertion):
+                text = apply_insertion(text, p)
+        assert text.count(PINNED_START_MARKER) == 1
+
+    def test_a_broken_gap_computation_grows_without_bound(self):
+        """ROUTE 2, UNBOUNDED, and the reason route 1 must not stand in for it.
+        A detector looking at the wrong place never matches the marker it just
+        emitted, so nothing halts. Simulated by a predicate that always reports
+        `not marked` -- the shape any wrong-region or off-by-one bug takes.
+
+        This test does NOT exercise shipped code. It exists to show that the
+        four-passes gate above is measuring something real: if growth were
+        impossible, that gate would be vacuous.
+        """
+        text = build_claude_md()
+        assert isinstance(plan_insertion(text), Insertion), "FIXTURE INVALID"
+        for _ in range(4):
+            planned = plan_insertion(text)
+            if isinstance(planned, Insertion):
+                text = apply_insertion(text, planned)
+            else:
+                # A broken detector would not have returned a SkipReason here.
+                text = apply_insertion(
+                    text, Insertion(text.index("## Pinned Context"), START_LINE)
+                )
+        assert text.count(PINNED_START_MARKER) > 1, (
+            "the unbounded route could not be reproduced, so the four-passes "
+            "gate may be vacuous"
+        )
+
+
 class TestFencedBodyRefusal:
     """A pinned body containing ANY fence marker is refused.
 
@@ -654,16 +938,33 @@ class TestIdempotenceOnASingleMarker:
         assert not hasattr(SkipReason, "UNPAIRED")
         assert not hasattr(SkipReason, "INVERTED_PAIR")
 
-    def test_presence_is_detected_wherever_the_marker_sits(self):
-        """NON-VACUITY for the presence check: a marker anywhere in the file
-        must be seen, so the check cannot be an accident of position."""
+    def test_only_the_writer_emitted_POSITION_counts_as_marked(self):
+        """SUPERSEDES an earlier version of this test that asserted the marker
+        was detected "wherever it sits". That assertion pinned the DEFECT: a
+        whole-file substring search treats a document merely MENTIONING the
+        marker as already migrated, and refuses it permanently.
+
+        The contract is now positional. Only the shape `apply_insertion` emits
+        counts, so a copy anywhere else leaves the document writable.
+        """
         old = build_claude_md()
-        for placed in (
-            START_LINE + old,
-            old.replace("## Working Memory", START_LINE + "## Working Memory"),
-            old + START_LINE,
-        ):
-            assert plan_insertion(placed) is SkipReason.ALREADY_MARKED
+        planned = plan_insertion(old)
+        assert isinstance(planned, Insertion), "FIXTURE INVALID"
+        marked = apply_insertion(old, planned)
+
+        # The writer's own position: marked.
+        assert plan_insertion(marked) is SkipReason.ALREADY_MARKED
+
+        # Every other position: NOT marked, so the write still proceeds.
+        for label, placed in [
+            ("prepended to the file", f"{PINNED_START_MARKER}\n" + old),
+            ("above another heading",
+             old.replace("## Working Memory", f"{PINNED_START_MARKER}\n## Working Memory")),
+            ("appended to the file", old + f"{PINNED_START_MARKER}\n"),
+        ]:
+            assert plan_insertion(placed) is not SkipReason.ALREADY_MARKED, (
+                f"{label}: a stray copy still reads as a completed migration"
+            )
 
 
 # --------------------------------------------------------------------------
@@ -1058,6 +1359,51 @@ class TestFencedBodyCensusEvent:
         """NON-VACUITY. An event emitted unconditionally would count nothing."""
         events = self._capture(monkeypatch, outcome)
         assert [e["type"] for e in events] == ["pin_marker_write"]
+
+
+class TestCollisionIsDistinguishableFromCompletedMigration:
+    """THE OUTCOME SPLIT. A refused migration and a completed one used to be the
+    same journal entry, so a collision was reported under a SUCCESS-shaped
+    label and was unobservable.
+
+    RESTORED OBSERVABILITY, NOT A NEW FEATURE: `unpaired` and `inverted_pair`
+    were deleted as unreachable, they were unreachable for a PAIR reason, and
+    the condition they reported migrated into the success label rather than
+    vanishing with the pair.
+    """
+
+    def test_an_own_line_quote_in_the_body_reports_a_collision(self, tmp_path):
+        """Narrowing the detector does not CLOSE the collision -- this document
+        falls through to the write and the certificate refuses it. What changes
+        is that the refusal is now named.
+        """
+        original = build_claude_md(
+            pinned_body=f"### A pin\n{PINNED_START_MARKER}\nmore\n\n"
+        )
+        target = tmp_path / "CLAUDE.md"
+        target.write_text(original, encoding="utf-8")
+        rc, out, err = run_hook(
+            {"hook_event_name": "UserPromptSubmit", "prompt": "/PACT:pin-memory"},
+            tmp_path,
+        )
+        assert rc == 0
+        assert target.read_text(encoding="utf-8") == original, (
+            "the write proceeded into an ambiguous document"
+        )
+
+    def test_the_two_refusal_reasons_are_different_values(self):
+        """A collision and an assembly defect call for opposite responses, so
+        they must not share an outcome string."""
+        assert SkipReason.MARKER_COLLISION.value != "certificate_failed"
+        assert SkipReason.MARKER_COLLISION.value != SkipReason.ALREADY_MARKED.value
+
+    def test_a_completed_migration_still_reports_already_marked(self):
+        """NON-VACUITY for the split: if everything reported a collision, the
+        distinction would be worthless."""
+        old = build_claude_md()
+        planned = plan_insertion(old)
+        assert isinstance(planned, Insertion), "FIXTURE INVALID"
+        assert plan_insertion(apply_insertion(old, planned)) is SkipReason.ALREADY_MARKED
 
 
 class TestRegistration:

@@ -229,6 +229,7 @@ def _plan_and_write() -> str:
             _atomic_write_text,
             file_lock,
         )
+        from shared.claude_md_manager import PINNED_START_MARKER
         from shared.pin_markers import (
             SkipReason,
             apply_insertion,
@@ -252,8 +253,18 @@ def _plan_and_write() -> str:
         new_content = apply_insertion(content, planned)
         if not certify_expel_nothing(content, new_content, planned):
             # The composition could not be proven byte-identical to the
-            # original plus the two marker lines. Refusing is the safe
-            # direction and there is no repair attempt.
+            # original plus the marker line. Refusing is the safe direction and
+            # there is no repair attempt.
+            #
+            # THE TWO REASONS THIS CAN FAIL ARE REPORTED SEPARATELY, because
+            # they call for opposite responses. A document that already carries
+            # the marker somewhere the writer did not put it is a COLLISION --
+            # expected, benign, and something a human may want to see counted.
+            # Anything else is an ASSEMBLY defect in this plugin's own code.
+            # Reporting both as one outcome is what let the collision hide
+            # under a success-shaped label before the detector was narrowed.
+            if PINNED_START_MARKER in content:
+                return SkipReason.MARKER_COLLISION.value
             return "certificate_failed"
 
         with file_lock(path):

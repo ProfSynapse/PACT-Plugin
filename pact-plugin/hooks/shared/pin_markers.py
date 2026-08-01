@@ -397,11 +397,26 @@ def certify_expel_nothing(old: str, new: str, ins: Insertion) -> bool:
     - removing every occurrence of that line from `new` reproduces `old`
       exactly, which catches a byte that moved without the length changing.
 
-    THE `.replace` IS DELIBERATELY UNBOUNDED. If `old` quotes the marker
-    literal in the user's own prose, an unbounded replace strips that
-    occurrence from `new` while the one in `old` remains, the equality fails,
-    and the write is refused. A count-limited replace would mask exactly that
-    case. This guard therefore needs no census of how often such prose occurs.
+    THE `.replace` IS DELIBERATELY UNBOUNDED, AND ITS REACH IS NARROWER THAN
+    THIS DOCSTRING USED TO CLAIM. It replaces the marker line -- marker PLUS
+    NEWLINE -- not the marker. So it catches a quote only when that quote is
+    itself followed by a newline. MEASURED, on the three shapes a document can
+    quote the marker in:
+
+        marker alone on its own line   -> REFUSED
+        marker at the end of a line    -> REFUSED
+        marker in the MIDDLE of a line -> PASSES
+
+    The mid-line case passes because `old` then contains no `marker + newline`
+    at all, so the single inserted occurrence is removed cleanly and the
+    equality holds. THE EARLIER CLAIM THAT THIS INDEPENDENTLY CATCHES `a
+    document quoting the literal` WAS FALSE FOR THAT SHAPE, and it was false
+    when written rather than broken later.
+
+    Passing the mid-line case is the correct outcome, not a residual hole: a
+    marker in the middle of a line is not a boundary, the write proceeds
+    normally, and the next pass reports the document as already marked. What
+    was wrong was the claim's SCOPE, not the behaviour.
 
     ITS SCOPE NARROWED WHEN THE SECOND MARKER WENT, AND THE NARROWING IS
     MEASURED RATHER THAN ARGUED. Run at EVERY offset from 0 to len(old), on
