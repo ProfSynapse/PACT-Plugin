@@ -176,6 +176,21 @@ class SkipReason(str, Enum):
     # The pinned body contains a fenced code block. See `_body_contains_a_fence`.
     FENCED_BODY = "noop_fenced_body"
     ALREADY_MARKED = "already_marked"
+    # A document that CONTAINS the marker somewhere, but not in the position
+    # this writer emits, and whose write was therefore refused by the
+    # certificate. Split out of ALREADY_MARKED, which reported it under a
+    # SUCCESS-shaped label -- a refused migration and a completed one were the
+    # same journal entry, so the collision was unobservable.
+    #
+    # THIS IS RESTORED OBSERVABILITY, NOT A NEW FEATURE, and the history is the
+    # reason it is worth an enum member. `unpaired` and `inverted_pair` were
+    # deleted as unreachable. They were unreachable for a PAIR reason -- one
+    # marker cannot be unpaired or inverted -- but the CONDITION they reported,
+    # a document carrying the marker in a shape the writer did not make, did
+    # not vanish with the pair. It migrated into the success label. A signal
+    # removed as dead code was the only observability for a live hazard, and
+    # this is the second time in this arc that has happened.
+    MARKER_COLLISION = "noop_marker_collision"
     # Totality guard. The five above enumerate every DESIGNED outcome; this one
     # exists so the function can promise it never raises without that promise
     # depending on a saturated type. Every operation in `plan_insertion` is a
