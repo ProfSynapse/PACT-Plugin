@@ -674,6 +674,93 @@ class TestPinCommentMixedLine_RuledAcceptance:
         assert _extract_body_chars(self.ALONE) == 0
 
 
+class TestPinCommentSplitComment_RuledAcceptance:
+    """RULED ACCEPTANCE for a pin comment SPLIT ACROSS TWO LINES.
+
+    THIS PINS THE CHARGE, AND IT IS A REQUIREMENT. Do not confuse it with
+    `TestPinCommentMultiLine_Characterization` directly below, which pins the
+    PATTERN and says in its own docstring that a remediation is expected to
+    change its values. That class disclaims what it appears to guard; THIS one
+    does not. A failure here is not a delta to review and absorb — it is a
+    ruling being reversed.
+
+    THE BEHAVIOUR. `_extract_body_chars` strips per line, so a comment that
+    spans a line break is not stripped at all and every one of its characters
+    counts against the curator's budget.
+
+    WHY THAT IS CORRECT RATHER THAN A COST TO BE REPAID. `parse_pins`
+    attributes only after `splitlines()`, so a comment spanning a line break is
+    NOT A COMMENT to the attribution path — it sets no date and grants no
+    override. The previous whole-body strip removed it anyway, which is the
+    two-oracles-disagree defect this whole change exists to remove. Charging it
+    is what AGREEMENT between the two paths looks like, not a regression that a
+    later fix should undo.
+
+    THIS WAS THE FIRST OF THE FOUR RULINGS AND IT WAS RULED DELIBERATELY. The
+    charge rises for this shape, and near the cap that turns some edits from
+    allowed into denied. Live reachability was measured at ZERO. The ruling
+    weighed a bounded, measured cost against re-opening the defect.
+
+    DO NOT "FIX" THIS. The repair someone reaches for first is to keep the line
+    bound and add a second whole-body pass that re-strips the split comment.
+    That silently reverses this ruling, and before this class existed it passed
+    the entire suite.
+
+    STANDING ORDER: if these tests fail, RE-OPEN THE RULING. Do not adjust the
+    test to match new behaviour.
+    """
+
+    OPEN = "<!-- pinned: 2026-02-02,"
+    CLOSE = "ratio > 3 -->"
+    SPLIT = OPEN + "\n" + CLOSE
+    JOINED = OPEN + " " + CLOSE
+
+    def test_a_split_comment_is_not_stripped_and_its_characters_count(self):
+        """The ruled behaviour, as a DIRECT OBSERVATION with no magic number.
+
+        Nothing is removed, so the charge is the whole string. Asserted against
+        the fixture's own length rather than a literal, so re-wording the
+        fixture cannot make this a false regression.
+        """
+        from pin_caps import _extract_body_chars
+
+        assert _extract_body_chars(self.SPLIT) == len(self.SPLIT), (
+            "a comment spanning a line break must NOT be stripped; its "
+            "characters count, which is the ruled acceptance recorded above"
+        )
+
+    def test_the_same_text_on_one_line_is_stripped_to_nothing(self):
+        """CONTROL, and it must PASS for the assertion above to mean anything.
+
+        Identical text, one line instead of two. Here the strip and attribution
+        agree that it IS a comment, and it costs nothing. The CONTRAST between
+        the two is the finding: the line break is the only difference, and it
+        is what decides whether the characters count.
+        """
+        from pin_caps import _extract_body_chars
+
+        assert _extract_body_chars(self.JOINED) == 0
+
+    def test_a_split_comment_inside_a_pin_body_is_charged_to_that_pin(self):
+        """The same fact where a curator meets it, rather than on a bare string.
+
+        Without this the class would pin a helper's behaviour on an input no
+        document produces.
+        """
+        from pin_caps import parse_pins
+
+        body = "prose line one"
+        region = (
+            "<!-- pinned: 2026-01-01 -->\n"
+            f"### Alpha\n{body}\n{self.SPLIT}\n"
+        )
+        pin = parse_pins(region)[0]
+        assert pin.body_chars == len(body) + 1 + len(self.SPLIT), (
+            "the split comment's characters must be charged to the pin whose "
+            "body contains them"
+        )
+
+
 class TestPinCommentMultiLine_Characterization:
     """CHARACTERIZATION OF CURRENT BEHAVIOUR. This is NOT a requirement.
 
