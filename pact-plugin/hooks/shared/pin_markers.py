@@ -61,10 +61,14 @@ from shared.claude_md_manager import (
 #     "cannot import name ... from partially initialized module"
 #
 # The control is what makes the two clean arms readable: the harness CAN detect a
-# real cycle, so their success is a result rather than a silent no-op. A
-# re-export is safe because `from shared.claude_md_manager import ...` binds a
-# SUBMODULE, and Python resolves that without requiring the parent package's
-# `__init__` to have finished executing.
+# real cycle, so their success is a result rather than a silent no-op.
+#
+# THE MECHANISM, also measured rather than reasoned: `from
+# shared.claude_md_manager import ...` resolves a SUBMODULE, and a submodule
+# import needs only the parent package present in `sys.modules` with its
+# `__path__` set. Probed from inside a partially-executed `shared/__init__.py`:
+# `"shared" in sys.modules` is True and `__path__` is already bound there, so a
+# half-initialised package still resolves its own submodules.
 #
 # So the condition to avoid is not a re-export. It is a module in this import
 # chain -- `claude_md_manager` or `staleness` -- importing `pin_markers`.
