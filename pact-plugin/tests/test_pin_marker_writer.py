@@ -955,15 +955,20 @@ class TestIdempotenceOnASingleMarker:
         # The writer's own position: marked.
         assert plan_insertion(marked) is SkipReason.ALREADY_MARKED
 
-        # Every other position: NOT marked, so the write still proceeds.
+        # Every other position: the write PROCEEDS. Asserted as
+        # `isinstance(..., Insertion)` and deliberately NOT as `is not
+        # ALREADY_MARKED` -- "not the old wrong answer" is satisfied by ANY
+        # refusal, including a wrong one, and is not the same claim as "the
+        # right answer". An earlier draft of this test used the weak form.
         for label, placed in [
             ("prepended to the file", f"{PINNED_START_MARKER}\n" + old),
             ("above another heading",
              old.replace("## Working Memory", f"{PINNED_START_MARKER}\n## Working Memory")),
             ("appended to the file", old + f"{PINNED_START_MARKER}\n"),
         ]:
-            assert plan_insertion(placed) is not SkipReason.ALREADY_MARKED, (
-                f"{label}: a stray copy still reads as a completed migration"
+            assert isinstance(plan_insertion(placed), Insertion), (
+                f"{label}: a stray copy did not leave the document writable "
+                f"(got {plan_insertion(placed)!r})"
             )
 
 
