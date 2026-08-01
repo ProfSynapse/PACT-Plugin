@@ -156,6 +156,37 @@ MANAGED_END_MARKER = "<!-- PACT_MANAGED_END -->"
 MEMORY_START_MARKER = "<!-- PACT_MEMORY_START -->"
 MEMORY_END_MARKER = "<!-- PACT_MEMORY_END -->"
 
+# Declared boundary of the `## Pinned Context` section. The pinned region's
+# extent is INFERRED today -- every reader guesses where the section ends from
+# a terminator pattern. These two literals let the extent be DECLARED instead.
+# Nothing reads them yet; the writer that inserts them is pin_marker_writer.py.
+#
+# TWO PROPERTIES OF THESE EXACT NAMES ARE LOAD-BEARING, both measured:
+#
+# 1. BOTH names carry a `PACT_MEMORY_` prefix, so BOTH are matched by every
+#    scan-terminator alternation built from PACT_BOUNDARY_PREFIXES below. That
+#    is not decoration. Canonical section order puts `## Retrieved Context`
+#    ABOVE `## Pinned Context`, so a start marker on a new line above the
+#    pinned heading sits inside the span that the Retrieved Context writer
+#    REBUILDS from recognised entries only. A marker the alternation does not
+#    match fails to terminate that scan, rides the last dated entry as a
+#    passenger, and is deleted when rotation evicts that entry -- or at the
+#    first save when the section holds no dated entry. A matched marker
+#    terminates the scan at the true end of Retrieved Context and lands in the
+#    span the rebuild preserves verbatim.
+#
+# 2. NEITHER literal CONTAINS an existing marker literal as a substring, and
+#    the qualifier sits BEFORE the START and END words for that reason.
+#    `<!-- PACT_MEMORY_END_PINNED -->` would NOT contain `<!-- PACT_MEMORY_END
+#    -->` either, because of the trailing ` -->`, but that is a near miss
+#    rather than a margin. Containment matters because `extract_managed_region`
+#    uses first-find on both managed markers and session_resume runs an
+#    UNBOUNDED `content.replace(MEMORY_START_MARKER, ...)`: a literal that
+#    contained the memory start marker would collect a session block on every
+#    SessionStart.
+PINNED_START_MARKER = "<!-- PACT_MEMORY_PINNED_START -->"
+PINNED_END_MARKER = "<!-- PACT_MEMORY_PINNED_END -->"
+
 # Canonical H1 title for the managed block. Extracted as a constant so
 # the three template sites (ensure_project_memory_md, _build_migrated_content,
 # session_resume.update_session_info Case 0) cannot drift apart. Changing this
