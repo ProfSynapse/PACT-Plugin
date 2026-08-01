@@ -544,6 +544,18 @@ class TestNoCaughtTerminatorEndsThePinnedRegion:
         above measures what happens WHEN it complies, and this one measures what
         happens when it does not.
 
+        AND PROSE IS NOT A FALLBACK HERE, IT IS THE ONLY WRITER THERE IS. No
+        code path in this repository inserts a pin: the command file instructs
+        an LLM to perform the edit, and the caps gate only judges the resulting
+        Edit at PreToolUse. So there is no lower level to push this down to
+        without building one.
+
+        Tracked as issue #1358, which carries the measured table, the search
+        that establishes no pin-inserting code path exists, and the reason a
+        caps-gate refusal was DEFERRED rather than omitted: a new deny on that
+        control needs over-block certification of its own, and in this project
+        an over-block is worse than the gap it closes.
+
         SO THE INSTRUCTION'S EXISTENCE IS ASSERTED HERE TOO. It is the only
         mitigation this span has, and a mitigation that lives in prose can be
         deleted by anyone tidying a command file without a single test going

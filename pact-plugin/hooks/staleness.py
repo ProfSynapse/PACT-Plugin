@@ -274,11 +274,32 @@ def _find_declared_end_offset(content: str, start: int, literal: str) -> Optiona
         `.rstrip()` reports 2. A dropped pin is a cap that fails OPEN.
 
     THE SIBLING PREDICATES IN `pin_markers` USE `.strip()` AND THAT IS CORRECT
-    THERE, which is exactly why this one is easy to get wrong. `marker_line_present`
-    and `_is_already_marked` decide whether to REFUSE a write, so over-matching
-    is fail-safe. This function decides where a cap stops counting, so
-    over-matching is fail-open. Same-looking predicates, OPPOSITE failure
-    directions. Tolerance must follow the direction, not the resemblance.
+    THERE, which is exactly why this one is easy to get wrong.
+    `marker_line_present` and `_is_already_marked` decide whether to REFUSE a
+    write, so over-matching costs a skipped write and is fail-SAFE. This
+    function decides where a cap stops counting, so over-matching drops a pin
+    out of the counted span and is fail-OPEN. Same-looking predicates, OPPOSITE
+    failure directions.
+
+    A PREDICATE'S TOLERANCE IS SET BY ITS FAILURE DIRECTION, NEVER BY SYMMETRY
+    WITH A PREDICATE THAT LOOKS LIKE IT.
+
+    HOW THIS NEARLY WENT WRONG, recorded because the mechanism is the reusable
+    part. `.strip()` was not chosen here carelessly. The argument FOR it is
+    written out in `_is_already_marked`'s docstring -- careful and measured, 6
+    of 6 against byte-exact's 3 of 6 -- and it was carried across to this
+    function. IT IS A CORRECT ARGUMENT ABOUT A DIFFERENT QUESTION. A docstring
+    states its conclusion out loud and leaves its premise implicit, so reasoning
+    lifted out of one arrives without the condition that made it true. The
+    premise there is "a match REFUSES a write". Here a match BOUNDS a region,
+    and the conclusion inverts with the premise.
+
+    THE SYMMETRY ERROR RUNS BOTH WAYS, so do not correct it in the other
+    direction either: having made THIS locator strict, do NOT go and tighten
+    the certificate's presence check to match. That check should stay
+    `.strip()`. Over-detection there refuses a write, which is the safe side.
+    Two policies, on purpose. Unifying them breaks one of the two, whichever
+    way you unify.
 
     Args:
         content: Text to scan (typically the managed region extract).

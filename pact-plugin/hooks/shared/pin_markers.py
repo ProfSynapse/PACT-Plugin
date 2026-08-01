@@ -20,6 +20,14 @@ DENIES, a pair with the insertion INSIDE DENIES, a pair with an append BELOW the
 END is ALLOWED. So `commands/pin-memory.md` must place new pins above the END
 marker, and this module is only half of that story.
 
+THAT HALF IS AN INSTRUCTION, NOT A MECHANISM, and the asymmetry is deliberate
+rather than unfinished. No code path in this repository inserts a pin -- the
+command file instructs an LLM to make the edit, and the caps gate only judges
+the resulting Edit. So nothing here can enforce the placement, and a test that
+composes the document the way the instruction says is a second opinion about
+the instruction rather than evidence that it was obeyed. Tracked as issue
+#1358, with the reason a caps-gate refusal was deferred rather than omitted.
+
 Used by: `hooks/pin_marker_writer.py`, which owns every side effect -- stdin,
 path resolution, the file lock, the atomic write and the journal. That split is
 not tidiness. The pinned-region cap this feature leads to is a TWO-STATE
