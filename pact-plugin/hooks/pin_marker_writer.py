@@ -229,8 +229,8 @@ def _plan_and_write() -> str:
             _atomic_write_text,
             file_lock,
         )
-        from shared.claude_md_manager import PINNED_START_MARKER
         from shared.pin_markers import (
+            START_LINE,
             SkipReason,
             apply_insertion,
             certify_expel_nothing,
@@ -257,13 +257,28 @@ def _plan_and_write() -> str:
             # there is no repair attempt.
             #
             # THE TWO REASONS THIS CAN FAIL ARE REPORTED SEPARATELY, because
-            # they call for opposite responses. A document that already carries
-            # the marker somewhere the writer did not put it is a COLLISION --
-            # expected, benign, and something a human may want to see counted.
-            # Anything else is an ASSEMBLY defect in this plugin's own code.
-            # Reporting both as one outcome is what let the collision hide
-            # under a success-shaped label before the detector was narrowed.
-            if PINNED_START_MARKER in content:
+            # they call for opposite responses. Reporting both as one outcome
+            # is what let the collision hide under a success-shaped label
+            # before the detector was narrowed.
+            #
+            # COLLISION -- the document already carries START_LINE, the marker
+            # followed by a newline, which is exactly what the certificate's
+            # unbounded replace strips. That is an own-line or end-of-line copy
+            # the writer did not put there: expected, benign, and worth
+            # counting.
+            #
+            # THE TEST IS `START_LINE`, NOT THE BARE MARKER. A mid-line mention
+            # is invisible to that replace, so it cannot cause this failure at
+            # all. Testing for the bare marker would label a genuine assembly
+            # defect as a benign collision on any document that merely mentions
+            # the marker in running text.
+            #
+            # ASSEMBLY DEFECT -- anything else. This branch is reachable only
+            # if apply_insertion assembles a document the certificate rejects
+            # for some reason OTHER than a pre-existing marker line. It is
+            # defensive, not dead: deleting it means arguing that
+            # apply_insertion cannot be wrong.
+            if START_LINE in content:
                 return SkipReason.MARKER_COLLISION.value
             return "certificate_failed"
 

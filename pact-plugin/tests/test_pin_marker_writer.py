@@ -1408,6 +1408,115 @@ class TestCollisionIsDistinguishableFromCompletedMigration:
             "the write proceeded into an ambiguous document"
         )
 
+    def test_a_stray_own_line_copy_is_labelled_a_collision(
+        self, tmp_path, monkeypatch
+    ):
+        """ARM 1 -- the label fires on the condition that CAUSED the failure.
+
+        The stray copy sits under Working Memory, where the adjacency detector
+        does not look, so the planner returns an `Insertion` and the
+        CERTIFICATE is the mechanism that refuses. No injection: this is a
+        document a user could be holding today.
+
+        FAILING INPUT: a planner that refuses this document first -- the
+        `Insertion` precondition reddens and the certificate is masked again
+        -- or a certificate degraded to a constant True, which reddens the
+        outcome assertion.
+        """
+        import pin_marker_writer
+        from staleness import _resolve_project_claude_md_with_base
+
+        original = build_claude_md(
+            working=(
+                f"\n### 2026-01-02\nA working entry.\n{PINNED_START_MARKER}\n"
+            )
+        )
+        # PRECONDITIONS, asserted before any result is read.
+        assert START_LINE in original, "FIXTURE INVALID: no own-line copy"
+        assert isinstance(plan_insertion(original), Insertion), (
+            "FIXTURE INVALID: the planner refused, so the certificate branch "
+            "is never reached and any outcome below is a clean negative"
+        )
+        (tmp_path / "CLAUDE.md").write_text(original, encoding="utf-8")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+        resolved, _base = _resolve_project_claude_md_with_base()
+        assert resolved == tmp_path / "CLAUDE.md", (
+            "FIXTURE INVALID: the resolver escaped tmp_path and would read a "
+            "real CLAUDE.md"
+        )
+
+        outcome = pin_marker_writer._plan_and_write()
+
+        # The collision value is produced at exactly ONE site, inside the
+        # certificate-failure branch, so the value is its own witness that the
+        # branch was reached.
+        assert outcome == SkipReason.MARKER_COLLISION.value
+
+    def test_a_mid_line_mention_does_not_borrow_the_collision_label(
+        self, tmp_path, monkeypatch
+    ):
+        """ARM 2 -- THE ARM THAT PROVES THE FIX. It cannot be built from a
+        document alone; it needs an injected assembly defect.
+
+        A mid-line mention is invisible to the certificate's unbounded
+        replace, so it cannot make the certificate fail by itself. The only
+        way to reach the failure branch while holding one is to break the
+        ASSEMBLY. Under the old predicate -- the bare marker -- that genuine
+        defect was reported as a benign collision.
+
+        FAILING INPUT: restoring the bare marker at the label site. This test
+        reddens and names the mislabel, while every other test in this file
+        stays green. That is the whole reason this arm exists.
+        """
+        import pin_marker_writer
+        import shared.pin_markers as pin_markers
+        from staleness import _resolve_project_claude_md_with_base
+
+        original = build_claude_md(
+            pinned_body=(
+                f"### A pin\nProse naming the {PINNED_START_MARKER} inline.\n\n"
+            )
+        )
+        # PRECONDITIONS. The second is what makes the arm DISCRIMINATING:
+        # without a bare-marker occurrence the OLD predicate would also have
+        # answered "not a collision", and the arm would prove nothing.
+        assert START_LINE not in original, (
+            "FIXTURE INVALID: the copy is not mid-line, so the certificate "
+            "would refuse for the collision reason instead"
+        )
+        assert PINNED_START_MARKER in original, (
+            "FIXTURE INVALID: no bare mention, so the old predicate is never "
+            "exercised and this arm cannot discriminate"
+        )
+        assert isinstance(plan_insertion(original), Insertion), (
+            "FIXTURE INVALID: the planner refused before the certificate"
+        )
+
+        def broken_assembly(content, ins):
+            return apply_insertion(content, ins) + "!"
+
+        monkeypatch.setattr(pin_markers, "apply_insertion", broken_assembly)
+        (tmp_path / "CLAUDE.md").write_text(original, encoding="utf-8")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+        resolved, _base = _resolve_project_claude_md_with_base()
+        assert resolved == tmp_path / "CLAUDE.md", (
+            "FIXTURE INVALID: the resolver escaped tmp_path and would read a "
+            "real CLAUDE.md"
+        )
+
+        outcome = pin_marker_writer._plan_and_write()
+
+        # MEASURED, NOT ASSUMED: the injection reached the writer. The import
+        # of `apply_insertion` is function-local, so if it had bound an
+        # unpatched reference the write would have succeeded and this would
+        # read `written`.
+        assert outcome != "written", (
+            "the injected assembly defect never took effect, so the outcome "
+            "below says nothing about the label"
+        )
+        assert outcome == "certificate_failed"
+        assert outcome != SkipReason.MARKER_COLLISION.value
+
     def test_the_two_refusal_reasons_are_different_values(self):
         """A collision and an assembly defect call for opposite responses, so
         they must not share an outcome string."""
