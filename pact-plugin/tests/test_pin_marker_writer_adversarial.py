@@ -941,38 +941,144 @@ class TestFenceRefusalDoesNotOverMatch:
 # 5. Marker state is decided on the WHOLE FILE, the section on the REGION
 # --------------------------------------------------------------------------
 
-class TestWholeFileMarkerScope:
-    """`plan_insertion` uses `content.find` for both markers -- the whole file,
-    first-find -- while the section checks are bounded to the managed region.
-    A marker literal quoted in a user's prose OUTSIDE the region therefore
-    decides the outcome.
+class TestOnlyTheAdjacentLineSuppressesTheWrite:
+    """The detector recognises ONLY what the writer emits: the last line of the
+    gap above the pinned heading, stripped, equal to the symbol.
 
-    This repository is the most likely first site, because its own CLAUDE.md
-    pins plugin-mechanics notes. The direction is what matters: it must
-    refuse, never write twice.
+    THIS CLASS REPLACES ONE THAT ASSERTED THE OPPOSITE, and the history is kept
+    because it is the more useful half. Its predecessor observed -- correctly --
+    that the detector searched the WHOLE FILE while the section checks were
+    region-bounded, and then pinned the resulting refusal as intended
+    behaviour. Refusing IS the safe direction, which is why it read as a
+    finding rather than a defect. What the assertion did not capture is that
+    the refusal was UNCONDITIONAL and PERMANENT: a document that merely
+    MENTIONED the symbol was never revisited, and the memory formatters
+    interpolate harvested text into the target file, so a memory DISCUSSING
+    the symbol creates a carrier with no human involved.
+
+    So the direction was right and the duration was wrong, and a test that
+    checks direction without duration certifies a feature that has switched
+    itself off.
     """
 
-    def test_a_stray_start_marker_above_the_region_refuses_the_write(self):
-        """A marker literal quoted in prose OUTSIDE the managed region still
-        decides the outcome, because the marker check is whole-file first-find
-        while the section checks are region-bounded.
+    # (label, carrier placement, whether the write should proceed)
+    CARRIERS = [
+        ("no carrier at all", "", "", True),
+        ("mid-line above the managed region", "prose", "", True),
+        ("mid-line inside the pinned body", "", "prose", True),
+    ]
 
-        The assertion is on the DIRECTION -- refuse, never write a second time
-        -- rather than on which skip reason names it, because the reason set
-        depends on how many marker literals the design carries and that is not
-        the property under test here.
+    def test_a_clean_document_receives_the_marker(self):
+        """Baseline. Kept from the predecessor class, where it was the
+        non-vacuity arm for a refusal that no longer exists -- the assertion
+        is still worth making on its own, so it is renamed rather than
+        dropped."""
+        planned = plan_insertion(claude_md(n_pins=1))
+        assert isinstance(planned, Insertion)
+
+    def test_a_carrier_outside_the_adjacent_line_does_not_suppress_the_write(self):
+        """THE CORRECTED CONTRACT. A carrier anywhere but the adjacent line
+        must NOT stop the write.
+
+        Asserted as `isinstance(..., Insertion)` rather than as "not
+        already-marked", because the weak form is satisfied by ANY other
+        outcome -- including a refusal under a different name, which is the
+        exact failure this replaces.
+
+        FAILING INPUT: a detector that reverts to a whole-file substring test.
+        It returns a `SkipReason` for both rows and this reddens. Verified by
+        construction: the predecessor assertion, which demanded a `SkipReason`
+        on this same fixture, failed against the corrected planner.
         """
-        doc = claude_md(n_pins=1)
-        doc = "I documented " + PINNED_START_MARKER + " in my notes.\n\n" + doc
-        planned = plan_insertion(doc)
-        assert isinstance(planned, SkipReason), (
-            f"a stray marker literal must refuse, got {planned}"
+        above = claude_md(n_pins=1)
+        above = f"I documented {PINNED_START_MARKER} in my notes.\n\n" + above
+        inside = claude_md(
+            pinned_body=f"### A pin\nI quoted {PINNED_START_MARKER} here\n\n"
+        )
+        for label, doc in (("above the region", above), ("inside the body", inside)):
+            assert_is_shipping_shape(doc)
+            assert PINNED_START_MARKER in doc, f"{label}: fixture carries no carrier"
+            planned = plan_insertion(doc)
+            assert isinstance(planned, Insertion), (
+                f"{label}: a carrier off the adjacent line suppressed the "
+                f"write, got {planned}. The detector is matching somewhere "
+                "other than the line the writer emits."
+            )
+
+    def test_a_carrier_ON_the_adjacent_line_still_suppresses_it(self):
+        """THE POSITIVE CONTROL, and the reason it must survive this rewrite.
+
+        Without it the class cannot catch a detector that NEVER matches, which
+        is worse than the defect being fixed: every pin command would re-insert
+        a marker and the count would grow without bound.
+
+        Inverting a fossilised test is precisely when its positive control gets
+        dropped as no-longer-relevant. It is MORE relevant here, not less.
+
+        FAILING INPUT: a detector that never matches -- it returns an
+        `Insertion` and this reddens.
+        """
+        doc = claude_md(n_pins=1).replace(
+            "## Pinned Context\n", f"{PINNED_START_MARKER}\n## Pinned Context\n", 1
+        )
+        assert_is_shipping_shape(doc)
+        assert plan_insertion(doc) is SkipReason.ALREADY_MARKED, (
+            "a marker on the adjacent line was not recognised as the writer's "
+            "own, so the next pin command would insert a second one"
         )
 
-    def test_the_refusal_is_not_universal(self):
-        """NON-VACUITY. Without this, a planner that refused every document
-        would pass the assertion above."""
-        assert isinstance(plan_insertion(claude_md(n_pins=1)), Insertion)
+    def test_a_carrier_never_causes_a_second_marker_to_be_emitted(self):
+        """THE PROPERTY THE PREDECESSOR WAS REALLY PINNING, kept because the
+        wrong contract was wrapped around a real guard.
+
+        Its original intent was that a carrier must never cause a DOUBLE WRITE.
+        That was previously guaranteed BY the defect -- the write never ran at
+        all -- so it was true for the wrong reason and cost nothing to assert.
+        Now the write DOES run, which makes the property non-trivial for the
+        first time.
+
+        The measure is what the WRITER emitted, not the total occurrence count,
+        because the carrier itself is one of the occurrences and is not ours.
+
+        FAILING INPUT: a detector that fails to recognise its own emitted
+        marker on the second pass. Every pass writes again and the count
+        climbs past `carriers + 1`.
+        """
+        for label, doc in (
+            ("above the region",
+             f"I documented {PINNED_START_MARKER} in my notes.\n\n"
+             + claude_md(n_pins=1)),
+            ("inside the body",
+             claude_md(pinned_body=f"### A pin\nI quoted {PINNED_START_MARKER} here\n\n")),
+        ):
+            carriers = doc.count(PINNED_START_MARKER)
+            outcomes = []
+            current = doc
+            for _ in range(4):
+                planned = plan_insertion(current)
+                if isinstance(planned, SkipReason):
+                    outcomes.append(planned.value)
+                    continue
+                composed = apply_insertion(current, planned)
+                if not certify_expel_nothing(current, composed, planned):
+                    outcomes.append("refused")
+                    continue
+                current = composed
+                outcomes.append("written")
+
+            assert outcomes[0] == "written", (
+                f"{label}: the first pass did not write, so this arm never "
+                f"reached the state it exists to test. outcomes={outcomes}"
+            )
+            assert outcomes[1:] == [SkipReason.ALREADY_MARKED.value] * 3, (
+                f"{label}: a later pass did not report already-marked. "
+                f"outcomes={outcomes}"
+            )
+            assert current.count(PINNED_START_MARKER) == carriers + 1, (
+                f"{label}: the writer emitted more than one marker across four "
+                f"passes -- {current.count(PINNED_START_MARKER)} occurrences "
+                f"against {carriers} carrier(s) plus one legitimate write."
+            )
 
     def test_a_second_pinned_heading_is_ignored_first_find_wins(self):
         """Documented behaviour: `re.search` takes the FIRST heading, so a
@@ -1169,16 +1275,108 @@ class TestCertificateRefusalReachability:
     recorded at `TestPlacementIsTheOnlyOffsetConstraint`.
     """
 
-    def test_a_stray_marker_is_refused_before_the_certificate_is_reached(self):
-        """`certificate_failed` is NOT reachable by the stray-literal route:
-        the planner's marker-state check refuses first. Recorded so a reader
-        does not assume a live guard where an earlier one already fired."""
-        doc = claude_md(n_pins=1)
-        doc = doc.replace("body prose", "I quoted " + PINNED_START_MARKER + " here", 1)
+    def test_a_carrier_on_its_own_line_reaches_the_certificate_and_is_refused(self):
+        """THE CERTIFICATE IS NOW REACHABLE BY THE CARRIER ROUTE, and that is
+        the two-independent-mechanisms property rather than a side effect.
+
+        The predecessor asserted the opposite -- that the planner refused first
+        so the certificate was never consulted. That was TRUE, and it was true
+        only because of the defect: an over-broad detector was firing early and
+        MASKING the later guard. Removing the mask makes the second mechanism
+        load-bearing for the first time.
+
+        PLACEMENT IS THE WHOLE FIXTURE. The certificate strips `START_LINE` --
+        the symbol PLUS its newline -- so a carrier sitting MID-LINE leaves
+        `START_LINE` absent from the original and the certificate PASSES. Only
+        a carrier occupying its OWN LINE puts `START_LINE` into the original
+        and makes the equality fail. The predecessor's fixture was mid-line, so
+        a rewrite that merely flipped its assertion would have demanded a
+        refusal that never comes.
+
+        FAILING INPUTS, two, and they are different mechanisms:
+          - the planner refusing first again: `isinstance(planned, Insertion)`
+            reddens, and the certificate is masked once more;
+          - the certificate degrading to a constant True: the refusal
+            assertion reddens.
+        """
+        doc = claude_md(
+            pinned_body=f"### A pin\nbody prose\n\n{PINNED_START_MARKER}\n\n"
+        )
+        assert_is_shipping_shape(doc)
+        assert f"{PINNED_START_MARKER}\n" in doc, (
+            "precondition: the carrier must occupy its own line, or the "
+            "certificate cannot observe it at all"
+        )
+
         planned = plan_insertion(doc)
-        assert isinstance(planned, SkipReason), (
-            "the planner must refuse a document quoting a marker literal, so "
-            "the certificate is never consulted on this input"
+        assert isinstance(planned, Insertion), (
+            f"the planner refused before the certificate was reached, got "
+            f"{planned}. The early guard is masking the later one again."
+        )
+        composed = apply_insertion(doc, planned)
+        assert certify_expel_nothing(doc, composed, planned) is False, (
+            "the certificate accepted a composition whose original already "
+            "carried the marker line; the second mechanism is not refusing"
+        )
+
+    def test_a_mid_line_carrier_does_NOT_reach_the_certificate(self):
+        """NON-VACUITY for the row above, and the measurement that decides its
+        fixture.
+
+        If the certificate refused on ANY carrier the test above would pass
+        without placement mattering, and the claim that the rewrite is a
+        fixture change rather than a claim change would be untested. Measured:
+        mid-line PASSES, own-line REFUSES.
+
+        FAILING INPUT: a certificate that strips the bare symbol rather than
+        the symbol-plus-newline. Both placements would then refuse and this
+        reddens.
+        """
+        doc = claude_md(
+            pinned_body=f"### A pin\nI quoted {PINNED_START_MARKER} here\n\n"
+        )
+        assert_is_shipping_shape(doc)
+        assert f"{PINNED_START_MARKER}\n" not in doc, (
+            "precondition: the carrier must NOT occupy its own line"
+        )
+        planned = plan_insertion(doc)
+        assert isinstance(planned, Insertion)
+        composed = apply_insertion(doc, planned)
+        assert certify_expel_nothing(doc, composed, planned) is True, (
+            "a mid-line carrier was refused by the certificate, so placement "
+            "no longer discriminates and the arm above proves nothing"
+        )
+
+    def test_the_writer_reports_a_collision_rather_than_an_assembly_defect(self):
+        """END TO END, over BYTES ON DISK, because the branch under test lives
+        in the WRITER and is unreachable from the planner alone.
+
+        A refused composition has two causes that call for opposite responses:
+        a document already carrying the marker is a COLLISION -- expected and
+        countable -- while anything else is an assembly defect in this
+        plugin's own code. Reporting them as one outcome is what let the
+        collision hide under a success-shaped label.
+
+        This is also the arm a planner-only rewrite would have missed
+        entirely: I predicted the certificate would refuse and did NOT predict
+        that the refusal surfaces under a distinct outcome name.
+
+        FAILING INPUTS: the collision branch collapsing back into
+        `certificate_failed`, or the write proceeding and changing the file.
+        """
+        rc, events, text = _run_hook_with_journal(
+            f"### A pin\nbody prose\n\n{PINNED_START_MARKER}\n\n",
+            "/PACT:pin-memory x",
+        )
+        assert rc == 0
+        outcomes = [e["outcome"] for e in events if e["type"] == "pin_marker_write"]
+        assert outcomes == [SkipReason.MARKER_COLLISION.value], (
+            f"the writer did not report a collision; got {outcomes}"
+        )
+        # BYTES ON DISK: a refused composition must leave the file alone, and
+        # the carrier must still be the only occurrence.
+        assert text.count(PINNED_START_MARKER) == 1, (
+            "the refused pass still altered the marker count on disk"
         )
 
 
