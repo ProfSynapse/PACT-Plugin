@@ -639,6 +639,272 @@ class TestStalenessModuleDirect:
         assert result is None
 
 
+class TestDeclaredPinnedEndMarker:
+    """The declared END boundary of `## Pinned Context`.
+
+    WHY THIS CLASS EXISTS AT ALL, stated first because it is the trap. The
+    declared parse is a NO-OP on every document that carries the shipped
+    marker name: `PINNED_END_MARKER` sits in the `PACT_MEMORY_` family, so the
+    INFERRED forward scan already stops at its line and the two offsets
+    coincide. A suite that only feeds documents to the parser therefore
+    certifies the change as a no-op, which it is, and PROVES NOTHING.
+
+    THE NON-VACUITY ARM IS `test_rename_arm_*` BELOW, AND IT MUTATES THE
+    CONSTANT, NOT THE DOCUMENT. That is the only configuration in which the
+    declared parse and the inferred scan disagree. Any future edit that drops
+    that arm leaves this class unable to fail for the right reason.
+    """
+
+    def _doc(self, pinned_body, above="", tail="## Working Memory\nnotes\n"):
+        """`above` goes between `## Retrieved Context` and the pinned heading.
+
+        THE START MARKER BELONGS THERE, NOT IN `pinned_body`. It carries the
+        `PACT_MEMORY_` prefix, so a copy placed as the body's first line
+        TERMINATES the scan at once and the section parses as empty (None).
+        The writer emits it immediately ABOVE the heading, and a fixture that
+        puts it below is testing a document the writer cannot produce.
+        """
+        from shared.claude_md_manager import (
+            MANAGED_START_MARKER, MANAGED_END_MARKER,
+        )
+        return (
+            "# Project\npreamble\n"
+            + MANAGED_START_MARKER + "\n"
+            "# PACT Framework and Managed Project Memory\n\n"
+            "## Retrieved Context\n\n"
+            + above
+            + "## Pinned Context\n"
+            + pinned_body + tail
+            + MANAGED_END_MARKER + "\ntail\n"
+        )
+
+    PIN_A = "<!-- pinned: 2026-01-01 -->\n### Alpha\nalpha body\n\n"
+    PIN_B = "<!-- pinned: 2026-01-02 -->\n### Beta\nbeta body\n\n"
+
+    def test_rename_arm_declared_parse_excludes_what_inferred_scan_charges(
+        self, monkeypatch
+    ):
+        """THE NON-VACUITY ARM. Rename the marker out of the boundary family
+        and the two parses diverge: the inferred scan overruns the marker and
+        charges its text to the pinned body, while the declared parse still
+        ends the region at it.
+
+        Today the marker escapes the body only because its NAME matches a
+        generic alternation -- an INCIDENTAL exclusion. This arm is what makes
+        the exclusion INTENTIONAL, and it is the sole measured difference
+        between the two parses.
+        """
+        import staleness
+
+        renamed = "<!-- PINNED_REGION_END -->"
+        # CONTROL: the rename must actually leave the family, or this arm
+        # silently degrades into the no-op case it exists to escape.
+        from shared.claude_md_manager import PACT_BOUNDARY_PREFIXES
+        assert not any(
+            renamed.startswith("<!-- " + p) for p in PACT_BOUNDARY_PREFIXES
+        ), "rename arm is vacuous: the substitute marker is still in the family"
+
+        content = self._doc(self.PIN_A + self.PIN_B + renamed + "\n")
+
+        # Arm 1: shipped constant -> the substitute is not the declared end,
+        # so the parse falls through to the inferred scan and CHARGES it.
+        inferred_body = staleness._parse_pinned_section(content)[2]
+
+        # Arm 2: the constant IS the substitute -> the declared parse excludes.
+        monkeypatch.setattr(staleness, "PINNED_END_MARKER", renamed)
+        declared_body = staleness._parse_pinned_section(content)[2]
+
+        assert renamed in inferred_body, (
+            "inferred scan should have overrun the out-of-family marker"
+        )
+        assert renamed not in declared_body, (
+            "declared parse must exclude the marker it was told to look for"
+        )
+        assert len(declared_body) < len(inferred_body), (
+            f"declared ({len(declared_body)}) must be shorter than inferred "
+            f"({len(inferred_body)}); equal lengths mean the arm went vacuous"
+        )
+
+    def test_absent_end_marker_uses_the_inferred_scan(self):
+        """Fail open. No marker at all is the production shape on day one."""
+        import staleness
+        with_marker = staleness._parse_pinned_section(
+            self._doc(self.PIN_A + self.PIN_B
+                      + staleness.PINNED_END_MARKER + "\n")
+        )[2]
+        without = staleness._parse_pinned_section(
+            self._doc(self.PIN_A + self.PIN_B)
+        )[2]
+        assert with_marker == without
+
+    def test_start_marker_without_end_does_not_raise_and_parses_the_same(self):
+        """Half-marked tolerance is REQUIRED, not optional. If the marker
+        writer lands before a document gains an END, every file it touches
+        carries a START alone. That is correct, not broken."""
+        import staleness
+        from shared.claude_md_manager import PINNED_START_MARKER
+
+        half = self._doc(self.PIN_A + self.PIN_B,
+                         above=PINNED_START_MARKER + "\n")
+        plain = self._doc(self.PIN_A + self.PIN_B)
+
+        half_parsed = staleness._parse_pinned_section(half)
+        assert half_parsed is not None, (
+            "a START-only document must still parse; None means the half-marked "
+            "state was treated as absent rather than tolerated"
+        )
+        assert half_parsed[2] == staleness._parse_pinned_section(plain)[2]
+
+    def test_heading_between_body_and_declared_end_is_not_swallowed(self):
+        """A foreign H2 section before the declared end must stay OUT of the
+        pinned span.
+
+        THE OUTCOME IS UNCHANGED; THE MECHANISM IS NOT. This case used to be
+        caught by a well-formedness gate that probed for headings. The gate is
+        gone: the parse now bounds the declared end by the inferred one, so an
+        interloping section stops the inferred scan and `min` takes it. The gate
+        was an enumeration of bad shapes and it enumerated them too narrowly --
+        headings yes, PACT boundary comments no -- which shipped a cardinal
+        over-block. This test survives because the PROPERTY survives.
+
+        Do not read a pass here as coverage of the alphabet. See
+        `test_span_never_exceeds_inferred_for_every_scan_terminator`, which is
+        the arm that ranges over the terminator alternation rather than over the
+        one member this test happens to use.
+        """
+        import staleness
+
+        content = self._doc(
+            self.PIN_A + self.PIN_B
+            + "## Interloper\nforeign content\n\n"
+            + staleness.PINNED_END_MARKER + "\n"
+        )
+        body = staleness._parse_pinned_section(content)[2]
+        assert "foreign content" not in body, (
+            "the gate must refuse a declared end that lies beyond a heading"
+        )
+        assert "## Interloper" not in body
+
+    def test_span_never_exceeds_inferred_for_every_scan_terminator(self):
+        """THE CEILING INVARIANT, ranged over the SCAN's alphabet.
+
+        THE INPUT ALPHABET IS DERIVED FROM THE TERMINATOR SCAN, NEVER FROM THE
+        PARSE RULE, and that is the whole point of this test rather than a
+        stylistic note. The predecessor gate probed `#{1,2}\\s`; the test written
+        for it exercised an H2 heading. Its alphabet was read off the
+        implementation, so it could not falsify the implementation's CHOICE of
+        alphabet -- it exercised exactly the shape the gate already covered, and
+        reported green while a boundary comment sailed through. A TEST WHOSE
+        INPUT SPACE COMES FROM THE CODE UNDER TEST CANNOT FALSIFY THAT CODE'S
+        CHOICE OF INPUT SPACE.
+
+        So the members here are enumerated from `PACT_BOUNDARY_PREFIXES` plus
+        the heading form -- the two branches of the scan's own alternation. A
+        fourth prefix added to that tuple appears here automatically.
+
+        THE ASSERTION IS THE INVARIANT ITSELF, not a table of expected offsets:
+        the span returned for a MARKED document is never larger than the span
+        returned for the same document unmarked. Unmarked is the pre-change
+        behaviour, so this states that no declared end can widen any region.
+
+        COUNTER-TEST PROTOCOL, TWO MUTANTS WITH DIFFERENT SIGNATURES. Both were
+        run; the second is the one that matters:
+
+          MUTANT A -- replace the `min` with a bare unbounded override.
+            EVERY member fails, headings included.
+
+          MUTANT B -- restore the shipped defect exactly: a heading-only probe
+            `#{1,2}\\s` guarding an unbounded override.
+            The HEADING members PASS and all three BOUNDARY members FAIL.
+
+        MUTANT B IS THE PROOF THAT THIS TEST WOULD HAVE CAUGHT THE SHIPPED
+        DEFECT, and its asymmetry is the reason the defect shipped: the gate
+        covered the heading subset, the test exercised the heading subset, and
+        the two agreed with each other while both missed the boundary subset.
+
+        A NOTE ON BUILDING MUTANT B, because getting it wrong reads like a
+        result. A first attempt over-escaped the pattern into a literal
+        backslash, which matched nothing, silently degrading mutant B into
+        mutant A -- every member failed and the asymmetry vanished. The tell was
+        that headings failed too. If you rebuild it, first assert the mutant
+        pattern MATCHES `## Interloper` and does NOT match a boundary comment;
+        otherwise you are testing a bare override and will conclude the wrong
+        thing about what this test covers.
+        """
+        import staleness
+        from shared.claude_md_manager import PACT_BOUNDARY_PREFIXES
+
+        members = [
+            ("h2 heading", "## Interloper\nforeign\n\n"),
+            ("h1 heading", "# Interloper\nforeign\n\n"),
+        ] + [
+            (f"boundary comment {p}", f"<!-- {p}NOTE -->\nforeign\n\n")
+            for p in PACT_BOUNDARY_PREFIXES
+        ]
+        assert len(members) >= 5, "alphabet collapsed; the sweep is vacuous"
+
+        for label, interloper in members:
+            marked = staleness._parse_pinned_section(
+                self._doc(self.PIN_A + self.PIN_B + interloper
+                          + staleness.PINNED_END_MARKER + "\n")
+            )
+            inferred = staleness._parse_pinned_section(
+                self._doc(self.PIN_A + self.PIN_B + interloper)
+            )
+            assert marked is not None and inferred is not None, label
+            assert len(marked[2]) <= len(inferred[2]), (
+                f"{label}: the declared end WIDENED the region "
+                f"({len(marked[2])} > {len(inferred[2])}). A declared end must "
+                f"only ever bound the inferred one."
+            )
+            assert "foreign" not in marked[2], (
+                f"{label}: foreign section pulled into the pinned span"
+            )
+
+    def test_indented_marker_quoted_in_a_pin_body_does_not_truncate(self):
+        """THE FAIL-OPEN GUARD, and it is the reason
+        `_find_declared_end_offset` tolerates trailing whitespace only.
+
+        `_find_terminator_offset` matches the RAW line, so it does not match an
+        indented marker. A `.strip()` compare in the declared locator WOULD,
+        the two would disagree about which line ends the region, and the
+        declared offset would land INSIDE the pinned body -- dropping a pin out
+        of the counted span and failing the cap OPEN.
+
+        Counter-test protocol: change `.rstrip()` to `.strip()` in
+        `staleness._find_declared_end_offset` and this test must fail.
+        """
+        import staleness
+
+        content = self._doc(
+            "<!-- pinned: 2026-01-01 -->\n### Alpha\ntext\n"
+            "  " + staleness.PINNED_END_MARKER + "\n"
+            "more alpha\n\n"
+            + self.PIN_B
+        )
+        body = staleness._parse_pinned_section(content)[2]
+        assert body.count("### ") == 2, (
+            f"expected both pins to stay in the counted span, got "
+            f"{body.count('### ')} -- an indented quote truncated the region"
+        )
+
+    def test_trailing_whitespace_on_the_marker_line_is_tolerated(self):
+        """The other half of the same asymmetry. A trailing-space marker line
+        is still at column 0, so the inferred scan matches it too and the two
+        locators stay in agreement. Tolerating it costs nothing."""
+        import staleness
+
+        padded = staleness._parse_pinned_section(
+            self._doc(self.PIN_A + self.PIN_B
+                      + staleness.PINNED_END_MARKER + "   \n")
+        )[2]
+        clean = staleness._parse_pinned_section(
+            self._doc(self.PIN_A + self.PIN_B
+                      + staleness.PINNED_END_MARKER + "\n")
+        )[2]
+        assert padded == clean
+
+
 class TestParsePinnedSectionMarkerBoundary:
     r"""Direct unit tests for `staleness._parse_pinned_section`'s marker-aware
     section-end detection.

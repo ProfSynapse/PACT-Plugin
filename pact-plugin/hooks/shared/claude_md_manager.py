@@ -156,6 +156,100 @@ MANAGED_END_MARKER = "<!-- PACT_MANAGED_END -->"
 MEMORY_START_MARKER = "<!-- PACT_MEMORY_START -->"
 MEMORY_END_MARKER = "<!-- PACT_MEMORY_END -->"
 
+# Declared START boundary of the `## Pinned Context` section. The pinned
+# region's extent was INFERRED before this pair existed -- every reader guessed
+# where the section ends from a terminator pattern. This literal declares where
+# it BEGINS, and PINNED_END_MARKER below declares where it ENDS.
+#
+# THE PAIR SHIPS WITH A MARKER-AWARE WRITER, AND THAT COUPLING IS THE WHOLE
+# SAFETY ARGUMENT. An END marker alone CREATES a gap rather than closing one: a
+# writer that anchors on the heading and appends at the end of the section
+# places a new pin BELOW the END marker, where no cap measures it. Measured, at
+# a cap of 12 with a 13th pin appended: no markers denies, a pair with an
+# insertion INSIDE denies, and a pair with an append BELOW the END is ALLOWED.
+# So the marker and the writer that respects it are one unit. Neither ships
+# alone.
+#
+# A PRIOR REVISION OF THIS COMMENT ARGUED THAT NO END MARKER COULD EXIST, and
+# every load-bearing claim in it was FALSIFIED BY EXECUTION. It said a matched
+# END was an enforcement change in disguise and that an unmatched one inflated
+# the last pin's charge by 26 characters. Run against the removed code: the
+# removed marker WAS matched, it sat AFTER the pinned body, and it charged
+# ZERO. Body length, pin count and per-pin charges were byte-identical to the
+# same document with no markers at all. The magnitude 26 is unreproduced -- do
+# not reconstruct a source for it. The coupling it drew to a later strip has no
+# basis either, because there is no charge to remove.
+#
+# STATE THE CONCLUSION PRECISELY, because a wrong one sits next to it. This does
+# NOT show the removal was groundless. It shows that the UNMATCHED-NAME arm was
+# inapplicable here, since no unmatched name was ever used. The matched-name arm
+# is a REAL hazard, and its remedy is the marker-aware writer above, not the
+# absence of a marker.
+#
+# TWO PROPERTIES OF THIS EXACT NAME ARE LOAD-BEARING, both measured:
+#
+# 1. The name carries a `PACT_MEMORY_` prefix, so it is matched by every
+#    scan-terminator alternation built from PACT_BOUNDARY_PREFIXES below. That
+#    is not decoration. Canonical section order puts `## Retrieved Context`
+#    ABOVE `## Pinned Context`, so a start marker on a new line above the
+#    pinned heading sits inside the span that the Retrieved Context writer
+#    REBUILDS from recognised entries only. A marker the alternation does not
+#    match fails to terminate that scan, rides the last dated entry as a
+#    passenger, and is deleted when rotation evicts that entry -- or at the
+#    first save when the section holds no dated entry. A matched marker
+#    terminates the scan at the true end of Retrieved Context.
+#
+#    THE TWO MARKERS CARRY DIFFERENT RISK, and only the END one needs a writer
+#    to guard it. This START marker cannot open an enforcement hole, because its
+#    gap lies ABOVE the `## Pinned Context` heading and the pinned scan BEGINS at
+#    that heading. Gap content there is outside the pinned region by every
+#    reading, with a marker or without one. A boundary marker can only open an
+#    enforcement hole on the side where the section's content legitimately
+#    lives, and nothing above the heading calls itself a pin. Below the END
+#    marker is exactly that side, which is why the pair needs a marker-aware
+#    writer and this marker alone never did.
+#
+# 2. The literal CONTAINS no existing marker literal as a substring, and the
+#    qualifier sits BEFORE the START word for that reason. Containment matters
+#    because `extract_managed_region` uses first-find on both managed markers
+#    and session_resume runs an UNBOUNDED
+#    `content.replace(MEMORY_START_MARKER, ...)`: a literal that contained the
+#    memory start marker would collect a session block on every SessionStart.
+PINNED_START_MARKER = "<!-- PACT_MEMORY_PINNED_START -->"
+
+# Declared END boundary of the `## Pinned Context` section. Read by
+# `staleness._parse_pinned_section`, emitted by `pin_marker_writer.py` in the
+# same composition as its START twin.
+#
+# THE `PACT_MEMORY_` PREFIX IS THE LOAD-BEARING PART, and it is what makes the
+# declared parse a no-op on every document that carries this exact name. The
+# prefix puts the marker in every scan-terminator alternation built from
+# PACT_BOUNDARY_PREFIXES below, so the INFERRED forward scan already stops at
+# this line. Declared and inferred therefore agree, and every reader this change
+# does not touch keeps the extent it already had.
+#
+# SO WHAT DOES THE DECLARED PARSE BUY? It converts an INCIDENTAL exclusion into
+# an INTENTIONAL one. Today this marker escapes the pinned body only because its
+# NAME happens to match a generic alternation. Measured: rename it out of the
+# family and the inferred scan overruns it and charges the marker text, while a
+# declared parse still excludes it. The declared parse is a guard against a
+# future rename, not a repair of a present fault. That is the only measured
+# difference between the two parses, and a certification that omits the rename
+# arm proves nothing at all.
+#
+# TWO PROPERTIES OF THIS EXACT NAME ARE LOAD-BEARING, and they are the same two
+# that govern the START twin:
+#
+# 1. The `PACT_MEMORY_` prefix, as above.
+# 2. The literal CONTAINS no existing marker literal as a substring, so the
+#    unbounded `content.replace(MEMORY_START_MARKER, ...)` in session_resume and
+#    the first-find in `extract_managed_region` cannot mistake it for one. The
+#    qualifier sits BEFORE the END word for that reason, exactly as the START
+#    twin puts it before START. Note that `PINNED_START_MARKER` is NOT a
+#    substring of this literal and this literal is not a substring of it: the
+#    two differ before either reaches its final word.
+PINNED_END_MARKER = "<!-- PACT_MEMORY_PINNED_END -->"
+
 # Canonical H1 title for the managed block. Extracted as a constant so
 # the three template sites (ensure_project_memory_md, _build_migrated_content,
 # session_resume.update_session_info Case 0) cannot drift apart. Changing this

@@ -26,6 +26,7 @@ from typing import List, Optional, Tuple
 
 from shared.claude_md_manager import (
     PACT_BOUNDARY_PREFIXES,
+    PINNED_END_MARKER,
     extract_managed_region,
 )
 from pin_caps import (
@@ -39,6 +40,14 @@ from pin_caps import (
 # PACT_BOUNDARY_PREFIXES (round 5, item 1) so the three-prefix union is
 # defined in one place.
 _BOUNDARY_ALT = "|".join(PACT_BOUNDARY_PREFIXES)
+
+# NOTE FOR ANYONE RE-ADDING A PROBE PATTERN HERE. A second alphabet used to live
+# at this spot, for a well-formedness gate that tried to DETECT the cases where a
+# declared end over-reaches. It was narrower than the terminator alternation it
+# guarded, so it caught the heading cases and missed the boundary-comment ones,
+# and that shipped a cardinal over-block. The gate is gone: `_parse_pinned_section`
+# now BOUNDS the declared end instead of policing it, so there is no second
+# alphabet to keep in sync and nothing here to widen.
 
 
 # Staleness detection constants
@@ -240,6 +249,82 @@ def _find_terminator_offset(
     return len(content)
 
 
+def _find_declared_end_offset(content: str, start: int, literal: str) -> Optional[int]:
+    """
+    Find the offset of the first line that IS `literal`, scanning from `start`.
+
+    Line-anchored, and deliberately NOT a bare `find()`. `extract_managed_region`
+    can use a bare find because the managed region holds only plugin-generated
+    content, and its docstring states that guarantee. The pinned region does NOT
+    have it, because a user writes the pins. Measured on a pin whose body quotes
+    the marker mid-line: a bare find reports a 30-character body and LOSES a pin,
+    where a line-wise compare reports 118 and keeps them all.
+
+    TRAILING WHITESPACE IS TOLERATED. LEADING WHITESPACE IS NOT. That asymmetry
+    is the whole correctness argument of this function, so do not "tidy" it into
+    a `.strip()`:
+
+      - `_find_terminator_offset` matches the RAW line via `.match`, so it does
+        not match an indented marker line.
+      - A `.strip()` compare here WOULD match one. The two locators then
+        disagree about which line ends the region, the declared offset lands
+        INSIDE the pinned body, and the region TRUNCATES.
+      - Measured, on a document whose first pin quotes the marker on an indented
+        line: `.strip()` reports 1 pin where the current parse reports 2.
+        `.rstrip()` reports 2. A dropped pin is a cap that fails OPEN.
+
+    THE SIBLING PREDICATES IN `pin_markers` USE `.strip()` AND THAT IS CORRECT
+    THERE, which is exactly why this one is easy to get wrong.
+    `marker_line_present` and `_is_already_marked` decide whether to REFUSE a
+    write, so over-matching costs a skipped write and is fail-SAFE. This
+    function decides where a cap stops counting, so over-matching drops a pin
+    out of the counted span and is fail-OPEN. Same-looking predicates, OPPOSITE
+    failure directions.
+
+    A PREDICATE'S TOLERANCE IS SET BY ITS FAILURE DIRECTION, NEVER BY SYMMETRY
+    WITH A PREDICATE THAT LOOKS LIKE IT.
+
+    HOW THIS NEARLY WENT WRONG, recorded because the mechanism is the reusable
+    part. `.strip()` was not chosen here carelessly. The argument FOR it is
+    written out in `_is_already_marked`'s docstring -- careful and measured, 6
+    of 6 against byte-exact's 3 of 6 -- and it was carried across to this
+    function. IT IS A CORRECT ARGUMENT ABOUT A DIFFERENT QUESTION. A docstring
+    states its conclusion out loud and leaves its premise implicit, so reasoning
+    lifted out of one arrives without the condition that made it true. The
+    premise there is "a match REFUSES a write". Here a match BOUNDS a region,
+    and the conclusion inverts with the premise.
+
+    THE SYMMETRY ERROR RUNS BOTH WAYS, so do not correct it in the other
+    direction either: having made THIS locator strict, do NOT go and tighten
+    the certificate's presence check to match. That check should stay
+    `.strip()`. Over-detection there refuses a write, which is the safe side.
+    Two policies, on purpose. Unifying them breaks one of the two, whichever
+    way you unify.
+
+    Args:
+        content: Text to scan (typically the managed region extract).
+        start: Offset in `content` where scanning begins.
+        literal: The exact marker text the line must carry.
+
+    Returns:
+        Offset of the first matching line, or None when no line matches.
+    """
+    pos = start
+    while pos < len(content):
+        nl = content.find("\n", pos)
+        if nl == -1:
+            line, line_end = content[pos:], len(content)
+        else:
+            line, line_end = content[pos:nl], nl + 1
+
+        if line.rstrip() == literal:
+            return pos
+
+        pos = line_end
+
+    return None
+
+
 def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
     """
     Extract the Pinned Context section from CLAUDE.md content.
@@ -252,6 +337,55 @@ def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
     content (no user-authored fenced code blocks), so fence-aware scanning
     is unnecessary. If the managed region is not present (pre-migration
     file), falls back to scanning the full content.
+
+    A DECLARED END BOUNDS THE INFERRED ONE. IT NEVER EXTENDS IT:
+
+        inferred   := first terminator line at or after the heading
+        declared   := first PINNED_END_MARKER line at or after the heading
+        region_end := inferred                      when declared is absent
+                   := min(declared, inferred)       otherwise
+
+    THE INVARIANT IS THE WHOLE SAFETY ARGUMENT, and it holds by construction
+    rather than by case analysis: `region_end <= inferred` FOR EVERY DOCUMENT.
+    `inferred` is what every reader of this region returned before a declared
+    end existed, so this parse cannot widen any span, on any input, including
+    shapes nobody has enumerated. It can only narrow one.
+
+    THIS IS A NO-OP ON EVERY DOCUMENT CARRYING THE CANONICAL MARKER NAME, and
+    that is by design rather than by accident. `PINNED_END_MARKER` carries the
+    `PACT_MEMORY_` prefix, so the inferred scan already stops at its line and
+    the two offsets coincide. Measured across eleven document shapes, the
+    declared and inferred parses agree in every one. The declared parse earns
+    its place against a RENAME: take the marker out of the boundary family and
+    the inferred scan overruns it and charges the marker text, while this parse
+    still excludes it. That is the only shape where the two differ.
+
+    UNMARKED AND HALF-MARKED FILES FAIL OPEN TO THE INFERRED SCAN. No marker at
+    all, or a START with no END, is a correct and expected state -- not an
+    error, not an incomplete write, not a repair opportunity. Such a document
+    parses exactly as it did before this pair existed, and nothing here raises.
+
+    OVER-REACH IS UNREPRESENTABLE RATHER THAN DETECTED, and that distinction is
+    worth the sentence. A foreign section between the body and a declared end --
+    a heading OR a PACT boundary comment -- stops the inferred scan, so `min`
+    takes the inferred offset and the foreign section stays out. No clause
+    enumerates those shapes, so no clause can enumerate them too narrowly.
+
+    AN EARLIER REVISION DID ENUMERATE THEM, with a gate that probed for H1/H2
+    headings only while the scan also matched the boundary-comment alternation.
+    It therefore caught the heading shapes and missed the boundary ones, and
+    shipped a cardinal over-block: a boundary comment between the pins and the
+    declared end was swallowed into the last pin, which crossed the size cap and
+    denied edits that had previously passed. THE LESSON IS ABOUT THE FORM, NOT
+    THE ALPHABET -- widening the gate's pattern would have fixed those cases and
+    left the same shape of defect available to the next person who edited either
+    pattern. A bounded operator has no alphabet to get wrong.
+
+    `_find_declared_end_offset` still matters and covers a DIFFERENT hazard:
+    it refuses an indented marker line, so a marker quoted inside a pin body
+    cannot become the declared end at all. Read its docstring before changing
+    it -- its whitespace policy is deliberately stricter than the certificate's,
+    and the two must not be unified.
 
     Args:
         content: Full CLAUDE.md file content.
@@ -285,6 +419,47 @@ def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
     pinned_end = _find_terminator_offset(
         scan_text, pinned_start, next_section_pattern
     )
+
+    # THE DECLARED END IS A CEILING, NOT AN OVERRIDE. Absent marker ->
+    # `declared_end` is None and the inferred scan stands unchanged.
+    declared_end = _find_declared_end_offset(
+        scan_text, pinned_start, PINNED_END_MARKER
+    )
+    if declared_end is not None:
+        # `min(declared, inferred) <= inferred` FOR EVERY INPUT, and `inferred`
+        # is the extent every reader had before a declared end existed. So this
+        # parse can never return a span LARGER than the one the scan already
+        # produced -- for any document, including shapes nobody has enumerated.
+        # A declared end can only ever pull the boundary IN.
+        #
+        # THAT IS WHY THERE IS NO WELL-FORMEDNESS GATE. A gate DETECTS
+        # over-reach; a ceiling makes it UNREPRESENTABLE. Each malformed shape
+        # the gate used to name now falls out of the arithmetic instead of
+        # needing a clause: an interloping heading or boundary comment stops the
+        # inferred scan early, so `min` takes the inferred offset and the foreign
+        # section stays out. Nothing here enumerates what "malformed" means, so
+        # nothing here can enumerate it too narrowly.
+        #
+        # THE RENAME ARM IS THIS LINE, not a case beside it. A marker renamed out
+        # of the boundary family is not matched by the scan, so the inferred scan
+        # overruns it and `inferred > declared`; the `min` then selects the
+        # declared offset and the marker text stays out of the body. Excluding it
+        # is the only measured difference between the declared and inferred
+        # parses, and this operator is what produces it.
+        #
+        # WHAT STOOD HERE BEFORE WAS A GATE WHOSE PROBE ALPHABET WAS NARROWER
+        # THAN THIS SCAN'S. It probed `#{1,2}\s` while the scan also matches the
+        # boundary-comment alternation, so a boundary comment between the body
+        # and the declared end did not trip it, the declared offset won
+        # unbounded, and the region over-reached -- charging PACT's own text into
+        # the last pin and denying edits that previously passed. The comment
+        # defending it argued that such a comment "already stopped the inferred
+        # scan, so pinned_end is at or before it either way". The inferred scan
+        # does stop earlier. The branch that sentence guarded then DISCARDED that
+        # value and substituted the declared one, which is exactly what "either
+        # way" denies. It reasoned from the pre-override world inside the code
+        # performing the override.
+        pinned_end = min(pinned_end, declared_end)
 
     pinned_content = scan_text[pinned_start:pinned_end]
     if not pinned_content.strip():

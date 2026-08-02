@@ -37,20 +37,21 @@ Cap violations are denied by `hooks/pin_caps_gate.py` when the Edit/Write tool c
 
 1. Read existing CLAUDE.md.
 2. Locate or create a `## Pinned Context` section (place it before `## Working Memory`).
-3. Add the new entry with a date tag:
+3. **If the file carries a `<!-- PACT_MEMORY_PINNED_END -->` line, the new entry MUST go ABOVE that line.** The pinned region ends there. A pin placed below it sits outside the region, so the count and size caps do not measure it and the hook cannot deny it — the pin is silently uncapped. Insert immediately before that line, after the last existing entry. If the file has no such line, append at the end of the section as usual.
+4. Add the new entry with a date tag:
    ```markdown
    <!-- pinned: YYYY-MM-DD -->
    ### Entry Title
    Content here (~5-10 lines max)
    ```
-4. **Commit — then confirm `CLAUDE.md` is actually in the resulting commit.** Where a project git-ignores `CLAUDE.md` (a bare `CLAUDE.md` line in `.gitignore` matches at any depth), the failure is loud in the obvious cases and silent in the one that matters. An explicit `git add CLAUDE.md` errors, and a commit whose only change is `CLAUDE.md` reports "nothing to commit" — both non-zero, both visible. But a blanket `git commit -a` / `-am` that also picks up other changed files **succeeds, exits 0, and simply omits `CLAUDE.md`**. Checking the commit's exit status instead of its contents is what turns that into a pin reported as durable while it has no git backing at all. So verify the file is in the commit, not that the commit succeeded. If it is not, report the pin as **applied to the working file but not version-controlled**, so the curator knows it lives only on this machine. NEVER use `git add -f` to force it past the ignore rule — the rule is the project's decision, not an obstacle.
+5. **Commit — then confirm `CLAUDE.md` is actually in the resulting commit.** Where a project git-ignores `CLAUDE.md` (a bare `CLAUDE.md` line in `.gitignore` matches at any depth), the failure is loud in the obvious cases and silent in the one that matters. An explicit `git add CLAUDE.md` errors, and a commit whose only change is `CLAUDE.md` reports "nothing to commit" — both non-zero, both visible. But a blanket `git commit -a` / `-am` that also picks up other changed files **succeeds, exits 0, and simply omits `CLAUDE.md`**. Checking the commit's exit status instead of its contents is what turns that into a pin reported as durable while it has no git backing at all. So verify the file is in the commit, not that the commit succeeded. If it is not, report the pin as **applied to the working file but not version-controlled**, so the curator knows it lives only on this machine. NEVER use `git add -f` to force it past the ignore rule — the rule is the project's decision, not an obstacle.
 
 ### Without arguments — session review
 
 1. Read existing CLAUDE.md.
 2. Review the session for pin-worthy context. Apply the "When to Pin" criteria above.
 3. For each pin-worthy entry, add it as in "Adding a pin." If nothing is pin-worthy, report "No new context to pin."
-4. Commit any changes — and apply the same check as **Adding a pin** step 4: confirm `CLAUDE.md` is in the resulting commit rather than trusting the commit's exit status, and report any pin that did not make it in as applied to the working file but not version-controlled.
+4. Commit any changes — and apply the same check as **Adding a pin** step 5: confirm `CLAUDE.md` is in the resulting commit rather than trusting the commit's exit status, and report any pin that did not make it in as applied to the working file but not version-controlled.
 
 ## Refusal flow (hook-denied edits)
 

@@ -54,6 +54,23 @@ MUST_BE_SYNC = {
 SHOULD_BE_ASYNC = {
     "session_end.py",     # Fire-and-forget cleanup
     "file_tracker.py",    # Advisory tracking only
+    # async is LOAD-BEARING here, not a performance choice. The platform
+    # backgrounds an async hook and reports success before the child exits, so
+    # the marker writer cannot block a user prompt whatever it does.
+    #
+    # THIS ENTRY IS PARTIAL COVER, AND THE EARLIER CLAIM THAT IT TURNS ANY
+    # SILENT REMOVAL OF THE FLAG INTO A RED TEST WAS FALSE. `_get_hook_async_status`
+    # keys its map by SCRIPT NAME and OVERWRITES on each registration, and
+    # PostToolUse is the last event key in hooks.json -- so for a script
+    # registered under two events only the LAST registration's flag is
+    # examined. Measured: removing `async` from the PostToolUse registration
+    # fails as promised, while removing it from the UserPromptSubmit
+    # registration ALONE still PASSES. The UserPromptSubmit side is exactly
+    # where the session-availability argument lives, and it is unguarded.
+    #
+    # Widening the shared helper is tracked separately and deliberately NOT
+    # done here.
+    "pin_marker_writer.py",
 }
 
 
