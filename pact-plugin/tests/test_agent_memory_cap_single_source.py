@@ -46,6 +46,14 @@ UNIT_TOKENS = ["UTF-16", "code unit"]
 POINTER_TOKEN = "index-upkeep rule"
 RULE_HEADING = "Index upkeep"
 
+# --- the memory-block selection rule (see the second docstring block below) ---
+SELECTOR_FILE = SINGLE_SOURCE
+# The discriminator, backtick-anchored and deliberately WITHOUT a tilde.
+DISCRIMINATOR = "`.claude/agent-memory/`"
+# The bare form the discriminator must never be reduced to.
+BARE_DISCRIMINATOR = "`agent-memory/`"
+EXPECTED_SELECTOR_SITES = 2
+
 TEXT_SUFFIXES = {".md", ".py", ".json", ".sh", ".txt", ".yaml", ".yml"}
 SKIP_DIR_PARTS = {"__pycache__", ".pytest_cache"}
 
@@ -201,4 +209,147 @@ def test_index_upkeep_pointer_resolves_to_a_rule_that_exists():
         f"{REFERRER} points at the {POINTER_TOKEN!r} in {SINGLE_SOURCE}, but that "
         f"file has no {RULE_HEADING!r} rule. The pointer dangles: restore the "
         f"rule, or remove the pointer."
+    )
+
+
+# ---------------------------------------------------------------------------
+# The memory-block selection rule
+# ---------------------------------------------------------------------------
+# An agent's context carries TWO instruction blocks offering a memory
+# directory, at different paths, with byte-identical second sentences, neither
+# mentioning the other and neither stating precedence. The selection rule tells
+# the agent which one to follow. It appears at both deferral sites, verbatim:
+# the site read at spawn and the site read at wrap-up. The duplication is
+# deliberate — an agent saving a learning is not re-reading the start-up step,
+# and a missed cross-reference is the failure the rule exists to prevent.
+#
+# TWO PROPERTIES OF THE PREDICATE ARE LOAD-BEARING AND NEITHER IS EVIDENT FROM
+# READING IT. Both are the kind a future editor "tidies" away, leaving text
+# that reads better and a predicate that no longer works.
+#
+# 1. NO TILDE. The delivered path is EXPANDED, so `~/.claude/agent-memory/` is
+#    not a substring of anything an agent holds and a tilde predicate NEVER
+#    FIRES. The tilde is correct in the DESCRIPTION sentence beside it, which
+#    describes rather than selects. The two spellings sit on the same line on
+#    purpose, which is why these tests slice the selector SENTENCE out of the
+#    line: a line-level tilde assertion would be red against correct text.
+#
+# 2. THE FULL `.claude/` PREFIX, which looks like padding and is not. It
+#    contributes nothing to discrimination — the discriminating component is
+#    `agent-memory` — so the tempting edit is to strip it for brevity. That
+#    edit reintroduces a real collision. Project directories are keyed by a
+#    SLUG, and a slug is the filesystem path with `/` replaced by `-`; a
+#    repository under an `agent-memory` path therefore yields, for example,
+#    `.claude/projects/-Users-me-Sites-agent-memory/memory/`. The bare form
+#    matches that project path and MISROUTES the agent; the full form does not.
+#    The general reason is stronger than the example: a slug cannot contain
+#    `/`, and the full form contains two, so it can only ever match a real
+#    directory path and is immune to slug collision BY CONSTRUCTION. Keep the
+#    prefix. It is a false-positive guard, not a discriminator.
+#
+# WHY THIS IS NOT THE PIN VERIFICATION D FORBIDS. D forbids pinning the cap
+# sentence because that asserts a PLATFORM CONSTANT matches itself: it would
+# pass forever, including on the day the constant changes, converting a visible
+# limitation into an invisible one. These tests assert a PREDICATE'S SHAPE and
+# contain no number. They stay GREEN when the platform constants change —
+# correctly, because they never claimed anything about them — and go RED
+# exactly when someone tidies the asymmetry away. Opposite failure direction.
+# Do not delete these believing D forbids them.
+#
+# THE RESIDUAL, STATED RATHER THAN IMPLIED, because a bound left out is a
+# bounded guarantee presented as an unbounded one. The discriminator is ITSELF
+# a platform-determined path. If the platform relocated the agent-memory tree,
+# or renamed `.claude/`, the rule would go stale and THESE TESTS WOULD STAY
+# GREEN — structurally D's own objection, one level down. Two things bound it:
+# the path is OBSERVED by every agent in its own context every session, unlike
+# the cap, so staleness is discoverable in normal operation rather than
+# undetectable in principle; and a stale discriminator matches NOTHING, so the
+# agent falls back to the ambiguity that existed before the rule rather than
+# being routed to the wrong directory. Fail-safe, not fail-open.
+
+
+def _selector_slices():
+    """Every sentence in the selector file that carries the discriminator.
+
+    Returned as (line number, sentence). Slicing to the SENTENCE is what makes
+    the no-tilde assertion meaningful: the description sentence on the same
+    line legitimately carries a tilde, so a line-level assertion would be red
+    against correct text.
+
+    A broken slicer is caught rather than tolerated in both directions. Too
+    wide (the whole line) drags the description tilde in and reddens the
+    no-tilde assertion; too narrow (empty) fails the contains-discriminator
+    assertion beside it.
+    """
+    import re
+
+    text = (PLUGIN_ROOT / SELECTOR_FILE).read_text(encoding="utf-8")
+    out = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if DISCRIMINATOR not in line:
+            continue
+        for sentence in re.split(r'(?<=\.)\s+(?=[A-Z`“"*])', line):
+            if DISCRIMINATOR in sentence:
+                out.append((lineno, sentence))
+    return out
+
+
+def test_selection_rule_present_at_every_deferral_site():
+    slices = _selector_slices()
+    found = [ln for ln, _ in slices]
+    assert len(slices) == EXPECTED_SELECTOR_SITES, (
+        f"the memory-block selection rule must appear at exactly "
+        f"{EXPECTED_SELECTOR_SITES} sites in {SELECTOR_FILE}; found {len(slices)} "
+        f"at lines {found}. The rule is duplicated deliberately: one site is read "
+        f"at spawn and the other at wrap-up, and this project has recorded that "
+        f"agents do not follow cross-references reliably. Do NOT resolve a "
+        f"failure here by replacing a site with a pointer to the other one. If a "
+        f"site was legitimately added or removed, update EXPECTED_SELECTOR_SITES "
+        f"with a comment naming which site and why."
+    )
+
+
+@pytest.mark.parametrize("index", range(EXPECTED_SELECTOR_SITES))
+def test_selector_clause_carries_no_tilde(index):
+    """The tilde belongs in the description sentence and NEVER in the selector."""
+    slices = _selector_slices()
+    assert index < len(slices), (
+        f"expected {EXPECTED_SELECTOR_SITES} selector sites, found {len(slices)}"
+    )
+    lineno, clause = slices[index]
+    assert DISCRIMINATOR in clause, (
+        f"the slice taken at {SELECTOR_FILE}:{lineno} does not contain the "
+        f"discriminator, so the no-tilde check below would pass vacuously. The "
+        f"sentence splitter is broken, not the instruction text."
+    )
+    assert "~" not in clause, (
+        f"the selection rule at {SELECTOR_FILE}:{lineno} contains a tilde: "
+        f"{clause!r}. The delivered path is EXPANDED, so a tilde form is not a "
+        f"substring of what an agent holds and the predicate would NEVER FIRE. "
+        f"The tilde in the DESCRIPTION sentence beside this one is correct and "
+        f"must stay; this asymmetry is deliberate. Do not harmonise them."
+    )
+
+
+def test_discriminator_keeps_its_claude_prefix():
+    """`.claude/` is a false-positive guard, not padding. See the block above.
+
+    Separable from the site-count assertion: adding a THIRD mention in the bare
+    form leaves the count of full discriminators at two while reintroducing the
+    collision, and only this assertion sees that.
+    """
+    text = (PLUGIN_ROOT / SELECTOR_FILE).read_text(encoding="utf-8")
+    bare_sites = [
+        lineno
+        for lineno, line in enumerate(text.splitlines(), 1)
+        if BARE_DISCRIMINATOR in line.replace(DISCRIMINATOR, "")
+    ]
+    assert not bare_sites, (
+        f"{SELECTOR_FILE} uses the bare {BARE_DISCRIMINATOR} at line(s) "
+        f"{bare_sites}. The `.claude/` prefix is NOT redundant padding: project "
+        f"directories are keyed by a slug, a slug is the filesystem path with "
+        f"'/' replaced by '-', so a repository under an `agent-memory` path "
+        f"yields a project path the bare form MATCHES and misroutes the agent "
+        f"to. The full form contains two slashes and a slug contains none, so it "
+        f"can only match a real directory path. Restore the prefix."
     )
