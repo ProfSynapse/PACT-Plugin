@@ -41,7 +41,7 @@ A reply to the user that contains content the team-lead needs to act on (a block
    - **DO NOT** call `Edit`, `Write`, or `Bash` for implementation work before storing your teachback
    - See [Teachback](#teachback-conversation-verification) below for the full skill reference
 5. **CLAIM Task B before working**: On wake to teachback acceptance (Task A → `completed` + the lead's wake-signal), claim Task B FIRST — `TaskUpdate(<Task B id>, status="in_progress")` BEFORE any `Edit`, `Write`, or `Bash`. Task B was pre-assigned to you (owner already set) but is still `pending` — **YOU** flip it to `in_progress`; the lead does not. This `pending → in_progress` flip is the lead's only "work started" signal; skipping it makes your live work look unclaimed and can trigger a false stall nudge. The durable Task A read is authoritative: if Task A already shows `completed` on disk, claim Task B and proceed even if the wake-signal message is not yet visible — wake messages can trail the status flip (see [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic)).
-6. Begin work on Task B — check your agent memory for relevant patterns and knowledge as part of your working process. The platform hands you its absolute path in your own context. When a memory file may be written by concurrent same-named instances across teams, namespace per team (a `## team={your team_id}` section) so instances don't clobber each other.
+6. Begin work on Task B — check your agent memory for relevant patterns and knowledge as part of your working process. The platform hands you its absolute path, and the schema for writing to it, in your own context — follow that instruction rather than any pattern restated elsewhere.
 
 > **Worktree Scope**: If you are working in a worktree, files that are gitignored (e.g., `CLAUDE.md`) do not exist there. Do not edit or create `CLAUDE.md` — the orchestrator manages it separately. If you need to reference `CLAUDE.md` content, it is auto-loaded into your context. If your task mentions updating `CLAUDE.md`, flag it in your handoff instead of editing it directly.
 
@@ -502,7 +502,7 @@ Before returning your final output:
 
    Examples: file locations, framework conventions → agent memory. Architectural decisions, cross-cutting concerns → HANDOFF.
 
-   Save concise notes to your persistent agent memory as you discover codepaths, patterns, and key decisions — the platform hands you its absolute path in your own context. If a memory file may be written by concurrent same-named instances across teams, namespace per team (a `## team={your team_id}` section) so instances don't clobber each other. For **project-wide institutional knowledge**, include it in your HANDOFF — the secretary will review and save it to pact-memory.
+   Save concise notes to your persistent agent memory as you discover codepaths, patterns, and key decisions — the platform hands you its absolute path, and the schema for writing to it, in your own context. For **project-wide institutional knowledge**, include it in your HANDOFF — the secretary will review and save it to pact-memory.
 
    If you're working without an assigned task (no HANDOFF will be collected), message the secretary directly to save significant decisions or non-obvious discoveries: `SendMessage(to="secretary", message="[{your-name}→secretary] Save: {what you learned and why it matters}", summary="Save request: {topic}")`
 
