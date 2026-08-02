@@ -755,10 +755,23 @@ class TestDeclaredPinnedEndMarker:
         )
         assert half_parsed[2] == staleness._parse_pinned_section(plain)[2]
 
-    def test_heading_between_body_and_declared_end_is_malformed(self):
-        """WELL-FORMEDNESS GATE. A foreign H2 section before the declared end
-        means the pair straddles a boundary. Honouring the declared offset
-        would swallow that section into the pinned span."""
+    def test_heading_between_body_and_declared_end_is_not_swallowed(self):
+        """A foreign H2 section before the declared end must stay OUT of the
+        pinned span.
+
+        THE OUTCOME IS UNCHANGED; THE MECHANISM IS NOT. This case used to be
+        caught by a well-formedness gate that probed for headings. The gate is
+        gone: the parse now bounds the declared end by the inferred one, so an
+        interloping section stops the inferred scan and `min` takes it. The gate
+        was an enumeration of bad shapes and it enumerated them too narrowly --
+        headings yes, PACT boundary comments no -- which shipped a cardinal
+        over-block. This test survives because the PROPERTY survives.
+
+        Do not read a pass here as coverage of the alphabet. See
+        `test_span_never_exceeds_inferred_for_every_scan_terminator`, which is
+        the arm that ranges over the terminator alternation rather than over the
+        one member this test happens to use.
+        """
         import staleness
 
         content = self._doc(
@@ -771,6 +784,82 @@ class TestDeclaredPinnedEndMarker:
             "the gate must refuse a declared end that lies beyond a heading"
         )
         assert "## Interloper" not in body
+
+    def test_span_never_exceeds_inferred_for_every_scan_terminator(self):
+        """THE CEILING INVARIANT, ranged over the SCAN's alphabet.
+
+        THE INPUT ALPHABET IS DERIVED FROM THE TERMINATOR SCAN, NEVER FROM THE
+        PARSE RULE, and that is the whole point of this test rather than a
+        stylistic note. The predecessor gate probed `#{1,2}\\s`; the test written
+        for it exercised an H2 heading. Its alphabet was read off the
+        implementation, so it could not falsify the implementation's CHOICE of
+        alphabet -- it exercised exactly the shape the gate already covered, and
+        reported green while a boundary comment sailed through. A TEST WHOSE
+        INPUT SPACE COMES FROM THE CODE UNDER TEST CANNOT FALSIFY THAT CODE'S
+        CHOICE OF INPUT SPACE.
+
+        So the members here are enumerated from `PACT_BOUNDARY_PREFIXES` plus
+        the heading form -- the two branches of the scan's own alternation. A
+        fourth prefix added to that tuple appears here automatically.
+
+        THE ASSERTION IS THE INVARIANT ITSELF, not a table of expected offsets:
+        the span returned for a MARKED document is never larger than the span
+        returned for the same document unmarked. Unmarked is the pre-change
+        behaviour, so this states that no declared end can widen any region.
+
+        COUNTER-TEST PROTOCOL, TWO MUTANTS WITH DIFFERENT SIGNATURES. Both were
+        run; the second is the one that matters:
+
+          MUTANT A -- replace the `min` with a bare unbounded override.
+            EVERY member fails, headings included.
+
+          MUTANT B -- restore the shipped defect exactly: a heading-only probe
+            `#{1,2}\\s` guarding an unbounded override.
+            The HEADING members PASS and all three BOUNDARY members FAIL.
+
+        MUTANT B IS THE PROOF THAT THIS TEST WOULD HAVE CAUGHT THE SHIPPED
+        DEFECT, and its asymmetry is the reason the defect shipped: the gate
+        covered the heading subset, the test exercised the heading subset, and
+        the two agreed with each other while both missed the boundary subset.
+
+        A NOTE ON BUILDING MUTANT B, because getting it wrong reads like a
+        result. A first attempt over-escaped the pattern into a literal
+        backslash, which matched nothing, silently degrading mutant B into
+        mutant A -- every member failed and the asymmetry vanished. The tell was
+        that headings failed too. If you rebuild it, first assert the mutant
+        pattern MATCHES `## Interloper` and does NOT match a boundary comment;
+        otherwise you are testing a bare override and will conclude the wrong
+        thing about what this test covers.
+        """
+        import staleness
+        from shared.claude_md_manager import PACT_BOUNDARY_PREFIXES
+
+        members = [
+            ("h2 heading", "## Interloper\nforeign\n\n"),
+            ("h1 heading", "# Interloper\nforeign\n\n"),
+        ] + [
+            (f"boundary comment {p}", f"<!-- {p}NOTE -->\nforeign\n\n")
+            for p in PACT_BOUNDARY_PREFIXES
+        ]
+        assert len(members) >= 5, "alphabet collapsed; the sweep is vacuous"
+
+        for label, interloper in members:
+            marked = staleness._parse_pinned_section(
+                self._doc(self.PIN_A + self.PIN_B + interloper
+                          + staleness.PINNED_END_MARKER + "\n")
+            )
+            inferred = staleness._parse_pinned_section(
+                self._doc(self.PIN_A + self.PIN_B + interloper)
+            )
+            assert marked is not None and inferred is not None, label
+            assert len(marked[2]) <= len(inferred[2]), (
+                f"{label}: the declared end WIDENED the region "
+                f"({len(marked[2])} > {len(inferred[2])}). A declared end must "
+                f"only ever bound the inferred one."
+            )
+            assert "foreign" not in marked[2], (
+                f"{label}: foreign section pulled into the pinned span"
+            )
 
     def test_indented_marker_quoted_in_a_pin_body_does_not_truncate(self):
         """THE FAIL-OPEN GUARD, and it is the reason
