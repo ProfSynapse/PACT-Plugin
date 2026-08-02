@@ -266,6 +266,19 @@ def test_index_upkeep_pointer_resolves_to_a_rule_that_exists():
 # undetectable in principle; and a stale discriminator matches NOTHING, so the
 # agent falls back to the ambiguity that existed before the rule rather than
 # being routed to the wrong directory. Fail-safe, not fail-open.
+#
+# WHAT THE FULL-STRING FORM COSTS, because it is a TRADE and not a free win.
+# Asserting the whole `.claude/agent-memory/` couples this pin more tightly to
+# the platform's config-root NAME than a bare `agent-memory` would, and so it
+# WIDENS the silent-staleness surface described immediately above: rename
+# `.claude/` and the rule goes stale while these tests stay green. That cost is
+# accepted deliberately, because the alternative is worse in kind rather than
+# in degree. A stale full form matches NOTHING and degrades to the ambiguity
+# that existed before the rule; a stripped form plus a slug collision matches
+# BOTH paths and actively misroutes. The trade is a slightly larger
+# silent-staleness surface in exchange for removing an active-misroute
+# surface. Anyone reopening this decision should re-derive that comparison
+# rather than weigh the two failures as though they were the same kind.
 
 
 def _selector_slices():
