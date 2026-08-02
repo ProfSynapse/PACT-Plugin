@@ -504,6 +504,8 @@ Before returning your final output:
 
    Save concise notes to your persistent agent memory as you discover codepaths, patterns, and key decisions — the platform hands you its absolute path, and the schema for writing to it, in your own context. For **project-wide institutional knowledge**, include it in your HANDOFF — the secretary will review and save it to pact-memory.
 
+   **Index upkeep — pointers go in the head, never the tail.** Your `MEMORY.md` index is truncated to the first 200 lines and 25,000 UTF-16 code units, measured after trimming. Truncation is a strict prefix: the top always loads and the bottom is dropped first, so a pointer at the end is the first thing lost. Directly under the title, keep a short preamble that names satellite and archive files by NAMING CONVENTION rather than by filename — for example: "`MEMORY-*.md` and `INDEX_*.md` roll up a topic; `ARCHIVE_*.md` holds retired entries." Append new entries BELOW that preamble, never above it. Never re-derive the limits from a rendered size warning — that string has lost its unit. Editors of this skill: these two limits are stated here and nowhere else; refer to this rule rather than repeating the numbers.
+
    If you're working without an assigned task (no HANDOFF will be collected), message the secretary directly to save significant decisions or non-obvious discoveries: `SendMessage(to="secretary", message="[{your-name}→secretary] Save: {what you learned and why it matters}", summary="Save request: {topic}")`
 
 2. **Confirm Memory Saved**: After saving domain learnings, set `memory_saved: true` in your task metadata:
