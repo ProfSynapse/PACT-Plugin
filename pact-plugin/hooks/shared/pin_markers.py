@@ -716,16 +716,33 @@ def certify_expel_nothing(old: str, new: str, ins: Insertion) -> bool:
     is the sentence a future reader is most likely to delete as redundant
     defence-in-depth:
 
-      - A MID-LINE quote is caught by `_is_already_marked` AND ONLY BY IT. This
-        certificate PASSES a mid-line quote, measured, because `old` then holds
-        no `marker + newline` at all.
+      - A MID-LINE quote is caught by NEITHER MECHANISM, and it needs no guard.
+        Measured in both: `_is_already_marked` compares a STRIPPED line against
+        the marker, and a line reading `I wrote <marker> in my notes` does not
+        strip to it; this certificate then passes too, because `old` holds no
+        `marker + newline` at all. The write proceeds and the certificate
+        returns True.
+
+        THAT IS THE CORRECT OUTCOME, not a hole. A mid-line literal is invisible
+        to EVERY line-anchored reader of this region, so it is not a boundary
+        for anything and there is nothing for a guard to protect. ADD NO GUARD
+        HERE: one would have to match a bare substring, which is precisely the
+        over-broad predicate this module removed.
+
+        THIS SENTENCE PREVIOUSLY CLAIMED `_is_already_marked` CAUGHT IT, AND
+        ONLY IT. That was false when written -- an adjacency predicate cannot
+        match a mid-line quote at any position. The claim is worth correcting
+        rather than deleting because it named a guard that does not fire, and a
+        reader auditing this module would have gone looking for it.
       - An OWN-LINE quote is caught by THIS CERTIFICATE AND ONLY BY IT. The
         adjacency detector does not match it -- an own-line copy anywhere other
         than immediately above the pinned heading is not the shape the writer
         emits -- so the plan proceeds and this is the only remaining guard.
 
-    NEITHER COVERS THE OTHER'S CASE, so removing either on the ground that the
-    other handles it opens a hole with a named shape.
+    SO THE DIVISION IS: own-line copies away from the writer's own position are
+    this certificate's alone, and mid-line copies belong to nobody because they
+    are not boundaries. Removing this certificate on the ground that the
+    detector covers own-line copies opens a hole with a named shape.
 
     A NOTE ON WHAT THIS PARAGRAPH REPLACED, because the error is instructive.
     It used to say the collision was `refused EARLIER, by the presence check in
