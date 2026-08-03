@@ -83,11 +83,11 @@ UNIT_TOKENS = ["UTF-16", "code unit"]
 # the index file reduces that to the statements about this index and nothing
 # else. Measured across the shipped surfaces, not estimated.
 #
-# THE LINE CAP IS NOT MATCHED, and that is a measured choice rather than an
-# oversight. "200 lines" collides with an unrelated n8n README and a pact-memory
-# reference example, and the taint does not separate the auto-memory table row,
-# which states it a second time. Pin it here and the suite is red against correct
-# text.
+# THE SIZE ALPHABET EXCLUDES LINE UNITS, and that is a separation rather than
+# an omission. The two caps are distinct axes with distinct counts, so merging
+# their alphabets would make a line-only restatement and a size-only
+# restatement indistinguishable in a single tally. The line cap has its own
+# pattern immediately below.
 SIZE_UNIT = (
     r"(?:UTF-16\s+code\s+units?|code\s+units?|characters?|chars?"
     r"|bytes?|[KMG]i?B)"
@@ -313,6 +313,98 @@ def test_single_source_is_the_file_the_pointer_names(token):
         f"the single statement of {token!r} is at {sites[0]}, but {REFERRER} "
         f"sends readers to {SINGLE_SOURCE}. Move the rule back, or re-point the "
         f"pointer and update SINGLE_SOURCE here."
+    )
+
+
+# ---------------------------------------------------------------------------
+# The meta-arm: the pin's own constants
+# ---------------------------------------------------------------------------
+# THE ARMS ABOVE COUNT SITES; NOTHING ABOVE CHECKS THAT THE PREDICATE CAN STILL
+# SEE A SITE. SUBJECT_TOKEN, SIZE_UNIT and LINE_CAP_RE are bare literals, and
+# narrowing any of them is SILENT: measured, `SUBJECT_TOKEN` narrowed to
+# "`MEMORY.md` index" leaves every arm green while the guard's reach has
+# collapsed, because the single source still matches and the count is still one.
+# Only a narrowing that matches NOTHING drives the count to zero and fires.
+# SUBJECT_TOKEN is the worst of the three: one literal gating BOTH axes.
+#
+# The remedy is a table of statements the predicate MUST recognise. Narrow any
+# constant and a probe stops matching, so alphabet completeness stops being an
+# editorial property and becomes an asserted one.
+#
+# WHY A PROBE TABLE RATHER THAN A MUTATION HARNESS. A test that mutated these
+# constants and re-ran the predicate would RE-DERIVE THE RULE IT IS CHECKING,
+# which is the vacuity this very file shipped in its first version. Mutation is
+# how this table is CERTIFIED, not what ships.
+#
+# THE NEGATIVE HALF IS NOT DECORATION. Without it this arm is a one-way
+# ratchet: every failure argues for a broader alphabet and nothing argues back,
+# until the subject taint is dropped and the 96 unrelated matches return.
+#
+# RESIDUAL, stated because a bound left implicit reads as a guarantee: this
+# table is itself unguarded — a future editor can delete a probe. The regress
+# does not close, it TERMINATES WHERE REVIEW CAN SEE IT. Narrowing a regex
+# character class is invisible in review; deleting a plain-English sentence
+# from a list is not.
+DETECTION_PROBES = {
+    "size": (
+        "Your `MEMORY.md` index auto-loads only the first 25KB.",
+        "Your `MEMORY.md` index is capped at 25,000 characters.",
+        "`MEMORY.md` is truncated to the first 25,000 UTF-16 code units.",
+    ),
+    "line": (
+        "Only the first 200 lines of `MEMORY.md` auto-load.",
+        "Your `MEMORY.md` index is truncated to the first 250 lines.",
+    ),
+}
+
+# Near-misses. Each carries a unit OR the subject, never both as a cap claim.
+NON_DETECTIONS = (
+    "The webhook payload is capped at 8 MB.",
+    "- **WORKFLOW_GUIDE.md** (200 lines) - Workflow management",
+    "Your `MEMORY.md` index is the file the platform loads at session start.",
+)
+
+_PROBE_CASES = [(a, p) for a, ps in DETECTION_PROBES.items() for p in ps]
+
+
+@pytest.mark.parametrize(
+    "axis,probe",
+    _PROBE_CASES,
+    ids=[f"{a}{i}" for a, ps in DETECTION_PROBES.items() for i in range(len(ps))],
+)
+def test_predicate_detects_every_canonical_spelling(axis, probe):
+    """Narrow any constant and one of these stops matching."""
+    assert SUBJECT_TOKEN in probe, (
+        f"the subject taint {SUBJECT_TOKEN!r} no longer matches a canonical "
+        f"statement of the ceiling: {probe!r}. Narrowing the taint disarms BOTH "
+        f"axes at once while the count arms stay green, because the single "
+        f"source still matches and the count is still one. Widen it back, or "
+        f"retire the probe with a comment saying why it is no longer canonical."
+    )
+    assert CAP_AXES[axis].pattern.search(probe), (
+        f"the {axis} alphabet no longer matches a canonical statement of the "
+        f"ceiling: {probe!r}. A duplicate written this way would now be "
+        f"invisible to the {axis} arm while it reports green. Restore the "
+        f"missing unit, or retire the probe with a comment saying why."
+    )
+
+
+@pytest.mark.parametrize(
+    "text", NON_DETECTIONS, ids=[f"near{i}" for i in range(len(NON_DETECTIONS))]
+)
+def test_predicate_ignores_near_misses(text):
+    """The other direction: a widened alphabet must not readmit unrelated text."""
+    hit = [
+        axis
+        for axis, spec in CAP_AXES.items()
+        if SUBJECT_TOKEN in text and spec.pattern.search(text)
+    ]
+    assert not hit, (
+        f"{hit} now match text that does not state the index ceiling: {text!r}. "
+        f"An alphabet widened to fix a missed spelling has readmitted unrelated "
+        f"content; a bare numeral-plus-unit sweep matches 96 lines across the "
+        f"shipped surfaces, and the subject taint is what excludes them. Narrow "
+        f"the change, do not delete this case."
     )
 
 
