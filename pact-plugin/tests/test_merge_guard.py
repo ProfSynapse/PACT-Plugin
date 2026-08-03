@@ -14810,11 +14810,12 @@ class TestD2QuoteAwareSpanRemediation:
         both are listed in the known-refused family below so the next reader
         meets them as a recorded limit rather than as a surprise.
 
-        THE RESIDUAL, STATED PLAINLY. Both pins read ONE module
-        (`merge_guard_common`). A carrier built in `merge_guard_pre.py` or
-        `merge_guard_post.py` is invisible to them. All 13 carriers live in the
-        strip pipeline here today, so that is a latent gap rather than a live
-        one — but do not read a green run as covering those two modules.
+        COVERAGE, STATED PLAINLY. Both pins read ALL THREE implementation
+        modules — `merge_guard_common` plus the two hooks that import from it
+        (see `_all_merge_guard_modules`). A carrier built in `merge_guard_pre.py`
+        or `merge_guard_post.py` is as dangerous as one here and is checked the
+        same way, including when the span arrives under an import alias or
+        through a module attribute.
 
         THIS PIN IS NOT THE ONLY THING THAT COULD NOTICE, and the claim that it
         was is why the earlier form of it went unchallenged. A behavioural arm
@@ -14915,12 +14916,11 @@ class TestD2QuoteAwareSpanRemediation:
         40 KB probe input while the whole suite stayed green. The shared
         resolver therefore follows compiled bindings before this scan runs.
 
-        SAME RESIDUAL AS THE SIBLING: one module only. A `fullmatch` on a
-        carrier in `merge_guard_pre.py`/`merge_guard_post.py` is not seen here.
+        SAME COVERAGE AS THE SIBLING: all three implementation modules. A
+        `fullmatch` on a carrier in `merge_guard_pre.py`/`merge_guard_post.py`
+        re-arms the same explosion and is checked here too.
         """
         import ast
-
-        from shared import merge_guard_common
 
         # ALL THREE modules. A `fullmatch` on a carrier in merge_guard_pre or
         # merge_guard_post re-arms the same explosion, and scanning only the
