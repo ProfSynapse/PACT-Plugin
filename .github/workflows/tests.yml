@@ -23,8 +23,15 @@
 # WHY `working-directory: pact-plugin`
 #   `tests/conftest.py` inserts sys.path entries relative to its own location and
 #   resolves the local `telegram/` package via the current working directory, so
-#   pytest's rootdir MUST be `pact-plugin/`. This is the idiomatic encoding of
-#   the canonical `cd pact-plugin && python -m pytest tests/ skills/` invocation.
+#   the CURRENT WORKING DIRECTORY must be `pact-plugin/`. This is the idiomatic
+#   encoding of the canonical
+#   `cd pact-plugin && python -m pytest tests/ skills/` invocation.
+#
+#   The constraint is on the WORKING DIRECTORY, not on pytest's rootdir — the two
+#   are separate concepts and it is easy to name the wrong one here. `pact-plugin/`
+#   carries no pytest config, so rootdir actually resolves to the repository root.
+#   That is correct and needs no change; the step still requires
+#   `working-directory: pact-plugin`.
 #
 # DEPENDENCY SET (empirically verified — see note below)
 #   The suite is stdlib + the third-party libraries listed below, which are HARD
@@ -134,8 +141,9 @@ jobs:
           ruff check --select F401,F821 --target-version py39 pact-plugin/
           ruff check --select F821 --target-version py39 pact-plugin/
 
-      # rootdir must be pact-plugin/ (CWD-relative conftest sys.path + local
-      # `telegram` package). Equivalent to
+      # The working directory must be pact-plugin/ (CWD-relative conftest
+      # sys.path + local `telegram` package) — see the header note: this
+      # constrains the WORKING DIRECTORY, not pytest's rootdir. Equivalent to
       # `cd pact-plugin && python -m pytest tests/ skills/`.
       #
       # WHY `skills/` IS LISTED SEPARATELY
