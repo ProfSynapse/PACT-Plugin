@@ -24,11 +24,11 @@
 #   `tests/conftest.py` inserts sys.path entries relative to its own location and
 #   resolves the local `telegram/` package via the current working directory, so
 #   pytest's rootdir MUST be `pact-plugin/`. This is the idiomatic encoding of
-#   the canonical `cd pact-plugin && python -m pytest tests/` invocation.
+#   the canonical `cd pact-plugin && python -m pytest tests/ skills/` invocation.
 #
 # DEPENDENCY SET (empirically verified — see note below)
-#   The suite is stdlib + four third-party libraries that are HARD requirements
-#   for a green run:
+#   The suite is stdlib + the third-party libraries listed below, which are HARD
+#   requirements for a green run:
 #     - pytest           : the runner (hard import everywhere).
 #     - httpx            : UNGUARDED top-level import in the local telegram
 #                          package (telegram/voice.py, telegram/telegram_client.py)
@@ -40,6 +40,16 @@
 #     - hypothesis       : property tests guard it with try/except + skipif, so
 #                          it is technically optional, but it is installed so the
 #                          property tests actually RUN rather than silently skip.
+#     - pyyaml           : UNGUARDED top-level `import yaml` in the skill test
+#                          modules that the `skills/` path argument collects.
+#                          Without it those modules ERROR at COLLECTION and pytest
+#                          aborts the run, so ZERO tests execute.
+#                          It is absent from this list historically because the
+#                          set was derived by running the SCOPED `pytest tests/`,
+#                          which never collected those modules and so never saw
+#                          their import. Required BY the `skills/` path, not by
+#                          `tests/`: adding either one without the other breaks
+#                          the gate.
 #   `telegram` is the LOCAL package under pact-plugin/, NOT the pip library — it
 #   needs no install (it resolves via the working-directory on sys.path).
 #     - ruff             : the import-hygiene lint step ONLY (not a test dep).
@@ -102,7 +112,7 @@ jobs:
         # drop it to "shorten" the line: that silently re-opens the exact
         # inert-test gap (green suite, tests not actually running) this
         # project's live-probe gate exists to catch.
-        run: python -m pip install --upgrade pip pytest hypothesis httpx pytest-asyncio ruff
+        run: python -m pip install --upgrade pip pytest hypothesis httpx pytest-asyncio pyyaml ruff
 
       # Import-hygiene lint, two legs. Leg 1: unused imports (F401) + undefined
       # names (F821) over all of pact-plugin/ — hooks, scripts, telegram,
@@ -125,10 +135,26 @@ jobs:
           ruff check --select F821 --target-version py39 pact-plugin/
 
       # rootdir must be pact-plugin/ (CWD-relative conftest sys.path + local
-      # `telegram` package). Equivalent to `cd pact-plugin && python -m pytest tests/`.
+      # `telegram` package). Equivalent to
+      # `cd pact-plugin && python -m pytest tests/ skills/`.
+      #
+      # WHY `skills/` IS LISTED SEPARATELY
+      #   Some test modules live inside the skill directories they guard rather
+      #   than under tests/, so a `tests/`-only path argument silently drops
+      #   them: a skill edit is then certified by a gate that never ran the
+      #   tests written for that skill. Both paths together collect the same set
+      #   as a bare `pytest` from pact-plugin/ — that EQUALITY is the invariant
+      #   to preserve, not any particular count.
+      #   A `testpaths` entry in config CANNOT substitute: a path argument on
+      #   the command line overrides testpaths, so config alone is a no-op here.
+      #   `skills/` and the pyyaml install above are ONE change. The dependency
+      #   set was itself derived through the scoped invocation, so it was blind
+      #   to the `import yaml` in those modules by construction — which is why
+      #   adding the path without the dependency aborts collection and runs
+      #   nothing. Do not add or remove one without the other.
       - name: Run test suite
         working-directory: pact-plugin
-        run: python -m pytest tests/
+        run: python -m pytest tests/ skills/
 
   # ---------------------------------------------------------------------------
   # OPTIONAL FALLBACKS (do NOT enable without the stated verification first)
