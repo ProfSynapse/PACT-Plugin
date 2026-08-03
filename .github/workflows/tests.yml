@@ -42,9 +42,9 @@
 #                          package (telegram/voice.py, telegram/telegram_client.py)
 #                          and in telegram test modules → without it,
 #                          `python -m pytest tests/` ERRORS at COLLECTION.
-#     - pytest-asyncio   : the suite has ~143 `@pytest.mark.asyncio` tests.
+#     - pytest-asyncio   : the suite has a large `@pytest.mark.asyncio` cohort.
 #                          On pytest >= 9, an unhandled async test FAILS (not
-#                          skips). Without this plugin the suite is 143 RED.
+#                          skips). Without this plugin that whole cohort is RED.
 #     - hypothesis       : property tests guard it with try/except + skipif, so
 #                          it is technically optional, but it is installed so the
 #                          property tests actually RUN rather than silently skip.
@@ -65,11 +65,14 @@
 #                          rule surface, so new ruff releases cannot add rule
 #                          classes to it.
 #
-#   VERIFICATION: clean-venv full runs (the dep set proven, not grepped):
-#     - Python 3.13.13 (this CI version): 8187 passed, 17 skipped, 0 failed.
-#     - Python 3.14.5  (dev host):        8195 passed,  9 skipped, 0 failed.
-#   With `pytest httpx hypothesis` but NO pytest-asyncio (pytest 9.0.3):
-#     143 FAILED — the exact async-test cohort. The plugin is mandatory.
+#   VERIFICATION: this set was proven by clean-venv full runs on both the CI
+#   Python and the dev-host Python — derived by RUNNING the suite, not by
+#   grepping imports. Counts are deliberately not quoted here: they go stale on
+#   the next test added, and a stale figure under a heading claiming
+#   "empirically verified" is worse than none, because the heading vouches for it.
+#   Those earlier runs also used the SCOPED `pytest tests/`, so they could not
+#   see the skill test modules and could not have discovered pyyaml — which is
+#   why that entry was missing from this list until the gate was widened.
 #   All remaining skips are intentional carve-outs (live-tmux-only probes,
 #   orchestrator carve-out, pin-caps test-design, fuzz-strategy edges) and
 #   version-conditional cases — green-with-skips is the accepted CI outcome;
@@ -113,9 +116,9 @@ jobs:
 
       - name: Install test dependencies
         # See the "DEPENDENCY SET" header note for why each lib is required.
-        # pytest-asyncio is REQUIRED, not optional: the suite has ~143
-        # @pytest.mark.asyncio tests. Without this plugin they FAIL on
-        # pytest >= 9 (unknown-mark, ~143 failures here) or — worse — SILENTLY
+        # pytest-asyncio is REQUIRED, not optional: the suite has a large
+        # @pytest.mark.asyncio cohort. Without this plugin they FAIL on
+        # pytest >= 9 (unknown-mark, one failure per async test) or — worse — SILENTLY
         # SKIP on pytest 8.x (green-looking, but the tests never run). Do NOT
         # drop it to "shorten" the line: that silently re-opens the exact
         # inert-test gap (green suite, tests not actually running) this
