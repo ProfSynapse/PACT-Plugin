@@ -28,10 +28,37 @@ disclosed in this docstring, and a second statement of the ceiling reached the
 tree through it anyway. A STATED BOUND IS NOT A CONTROL. The subject-tainted arm
 below closes the spelling gap for any statement that names the index file.
 
-WHAT REMAINS OUTSIDE, so the next reader does not have to rediscover it. A
-restatement that both invents a spelling AND never names the index file is still
-invisible. The LINE cap is deliberately unpinned: its vocabulary collides with
-unrelated documentation, and the auto-memory table row states it a second time.
+BOTH CAPS ARE PINNED — the size axis and the line axis, each with its own unit
+alphabet. An earlier version of this docstring said the line cap was
+deliberately unpinned, and gave two reasons. The first was real and is now
+SUPERSEDED: the line vocabulary did collide with unrelated documentation, and
+the collision was solved by NARROWING that alphabet to a bare "N lines" rather
+than by abandoning the axis. The second stopped being true when the auto-memory
+table row became a pointer. Read the comment above LINE_CAP_RE for the alphabet
+that shipped.
+
+WHAT REMAINS OUTSIDE, so the next reader does not have to rediscover it, and
+WIDER than the superseded paragraph implied. A restatement is invisible when it
+uses a spelling outside the alphabet OR when it never names the index file —
+ONE of the two is enough, and the earlier text required both. The predicate
+reads ONE LINE AT A TIME, so a ceiling whose subject and numeral sit on
+different lines is invisible unless the subject-free unit arm happens to catch
+it. The arms count NUMERIC restatements, so a statement that a ceiling exists
+without giving a figure is out of scope by design — a pointer states no value
+and cannot duplicate one. And the shape the arms match is
+subject-plus-numeral-plus-unit, which a line can satisfy WITHOUT restating the
+ceiling, so this guard can also flag correct text.
+
+PART OF THAT IS ASSERTED RATHER THAN MERELY STATED, and the split matters
+because this docstring has been wrong before. KNOWN_MISSES at the end of this
+module carries one spelling outside each of the two alphabets. KNOWN_OVER_BLOCKS
+carries a line that matches the shape without restating the ceiling. Both go RED
+if the predicate ever improves past them, so those two clauses cannot rot here
+unnoticed. THE REST OF THE PARAGRAPH ABOVE IS PROSE — the unnamed-subject half,
+and the one-line-at-a-time limit, are enforced by nothing. A reader who needs
+either of them held should convert it the same way rather than trust this
+wording.
+
 And nothing here says whether the stated limits are CORRECT — no test in this
 repository can, because none of them reads the platform bundle.
 """
@@ -134,6 +161,22 @@ CAP_AXES = {
 
 SUBJECT_TOKEN = "MEMORY.md"
 
+# THE SUBJECT MATCH IS CASE-INSENSITIVE BUT ANCHORED, and both halves are
+# load-bearing in opposite directions.
+#
+# Case-insensitive, because a plain substring test missed `Memory.md` and
+# `memory.md` while the count arms reported green — the taint is what gates
+# BOTH axes, so a case variant disarmed the whole guard.
+#
+# Anchored, because the plugin ships a `-memory.md` filename family:
+# `commands/prune-memory.md` contains the token as a suffix. A case-insensitive
+# substring test readmits every line naming that command file, and such a line
+# carrying any numeral next to a unit would be counted as a statement of this
+# ceiling. The lookbehind rejects a preceding word character or hyphen, so the
+# command file cannot satisfy the subject while the index still can. Both
+# directions are pinned by the probe tables below; neither is assumed.
+SUBJECT_RE = re.compile(r"(?<![\w-])" + re.escape(SUBJECT_TOKEN), re.IGNORECASE)
+
 # The pointer, and the heading it must resolve to.
 POINTER_TOKEN = "index-upkeep rule"
 RULE_HEADING = "Index upkeep"
@@ -197,6 +240,11 @@ def _sites(token):
     return hits
 
 
+def _names_subject(line):
+    """True when the line names the index file, in any case, as its own token."""
+    return bool(SUBJECT_RE.search(line))
+
+
 def _states_cap(line, pattern):
     """THE predicate. One definition, used by the walk AND by the probes below.
 
@@ -206,7 +254,7 @@ def _states_cap(line, pattern):
     every probe green, because the probes were re-deriving the rule instead of
     calling it. A self-check that re-derives its own rule cannot falsify it.
     """
-    return SUBJECT_TOKEN in line and bool(pattern.search(line))
+    return _names_subject(line) and bool(pattern.search(line))
 
 
 def _cap_sites(pattern):
@@ -357,8 +405,18 @@ def test_single_source_is_the_file_the_pointer_names(token):
 # SUBJECT_TOKEN is the worst of the three: one literal gating BOTH axes.
 #
 # The remedy is a table of statements the predicate MUST recognise. Narrow any
-# constant and a probe stops matching, so alphabet completeness stops being an
+# constant and a probe stops matching, so alphabet NON-REGRESSION stops being an
 # editorial property and becomes an asserted one.
+#
+# WHAT THIS TABLE CANNOT DO, stated because an earlier version of this comment
+# claimed the opposite and claimed it in the direction that stops a reader
+# looking. It cannot assert that the alphabet is SUFFICIENT. Every entry here is
+# asserted to be DETECTED, so by construction every entry lies INSIDE the
+# current alphabet, and no entry can represent a spelling the alphabet does not
+# already cover. The table pins the alphabet against SHRINKING. It says nothing
+# about whether the alphabet was wide enough to begin with, and a green run here
+# is not evidence that it was. KNOWN_MISSES below carries that half, and it is
+# an enumeration rather than a proof.
 #
 # WHY A PROBE TABLE RATHER THAN A MUTATION HARNESS. A test that mutated these
 # constants and re-ran the predicate would RE-DERIVE THE RULE IT IS CHECKING,
@@ -380,6 +438,8 @@ DETECTION_PROBES = {
         "Your `MEMORY.md` index is capped at 25,000 characters.",
         "`MEMORY.md` is truncated to the first 25,000 UTF-16 code units.",
         "Your `MEMORY.md` index has a 25-KB cap.",
+        # Case variant. Pins the case-insensitive half of the subject match.
+        "Your `Memory.md` index is capped at 25,000 characters.",
     ),
     "line": (
         "Only the first 200 lines of `MEMORY.md` auto-load.",
@@ -393,9 +453,61 @@ NON_DETECTIONS = (
     "The webhook payload is capped at 8 MB.",
     "- **WORKFLOW_GUIDE.md** (200 lines) - Workflow management",
     "Your `MEMORY.md` index is the file the platform loads at session start.",
+    # The anchor's negative control. This line carries the token as a SUFFIX of
+    # a shipped command file and a numeral next to a line unit, so a
+    # case-insensitive SUBSTRING subject test would count it as a statement of
+    # this ceiling. Pinned, not assumed: drop the lookbehind and this fires.
+    "`prune-memory.md` reads the first 40 lines of the pin block.",
 )
 
 _PROBE_CASES = [(a, p) for a, ps in DETECTION_PROBES.items() for p in ps]
+
+# ---------------------------------------------------------------------------
+# The bounds, as assertions rather than as prose
+# ---------------------------------------------------------------------------
+# A BOUND WRITTEN AS PROSE GOES STALE IN SILENCE, and this module has paid for
+# that twice: a docstring paragraph disclosed a hole and a duplicate walked
+# through it, then a second paragraph kept asserting a superseded reason across
+# three reviews. Both tables below therefore pin CURRENT behaviour, not desired
+# behaviour, so that the day someone changes the predicate CI tells them the
+# bound moved instead of leaving the prose to rot.
+#
+# HOW TO RESOLVE A FAILURE HERE. These are the only tests in this file that go
+# RED on an IMPROVEMENT. If one fails, the predicate got better: move the entry
+# to DETECTION_PROBES or to NON_DETECTIONS and delete it from here. Do not widen
+# the entry to make it pass again.
+#
+# NEITHER TABLE MAY GROW SILENTLY. An addition is a statement that the guard is
+# weaker than the last reader believed, and it belongs in review as such.
+
+# Statements of the ceiling the predicate does NOT see today.
+KNOWN_MISSES = {
+    # The unit word before the numeral. This is the platform's own phrasing of
+    # the line cap, so it is the spelling a future author is most likely to
+    # copy, and both cap patterns require the numeral FIRST.
+    "line": (
+        "`MEMORY.md` is always loaded into your conversation context - lines "
+        "after 200 will be truncated, so keep the index concise.",
+    ),
+    # A spelled-out unit name. `[KMG]i?B` cannot match inside "kilobytes" and
+    # the alphabet carries no spelled-out form.
+    "size": (
+        "Keep `MEMORY.md` under 25 kilobytes.",
+    ),
+}
+
+# Correct text that is NOT a restatement of the ceiling and IS flagged today.
+# The predicate matches subject-plus-numeral-plus-unit on one line, which a
+# sentence can satisfy while stating something else entirely: a PER-ENTRY
+# limit, a measurement, or an example. The first entry is the platform's own
+# index-discipline sentence, so this is not a hypothetical cost.
+KNOWN_OVER_BLOCKS = (
+    "`MEMORY.md` is an index, not a memory - each entry should be one line, "
+    "under ~150 characters.",
+    "Each `MEMORY.md` entry should be one line, under 150 characters.",
+)
+
+_MISS_CASES = [(a, t) for a, ts in KNOWN_MISSES.items() for t in ts]
 
 
 def test_population_reaches_every_directory_a_duplicate_has_appeared_in():
@@ -419,6 +531,37 @@ def test_population_reaches_every_directory_a_duplicate_has_appeared_in():
             f"If a directory was deliberately dropped, say which and why."
         )
 
+    # THE NAMED PAIR ABOVE IS A FLOOR, NOT THE PROPERTY. It closes the one
+    # narrowing that was measured and nothing else: a walk cut to agents+skills
+    # satisfies it while commands/, protocols/, hooks/ and templates/ — all
+    # instruction surfaces — drop out unseen. The expectation below is derived
+    # from the DIRECTORY LISTING instead of from the population function, so it
+    # is an independent oracle rather than a second spelling of the same rule,
+    # and any narrowing is visible whichever directory it drops.
+    expected = set()
+    for entry in PLUGIN_ROOT.iterdir():
+        if not entry.is_dir():
+            continue
+        if entry.name == "tests" or entry.name in SKIP_DIR_PARTS:
+            continue
+        if any(
+            f.is_file()
+            and f.suffix in TEXT_SUFFIXES
+            and not (SKIP_DIR_PARTS & set(f.relative_to(PLUGIN_ROOT).parts))
+            and not _is_test_module(f.relative_to(PLUGIN_ROOT))
+            for f in entry.rglob("*")
+        ):
+            expected.add(entry.name)
+    unreached = sorted(expected - tops)
+    assert not unreached, (
+        f"the instruction population no longer reaches {unreached}; it covers "
+        f"{sorted(tops)}. Each of those directories holds at least one shipped "
+        f"text file, so a cap statement added there would be invisible to every "
+        f"arm in this file while the counts stay at one. If a directory was "
+        f"deliberately dropped, exclude it here by name with a comment saying "
+        f"why, rather than letting the walk narrow silently."
+    )
+
 
 @pytest.mark.parametrize(
     "axis,probe",
@@ -433,7 +576,7 @@ def test_predicate_detects_every_canonical_spelling(axis, probe):
         f"or _states_cap itself has narrowed, and a duplicate written this way "
         f"would now be invisible while the count arms report green.\n"
     )
-    assert SUBJECT_TOKEN in probe, (
+    assert _names_subject(probe), (
         f"the subject taint {SUBJECT_TOKEN!r} no longer matches a canonical "
         f"statement of the ceiling: {probe!r}. Narrowing the taint disarms BOTH "
         f"axes at once while the count arms stay green, because the single "
@@ -464,6 +607,57 @@ def test_predicate_ignores_near_misses(text):
         f"content; a bare numeral-plus-unit sweep matches 96 lines across the "
         f"shipped surfaces, and the subject taint is what excludes them. Narrow "
         f"the change, do not delete this case."
+    )
+
+
+@pytest.mark.parametrize(
+    "axis,text",
+    _MISS_CASES,
+    ids=[f"miss-{a}{i}" for a, ts in KNOWN_MISSES.items() for i in range(len(ts))],
+)
+def test_known_miss_is_still_missed(axis, text):
+    """A stated bound, asserted. RED here means the guard IMPROVED.
+
+    This is the half DETECTION_PROBES structurally cannot carry: every probe
+    there is asserted to be detected, so none of them can stand for a spelling
+    the alphabet does not cover.
+    """
+    assert not _states_cap(text, CAP_AXES[axis].pattern), (
+        f"the {axis} predicate now SEES a spelling this module records as a "
+        f"known miss: {text!r}. That is an improvement, not a failure. Move "
+        f"this entry into DETECTION_PROBES and delete it from KNOWN_MISSES, so "
+        f"the recorded bound matches the guard that ships. Do not edit the "
+        f"string to make this pass."
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    KNOWN_OVER_BLOCKS,
+    ids=[f"over{i}" for i in range(len(KNOWN_OVER_BLOCKS))],
+)
+def test_known_over_block_still_over_blocks(text):
+    """The opposite bound, asserted. RED here also means the guard IMPROVED.
+
+    These lines state a PER-ENTRY limit rather than the index ceiling, and the
+    guard counts them as restatements. Until the predicate can tell the two
+    apart, a shipped instruction file carrying one of them turns the count arms
+    red against correct text.
+    """
+    hit = [
+        axis for axis, spec in CAP_AXES.items() if _states_cap(text, spec.pattern)
+    ]
+    assert hit, (
+        f"the predicate no longer flags {text!r}, which this module records as "
+        f"CORRECT TEXT that the guard wrongly counts as a duplicate. THIS RED "
+        f"MEANS THE GUARD BECAME MORE CORRECT, NOT LESS. That line carries the "
+        f"index file and a numeral beside a unit WITHOUT restating the ceiling, "
+        f"and until now it was counted as a second statement of the cap. DO NOT "
+        f"REVERT THE PREDICATE CHANGE THAT CAUSED THIS: reverting restores a "
+        f"false positive and turns the suite green again, so nothing would tell "
+        f"you afterwards that you undid a real fix. Move this entry into "
+        f"NON_DETECTIONS and delete it from KNOWN_OVER_BLOCKS. Do not edit the "
+        f"string to make this pass."
     )
 
 
