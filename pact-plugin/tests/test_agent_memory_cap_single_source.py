@@ -180,6 +180,18 @@ def _sites(token):
     return hits
 
 
+def _states_cap(line, pattern):
+    """THE predicate. One definition, used by the walk AND by the probes below.
+
+    Kept separate so the probe table exercises the real conjunction rather than
+    a copy of it. A copy passes forever once the two drift: measured, a version
+    of `_cap_sites` that ignored SUBJECT_TOKEN and hardcoded the literal left
+    every probe green, because the probes were re-deriving the rule instead of
+    calling it. A self-check that re-derives its own rule cannot falsify it.
+    """
+    return SUBJECT_TOKEN in line and bool(pattern.search(line))
+
+
 def _cap_sites(pattern):
     """Every `relpath:lineno` stating a ceiling for the index, ANY spelling.
 
@@ -195,7 +207,7 @@ def _cap_sites(pattern):
         except (UnicodeDecodeError, OSError):
             continue
         for lineno, line in enumerate(text.splitlines(), 1):
-            if SUBJECT_TOKEN in line and pattern.search(line):
+            if _states_cap(line, pattern):
                 hits.append(f"{path.relative_to(PLUGIN_ROOT)}:{lineno}")
     return hits
 
@@ -367,6 +379,28 @@ NON_DETECTIONS = (
 _PROBE_CASES = [(a, p) for a, ps in DETECTION_PROBES.items() for p in ps]
 
 
+def test_population_reaches_every_directory_a_duplicate_has_appeared_in():
+    """The walk itself can narrow, and the count arms cannot see it.
+
+    Measured: restricting `_instruction_files()` to `skills/` leaves the count
+    at one, because the single source lives there — while a duplicate under
+    `agents/` becomes invisible. That is not hypothetical. The only real
+    duplicate this pin has ever caught was at agents/pact-orchestrator.md:581.
+    """
+    tops = {
+        rel.parts[0]
+        for rel in (p.relative_to(PLUGIN_ROOT) for p in _instruction_files())
+        if rel.parts
+    }
+    for required in ("agents", "skills"):
+        assert required in tops, (
+            f"the instruction population no longer reaches {required!r}; it "
+            f"covers {sorted(tops)}. A cap statement added there would be "
+            f"invisible to every arm in this file while the counts stay at one. "
+            f"If a directory was deliberately dropped, say which and why."
+        )
+
+
 @pytest.mark.parametrize(
     "axis,probe",
     _PROBE_CASES,
@@ -374,6 +408,12 @@ _PROBE_CASES = [(a, p) for a, ps in DETECTION_PROBES.items() for p in ps]
 )
 def test_predicate_detects_every_canonical_spelling(axis, probe):
     """Narrow any constant and one of these stops matching."""
+    assert _states_cap(probe, CAP_AXES[axis].pattern), (
+        f"the predicate no longer recognises a canonical statement of the "
+        f"ceiling: {probe!r}. Something in SUBJECT_TOKEN, the {axis} alphabet, "
+        f"or _states_cap itself has narrowed, and a duplicate written this way "
+        f"would now be invisible while the count arms report green.\n"
+    )
     assert SUBJECT_TOKEN in probe, (
         f"the subject taint {SUBJECT_TOKEN!r} no longer matches a canonical "
         f"statement of the ceiling: {probe!r}. Narrowing the taint disarms BOTH "
@@ -397,7 +437,7 @@ def test_predicate_ignores_near_misses(text):
     hit = [
         axis
         for axis, spec in CAP_AXES.items()
-        if SUBJECT_TOKEN in text and spec.pattern.search(text)
+        if _states_cap(text, spec.pattern)
     ]
     assert not hit, (
         f"{hit} now match text that does not state the index ceiling: {text!r}. "
