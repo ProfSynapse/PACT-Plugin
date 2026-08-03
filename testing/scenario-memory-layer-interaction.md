@@ -104,7 +104,7 @@ grep -c "Memory ID" CLAUDE.md  # Should be <= 3
 
 Invoke a specialist agent (e.g., backend coder) and observe whether agent persistent memory is loaded.
 
-**What happens**: When an agent with `memory: user` frontmatter is spawned, Claude Code automatically loads the first 200 lines of `~/.claude/agent-memory/{agent-name}/MEMORY.md` into that agent's context.
+**What happens**: When an agent with `memory: user` frontmatter is spawned, Claude Code automatically loads the first 200 lines of that agent's `MEMORY.md` into its context. The platform hands the agent the absolute path, under `~/.claude/agent-memory/`; the leaf is not derived from the agent's name or type.
 
 **Expected outcome**: The specialist agent has access to domain expertise from previous sessions. This is separate from and complementary to pact-memory.
 
