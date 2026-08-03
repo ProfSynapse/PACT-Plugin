@@ -8,6 +8,8 @@
 
 Verify that the three memory layers (auto-memory, pact-memory, agent persistent memory) coexist correctly: no token duplication causes context overflow, Working Memory in CLAUDE.md syncs from pact-memory SQLite, and agent persistent memory loads for specialist agents.
 
+> **The index limits below are literals on purpose.** A verification step needs a value to check against, so do not convert the line-count and code-unit figures in the steps below into a cross-reference. They are a second copy of a constant whose single source is `pact-plugin/skills/pact-agent-teams/SKILL.md`, and this directory sits outside the population guarded by `pact-plugin/tests/test_agent_memory_cap_single_source.py` — no test fails if they go stale. When that single source changes, update both occurrences in this file in the same commit.
+
 ## Prerequisites
 
 1. PACT plugin installed with memory hooks active (`staleness.py`, `session_init.py`)
@@ -22,7 +24,7 @@ Verify that the three memory layers (auto-memory, pact-memory, agent persistent 
 
 Start a new Claude Code session in the project directory.
 
-**What happens**: The platform automatically loads the first 200 lines of `~/.claude/projects/{hash}/memory/MEMORY.md` into the system prompt.
+**What happens**: The platform automatically loads the head of `~/.claude/projects/{hash}/memory/MEMORY.md` into the system prompt — the first 200 lines or the first 25,000 UTF-16 code units, measured after trimming, whichever limit binds first.
 
 **Expected outcome**: Session starts with auto-memory content available. The orchestrator can reference session learnings from previous sessions without invoking any skill.
 
@@ -104,7 +106,7 @@ grep -c "Memory ID" CLAUDE.md  # Should be <= 3
 
 Invoke a specialist agent (e.g., backend coder) and observe whether agent persistent memory is loaded.
 
-**What happens**: When an agent with `memory: user` frontmatter is spawned, Claude Code automatically loads the first 200 lines of that agent's `MEMORY.md` into its context. The platform hands the agent the absolute path, under `~/.claude/agent-memory/`; the leaf is not derived from the agent's name or type.
+**What happens**: When an agent with `memory: user` frontmatter is spawned, Claude Code automatically loads the head of that agent's `MEMORY.md` into its context — the first 200 lines or the first 25,000 UTF-16 code units, measured after trimming, whichever limit binds first. The platform hands the agent the absolute path, under `~/.claude/agent-memory/`; the leaf is not derived from the agent's name or type.
 
 **Expected outcome**: The specialist agent has access to domain expertise from previous sessions. This is separate from and complementary to pact-memory.
 
