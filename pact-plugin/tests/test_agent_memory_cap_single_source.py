@@ -21,12 +21,21 @@ counting the unit instead:
     is exactly what must be removed;
   * deletion of the rule while a pointer still aims at it turns it RED.
 
-BOUND, stated rather than implied. A restatement that avoids the unit vocabulary
-altogether (for example "25,000 characters") is invisible to this pin. The pin
-narrows the failure mode; it does not close it. It also says nothing about
-whether the stated limits are CORRECT — no test in this repository can, because
-none of them reads the platform bundle.
+BOUND, stated rather than implied — and NARROWED, because the previous bound was
+walked through. This pin once matched only the unit VOCABULARY, so a restatement
+spelled "25KB" or "25,000 characters" was invisible to it. That bound was
+disclosed in this docstring, and a second statement of the ceiling reached the
+tree through it anyway. A STATED BOUND IS NOT A CONTROL. The subject-tainted arm
+below closes the spelling gap for any statement that names the index file.
+
+WHAT REMAINS OUTSIDE, so the next reader does not have to rediscover it. A
+restatement that both invents a spelling AND never names the index file is still
+invisible. The LINE cap is deliberately unpinned: its vocabulary collides with
+unrelated documentation, and the auto-memory table row states it a second time.
+And nothing here says whether the stated limits are CORRECT — no test in this
+repository can, because none of them reads the platform bundle.
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -37,10 +46,53 @@ PLUGIN_ROOT = Path(__file__).parent.parent
 SINGLE_SOURCE = "skills/pact-agent-teams/SKILL.md"
 REFERRER = "skills/pact-memory/SKILL.md"
 
-# Unit vocabulary of the size ceiling. Neither token is used by the two
-# auto-memory carriers, which state a limit for a DIFFERENT memory system and
-# are deliberately out of scope here.
+# Unit vocabulary of the size ceiling.
+#
+# AN EARLIER VERSION OF THIS COMMENT WAS WRONG, and the error is worth keeping
+# visible because of what it cost. It said the two auto-memory carriers "state a
+# limit for a DIFFERENT memory system and are deliberately out of scope here".
+# Both carriers in fact state a limit for the SAME artifact this rule governs,
+# and one of them was a second statement of this very ceiling — spelled "25KB",
+# which the vocabulary arm cannot see. The wrong justification is why the
+# exclusion read as principled through three separate reviews: a false reason in
+# a test is worse than no reason, because it stops the next reader looking.
+#
+# WHAT THIS FILE DELIBERATELY DOES NOT SETTLE: whether the two memory
+# directories share one platform constant. No test in this repository reads the
+# platform bundle, so that question cannot be answered from here. The arms below
+# assert only what is measurable — how many times the shipped tree STATES a size
+# ceiling for the index.
+#
+# This arm is RETAINED rather than replaced. It is keyed on vocabulary, so it
+# still catches a restatement that never names the index file, which the
+# subject-tainted arm below cannot see. Neither arm contains the other.
 UNIT_TOKENS = ["UTF-16", "code unit"]
+
+# --- the subject-tainted size-cap arm --------------------------------------
+# Keyed on the SHAPE of a size statement about the index rather than on the
+# words chosen for it, so the spelling no longer decides the verdict.
+#
+# THE NUMBER IS A WILDCARD, deliberately. Pinning the value would assert only
+# that the text matches itself, and would have to be edited on the very day
+# someone correctly updates the platform constant.
+#
+# THE SUBJECT TAINT IS WHAT MAKES THE SHAPE USABLE. A bare numeral-plus-size-unit
+# sweep matches 96 lines across the shipped surfaces — hook buffer sizes, n8n
+# documentation, telegram limits, the pact-memory CLI. Requiring the line to name
+# the index file reduces that to the statements about this index and nothing
+# else. Measured across the shipped surfaces, not estimated.
+#
+# THE LINE CAP IS NOT MATCHED, and that is a measured choice rather than an
+# oversight. "200 lines" collides with an unrelated n8n README and a pact-memory
+# reference example, and the taint does not separate the auto-memory table row,
+# which states it a second time. Pin it here and the suite is red against correct
+# text.
+SIZE_UNIT = (
+    r"(?:UTF-16\s+code\s+units?|code\s+units?|characters?|chars?"
+    r"|bytes?|[KMG]i?B)"
+)
+SIZE_CAP_RE = re.compile(r"\d[\d,\.]*\s*" + SIZE_UNIT, re.IGNORECASE)
+SUBJECT_TOKEN = "MEMORY.md"
 
 # The pointer, and the heading it must resolve to.
 POINTER_TOKEN = "index-upkeep rule"
@@ -103,6 +155,53 @@ def _sites(token):
             if needle in line.lower():
                 hits.append(f"{path.relative_to(PLUGIN_ROOT)}:{lineno}")
     return hits
+
+
+def _size_cap_sites():
+    """Every `relpath:lineno` stating a size ceiling for the index, ANY spelling.
+
+    A line qualifies when it names the index file AND carries a numeral next to
+    a size unit. Both conditions are load-bearing: the numeral-plus-unit shape
+    alone matches 96 unrelated lines, and the subject alone matches every
+    mention of the index.
+    """
+    hits = []
+    for path in _instruction_files():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if SUBJECT_TOKEN in line and SIZE_CAP_RE.search(line):
+                hits.append(f"{path.relative_to(PLUGIN_ROOT)}:{lineno}")
+    return hits
+
+
+def test_size_cap_stated_exactly_once_in_any_spelling():
+    """The spelling-agnostic arm. A count of 0 fails loudly rather than passing."""
+    sites = _size_cap_sites()
+    assert len(sites) == 1, (
+        f"the index size ceiling must be STATED on exactly ONE line across the "
+        f"shipped instruction surfaces; found {len(sites)}: {sites}. This arm is "
+        f"spelling-agnostic on purpose — '25KB' and '25,000 characters' count as "
+        f"statements just as '25,000 UTF-16 code units' does, because a duplicate "
+        f"in a novel spelling is exactly how a second statement last reached this "
+        f"tree. If you added a site, replace it with a pointer to the rule at "
+        f"{SINGLE_SOURCE}. A count of ZERO means the rule was deleted, or that "
+        f"{SUBJECT_TOKEN!r} no longer names the index file — fix the predicate, "
+        f"do not delete this test."
+    )
+
+
+def test_size_cap_site_is_the_single_source():
+    """The one statement must live in the file the pointer sends readers to."""
+    sites = _size_cap_sites()
+    assert len(sites) == 1, f"expected one size-cap statement, found {sites}"
+    assert sites[0].startswith(SINGLE_SOURCE + ":"), (
+        f"the size ceiling is stated at {sites[0]}, but {REFERRER} sends readers "
+        f"to {SINGLE_SOURCE}. Move the rule back, or re-point the pointer and "
+        f"update SINGLE_SOURCE here."
+    )
 
 
 def test_each_population_filter_removes_something():
