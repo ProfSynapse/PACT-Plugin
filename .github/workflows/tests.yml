@@ -34,12 +34,13 @@
 #   `working-directory: pact-plugin`.
 #
 # DEPENDENCY SET (empirically verified — see note below)
-#   The suite is stdlib + the third-party libraries listed below, which are HARD
-#   requirements for a green run:
+#   The suite is stdlib + the third-party libraries listed below. Each bullet
+#   states what breaks without that library. Do not drop any of them to shorten
+#   the install line — the failure modes differ, and not all of them are loud.
 #     - pytest           : the runner (hard import everywhere).
 #     - httpx            : UNGUARDED top-level import in the local telegram
 #                          package (telegram/voice.py, telegram/telegram_client.py)
-#                          and two telegram test modules → without it,
+#                          and in telegram test modules → without it,
 #                          `python -m pytest tests/` ERRORS at COLLECTION.
 #     - pytest-asyncio   : the suite has ~143 `@pytest.mark.asyncio` tests.
 #                          On pytest >= 9, an unhandled async test FAILS (not
