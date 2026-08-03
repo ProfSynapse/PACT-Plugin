@@ -70,12 +70,42 @@ def check_and_install_dependencies() -> dict:
 
     # CI declares these packages up front (see the workflow's DEPENDENCY SET),
     # so reaching here under CI means that list and the one above have drifted
-    # apart. Fail loudly rather than install mid-run: a test-time `pip install`
-    # reaches the network, mutates the environment the suite is measuring, and
-    # lands AFTER collection-time availability checks have already skipped their
-    # tests — so the suite silently runs fewer tests than it reports.
-    # `failed` stays EMPTY on purpose: nothing was attempted, and
-    # ensure_memory_ready logs that key as "Failed to install".
+    # apart. Report it and skip, rather than install mid-run: a test-time
+    # `pip install` reaches the network, mutates the environment the suite is
+    # measuring, and lands AFTER collection-time availability checks have
+    # already skipped their tests — so the suite silently runs fewer tests than
+    # it reports.
+    #
+    # `failed` stays EMPTY on purpose: nothing was attempted. That means
+    # ensure_memory_ready's "Failed to install" branch does NOT fire, and the
+    # `skipped` key below has no production consumer — so if this branch did not
+    # emit here, the drift it exists to detect would be reported NOWHERE.
+    #
+    # THIS BRANCH IS DELIBERATELY SILENT, and that is a measured decision rather
+    # than the oversight it looks like. Do not "fix" it by adding a log line.
+    #
+    # The DOMINANT caller of this function is not the pytest process: it is a
+    # CLI SUBPROCESS (scripts/cli.py invoked via subprocess.run by the CLI
+    # tests). On that path the CLI's STDERR IS A STRUCTURED JSON CONTRACT — the
+    # tests do `json.loads(result.stderr)` and read `ok`/`error` out of it. Any
+    # free text written there corrupts the parse. Measured, drift forced, same
+    # suite, one variable changed at a time:
+    #     no emission at all ................ 154 passed
+    #     print(file=sys.stderr) ............ 15 failed
+    #     logger.warning (lastResort→stderr)  15 failed
+    #     warnings.warn (default→stderr) .... 15 failed
+    # All three reach stderr, so all three break the contract identically. There
+    # is no in-process emission that is both visible here and safe.
+    #
+    # And visibility does not survive the process boundary anyway: a warning
+    # raised in a subprocess never reaches pytest's warnings summary, which only
+    # collects warnings raised in the pytest process.
+    #
+    # So drift is detected STATICALLY instead, by the package-list/workflow
+    # parity test in tests/test_memory_init.py. A failing test is both louder
+    # than any log line and immune to capture, to the process boundary, and to
+    # the `-r` flag. `status` and `skipped` below remain the programmatic signal
+    # for any caller that wants to inspect the result.
     if os.environ.get('CI'):
         return {'status': 'skipped_ci', 'installed': [], 'failed': [],
                 'skipped': list(missing)}
