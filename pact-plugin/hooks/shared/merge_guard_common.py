@@ -298,9 +298,32 @@ _MAX_GLOBAL_FLAG_TOKENS = 32
 
 # Optional global flags between CLI tool and subcommand — BOUNDED (was `*`).
 _GH_GLOBAL_FLAGS  = r"(?:\S+\s+){0,%d}" % _MAX_GLOBAL_FLAG_TOKENS
-# Tight variant for PR-number extraction — UNCHANGED (already linear; requires
-# a leading `-` per token so it fails fast; used only by _GH_PR_NUMBER_RE).
-_GH_FLAG_TOKENS   = r"(?:-\S*(?:\s+\S+)?\s+)*"
+# Tight variant for PR-number extraction; used only by _GH_PR_NUMBER_RE.
+#
+# THE OPTIONAL VALUE MUST NOT START WITH `-`, AND THAT IS THE WHOLE POINT.
+# Requiring a leading `-` per FLAG does not make this linear on its own — an
+# earlier comment here claimed it did ("already linear ... fails fast"), and
+# that claim is why an exponential shipped: it was written down, so nobody
+# re-measured. MEASURED with the old `(?:\s+\S+)?` value arm, on consecutive
+# valueless dash-flags with the match failing: 18 flags 1.0 ms, 22 flags 6.6 ms,
+# 26 flags 45 ms — roughly 2.5x per two added flags, extrapolating to the 600 s
+# PreToolUse ceiling at ~46 flags. A hook that exceeds that ceiling is KILLED
+# AND THE TOOL CALL PROCEEDS, so a hang here is a silent guard BYPASS, not a
+# slow refusal.
+#
+# The ambiguity was structural: with `\S+` as the value, a `-x` token could be
+# EITHER the previous flag's value OR a flag in its own right, so every token
+# doubled the partitions the engine had to try. `[^-\s]\S*` makes that
+# unrepresentable — a dash-initial token can only ever be a flag, a
+# non-dash-initial token can only ever be a value, and the partition is unique.
+#
+# THE MATCHED LANGUAGE IS UNCHANGED. A value that genuinely starts with `-`
+# (`--subject -x 42`) is still consumed, by the NEXT iteration as a flag rather
+# than by this one as a value, so the same tokens are swallowed and the same
+# number is extracted. Verified across 14 forms with zero divergence, including
+# every legitimate shape the merge-guard suite pins. Measured after: 2000 flags
+# in 0.25 ms.
+_GH_FLAG_TOKENS   = r"(?:-\S*(?:\s+[^-\s]\S*)?\s+)*"
 _GIT_GLOBAL_FLAGS = r"(?:\S+\s+){0,%d}" % _MAX_GLOBAL_FLAG_TOKENS
 
 # Composed prefixes for DRY usage across all patterns.
