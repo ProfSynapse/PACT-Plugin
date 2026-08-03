@@ -41,6 +41,27 @@ _init_lock = threading.Lock()
 _initialized = False
 
 
+# Values of `CI` that mean "NOT running under CI" even though the variable is
+# SET. A bare `os.environ.get('CI')` treats every one of these as CI, because a
+# non-empty string is truthy — so `CI=false` took the CI branch and skipped the
+# install it was meant to permit. Pinned as an explicit set so the intent is
+# readable at the call site instead of resting on a truthiness accident.
+_CI_FALSY_VALUES = frozenset({'', '0', 'false', 'no'})
+
+
+def _ci_is_declared() -> bool:
+    """
+    Report whether the environment declares that this is a CI run.
+
+    Absent, empty, `0`, `false` and `no` all mean NOT CI, in any letter case and
+    ignoring surrounding whitespace. Every other value means CI.
+
+    Returns:
+        True when the run is under CI, False otherwise.
+    """
+    return os.environ.get('CI', '').strip().lower() not in _CI_FALSY_VALUES
+
+
 def check_and_install_dependencies() -> dict:
     """
     Check for pact-memory dependencies and auto-install if missing.
@@ -106,7 +127,7 @@ def check_and_install_dependencies() -> dict:
     # than any log line and immune to capture, to the process boundary, and to
     # the `-r` flag. `status` and `skipped` below remain the programmatic signal
     # for any caller that wants to inspect the result.
-    if os.environ.get('CI'):
+    if _ci_is_declared():
         return {'status': 'skipped_ci', 'installed': [], 'failed': [],
                 'skipped': list(missing)}
 
