@@ -115,9 +115,17 @@ UNIT_TOKENS = ["UTF-16", "code unit"]
 # their alphabets would make a line-only restatement and a size-only
 # restatement indistinguishable in a single tally. The line cap has its own
 # pattern immediately below.
+#
+# THE SPELLED-OUT UNIT NAMES ARE INCLUDED, and they were measured before they
+# were added. "kilobytes" is ordinary English and `[KMG]i?B` cannot match inside
+# it, so a cap written that way was invisible. The addition costs NOTHING on
+# either side: the untainted sweep is unchanged at 112 and the tainted count
+# unchanged at 1, and it opens no new class of false positive, because a
+# non-restatement written as "grew by 3 kilobytes" is the same class the
+# alphabet already admitted as "grew by 3 KB".
 SIZE_UNIT = (
     r"(?:UTF-16\s+code\s+units?|code\s+units?|characters?|chars?"
-    r"|bytes?|[KMG]i?B)"
+    r"|(?:kilo|mega|giga|kibi|mebi)-?bytes?|bytes?|[KMG]i?B)"
 )
 SIZE_CAP_RE = re.compile(r"\d[\d,\.]*[-\s]*" + SIZE_UNIT, re.IGNORECASE)
 
@@ -125,9 +133,29 @@ SIZE_CAP_RE = re.compile(r"\d[\d,\.]*[-\s]*" + SIZE_UNIT, re.IGNORECASE)
 # first pass of this repair because a third statement of the constant still
 # stood in the auto-memory table row, so this arm would have been red against
 # correct text. With that row converted to a pointer the sweep returns one site,
-# and the arm is admissible. THE ALPHABET IS DELIBERATELY NARROW: bare
-# "N lines". Widening it to prose forms buys nothing measurable and spends the
-# false-positive budget that makes the subject taint work.
+# and the arm is admissible.
+#
+# THE REVERSED ORDER IS MATCHED THROUGH A CLOSED LIST OF CONNECTIVES, and the
+# shape of that decision is the important part. An earlier version of this
+# comment said widening to prose forms "buys nothing measurable"; that was
+# wrong, because the platform's OWN phrasing of this cap puts the numeral AFTER
+# the unit word ("lines after 200 will be truncated") and the bare form cannot
+# see it.
+#
+# WHAT WAS MEASURED, and it reversed the obvious choice. The general widening —
+# the unit word, then up to three words, then a numeral — accepts EVERY line
+# citation: "see line 12", "delete lines 5 and 6", "lines 1 to 3". Measured on
+# CONSTRUCTED inputs it took 6 of 6 such sentences, and 13 of the 14 lines it
+# matches in the shipped tree are line-number citations rather than caps. A
+# corpus count could not reveal that, because it measures what the tree ALREADY
+# contains, never what a pattern would newly ACCEPT.
+#
+# So the widening is an ALLOWLIST of the connectives a ceiling is stated with,
+# not a general shape. That direction is deliberate: the ways to STATE a cap are
+# few and enumerable, while the ways to write a non-cap sentence with a numeral
+# near "lines" are unbounded. Bounding the small side is the only side that can
+# be bounded. It fails toward a MISS rather than toward a false positive, and
+# every known miss is recorded in KNOWN_MISSES below rather than left silent.
 #
 # THE SEPARATOR IS `[-\s]*` RATHER THAN `\s*` so the HYPHENATED-ADJECTIVE form
 # is caught: "a 200-line ceiling", "a 25-KB cap". Ordinary English, and the
@@ -145,7 +173,15 @@ SIZE_CAP_RE = re.compile(r"\d[\d,\.]*[-\s]*" + SIZE_UNIT, re.IGNORECASE)
 # PR converted several numeric cap statements into pointer-shaped ones, so the
 # guard is deliberately blind to the shape they were converted INTO -- including
 # the auto-memory row that now reads as a pointer.
-LINE_CAP_RE = re.compile(r"\d[\d,\.]*[-\s]*lines?\b", re.IGNORECASE)
+LINE_CONNECTIVE = (
+    r"(?:after|beyond|past|over|above|up\s+to|and"
+    r"|are\s+capped\s+at|is\s+capped\s+at|are\s+limited\s+to)"
+)
+LINE_CAP_RE = re.compile(
+    r"\d[\d,\.]*[-\s]*lines?\b"
+    r"|\blines?\b\s+" + LINE_CONNECTIVE + r"\s+\d[\d,\.]*",
+    re.IGNORECASE,
+)
 
 # The two axes of the same ceiling. Both are subject-tainted and
 # number-wildcard; they differ only in the unit alphabet, so a new axis is one
@@ -257,6 +293,40 @@ def _states_cap(line, pattern):
     return _names_subject(line) and bool(pattern.search(line))
 
 
+# --- the declared exception ------------------------------------------------
+# WHY A DECLARATION RATHER THAN A CLEVERER PREDICATE. The arms match
+# subject-plus-numeral-plus-unit, and a line can satisfy that shape while
+# stating something else entirely: a PER-ENTRY limit, a MEASUREMENT, an EXAMPLE
+# cost, a BUDGET. Those four share NO vocabulary, so no word list separates
+# them. That was measured rather than assumed: a negative lookahead for
+# "each/per ... entry" silenced the two per-entry lines it was written for and
+# left four others of the same class standing. The distinguisher is the semantic
+# ROLE of the numeral — is this figure THE ceiling of the index, or some other
+# quantity that happens to sit beside the index's name — and a regular
+# expression cannot read a role.
+#
+# So this module does not try to. A line that carries the shape without
+# restating the ceiling is DECLARED here. The declaration IS the human
+# judgement the predicate cannot make, and it lands in review as a visible
+# one-line addition rather than as a silent widening of the pattern.
+#
+# KEYED ON THE EXACT LINE TEXT, DELIBERATELY. Edit the line and the declaration
+# stops matching, so the guard flags it again and the judgement is re-made by
+# whoever changed it. A declaration keyed on a line NUMBER would drift the
+# moment anything above it moved, and would then exempt a line nobody judged.
+#
+# EMPTY TODAY, and that is the honest state: no shipped line currently carries
+# the shape without restating the ceiling. The mechanism is asserted anyway by
+# the arm below, which drives it with a synthetic table, so an empty production
+# list cannot make the machinery vacuous.
+DECLARED_NON_RESTATEMENTS = ()
+
+
+def _is_declared(rel, line, declarations=DECLARED_NON_RESTATEMENTS):
+    """True when this exact line, at this exact path, is a declared exception."""
+    return (str(rel), line.strip()) in declarations
+
+
 def _cap_sites(pattern):
     """Every `relpath:lineno` stating a ceiling for the index, ANY spelling.
 
@@ -271,9 +341,10 @@ def _cap_sites(pattern):
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
+        rel = path.relative_to(PLUGIN_ROOT)
         for lineno, line in enumerate(text.splitlines(), 1):
-            if _states_cap(line, pattern):
-                hits.append(f"{path.relative_to(PLUGIN_ROOT)}:{lineno}")
+            if _states_cap(line, pattern) and not _is_declared(rel, line):
+                hits.append(f"{rel}:{lineno}")
     return hits
 
 
@@ -287,8 +358,14 @@ def test_cap_stated_exactly_once_in_any_spelling(axis):
         f"spelling-agnostic on purpose — {CAP_AXES[axis].examples} all count as "
         f"statements of the same ceiling, because a duplicate "
         f"in a novel spelling is exactly how a second statement last reached this "
-        f"tree. If you added a site, replace it with a pointer to the rule at "
-        f"{SINGLE_SOURCE}. A count of ZERO means the rule was deleted, or that "
+        f"tree. TWO DOORS, and pick by what the line actually says. If it "
+        f"RESTATES the ceiling, replace it with a pointer to the rule at "
+        f"{SINGLE_SOURCE}. If it carries the shape WITHOUT restating the ceiling "
+        f"— a per-entry limit, a measurement, an example cost — then it is not a "
+        f"duplicate and the predicate cannot tell: declare it in "
+        f"DECLARED_NON_RESTATEMENTS by path and exact text. Do NOT widen the "
+        f"pattern to exclude it; that is how the alphabet rots. "
+        f"A count of ZERO means the rule was deleted, or that "
         f"{SUBJECT_TOKEN!r} no longer names the index file — fix the predicate, "
         f"do not delete this test."
     )
@@ -440,11 +517,17 @@ DETECTION_PROBES = {
         "Your `MEMORY.md` index has a 25-KB cap.",
         # Case variant. Pins the case-insensitive half of the subject match.
         "Your `Memory.md` index is capped at 25,000 characters.",
+        # Spelled-out unit. Was a KNOWN_MISS until the alphabet was widened.
+        "Keep `MEMORY.md` under 25 kilobytes.",
     ),
     "line": (
         "Only the first 200 lines of `MEMORY.md` auto-load.",
         "Your `MEMORY.md` index is truncated to the first 250 lines.",
         "Your `MEMORY.md` index has a 200-line ceiling.",
+        # THE PLATFORM'S OWN PHRASING, numeral AFTER the unit word. Was a
+        # KNOWN_MISS until the reversed-order connectives were admitted.
+        "`MEMORY.md` is always loaded into your conversation context - lines "
+        "after 200 will be truncated, so keep the index concise.",
     ),
 }
 
@@ -458,6 +541,14 @@ NON_DETECTIONS = (
     # case-insensitive SUBSTRING subject test would count it as a statement of
     # this ceiling. Pinned, not assumed: drop the lookbehind and this fires.
     "`prune-memory.md` reads the first 40 lines of the pin block.",
+    # LINE CITATIONS. These are what the reversed-order arm must NOT readmit,
+    # and they are the reason it is a closed list of connectives rather than a
+    # general "unit word, then a numeral" shape: the general form took all
+    # three of these, and 13 of the 14 lines it matches in the shipped tree are
+    # citations exactly like them.
+    "See `MEMORY.md` line 12 for the pointer format.",
+    "Delete `MEMORY.md` lines 5 and 6.",
+    "The `MEMORY.md` header occupies lines 1 to 3.",
 )
 
 _PROBE_CASES = [(a, p) for a, ps in DETECTION_PROBES.items() for p in ps]
@@ -482,17 +573,13 @@ _PROBE_CASES = [(a, p) for a, ps in DETECTION_PROBES.items() for p in ps]
 
 # Statements of the ceiling the predicate does NOT see today.
 KNOWN_MISSES = {
-    # The unit word before the numeral. This is the platform's own phrasing of
-    # the line cap, so it is the spelling a future author is most likely to
-    # copy, and both cap patterns require the numeral FIRST.
+    # THE CONNECTIVE BEFORE THE UNIT WORD, not after it. The reversed-order arm
+    # is an allowlist of connectives that follow "lines", so a sentence that
+    # puts the connective FIRST is outside it. Both entries this table used to
+    # carry are now DETECTED and have moved to DETECTION_PROBES; this one
+    # replaces them and is a real, current hole rather than a placeholder.
     "line": (
-        "`MEMORY.md` is always loaded into your conversation context - lines "
-        "after 200 will be truncated, so keep the index concise.",
-    ),
-    # A spelled-out unit name. `[KMG]i?B` cannot match inside "kilobytes" and
-    # the alphabet carries no spelled-out form.
-    "size": (
-        "Keep `MEMORY.md` under 25 kilobytes.",
+        "`MEMORY.md` is truncated past line 200.",
     ),
 }
 
@@ -659,6 +746,67 @@ def test_known_over_block_still_over_blocks(text):
         f"NON_DETECTIONS and delete it from KNOWN_OVER_BLOCKS. Do not edit the "
         f"string to make this pass."
     )
+
+
+def test_a_declaration_suppresses_exactly_its_own_line():
+    """The declared-exception machinery, driven by a SYNTHETIC table.
+
+    DELIBERATELY NOT DRIVEN BY THE PRODUCTION TABLE, which is empty. An empty
+    allowlist makes every assertion about it vacuously true, so the mechanism
+    would ship unasserted and would first be exercised on the day someone
+    depended on it. Passing the table as an argument is what makes that
+    impossible.
+    """
+    line = "Each `MEMORY.md` entry should be one line, under 150 characters."
+    table = (("agents/example.md", line),)
+
+    assert _states_cap(line, CAP_AXES["size"].pattern), (
+        "the fixture line no longer carries the shape, so this arm would pass "
+        "vacuously; pick a line the predicate still flags."
+    )
+    assert _is_declared("agents/example.md", line, table), (
+        "a declaration did not suppress its own line. DECLARED_NON_RESTATEMENTS "
+        "is keyed on (path, exact stripped text) — check the key shape."
+    )
+    assert not _is_declared("agents/other.md", line, table), (
+        "a declaration suppressed the same text at a DIFFERENT path. The key "
+        "must include the path, or one judgement would exempt every copy."
+    )
+    assert not _is_declared("agents/example.md", line + " Plus more.", table), (
+        "a declaration suppressed an EDITED line. The key must be the exact "
+        "text, so that changing the line forces the judgement to be re-made."
+    )
+
+
+def test_every_declaration_is_live():
+    """A declaration for a line that no longer exists is a rotting exemption.
+
+    VACUOUS WHILE THE TABLE IS EMPTY, and that is stated rather than hidden.
+    It arms itself the moment a first declaration is added, which is the moment
+    it starts to matter.
+    """
+    for rel, text in DECLARED_NON_RESTATEMENTS:
+        path = PLUGIN_ROOT / rel
+        assert path.is_file(), (
+            f"DECLARED_NON_RESTATEMENTS names {rel}, which does not exist. A "
+            f"declaration outliving its file silently exempts any future line "
+            f"with the same text. Delete the entry."
+        )
+        lines = [
+            ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert text in lines, (
+            f"DECLARED_NON_RESTATEMENTS declares a line that is no longer in "
+            f"{rel}: {text!r}. Delete the entry — the judgement it carried was "
+            f"about a line that has gone."
+        )
+        assert any(
+            _states_cap(text, spec.pattern) for spec in CAP_AXES.values()
+        ), (
+            f"DECLARED_NON_RESTATEMENTS declares {text!r} in {rel}, but no arm "
+            f"would flag that line anyway. The declaration is inert: delete it, "
+            f"or the table will read as though the guard is noisier than it is."
+        )
 
 
 def test_index_upkeep_pointer_resolves_to_a_rule_that_exists():
