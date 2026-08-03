@@ -22,6 +22,7 @@ Thread-safety: Uses threading.Lock for the session-scoped initialization flag.
 from __future__ import annotations
 
 import logging
+import os
 import struct
 import subprocess
 import sys
@@ -66,6 +67,18 @@ def check_and_install_dependencies() -> dict:
 
     if not missing:
         return {'status': 'ok', 'installed': [], 'failed': []}
+
+    # CI declares these packages up front (see the workflow's DEPENDENCY SET),
+    # so reaching here under CI means that list and the one above have drifted
+    # apart. Fail loudly rather than install mid-run: a test-time `pip install`
+    # reaches the network, mutates the environment the suite is measuring, and
+    # lands AFTER collection-time availability checks have already skipped their
+    # tests — so the suite silently runs fewer tests than it reports.
+    # `failed` stays EMPTY on purpose: nothing was attempted, and
+    # ensure_memory_ready logs that key as "Failed to install".
+    if os.environ.get('CI'):
+        return {'status': 'skipped_ci', 'installed': [], 'failed': [],
+                'skipped': list(missing)}
 
     # Attempt installation
     for pkg in missing:

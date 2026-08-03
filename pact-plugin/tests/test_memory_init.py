@@ -262,11 +262,12 @@ class TestCheckAndInstallDependencies:
         assert 'installed' in result
         assert 'failed' in result
 
-    def test_subprocess_called_for_missing_deps(self):
+    def test_subprocess_called_for_missing_deps(self, monkeypatch):
         """Test that subprocess.run is called when deps are missing."""
         import builtins
         from memory_init import check_and_install_dependencies
 
+        monkeypatch.delenv("CI", raising=False)   # pins the installer, so the gate must be OPEN
         original_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
@@ -285,11 +286,12 @@ class TestCheckAndInstallDependencies:
             # Should have attempted pip install
             assert mock_run.called
 
-    def test_installation_failure_recorded(self):
+    def test_installation_failure_recorded(self, monkeypatch):
         """Test that installation failures are recorded in result."""
         import builtins
         from memory_init import check_and_install_dependencies
 
+        monkeypatch.delenv("CI", raising=False)   # pins the installer, so the gate must be OPEN
         original_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
@@ -308,12 +310,13 @@ class TestCheckAndInstallDependencies:
             assert result['status'] == 'failed'
             assert len(result['failed']) > 0
 
-    def test_installation_timeout_handled(self):
+    def test_installation_timeout_handled(self, monkeypatch):
         """Test that installation timeout is handled gracefully."""
         import builtins
         import subprocess
         from memory_init import check_and_install_dependencies
 
+        monkeypatch.delenv("CI", raising=False)   # pins the installer, so the gate must be OPEN
         original_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
@@ -330,6 +333,31 @@ class TestCheckAndInstallDependencies:
 
             # Should record timeout in failed list
             assert any('timeout' in str(f).lower() for f in result['failed'])
+
+    def test_install_path_inert_when_ci_set(self, monkeypatch):
+        """The gate FIRES: under CI the install path returns before subprocess."""
+        import builtins
+        from memory_init import check_and_install_dependencies
+
+        monkeypatch.setenv("CI", "true")
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == 'pysqlite3':
+                raise ImportError("No module named 'pysqlite3'")
+            return original_import(name, *args, **kwargs)
+
+        with patch.object(builtins, '__import__', mock_import), \
+             patch('memory_init.subprocess.run') as mock_run:
+
+            result = check_and_install_dependencies()
+
+            assert not mock_run.called
+            assert result['status'] == 'skipped_ci'
+            assert 'pysqlite3' in result['skipped']
+            # Must stay empty: ensure_memory_ready logs this key as
+            # "Failed to install", and nothing was attempted.
+            assert result['failed'] == []
 
 
 class TestMaybeEmbedPending:
