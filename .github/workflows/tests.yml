@@ -2,9 +2,11 @@
 #
 # WHAT THIS DOES
 #   Runs the pact-plugin pytest suite on every pull request and on pushes to
-#   `main`. Its primary job for the live-probe gate is to auto-run the
-#   structural + meta-tests (the seam-dependent-hook presence/anti-mock checks)
-#   on every hook-infra PR, so a regression in those gates cannot merge unseen.
+#   `main`. Its primary job is to auto-run the structural + meta-tests — the
+#   seam-dependent-hook presence/anti-mock checks in
+#   `pact-plugin/tests/test_hook_infra_classifier.py`, which key off the
+#   `SEAM_DEPENDENT_HOOKS` SSOT in `hooks/shared/hook_infra_classifier.py` — on
+#   every hook-infra PR, so a regression in those gates cannot merge unseen.
 #   It also keeps `main` green by catching direct pushes.
 #
 #   This is locus-a auto-enforcement. It is NOT a runtime hook — it never loads
@@ -24,8 +26,7 @@
 #   `tests/conftest.py` inserts sys.path entries relative to its own location and
 #   resolves the local `telegram/` package via the current working directory, so
 #   the CURRENT WORKING DIRECTORY must be `pact-plugin/`. This is the idiomatic
-#   encoding of the canonical
-#   `cd pact-plugin && python -m pytest tests/ skills/` invocation.
+#   encoding of the canonical `cd pact-plugin && python -m pytest` invocation.
 #
 #   The constraint is on the WORKING DIRECTORY, not on pytest's rootdir — the two
 #   are separate concepts and it is easy to name the wrong one here. `pact-plugin/`
@@ -41,7 +42,7 @@
 #     - httpx            : UNGUARDED top-level import in the local telegram
 #                          package (telegram/voice.py, telegram/telegram_client.py)
 #                          and in telegram test modules → without it,
-#                          `python -m pytest tests/` ERRORS at COLLECTION.
+#                          `python -m pytest` ERRORS at COLLECTION.
 #     - pytest-asyncio   : the suite has a large `@pytest.mark.asyncio` cohort.
 #                          On pytest >= 9, an unhandled async test FAILS (not
 #                          skips). Without this plugin that whole cohort is RED.
@@ -49,18 +50,24 @@
 #                          it is technically optional, but it is installed so the
 #                          property tests actually RUN rather than silently skip.
 #     - pyyaml           : UNGUARDED top-level `import yaml` in the skill test
-#                          modules that the `skills/` path argument collects.
-#                          Without it those modules ERROR at COLLECTION and pytest
-#                          aborts the run, so ZERO tests execute.
-#                          It is absent from this list historically because the
+#                          modules under `skills/`. Without it those modules
+#                          ERROR at COLLECTION and pytest aborts the run, so
+#                          ZERO tests execute — not "the skill tests are
+#                          skipped", the WHOLE run executes nothing.
+#                          It was absent from this list historically because the
 #                          set was derived by running the SCOPED `pytest tests/`,
 #                          which never collected those modules and so never saw
-#                          their import. Required BY the `skills/` path, not by
-#                          `tests/`: adding either one without the other breaks
-#                          the gate.
-#     - pysqlite3 /      : the pact-memory suite. Without them the memory CLI
-#       sqlite-vec /       subprocess tests and the vector-migration tests FAIL
-#       model2vec          rather than skip. Declared here so CI does not install
+#                          their import. It became mandatory the moment the run
+#                          began collecting `skills/`, which it now does
+#                          unconditionally — see "WHY THERE ARE NO PATH
+#                          ARGUMENTS" at the test step below.
+#     - pysqlite3 /      : the pact-memory suite. Without them the
+#       sqlite-vec /       vector-migration tests FAIL (not skip) and the
+#       model2vec          `TestSqliteVecIntegration` class SKIPS — ROUND 2 below
+#                          names which library causes which. The memory CLI
+#                          subprocess tests are NOT affected: their fixture falls
+#                          back to stdlib sqlite3, so do not "fix" them here.
+#                          Declared here so CI does not install
 #                          them mid-run: a test-time install reaches the network
 #                          and lands AFTER collection-time availability checks
 #                          have skipped their tests, so the suite silently runs
@@ -74,14 +81,46 @@
 #                          rule surface, so new ruff releases cannot add rule
 #                          classes to it.
 #
-#   VERIFICATION: this set was proven by clean-venv full runs on both the CI
-#   Python and the dev-host Python — derived by RUNNING the suite, not by
-#   grepping imports. Counts are deliberately not quoted here: they go stale on
-#   the next test added, and a stale figure under a heading claiming
-#   "empirically verified" is worse than none, because the heading vouches for it.
-#   Those earlier runs also used the SCOPED `pytest tests/`, so they could not
-#   see the skill test modules and could not have discovered pyyaml — which is
-#   why that entry was missing from this list until the gate was widened.
+#   VERIFICATION: every entry was proven by RUNNING the suite in a clean venv,
+#   never by grepping imports. This heading vouches for every entry beneath it,
+#   so read both paragraphs — no reader should inherit a stronger warrant than
+#   the evidence supports.
+#
+#   CURRENT WARRANT — the set was verified AS A WHOLE against the WIDENED
+#   collection, that is, the invocation this file actually runs. Two clean venvs
+#   differing ONLY in the pact-memory packages: with the full set the suite is
+#   green; with those packages removed the consequences are exactly these —
+#     - pyyaml removed            -> collection is INTERRUPTED, ZERO tests run.
+#     - pysqlite3 + sqlite-vec    -> the `TestSqliteVecIntegration` class SKIPS
+#       removed                      and the `maybe_migrate_embeddings` tests
+#                                    FAIL, both in
+#                                    `tests/test_vector_dimension_fixes.py`.
+#     - model2vec removed         -> the real-CLI probe in
+#                                    `tests/test_archive_pin.py` FAILS.
+#
+#   WHY THE EARLIER DERIVATION CANNOT CARRY THIS HEADING ALONE. The original set
+#   was derived by running the SCOPED `pytest tests/`. That path argument encoded
+#   a BELIEF about where the tests live, and the belief was wrong for the modules
+#   under `skills/` — so the derivation ran through an instrument narrowed by an
+#   unexamined assumption, and its output looked entirely plausible either way.
+#   This is a property of the METHOD, not one forgotten entry: pyyaml is the
+#   symptom that absence made visible, not the scope of the problem. Treat any
+#   dependency conclusion reached through a narrowed invocation as UNVERIFIED for
+#   the wider one — including the entries that derivation did cover, which is why
+#   the whole set was re-run above rather than only the newly added ones.
+#
+#   DRIFT ANCHOR (exact, so a check has two endpoints to compare): the
+#   pact-memory packages in the install line above must equal the pip names in
+#   the `packages` list of
+#   `pact-plugin/skills/pact-memory/scripts/memory_init.py` — exactly
+#   `pysqlite3`, `sqlite-vec`, `model2vec`. That module refuses to install when
+#   CI is set, so if the two lists diverge nothing installs the difference and
+#   CI shows the consequences listed above.
+#
+#   Populations are NAMED above rather than counted, and suite-wide counts are
+#   deliberately absent: a name stays checkable, a number goes stale silently,
+#   and a stale figure under a heading claiming "empirically verified" is worse
+#   than none, because the heading vouches for it.
 #   All remaining skips are intentional carve-outs (live-tmux-only probes,
 #   orchestrator carve-out, pin-caps test-design, fuzz-strategy edges) and
 #   version-conditional cases — green-with-skips is the accepted CI outcome;
@@ -130,8 +169,9 @@ jobs:
         # pytest >= 9 (unknown-mark, one failure per async test) or — worse — SILENTLY
         # SKIP on pytest 8.x (green-looking, but the tests never run). Do NOT
         # drop it to "shorten" the line: that silently re-opens the exact
-        # inert-test gap (green suite, tests not actually running) this
-        # project's live-probe gate exists to catch.
+        # inert-test gap (green suite, tests not actually running) that this
+        # workflow exists to catch, together with the seam-dependent-hook
+        # presence/anti-mock checks it runs.
         run: python -m pip install --upgrade pip pytest hypothesis httpx pytest-asyncio pyyaml pysqlite3 sqlite-vec model2vec ruff
 
       # Import-hygiene lint, two legs. Leg 1: unused imports (F401) + undefined
@@ -157,25 +197,34 @@ jobs:
       # The working directory must be pact-plugin/ (CWD-relative conftest
       # sys.path + local `telegram` package) — see the header note: this
       # constrains the WORKING DIRECTORY, not pytest's rootdir. Equivalent to
-      # `cd pact-plugin && python -m pytest tests/ skills/`.
+      # `cd pact-plugin && python -m pytest`.
       #
-      # WHY `skills/` IS LISTED SEPARATELY
-      #   Some test modules live inside the skill directories they guard rather
-      #   than under tests/, so a `tests/`-only path argument silently drops
-      #   them: a skill edit is then certified by a gate that never ran the
-      #   tests written for that skill. Both paths together collect the same set
-      #   as a bare `pytest` from pact-plugin/ — that EQUALITY is the invariant
-      #   to preserve, not any particular count.
-      #   A `testpaths` entry in config CANNOT substitute: a path argument on
-      #   the command line overrides testpaths, so config alone is a no-op here.
-      #   `skills/` and the pyyaml install above are ONE change. The dependency
-      #   set was itself derived through the scoped invocation, so it was blind
-      #   to the `import yaml` in those modules by construction — which is why
-      #   adding the path without the dependency aborts collection and runs
-      #   nothing. Do not add or remove one without the other.
+      # WHY THERE ARE NO PATH ARGUMENTS — deliberate, do not add any.
+      #   A path argument collects ONLY what it names, so any test directory not
+      #   listed is dropped silently: an edit is then certified by a gate that
+      #   never ran the tests written for it. That is not hypothetical — it
+      #   already happened here. Test modules living inside the skill
+      #   directories they guard went uncollected under a `tests/`-only
+      #   argument, and repairing it also forced pyyaml into the install line,
+      #   because the scoped invocation had been blind to the `import yaml` in
+      #   those modules by construction.
+      #   A bare `pytest` from pact-plugin/ has no such blind spot: it collects
+      #   whatever is there, so a NEW test directory is picked up automatically
+      #   instead of needing someone to remember this line. The invariant is
+      #   self-maintaining rather than asserted.
+      #   CERTIFIED BY MUTATION, not by a green suite: a throwaway test
+      #   directory outside tests/ and skills/ IS collected with no path
+      #   arguments, and is NOT collected once they are named. Re-run that
+      #   mutation before trusting any change to this step.
+      #   Two ways to silently re-narrow it, both closed on purpose: do not add
+      #   path arguments back "for speed" (they collect the same set today, so
+      #   the only behaviour an explicit list can add is dropping something
+      #   later), and do not add a `testpaths` entry to config — with no path
+      #   arguments it would now TAKE EFFECT and re-introduce the same gap
+      #   through a different door.
       - name: Run test suite
         working-directory: pact-plugin
-        run: python -m pytest tests/ skills/
+        run: python -m pytest
 
   # ---------------------------------------------------------------------------
   # OPTIONAL FALLBACKS (do NOT enable without the stated verification first)
