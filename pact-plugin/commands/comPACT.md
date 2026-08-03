@@ -196,7 +196,7 @@ TaskUpdate(A_id, owner="{specialist-name}")
 # 2. Create Task B (primary work) — per-dispatch variety stamping per pact-variety.md
 B_id = TaskCreate(
     subject="{specialist}: {sub-task}",
-    description="<full mission>",
+    description="<full mission>\n\nWrite metadata.handoff whatever the size of the diff — a task whose deliverable is a JUDGEMENT rather than a CHANGE carries its value in the rationale, not in the diff.",
     metadata={
         "variety": {
             "novelty":               N,

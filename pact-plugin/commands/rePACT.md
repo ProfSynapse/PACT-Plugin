@@ -239,7 +239,7 @@ A_id = TaskCreate(
 TaskUpdate(A_id, owner="{scope-prefixed-name}")
 B_id = TaskCreate(
     subject="{scope-prefixed-name}: implement {sub-task}",
-    description="<full mission>\n\nFIRST claim this task (TaskUpdate status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.",
+    description="<full mission>\n\nFIRST claim this task (TaskUpdate status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\nWrite metadata.handoff whatever the size of the diff — a task whose deliverable is a JUDGEMENT rather than a CHANGE carries its value in the rationale, not in the diff.",
     metadata={
         "variety": {
             "novelty":               N,
