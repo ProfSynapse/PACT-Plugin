@@ -92,7 +92,7 @@ SIZE_UNIT = (
     r"(?:UTF-16\s+code\s+units?|code\s+units?|characters?|chars?"
     r"|bytes?|[KMG]i?B)"
 )
-SIZE_CAP_RE = re.compile(r"\d[\d,\.]*\s*" + SIZE_UNIT, re.IGNORECASE)
+SIZE_CAP_RE = re.compile(r"\d[\d,\.]*[-\s]*" + SIZE_UNIT, re.IGNORECASE)
 
 # The LINE cap, added once the tree could support it. It was withheld from the
 # first pass of this repair because a third statement of the constant still
@@ -101,7 +101,24 @@ SIZE_CAP_RE = re.compile(r"\d[\d,\.]*\s*" + SIZE_UNIT, re.IGNORECASE)
 # and the arm is admissible. THE ALPHABET IS DELIBERATELY NARROW: bare
 # "N lines". Widening it to prose forms buys nothing measurable and spends the
 # false-positive budget that makes the subject taint work.
-LINE_CAP_RE = re.compile(r"\d[\d,\.]*\s*lines?\b", re.IGNORECASE)
+#
+# THE SEPARATOR IS `[-\s]*` RATHER THAN `\s*` so the HYPHENATED-ADJECTIVE form
+# is caught: "a 200-line ceiling", "a 25-KB cap". Ordinary English, and the
+# trailing `\b` does not save you because the break is on the far side of the
+# number. An independent enumeration found this family and nothing else that
+# was worth the budget. MEASURED COST: the widening adds 31 matches to the
+# UNTAINTED sweep (28 size, 3 line), every one a hyphenated adjective in a code
+# comment, and NONE of them is in a file that mentions the index file at all --
+# so the tainted count is unchanged at one site per axis. The taint absorbed
+# the whole cost.
+#
+# WHAT THIS COUNTS, and the distinction is load-bearing: NUMERIC restatements of
+# the ceiling, not every statement that a ceiling exists. A pointer states no
+# value, so it cannot duplicate one, and the arms are right to ignore it. This
+# PR converted several numeric cap statements into pointer-shaped ones, so the
+# guard is deliberately blind to the shape they were converted INTO -- including
+# the auto-memory row that now reads as a pointer.
+LINE_CAP_RE = re.compile(r"\d[\d,\.]*[-\s]*lines?\b", re.IGNORECASE)
 
 # The two axes of the same ceiling. Both are subject-tainted and
 # number-wildcard; they differ only in the unit alphabet, so a new axis is one
@@ -362,10 +379,12 @@ DETECTION_PROBES = {
         "Your `MEMORY.md` index auto-loads only the first 25KB.",
         "Your `MEMORY.md` index is capped at 25,000 characters.",
         "`MEMORY.md` is truncated to the first 25,000 UTF-16 code units.",
+        "Your `MEMORY.md` index has a 25-KB cap.",
     ),
     "line": (
         "Only the first 200 lines of `MEMORY.md` auto-load.",
         "Your `MEMORY.md` index is truncated to the first 250 lines.",
+        "Your `MEMORY.md` index has a 200-line ceiling.",
     ),
 }
 
