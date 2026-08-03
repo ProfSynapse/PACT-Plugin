@@ -36,6 +36,7 @@ And nothing here says whether the stated limits are CORRECT — no test in this
 repository can, because none of them reads the platform bundle.
 """
 import re
+from collections import namedtuple
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,28 @@ SIZE_UNIT = (
     r"|bytes?|[KMG]i?B)"
 )
 SIZE_CAP_RE = re.compile(r"\d[\d,\.]*\s*" + SIZE_UNIT, re.IGNORECASE)
+
+# The LINE cap, added once the tree could support it. It was withheld from the
+# first pass of this repair because a third statement of the constant still
+# stood in the auto-memory table row, so this arm would have been red against
+# correct text. With that row converted to a pointer the sweep returns one site,
+# and the arm is admissible. THE ALPHABET IS DELIBERATELY NARROW: bare
+# "N lines". Widening it to prose forms buys nothing measurable and spends the
+# false-positive budget that makes the subject taint work.
+LINE_CAP_RE = re.compile(r"\d[\d,\.]*\s*lines?\b", re.IGNORECASE)
+
+# The two axes of the same ceiling. Both are subject-tainted and
+# number-wildcard; they differ only in the unit alphabet, so a new axis is one
+# entry rather than a new test. Pinning only the size axis would leave the line
+# axis in exactly the state this repair exists to fix.
+CapAxis = namedtuple("CapAxis", "pattern examples")
+CAP_AXES = {
+    "size": CapAxis(
+        SIZE_CAP_RE, "'25KB', '25,000 characters' and '25,000 UTF-16 code units'"
+    ),
+    "line": CapAxis(LINE_CAP_RE, "'200 lines' and 'the first 250 lines'"),
+}
+
 SUBJECT_TOKEN = "MEMORY.md"
 
 # The pointer, and the heading it must resolve to.
@@ -157,13 +180,13 @@ def _sites(token):
     return hits
 
 
-def _size_cap_sites():
-    """Every `relpath:lineno` stating a size ceiling for the index, ANY spelling.
+def _cap_sites(pattern):
+    """Every `relpath:lineno` stating a ceiling for the index, ANY spelling.
 
     A line qualifies when it names the index file AND carries a numeral next to
-    a size unit. Both conditions are load-bearing: the numeral-plus-unit shape
-    alone matches 96 unrelated lines, and the subject alone matches every
-    mention of the index.
+    a unit from the given alphabet. Both conditions are load-bearing: the
+    numeral-plus-unit shape alone matches 96 unrelated lines across the shipped
+    surfaces, and the subject alone matches every mention of the index.
     """
     hits = []
     for path in _instruction_files():
@@ -172,19 +195,20 @@ def _size_cap_sites():
         except (UnicodeDecodeError, OSError):
             continue
         for lineno, line in enumerate(text.splitlines(), 1):
-            if SUBJECT_TOKEN in line and SIZE_CAP_RE.search(line):
+            if SUBJECT_TOKEN in line and pattern.search(line):
                 hits.append(f"{path.relative_to(PLUGIN_ROOT)}:{lineno}")
     return hits
 
 
-def test_size_cap_stated_exactly_once_in_any_spelling():
+@pytest.mark.parametrize("axis", sorted(CAP_AXES), ids=sorted(CAP_AXES))
+def test_cap_stated_exactly_once_in_any_spelling(axis):
     """The spelling-agnostic arm. A count of 0 fails loudly rather than passing."""
-    sites = _size_cap_sites()
+    sites = _cap_sites(CAP_AXES[axis].pattern)
     assert len(sites) == 1, (
-        f"the index size ceiling must be STATED on exactly ONE line across the "
+        f"the index {axis} ceiling must be STATED on exactly ONE line across the "
         f"shipped instruction surfaces; found {len(sites)}: {sites}. This arm is "
-        f"spelling-agnostic on purpose — '25KB' and '25,000 characters' count as "
-        f"statements just as '25,000 UTF-16 code units' does, because a duplicate "
+        f"spelling-agnostic on purpose — {CAP_AXES[axis].examples} all count as "
+        f"statements of the same ceiling, because a duplicate "
         f"in a novel spelling is exactly how a second statement last reached this "
         f"tree. If you added a site, replace it with a pointer to the rule at "
         f"{SINGLE_SOURCE}. A count of ZERO means the rule was deleted, or that "
@@ -193,12 +217,13 @@ def test_size_cap_stated_exactly_once_in_any_spelling():
     )
 
 
-def test_size_cap_site_is_the_single_source():
+@pytest.mark.parametrize("axis", sorted(CAP_AXES), ids=sorted(CAP_AXES))
+def test_cap_site_is_the_single_source(axis):
     """The one statement must live in the file the pointer sends readers to."""
-    sites = _size_cap_sites()
-    assert len(sites) == 1, f"expected one size-cap statement, found {sites}"
+    sites = _cap_sites(CAP_AXES[axis].pattern)
+    assert len(sites) == 1, f"expected one {axis}-cap statement, found {sites}"
     assert sites[0].startswith(SINGLE_SOURCE + ":"), (
-        f"the size ceiling is stated at {sites[0]}, but {REFERRER} sends readers "
+        f"the {axis} ceiling is stated at {sites[0]}, but {REFERRER} sends readers "
         f"to {SINGLE_SOURCE}. Move the rule back, or re-point the pointer and "
         f"update SINGLE_SOURCE here."
     )
