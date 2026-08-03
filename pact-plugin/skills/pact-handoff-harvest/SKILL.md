@@ -68,7 +68,7 @@ If none of these sources have completed agent tasks, report "No pending HANDOFFs
 
 ### Step 2: Dedup Check (Processed Tasks)
 
-Read your processed task list from your team's section in agent memory (`~/.claude/agent-memory/pact-secretary/session_processed_tasks.md`). The file is namespaced by team — read **only** your own `## team={your team_id}` section (file-format contract: see Step 8). Skip any task IDs already processed — only review the delta. This enables incremental passes (e.g., after remediation).
+Read your processed task list from your team's section of `session_processed_tasks.md`, in the agent-memory directory the platform gave you — use the path you are given, never one built from your agent type. The file is namespaced by team — read **only** your own `## team={your team_id}` section (file-format contract: see Step 8). Skip any task IDs already processed — only review the delta. This enables incremental passes (e.g., after remediation).
 
 ### Step 3: Read All HANDOFFs
 
@@ -173,11 +173,11 @@ Save using the CLI with proper structure:
 
 ### Step 8: Update Processed Task Tracking
 
-**Save the processed task IDs to your team's section in agent memory.** Locate (or create) the `## team={your team_id}` section in `~/.claude/agent-memory/pact-secretary/session_processed_tasks.md` and overwrite **that section's** task-ID list to set the baseline for subsequent incremental passes. Overwrite only your own team's section — never modify, overwrite, or remove another team's `## team=` section. Multiple secretary instances (one per concurrent team) share this single file; each owns exactly its own section.
+**Save the processed task IDs to your team's section in agent memory.** Locate (or create) the `## team={your team_id}` section in `session_processed_tasks.md`, in the agent-memory directory the platform gave you, and overwrite **that section's** task-ID list to set the baseline for subsequent incremental passes. Overwrite only your own team's section — never modify, overwrite, or remove another team's `## team=` section. Multiple secretary instances (one per concurrent team) share this single file; each owns exactly its own section.
 
 This file is **namespaced by team** so that concurrent secretary instances (one per active team, all sharing this single user-scope file) never clobber each other's processed-task baselines. The file-format contract:
 
-File: `~/.claude/agent-memory/pact-secretary/session_processed_tasks.md`
+File: `session_processed_tasks.md`, in the agent-memory directory the platform gave you. Use the path you are given; never build one from your agent type.
 ```markdown
 ---
 name: session_processed_tasks
@@ -241,7 +241,7 @@ After processing HANDOFFs, gather calibration metrics for the orchestrator's var
 
 Triggered after remediation completes — processes only the delta since the last harvest pass. Fires only when remediation occurred and produced new completed tasks.
 
-1. **Check processed task tracking**: Read **only your own** `## team={your team_id}` section of `~/.claude/agent-memory/pact-secretary/session_processed_tasks.md` for already-processed task IDs
+1. **Check processed task tracking**: Read **only your own** `## team={your team_id}` section of `session_processed_tasks.md`, in the agent-memory directory the platform gave you, for already-processed task IDs
 2. **Discover new completions**: Run all three Standard Harvest Step 1 sources — session journal `agent_handoff` events, `TaskList`, and the task-file metadata census — for completed tasks not in the processed set. Do not narrow to the journal: a new completion whose content sits only in a non-`handoff` key emits no `agent_handoff` event.
 3. **If no new completions**: Report "No new HANDOFFs since last harvest" and complete
 4. **Read new HANDOFFs** using the Standard Harvest Step 3 two-tier fallback: prefer journal inline content, fall back to `TaskGet`
@@ -269,7 +269,7 @@ Review all memories saved during this session by listing recent pact-memory entr
 
 - Merge overlapping memories (same topic, same entities, compatible conclusions)
 - Prune superseded memories (update or delete entries replaced by newer information)
-- **Prune stale `## team=` sections** in `~/.claude/agent-memory/pact-secretary/session_processed_tasks.md`: drop any `## team=` section older than ~30 days (judge by the section's `Last processed` timestamp) or whose team is known-complete (the session has wrapped/paused and will not resume). This is safe — a pruned-then-resurrected team re-derives its processed set by re-running Step 1 discovery over its own session. Re-deriving from `agent_handoff` events alone under-counts the processed set, because tasks found only by the metadata census emit no such event; the save-vs-update dedup absorbs the re-read. Prune only stale/complete sections; never touch an active team's section. (Pruning happens only in this deep-clean Consolidation pass — the Standard/Incremental hot paths leave the file untouched apart from your own section.)
+- **Prune stale `## team=` sections** in `session_processed_tasks.md`, in the agent-memory directory the platform gave you: drop any `## team=` section older than ~30 days (judge by the section's `Last processed` timestamp) or whose team is known-complete (the session has wrapped/paused and will not resume). This is safe — a pruned-then-resurrected team re-derives its processed set by re-running Step 1 discovery over its own session. Re-deriving from `agent_handoff` events alone under-counts the processed set, because tasks found only by the metadata census emit no such event; the save-vs-update dedup absorbs the re-read. Prune only stale/complete sections; never touch an active team's section. (Pruning happens only in this deep-clean Consolidation pass — the Standard/Incremental hot paths leave the file untouched apart from your own section.)
 
 ### Step 4: Reconcile Working Memory
 
