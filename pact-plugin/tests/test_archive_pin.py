@@ -1356,17 +1356,33 @@ class TestArchivePin_RealCLI:
         assert "`backticks`" in fetched["context"]
         assert "\t" in fetched["context"]
 
-    def test_save_writes_to_stderr_while_stdout_stays_clean_json(
-        self, claude_md, tmp_path
-    ):
-        """The never-`2>&1` constraint, measured rather than asserted.
+    def test_save_stdout_is_a_clean_json_envelope(self, claude_md, tmp_path):
+        """The real CLI's stdout parses, on any interpreter.
 
-        `save` writes an embedding progress bar to STDERR on SUCCESS. If the
-        streams were ever merged, that bar would splice into the envelope
-        and every parse would break. The stderr assertion is the NON-VACUITY
-        CONTROL: if the backend stops writing to stderr the hazard is gone
-        and this test is measuring nothing, so it should fail loudly and be
-        re-aimed rather than pass silently.
+        WHAT THIS COVERS. `save` succeeds and its stdout is a well-formed
+        envelope. If the streams were ever merged AND stderr happened to carry
+        anything, the parse below would break — so this catches the merged
+        stream OPPORTUNISTICALLY, whenever there is something to merge.
+
+        WHAT IT DELIBERATELY NO LONGER ASSERTS. It used to require non-empty
+        stderr as its non-vacuity control, on the grounds that `save` writes an
+        embedding progress bar. That bar is not a property of this code. It is
+        a property of the interpreter's dependency set and the model cache,
+        because `_run_memory_cli` spawns `sys.executable` — so the child
+        inherits whatever packages the parent has.
+
+        MEASURED, and the direction is the opposite of the obvious guess: with
+        `sentence_transformers` and `torch` PRESENT the warm-cache path prints
+        NOTHING and the old assertion FAILED; with them ABSENT the
+        `huggingface_hub` fallback prints `Fetching 10 files` even from cache
+        and it passed. Both runs returned 0 with a byte-identical stdout
+        envelope — nothing the test guards differed. So "install the missing
+        dependency to fix it" is backwards; installing more is what removes the
+        signal.
+
+        The guarantee therefore moved to `TestArchivePin_StreamSeparation`
+        below, which manufactures its own stderr payload and so does not depend
+        on any of that. Do NOT re-add a bare `assert stderr.strip()` here.
         """
         claude_md(_two_pin_file())
         pinned = _pinned_body(_two_pin_file())
@@ -1382,13 +1398,114 @@ class TestArchivePin_RealCLI:
             cwd=tmp_path,
         )
         assert rc == 0
-        assert stderr.strip(), (
-            "expected the embedding progress bar on stderr — without it "
-            "this test cannot detect a merged-stream regression"
+        # A merged stream returns stderr as None, not as "". Assert it before
+        # touching it: `stderr.strip()` on None raises AttributeError, and a
+        # crash and a detection must not look the same in the report.
+        assert stderr is not None, (
+            "stderr came back None — the child's streams are merged, so there "
+            "is no separate stderr to return"
         )
         envelope = json.loads(stdout)  # would raise if streams were merged
         assert envelope["ok"] is True
-        assert stderr.strip() not in stdout
+        # Not conditional on stderr being non-empty: when it IS empty this is
+        # trivially true, and when it is not, it is the real check.
+        assert not stderr.strip() or stderr.strip() not in stdout
+
+
+_SEPARATION_CANARY = "STREAM-SEPARATION-CANARY-2f8c1d"
+
+# A stand-in memory CLI that writes a KNOWN payload to each stream. The canary
+# is deliberately not valid JSON and not a JSON fragment, so if it ever reaches
+# stdout the envelope parse fails as well as the containment assertion — two
+# independent detections of one regression.
+_STUB_CLI = f'''import sys, json
+sys.stderr.write({_SEPARATION_CANARY!r} + "\\n")
+sys.stderr.flush()
+sys.stdout.write(json.dumps({{"ok": True, "result": {{"id": "stub"}}}}))
+'''
+
+
+class TestArchivePin_StreamSeparation:
+    """`_run_memory_cli` must never merge the child's streams.
+
+    WHY THIS EXISTS SEPARATELY FROM THE REAL-CLI TESTS. The guard is
+    `capture_output=True` in `_run_memory_cli` — separate pipes. The regression
+    is someone replacing it with `stderr=subprocess.STDOUT`, which splices
+    stderr into the JSON envelope and breaks every consumer.
+
+    To detect that, a test needs stderr to actually CARRY something. The
+    previous guard borrowed that from the real backend's embedding progress
+    bar, which made its verdict depend on the interpreter's dependency set and
+    the model cache rather than on this code — it failed on an interpreter with
+    a MORE complete stack, and passed on a barer one, while the behaviour under
+    test was byte-identical in both.
+
+    So the payload is manufactured here instead. A stub CLI writes a canary to
+    stderr and an envelope to stdout. The control is non-vacuous BY
+    CONSTRUCTION — this test wrote the canary, so it cannot be absent — and it
+    is identical on every interpreter, with no network, no model and no cache.
+    """
+
+    def _stub(self, tmp_path, monkeypatch):
+        stub = tmp_path / "stub_cli.py"
+        stub.write_text(_STUB_CLI, encoding="utf-8")
+        monkeypatch.setattr(archive_pin, "_MEMORY_CLI", stub)
+        return stub
+
+    def test_stderr_payload_never_reaches_stdout(self, tmp_path, monkeypatch):
+        """The guard: a canary on stderr must not appear on stdout."""
+        self._stub(tmp_path, monkeypatch)
+
+        rc, stdout, stderr = archive_pin._run_memory_cli(
+            ["save"], db_path=str(tmp_path / "mem.db"), cwd=tmp_path
+        )
+
+        assert rc == 0
+        # FIRST detection, and the one the mutation arm found: merging makes
+        # `proc.stderr` None rather than empty, so every later assertion would
+        # raise AttributeError/TypeError instead of failing. A crash and a
+        # detection must not look alike in the report.
+        assert stderr is not None, (
+            "stderr came back None — the streams are merged. _run_memory_cli "
+            "must keep separate pipes; there is no stderr to return once the "
+            "child's stderr is redirected into stdout."
+        )
+        # Non-vacuity, and it cannot silently lapse: the canary is written by
+        # the stub above, so an empty stderr here means the plumbing broke, not
+        # that the environment changed.
+        assert _SEPARATION_CANARY in stderr, (
+            "the stub CLI's stderr payload did not arrive — _run_memory_cli is "
+            "no longer capturing stderr, so this guard is measuring nothing"
+        )
+        assert _SEPARATION_CANARY not in stdout, (
+            "stderr content reached stdout — the streams are merged. Restore "
+            "separate pipes in _run_memory_cli; every consumer parses stdout "
+            "as JSON and a merged stream corrupts it."
+        )
+        assert json.loads(stdout)["ok"] is True
+
+    def test_a_merged_stream_would_be_caught(self, tmp_path, monkeypatch):
+        """Non-vacuity twin: prove the predicate above CAN fail.
+
+        Runs the same stub with the streams deliberately merged and asserts
+        that both detections fire — the canary lands in stdout AND the envelope
+        stops parsing. Without this, the test above is a predicate nobody has
+        ever seen return False, and a guard that has never failed is a guard
+        whose discrimination is unmeasured.
+        """
+        stub = self._stub(tmp_path, monkeypatch)
+
+        merged = subprocess.run(
+            [sys.executable, str(stub)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,      # the regression, made explicit
+            text=True,
+            timeout=30,
+        )
+
+        assert _SEPARATION_CANARY in merged.stdout
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(merged.stdout)
 
 
 def _cli_get(memory_id, db_path):
