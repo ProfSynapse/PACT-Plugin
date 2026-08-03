@@ -14086,10 +14086,25 @@ class TestD3PushToMainAuthorizationEndToEnd:
 # other, prefer the false alarm. Do not carry the guard's severity ordering
 # into the pin without re-deriving it; the subject changed underneath it.
 _SPAN_SENTINEL = "\x00CARRIER_SPAN\x00"
+_SPAN_SOURCE_NAME = "_VERB_MSG_BODY"
 
 
-def _carrier_span_analysis(source=None):
-    """Resolve every carrier in merge_guard_common and locate the span in each.
+def _all_merge_guard_modules():
+    """The THREE modules that make up the merge-guard implementation.
+
+    The span is defined in `merge_guard_common`, but a carrier can be built in
+    either hook that imports from it, and one there is exactly as dangerous.
+    Both pins below run over this list rather than over the shared module alone.
+    """
+    import merge_guard_post
+    import merge_guard_pre
+    from shared import merge_guard_common
+
+    return (merge_guard_common, merge_guard_pre, merge_guard_post)
+
+
+def _carrier_span_analysis(source=None, module=None):
+    """Resolve every carrier in ONE module and locate the span in each.
 
     Returns (carriers, offenders, resolved, unbound) where `carriers` is the set
     of local names carrying the span, `offenders` is [(lineno, name, tail)] for
@@ -14100,14 +14115,92 @@ def _carrier_span_analysis(source=None):
     `source` overrides the module text, so the safe/unsafe shape families below
     can drive this over synthetic carriers instead of only over whatever the
     shipped module happens to contain today.
+
+    `module` selects WHICH module to read and whose globals resolve free names.
+    The implementation is THREE files — `merge_guard_common` plus the two hooks
+    that import from it — and a carrier in any of them is equally dangerous, so
+    every caller here runs over all three (see `_ALL_MERGE_GUARD_MODULES`).
+    Reading only the shared module was a latent gap: a carrier in
+    `merge_guard_pre`/`merge_guard_post` was unreachable BY CONSTRUCTION, and no
+    count assertion could notice because the population it counted was the one
+    module it looked at.
     """
     import ast
 
     from shared import merge_guard_common
 
+    if module is None:
+        module = merge_guard_common
     if source is None:
-        source = Path(merge_guard_common.__file__).read_text(encoding="utf-8")
+        source = Path(module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
+
+    # The span is DEFINED in merge_guard_common, so in a sibling module it only
+    # ever arrives through an import — and an import may rename it. Resolve the
+    # local aliases from the module's own import statements rather than assuming
+    # the canonical name: `from ... import _VERB_MSG_BODY as _VMB` binds the span
+    # to `_VMB`, and a scan keyed on the canonical spelling sees nothing at all.
+    span_names = {_SPAN_SOURCE_NAME}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == _SPAN_SOURCE_NAME:
+                    span_names.add(alias.asname or alias.name)
+
+    # ...and the OTHER way a sibling module can reach the span: bind the whole
+    # module and go through it — `import shared.merge_guard_common as m` then
+    # `m._VERB_MSG_BODY`. That is an ast.Attribute, not an ast.Name, so a scan
+    # that only knows names walks straight past it and reports a clean zero.
+    #
+    # NOT hypothetical: `import shared.pact_context as pact_context` followed by
+    # `pact_context.init(...)` is already present in BOTH merge_guard_pre.py and
+    # merge_guard_post.py — the exact two modules this reaches. The idiom is one
+    # substitution away from a pattern an editor of those files already uses,
+    # and it fails toward MISSING a carrier, which is the unsafe direction.
+    module_aliases = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[-1] == "merge_guard_common":
+                    module_aliases.add(alias.asname or alias.name.split(".")[0])
+
+    def _dotted(node):
+        """`a.b.c` -> 'a.b.c' for a pure Name/Attribute chain, else None."""
+        parts = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if not isinstance(node, ast.Name):
+            return None
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+
+    def _is_span_ref(node):
+        """True for ANY static spelling of a reference to the span itself.
+
+        Three shapes reach here, and they are the complete set of ways Python
+        can name a value from another module WITHOUT constructing the name at
+        runtime: a bare local name (canonical, or bound by `from X import s as
+        alias`), an attribute on a module alias (`import X as m` -> `m.s`), and
+        an attribute on a DOTTED module path (`import X.Y` -> `X.Y.s`). The
+        receiver is walked as a chain rather than required to be a bare Name,
+        because the third shape's receiver is itself an Attribute.
+
+        Dynamic spellings (`getattr`, `globals()[...]`, `importlib`) are NOT
+        recognised here and deliberately so — see the module-level note on the
+        two-layer design. They are caught by the use-site census instead.
+        """
+        if isinstance(node, ast.Name):
+            return node.id in span_names
+        if isinstance(node, ast.Attribute) and node.attr == _SPAN_SOURCE_NAME:
+            path = _dotted(node.value)
+            if path is None:
+                return False
+            return (
+                path in module_aliases
+                or path.split(".")[-1] == "merge_guard_common"
+            )
+        return False
 
     # Every single-target assignment in the module, by name. Carriers are locals
     # inside _strip_non_executable_content, so `ast.walk` (not module globals)
@@ -14144,8 +14237,17 @@ def _carrier_span_analysis(source=None):
         """
         if isinstance(node, ast.Constant):
             return node.value if isinstance(node.value, str) else repr(node.value)
+        # `m._VERB_MSG_BODY` — the module-alias spelling. Deliberately NARROW:
+        # only this exact attribute on a name bound to merge_guard_common
+        # resolves to the span. Every other Attribute keeps falling through to
+        # the opaque marker below, so this widening cannot newly report an
+        # unrelated attribute access as a carrier.
+        if isinstance(node, ast.Attribute):
+            if _is_span_ref(node):
+                return _SPAN_SENTINEL
+            return _Opaque("?")
         if isinstance(node, ast.Name):
-            if node.id == "_VERB_MSG_BODY":
+            if node.id in span_names:
                 return _SPAN_SENTINEL
             if node.id in seen:                       # cycle guard
                 return _Opaque("?")
@@ -14157,8 +14259,8 @@ def _carrier_span_analysis(source=None):
             if src is not None:
                 return value_of(src.value, seen | {node.id}, src.lineno)
             # Module-level constant (e.g. _MAX_GLOBAL_FLAG_TOKENS, _GH_API_PREFIX).
-            if hasattr(merge_guard_common, node.id):
-                got = getattr(merge_guard_common, node.id)
+            if hasattr(module, node.id):
+                got = getattr(module, node.id)
                 return got if isinstance(got, str) else repr(got)
             return _Opaque("?")
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
@@ -14261,7 +14363,9 @@ def _carrier_span_analysis(source=None):
     assigned_values = {id(b.value) for bs in assigns.values() for b in bs}
     unbound, seen_exprs = 0, set()
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Name) and node.id == "_VERB_MSG_BODY"):
+        # Both spellings: a bare name, and `m._VERB_MSG_BODY` through a
+        # module alias. Keying this scan on ast.Name alone was the hole.
+        if not _is_span_ref(node):
             continue
         if not isinstance(node.ctx, ast.Load):        # skip the definition itself
             continue
@@ -14345,6 +14449,26 @@ _SAFE_CARRIER_SHAPES = (
      're.sub(r"\\bfind\\s+" + _VERB_MSG_BODY, _f, _text)'),
     ("rebound, span still terminal",
      '_s = r"\\bfind\\s+"\n_s = _s + _VERB_MSG_BODY'),
+    # --- cross-module spellings. The span is DEFINED in merge_guard_common, so
+    # a sibling module can only reach it through an import, and there are three
+    # static ways to write that. Each must be accepted when the span is
+    # terminal, or the guard refuses correct code in a sibling.
+    ("from-import alias, span terminal",
+     'from shared.merge_guard_common import _VERB_MSG_BODY as _V\n'
+     '_s = r"\\bfind\\s+" + _V'),
+    ("module alias attribute, span terminal",
+     'import shared.merge_guard_common as _m\n'
+     '_s = r"\\bfind\\s+" + _m._VERB_MSG_BODY'),
+    ("dotted module path, span terminal",
+     'import shared.merge_guard_common\n'
+     '_s = r"\\bfind\\s+" + shared.merge_guard_common._VERB_MSG_BODY'),
+    ("unrelated attribute through the same alias, span terminal",
+     'import shared.merge_guard_common as _m\n'
+     '_s = r"\\bfind\\s+" + _m.TOKEN_PREFIX + _m._VERB_MSG_BODY'),
+    ("span rebound through an intermediate, still terminal",
+     'import shared.merge_guard_common as _m\n'
+     '_v = _m._VERB_MSG_BODY\n'
+     '_s = r"\\bfind\\s+" + _v'),
 )
 
 _UNSAFE_CARRIER_SHAPES = (
@@ -14358,6 +14482,22 @@ _UNSAFE_CARRIER_SHAPES = (
      '_s = rf"\\bfind\\s+{_VERB_MSG_BODY}\\s*x"'),
     ("compiled with a trailing anchor",
      '_s = re.compile(r"\\bfind\\s+" + _VERB_MSG_BODY + r"\\Z")'),
+    # --- the same three cross-module spellings, each made UNSAFE. A carrier in
+    # a sibling module is exactly as dangerous as one here, and each of these
+    # was invisible to an earlier draft of the resolver.
+    ("from-import alias with a trailing anchor",
+     'from shared.merge_guard_common import _VERB_MSG_BODY as _V\n'
+     '_s = r"\\bfind\\s+" + _V + r"\\Z"'),
+    ("module alias attribute with a trailing anchor",
+     'import shared.merge_guard_common as _m\n'
+     '_s = r"\\bfind\\s+" + _m._VERB_MSG_BODY + r"\\Z"'),
+    ("dotted module path with a trailing anchor",
+     'import shared.merge_guard_common\n'
+     '_s = r"\\bfind\\s+" + shared.merge_guard_common._VERB_MSG_BODY + r"\\Z"'),
+    ("span rebound through an intermediate, then extended",
+     'import shared.merge_guard_common as _m\n'
+     '_v = _m._VERB_MSG_BODY\n'
+     '_s = r"\\bfind\\s+" + _v + r"\\Z"'),
     ("never bound to a name, with a trailing literal",
      're.sub(r"\\bfind\\s+" + _VERB_MSG_BODY + r"\\s*x", _f, _text)'),
     ("rebound so the span is no longer terminal",
@@ -14692,28 +14832,43 @@ class TestD2QuoteAwareSpanRemediation:
         each reference to its nearest PRECEDING binding, and checks all of
         them.
         """
-        carriers, offenders, resolved, unbound = _carrier_span_analysis()
-
-        # Non-vacuity: if the span is renamed or the carriers restructured, this
-        # test must fail loudly rather than pass over an empty population.
-        #
-        # The floor is a FLOOR, not a census — it cannot notice carriers that
-        # stopped being found. So pin the count against the population that
-        # actually exists: every `_VERB_MSG_BODY` mention in the source that is
-        # not a comment and not the definition itself. If a carrier is added or
-        # removed, update the expected count deliberately; do not relax this
-        # bound, which is how a shrinking population goes unnoticed.
+        # ALL THREE modules, not just the shared one. A carrier in
+        # merge_guard_pre/merge_guard_post is exactly as dangerous and was
+        # previously unreachable by this pin.
+        carriers, offenders, resolved, unbound = set(), [], 0, 0
+        _use_sites = []
         import re as _re
 
-        from shared import merge_guard_common
+        for _mod in _all_merge_guard_modules():
+            _c, _o, _r, _u = _carrier_span_analysis(module=_mod)
+            _tag = Path(_mod.__file__).name
+            carriers |= {f"{_tag}::{n}" for n in _c}
+            offenders += [(_tag, *row) for row in _o]
+            resolved += _r
+            unbound += _u
 
-        _src = Path(merge_guard_common.__file__).read_text(encoding="utf-8")
-        _use_sites = [
-            ln for ln in _src.splitlines()
-            if "_VERB_MSG_BODY" in ln
-            and not ln.lstrip().startswith("#")
-            and not _re.match(r"\s*_VERB_MSG_BODY\s*=", ln)
-        ]
+            # Count use sites PER MODULE, against that module's own span
+            # aliases — a sibling may import the span under another name, and a
+            # census keyed on the canonical spelling would score it zero and
+            # call the population complete.
+            _src = Path(_mod.__file__).read_text(encoding="utf-8")
+            _aliases = {_SPAN_SOURCE_NAME}
+            for _ln in _src.splitlines():
+                _m = _re.search(
+                    r"import\s+.*\b%s\b\s+as\s+(\w+)" % _SPAN_SOURCE_NAME, _ln
+                )
+                if _m:
+                    _aliases.add(_m.group(1))
+            for _ln in _src.splitlines():
+                if _ln.lstrip().startswith("#"):
+                    continue
+                if not any(_a in _ln for _a in _aliases):
+                    continue
+                if _re.match(r"\s*%s\s*=" % _SPAN_SOURCE_NAME, _ln):
+                    continue          # the definition itself
+                if _re.match(r"\s*(from|import)\s", _ln.lstrip()):
+                    continue          # the import that binds the alias
+                _use_sites.append(f"{_tag}:{_ln.strip()[:60]}")
         assert resolved >= 1, (
             "no local name was found carrying _VERB_MSG_BODY — the carrier "
             "construction changed shape and this test is now vacuous. Re-point "
@@ -14767,45 +14922,140 @@ class TestD2QuoteAwareSpanRemediation:
 
         from shared import merge_guard_common
 
-        source = Path(merge_guard_common.__file__).read_text(encoding="utf-8")
-        tree = ast.parse(source)
-
-        carriers, _offenders, _resolved, _unbound = _carrier_span_analysis()
-
-        # Attribute calls (`re.fullmatch(...)`, `pat.fullmatch(...)`) AND bare
-        # `fullmatch(...)` from a `from re import fullmatch`-style binding.
-        calls = [
-            n for n in ast.walk(tree)
-            if isinstance(n, ast.Call)
-            and (
-                (isinstance(n.func, ast.Attribute) and n.func.attr == "fullmatch")
-                or (isinstance(n.func, ast.Name) and n.func.id == "fullmatch")
+        # ALL THREE modules. A `fullmatch` on a carrier in merge_guard_pre or
+        # merge_guard_post re-arms the same explosion, and scanning only the
+        # shared module could never see it.
+        calls, offenders = [], []
+        for _mod in _all_merge_guard_modules():
+            _tree = ast.parse(
+                Path(_mod.__file__).read_text(encoding="utf-8")
             )
-        ]
-        # Non-vacuity: `fullmatch` is used in this module for unrelated tokens,
-        # so the population is genuinely non-empty and the scan has something to
-        # bite on. If that ever stops being true, say so rather than pass mute.
+            # Carriers are resolved PER MODULE, so a name that is a carrier in
+            # one module does not taint an unrelated same-named local in another.
+            _carriers, _o, _r, _u = _carrier_span_analysis(module=_mod)
+            _tag = Path(_mod.__file__).name
+
+            # Attribute calls (`re.fullmatch(...)`, `pat.fullmatch(...)`) AND
+            # bare `fullmatch(...)` from a `from re import fullmatch` binding.
+            _calls = [
+                n for n in ast.walk(_tree)
+                if isinstance(n, ast.Call)
+                and (
+                    (isinstance(n.func, ast.Attribute)
+                     and n.func.attr == "fullmatch")
+                    or (isinstance(n.func, ast.Name) and n.func.id == "fullmatch")
+                )
+            ]
+            calls += _calls
+            # Match NAME NODES, not a substring of the unparsed source: a
+            # substring test both misses (a carrier reached through an alias)
+            # and misfires (a longer identifier that merely contains a carrier
+            # name).
+            offenders += [
+                (_tag, n.lineno, ast.unparse(n)[:120])
+                for n in _calls
+                if any(
+                    isinstance(sub, ast.Name) and sub.id in _carriers
+                    for sub in ast.walk(n)
+                )
+            ]
+
+        # Non-vacuity: `fullmatch` is used across these modules for unrelated
+        # tokens, so the population is genuinely non-empty and the scan has
+        # something to bite on. If that ever stops being true, say so rather
+        # than pass mute.
         assert calls, (
-            "no fullmatch call sites found — either the module changed or the "
-            "scan broke. This assertion would pass vacuously; re-point it."
+            "no fullmatch call sites found in any merge-guard module — either "
+            "they changed or the scan broke. This assertion would pass "
+            "vacuously; re-point it."
         )
-
-        # Match NAME NODES, not a substring of the unparsed source: a substring
-        # test both misses (a carrier reached through an alias) and misfires (a
-        # longer identifier that merely contains a carrier name).
-        offenders = [
-            (n.lineno, ast.unparse(n)[:120])
-            for n in calls
-            if any(
-                isinstance(sub, ast.Name) and sub.id in carriers
-                for sub in ast.walk(n)
-            )
-        ]
         assert not offenders, (
             f"a carrier span is consumed by fullmatch at {offenders}. Under "
             f"fullmatch the span must reach end-of-string, so an input it "
             f"cannot fully consume forces the exponential backtracking that "
             f"terminality otherwise prevents. Use search/sub, or bound the span."
+        )
+
+    def test_catastrophic_backtracking_is_unreachable_end_to_end(self):
+        """The BEHAVIOURAL arm: run the real classifier and see if it returns.
+
+        WHY THIS EXISTS ALONGSIDE THE STRUCTURAL PINS. They read source text, so
+        they are bounded by what a reader can enumerate: the modules scanned and
+        the composition spellings the resolver values. This one runs the SHIPPED
+        CODE, so it is agnostic to BOTH — any carrier that the input reaches, in
+        any module, composed any way, including spellings nobody has thought of.
+        That property is exactly what the structural pins cannot have, and it is
+        why deleting the behavioural arm was a real loss even though the pins
+        catch more shapes today.
+
+        WHY IT IS NOT FLAKY, WHICH IS THE HARD PART. Earlier timing gates in
+        this suite failed under load because their signal-to-noise was ~3x — a
+        duration bound, and a scaling ratio whose small arm was ~68ms so noise
+        dominated the denominator. This arm is not a measurement at all; it is a
+        RETURNS-OR-DOES-NOT question, and the two answers are separated by four
+        to five ORDERS OF MAGNITUDE. Measured on the shipped tree:
+
+            terminal (as shipped)  n=30      8 ms      n=50000    42 ms
+            non-terminal (mutant)  n=14    821 ms      n=20    60,662 ms
+                                   growth ~4x per +2 input chars
+
+        At the n below, a non-terminal carrier needs roughly an HOUR. The bound
+        is seconds. Load can turn 8 ms into 800 ms; it cannot turn 8 ms into the
+        bound, and it cannot bring an hour under it. There is no threshold to
+        tune and no ratio to be noisy.
+
+        WHY A SUBPROCESS. `re` does not release the GIL or poll signals during a
+        match, so an in-process alarm never fires — the test would HANG rather
+        than fail. `subprocess.run(timeout=...)` kills the child outright, which
+        turns an unbounded hang into a deterministic failure.
+
+        WHAT THIS DOES NOT COVER, stated so a green run is not over-read: only
+        carriers that THIS INPUT traverses. It is a complement to the structural
+        pins, which cover the whole carrier population but only the spellings
+        they can value. Neither subsumes the other; keep both.
+        """
+        import subprocess
+
+        hooks_dir = Path(__file__).resolve().parent.parent / "hooks"
+        # Long enough that a non-terminal carrier needs ~an hour, short enough
+        # that the shipped code answers in milliseconds.
+        n = 26
+        command = "gh issue create --title " + "a" * n + "|"
+        bound_seconds = 15
+
+        probe = (
+            "import sys; sys.path.insert(0, %r)\n"
+            "from merge_guard_pre import is_dangerous_command as D\n"
+            "D(%r)\n"
+            "print('RETURNED')\n" % (str(hooks_dir), command)
+        )
+        try:
+            done = subprocess.run(
+                [sys.executable, "-c", probe],
+                capture_output=True, text=True, timeout=bound_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            raise AssertionError(
+                f"CATASTROPHIC BACKTRACKING REACHED. The classifier did not "
+                f"return within {bound_seconds}s on a {len(command)}-character "
+                f"command. As shipped this takes ~8ms, so this is not slowness "
+                f"— it is the exponential re-armed. A carrier's span has stopped "
+                f"being terminal, or is being consumed by fullmatch, somewhere "
+                f"the structural pins could not see. Command: {command!r}"
+            )
+
+        # Non-vacuity: a child that died for an unrelated reason (import error,
+        # bad path) would also "not time out", and would pass this test while
+        # exercising nothing. Require the probe to have actually run the
+        # classifier to completion.
+        assert done.returncode == 0, (
+            f"the probe subprocess failed (rc={done.returncode}) rather than "
+            f"exercising the classifier, so this test proved NOTHING about "
+            f"backtracking. stderr: {done.stderr[:400]}"
+        )
+        assert "RETURNED" in done.stdout, (
+            f"the probe did not reach its completion marker, so the classifier "
+            f"call cannot be assumed to have run. stdout: {done.stdout[:200]}"
         )
 
     # ---- 7.F — the safe-shape negative control, and its non-vacuity twin. ----

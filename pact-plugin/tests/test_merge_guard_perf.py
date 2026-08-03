@@ -69,8 +69,18 @@ from shared.merge_guard_common import detect_command_operation_type  # noqa: E40
 # N_LARGE = 2 * N_SMALL — the scaling-ratio doubling. N is large enough that the
 # unbounded quadratic is unmistakable (~6 s for the git bank) yet the bounded
 # form stays well under ~0.2 s, so the test runs in a few seconds.
-N_SMALL = 2000
-N_LARGE = 4000
+#
+# FLOORED (measured): a RATIO removes machine-SPEED dependence but NOT NOISE
+# dependence, and a small denominator amplifies what is left. At N_SMALL=2000 the
+# smallest arm measured ~33 ms, so a single scheduler slice is a large fraction
+# of it; under a loaded suite this ratio was observed at 3.85 against a 3.0
+# ceiling while the honest value is ~2.0. That is a false red, and it is also
+# uncomfortably close to the 4.0 quadratic signature the ceiling exists to
+# separate — so the noise threatened BOTH directions, not just flakiness.
+# Doubling N puts every arm in the hundreds of milliseconds, where a scheduler
+# slice is a few percent rather than tens of percent.
+N_SMALL = 4000
+N_LARGE = 8000
 
 # best-of-K minimum: the dominant timing noise is upward (scheduler preemption,
 # GC), and a minimum is a clean lower bound on the true cost that a slow sample
