@@ -351,7 +351,7 @@ right purpose.
 
 | Layer | Storage | Content | Who Writes | Auto-Loaded |
 |-------|---------|---------|------------|-------------|
-| **Auto-memory** (MEMORY.md) | `~/.claude/projects/{hash}/memory/` | Free-form session learnings, user preferences, general patterns | Platform (automatic) | Yes (first 200 lines) |
+| **Auto-memory** (MEMORY.md) | `~/.claude/projects/{hash}/memory/` | Free-form session learnings, user preferences, general patterns | Platform (automatic) | Yes — head of the index only, under the same limits as agent memory; see the index-upkeep rule in `pact-agent-teams` |
 | **pact-memory** (SQLite) | `~/.claude/pact-memory/memory.db` | Structured institutional knowledge: context, goals, decisions, lessons, entities | Agents via this skill | Partially — newest entries only, via Working Memory sync to CLAUDE.md |
 | **Agent persistent memory** | Platform-delivered absolute path under `~/.claude/agent-memory/` — the leaf is given, never derived from the type name | Per-agent domain expertise accumulated across sessions | Individual agents (automatic) | Yes — head of the index only; see the index-upkeep rule in `pact-agent-teams` for the enforced limits (per memory directory) |
 
