@@ -14049,6 +14049,334 @@ class TestD3PushToMainAuthorizationEndToEnd:
 # =============================================================================
 
 
+# --- Shared carrier analysis for the 7.E positional-safety pins below. --------
+#
+# WHY THIS IS VALUE-BASED, NOT SHAPE-BASED. An earlier form of these pins walked
+# `ast.BinOp`/`Add` chains and asked whether a carrier NAME was the last operand.
+# That question is only meaningful for ONE spelling of concatenation. A carrier
+# composed with `%`, an f-string, `.format` or `str.join` produced no `Add` node
+# at all, so it entered neither the discovery fixed point nor the offender scan
+# and the pin passed while the span sat in a non-terminal position. Measured: a
+# `%`-composed carrier with a trailing `\Z` took 7.1 SECONDS on a ~30-character
+# command and the whole merge-guard suite stayed green.
+#
+# So we EVALUATE each carrier expression to its actual string instead of
+# inspecting its syntax, with `_VERB_MSG_BODY` replaced by a sentinel, and then
+# ask whether the result ENDS WITH that sentinel. Composition spelling stops
+# mattering: `+`, `%`, f-string and `.join` all reduce to the same string.
+#
+# FAIL-SAFE, AND ON WHICH AXIS. On the SPELLING axis the claim holds: a
+# composition this evaluator cannot value loses the sentinel, the carrier drops
+# out of the population, and the count assertion in the terminality pin fires.
+# On the POSITION axis it does NOT hold on its own — a carrier the population
+# never enumerates is silent, not loud. That is why the population below is
+# every BINDING of every name plus every UNBOUND carrier expression, and not
+# one binding per name. Two shapes lived outside "one binding per name" and
+# both were caught by the predecessor and missed here: the span handed straight
+# to `re.sub(...)` with no name at all, and a name assigned twice where the
+# second assignment moved the span off the end.
+#
+# WHICH DIRECTION IS WORSE HERE, WHICH IS THE OPPOSITE OF THE GUARD ITSELF.
+# In `is_dangerous_command` an over-block is the cardinal sin: it refuses a real
+# user's faithful click. This is a PIN OVER that control, and the blast radii
+# are not the same. An over-block here reddens CI for a developer — loud,
+# immediate, cheap, and it announces itself. An under-block here lets an edit
+# that re-arms the exponential backtracking ship SILENTLY into the SACROSANCT
+# control. So when a change to this analysis trades one direction for the
+# other, prefer the false alarm. Do not carry the guard's severity ordering
+# into the pin without re-deriving it; the subject changed underneath it.
+_SPAN_SENTINEL = "\x00CARRIER_SPAN\x00"
+
+
+def _carrier_span_analysis(source=None):
+    """Resolve every carrier in merge_guard_common and locate the span in each.
+
+    Returns (carriers, offenders, resolved, unbound) where `carriers` is the set
+    of local names carrying the span, `offenders` is [(lineno, name, tail)] for
+    carriers whose span is NOT terminal, `resolved` counts bindings we fully
+    valued, and `unbound` counts carrier expressions that are never assigned to
+    a name.
+
+    `source` overrides the module text, so the safe/unsafe shape families below
+    can drive this over synthetic carriers instead of only over whatever the
+    shipped module happens to contain today.
+    """
+    import ast
+
+    from shared import merge_guard_common
+
+    if source is None:
+        source = Path(merge_guard_common.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    # Every single-target assignment in the module, by name. Carriers are locals
+    # inside _strip_non_executable_content, so `ast.walk` (not module globals)
+    # is what reaches them.
+    #
+    # A LIST per name, in source order — not one node per name. A name assigned
+    # twice has two bindings and BOTH are carriers. Keeping only the first is
+    # what let `_s = LIT + BODY` followed by `_s = _s + r"..."` pass: the second
+    # binding moved the span off the end and was never looked at.
+    assigns = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                assigns.setdefault(target.id, []).append(node)
+    for _bindings in assigns.values():
+        _bindings.sort(key=lambda n: n.lineno)
+
+    parents = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[id(child)] = node
+
+    class _Opaque(str):
+        """A resolved-but-unknown fragment. Truthy and non-empty on purpose."""
+
+    def value_of(node, seen, before=None):
+        """Evaluate an expression node to a string. Never raises.
+
+        `before` is the line the reference is made FROM. A name resolves to its
+        nearest binding above that line, so the second half of `_s = _s + r"x"`
+        reads the EARLIER `_s` rather than re-entering itself. `before` also
+        decreases strictly on every hop, so the walk terminates on its own.
+        """
+        if isinstance(node, ast.Constant):
+            return node.value if isinstance(node.value, str) else repr(node.value)
+        if isinstance(node, ast.Name):
+            if node.id == "_VERB_MSG_BODY":
+                return _SPAN_SENTINEL
+            if node.id in seen:                       # cycle guard
+                return _Opaque("?")
+            bindings = assigns.get(node.id, [])
+            earlier = [b for b in bindings if before is None or b.lineno < before]
+            # Fall back to the first binding for a genuine forward reference (a
+            # name defined below the function that reads it).
+            src = earlier[-1] if earlier else (bindings[0] if bindings else None)
+            if src is not None:
+                return value_of(src.value, seen | {node.id}, src.lineno)
+            # Module-level constant (e.g. _MAX_GLOBAL_FLAG_TOKENS, _GH_API_PREFIX).
+            if hasattr(merge_guard_common, node.id):
+                got = getattr(merge_guard_common, node.id)
+                return got if isinstance(got, str) else repr(got)
+            return _Opaque("?")
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return value_of(node.left, seen, before) + value_of(node.right, seen, before)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            left = value_of(node.left, seen, before)
+            right = value_of(node.right, seen, before)
+            try:
+                return left % right
+            except (TypeError, ValueError):
+                return left + _Opaque("?")
+        if isinstance(node, ast.JoinedStr):            # f-string
+            return "".join(value_of(v, seen, before) for v in node.values)
+        if isinstance(node, ast.FormattedValue):
+            return value_of(node.value, seen, before)
+        if isinstance(node, ast.Call):
+            func = node.func
+            # `re.compile(X)` is PATTERN-PRESERVING: it does not move the span,
+            # so it must resolve to X exactly. Appending an opaque tail here
+            # would report a compiled-then-`sub`'d carrier as non-terminal —
+            # an over-block in the guard itself, on a construct that is safe.
+            # Compiled bindings are still collected as carriers below, because
+            # the FULLMATCH pin does care about them.
+            if (
+                isinstance(func, ast.Attribute) and func.attr == "compile"
+                and node.args
+            ):
+                return value_of(node.args[0], seen, before)
+            # ONLY a string-COMPOSING call can pass the span through to its own
+            # value. `re.sub(pattern, repl, text)` returns the SUBSTITUTED TEXT,
+            # not its pattern argument. Resolving the arguments of an arbitrary
+            # call would make every `result = re.sub(_carrier, ...)` line in the
+            # strip pipeline render as a carrier with an opaque tail and report
+            # the whole module — an over-block created by the very widening that
+            # closed the terminality gap. Checking every binding of a name makes
+            # this reachable, so the two changes have to land together.
+            if not (
+                isinstance(func, ast.Attribute) and func.attr in ("join", "format")
+            ):
+                return _Opaque("?")
+            # `"".join([...])` and friends — resolve the pieces we can see so a
+            # span inside them still registers, then mark the rest opaque.
+            #
+            # KNOWN AND DELIBERATE: this arm cannot VALUE a `.join`/`.format`
+            # carrier, it can only notice one. `.join([...])` hands us an
+            # ast.List, which is not in the filter below, so the span is lost
+            # and the carrier drops out of `carriers` — the count assertion in
+            # the terminality pin is what catches that, not this scan. A safe
+            # `.format` carrier is likewise reported as an offender because the
+            # opaque tail is unconditional. Both are OVER-blocks: loud, at CI
+            # time, on an unusual spelling. Neither is in the safe-shape family
+            # below for that reason. Widening this arm to value them is worth
+            # doing; it is not worth doing at the same time as the terminality
+            # repair, because the two changes fail in opposite directions.
+            inner = "".join(
+                value_of(a, seen, before) for a in node.args
+                if isinstance(a, (ast.Constant, ast.Name, ast.BinOp, ast.JoinedStr))
+            )
+            return inner + _Opaque("?") if inner else _Opaque("?")
+        return _Opaque("?")
+
+    carriers, offenders, resolved = set(), [], 0
+    for name, bindings in assigns.items():
+        for node in bindings:
+            rendered = value_of(node.value, frozenset(), node.lineno)
+            if _SPAN_SENTINEL not in rendered:
+                continue
+            carriers.add(name)
+            resolved += 1
+            tail = rendered.rsplit(_SPAN_SENTINEL, 1)[1]
+            if tail:
+                offenders.append((node.lineno, name, tail[:80]))
+
+    # Carrier expressions that are NEVER BOUND to a name — the span handed
+    # straight to `re.sub(...)` as an argument. The loop above walks
+    # assignments, so an unassigned expression has no entry to be found under
+    # and was previously unreachable: appending a required element to the
+    # echo/printf carrier re-armed the explosion in total silence.
+    #
+    # Walk UP from each span mention through the nodes that can compose a
+    # string around it, and check the outermost one. Stopping at the composing
+    # boundary is what keeps the enclosing `re.sub(...)` call out of it — its
+    # attribute is `sub`, so it does not compose, and treating it as a carrier
+    # would append an opaque tail to every clean call site and report the whole
+    # module.
+    _COMPOSING_CALLS = {"join", "format", "compile"}
+
+    def _composes(node):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+            return True
+        if isinstance(node, (ast.JoinedStr, ast.FormattedValue)):
+            return True
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return True          # the argument list of a `.join(...)`
+        if isinstance(node, ast.Call):
+            func = node.func
+            return isinstance(func, ast.Attribute) and func.attr in _COMPOSING_CALLS
+        return False
+
+    assigned_values = {id(b.value) for bs in assigns.values() for b in bs}
+    unbound, seen_exprs = 0, set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Name) and node.id == "_VERB_MSG_BODY"):
+            continue
+        if not isinstance(node.ctx, ast.Load):        # skip the definition itself
+            continue
+        top = node
+        while True:
+            up = parents.get(id(top))
+            if up is None or not _composes(up):
+                break
+            top = up
+        if id(top) in assigned_values or id(top) in seen_exprs:
+            continue                                   # already checked above
+        seen_exprs.add(id(top))
+        rendered = value_of(top, frozenset(), getattr(top, "lineno", None))
+        if _SPAN_SENTINEL not in rendered:
+            continue
+        unbound += 1
+        resolved += 1
+        tail = rendered.rsplit(_SPAN_SENTINEL, 1)[1]
+        if tail:
+            offenders.append((top.lineno, "<unbound carrier expression>", tail[:80]))
+
+    # Names bound to a COMPILED carrier (`_x_re = re.compile(_carrier_span)`).
+    # Compiling does not move the span, so these are not terminality offenders —
+    # but they ARE carriers for the fullmatch pin, which otherwise sees only a
+    # literal carrier name at the call site and misses this module's dominant
+    # compile-then-call idiom.
+    for _ in range(8):
+        grew = False
+        for name, bindings in assigns.items():
+            if name in carriers:
+                continue
+            for node in bindings:
+                if not isinstance(node.value, ast.Call):
+                    continue
+                func = node.value.func
+                if not (isinstance(func, ast.Attribute) and func.attr == "compile"):
+                    continue
+                if any(
+                    isinstance(sub, ast.Name) and sub.id in carriers
+                    for arg in node.value.args
+                    for sub in ast.walk(arg)
+                ):
+                    carriers.add(name)
+                    grew = True
+                    break
+        if not grew:
+            break
+
+    return carriers, offenders, resolved, unbound
+
+
+# --- Carrier-shape families: the safe-shape negative control. -----------------
+#
+# The shipped module passing is a negative control for exactly the THREE shapes
+# it happens to contain today (`LIT + BODY`, `(LIT % CONST) + BODY`,
+# `LIT + NAME + LIT + BODY`). Every other spelling was unprotected: nothing here
+# demonstrated that this analysis does not REFUSE safe code, and the
+# compile-then-`sub` branch it leans on never fires on the real module, so a
+# regression in it would redden nothing.
+#
+# The UNSAFE family is not decoration — it is what stops the safe family being
+# vacuous. A safe-only family would also pass against an analysis that reported
+# nothing at all, which is the failure this whole pin exists to prevent.
+#
+# Each snippet is parsed, never executed. `_VERB_MSG_BODY` resolves to a
+# sentinel by name, so these need no imports and no module state.
+_SAFE_CARRIER_SHAPES = (
+    ("plain concatenation",
+     '_s = r"\\bfind\\s+" + _VERB_MSG_BODY'),
+    ("percent-formatted prefix, then concatenation",
+     '_s = r"\\bgit\\s+(?:[^\\s]+\\s+){0,%d}tag\\b" % 32 + _VERB_MSG_BODY'),
+    ("percent wrapping the span",
+     '_s = r"\\bfind\\s+%s" % _VERB_MSG_BODY'),
+    ("f-string",
+     '_s = rf"\\bfind\\s+{_VERB_MSG_BODY}"'),
+    ("compiled, then consumed by sub",
+     '_s = re.compile(r"\\bfind\\s+" + _VERB_MSG_BODY)'),
+    ("prefix held in another local",
+     '_p = r"\\bfind\\s+"\n_s = _p + _VERB_MSG_BODY'),
+    ("never bound to a name",
+     're.sub(r"\\bfind\\s+" + _VERB_MSG_BODY, _f, _text)'),
+    ("rebound, span still terminal",
+     '_s = r"\\bfind\\s+"\n_s = _s + _VERB_MSG_BODY'),
+)
+
+_UNSAFE_CARRIER_SHAPES = (
+    ("trailing literal after the span",
+     '_s = r"\\bfind\\s+" + _VERB_MSG_BODY + r"\\s*x"'),
+    ("end anchor after the span",
+     '_s = r"\\bfind\\s+" + _VERB_MSG_BODY + r"\\Z"'),
+    ("percent wrapping the span, with an anchor",
+     '_s = r"\\bfind\\s+%s\\Z" % _VERB_MSG_BODY'),
+    ("f-string with a trailing element",
+     '_s = rf"\\bfind\\s+{_VERB_MSG_BODY}\\s*x"'),
+    ("compiled with a trailing anchor",
+     '_s = re.compile(r"\\bfind\\s+" + _VERB_MSG_BODY + r"\\Z")'),
+    ("never bound to a name, with a trailing literal",
+     're.sub(r"\\bfind\\s+" + _VERB_MSG_BODY + r"\\s*x", _f, _text)'),
+    ("rebound so the span is no longer terminal",
+     '_s = r"\\bfind\\s+" + _VERB_MSG_BODY\n_s = _s + r"\\s*x"'),
+    ("re-concatenated into a new name",
+     '_s = r"\\bfind\\s+" + _VERB_MSG_BODY\n_t = _s + r"\\s*x"'),
+)
+
+# Shapes this analysis cannot value, and therefore refuses. Listed so the limit
+# is VISIBLE rather than discovered by whoever next writes one. See the Call
+# branch of `value_of` for why each fails.
+_KNOWN_REFUSED_CARRIER_SHAPES = (
+    ("str.join", '_s = "".join([r"\\bfind\\s+", _VERB_MSG_BODY])'),
+    ("str.format", '_s = r"\\bfind\\s+{}".format(_VERB_MSG_BODY)'),
+    ("group-wrapped whole span",
+     '_s = r"(?:" + r"\\bfind\\s+" + _VERB_MSG_BODY + r")"'),
+)
+
+
 class TestD2QuoteAwareSpanRemediation:
     """#933 M2/M3 — the quote-aware carrier span (design §7.A-E).
 
@@ -14330,77 +14658,79 @@ class TestD2QuoteAwareSpanRemediation:
           * consume a carrier with `re.fullmatch` instead of `search`/`sub`
             (pinned by the sibling test below).
 
-        THIS TEST IS THE ONLY THING THAT WOULD NOTICE, and a timing test cannot
-        replace it. With the span terminal, injecting an ambiguous nested
-        quantifier moves the measured scaling exponent from 1.09 to 1.10 — so a
-        timing guard here has no mutation that can redden it, and would be
-        unprovable by construction. This one has one: append a required element
-        to any carrier and it fails deterministically, with no clock involved.
+        WHAT THIS PIN COVERS, AND WHAT IT DOES NOT. It resolves each carrier to
+        its VALUE, so the first two breakages are caught whatever spelling built
+        the carrier: `+`, `%` and f-string all reduce to one string, and that
+        is measured, not asserted — the shape families below run each spelling
+        in both a safe and an unsafe form. `.join` and `.format` are the
+        exceptions and are NOT valued: `.join` loses the span (its argument is
+        an ast.List) and drops the carrier from the population, where the count
+        assertion below catches it; a `.format` carrier always reports an
+        opaque tail, safe or not. Both are OVER-blocks on unusual spellings,
+        both are listed in the known-refused family below so the next reader
+        meets them as a recorded limit rather than as a surprise.
 
-        The check is TRANSITIVE. A carrier is bound to a local name and could be
-        re-concatenated downstream, so following only `_VERB_MSG_BODY` itself
-        would miss `_git_commit_span + r"..."`. The fixed point below collects
-        every name that carries the span before checking any of them.
+        THE RESIDUAL, STATED PLAINLY. Both pins read ONE module
+        (`merge_guard_common`). A carrier built in `merge_guard_pre.py` or
+        `merge_guard_post.py` is invisible to them. All 13 carriers live in the
+        strip pipeline here today, so that is a latent gap rather than a live
+        one — but do not read a green run as covering those two modules.
+
+        THIS PIN IS NOT THE ONLY THING THAT COULD NOTICE, and the claim that it
+        was is why the earlier form of it went unchallenged. A behavioural arm
+        catches these breakages too, from the other side: it is agnostic to how
+        the carrier was composed AND to which module holds it, but it only
+        reaches the carriers its input traverses. The two are complements, not
+        substitutes. Do not delete one because the other is green.
+
+        The check is TRANSITIVE, in both of the ways a carrier can travel. A
+        carrier bound to a local name can be re-concatenated into a NEW name
+        (`_other = _git_commit_span + r"..."`), and it can be re-concatenated
+        into the SAME name (`_s = _s + r"..."`). Following only
+        `_VERB_MSG_BODY` misses the first; keeping one binding per name misses
+        the second. The resolver collects every binding of every name, resolves
+        each reference to its nearest PRECEDING binding, and checks all of
+        them.
         """
-        import ast
-
-        from shared import merge_guard_common
-
-        source = Path(merge_guard_common.__file__).read_text(encoding="utf-8")
-        tree = ast.parse(source)
-
-        def operands(node):
-            """Flatten a left-associative `a + b + c` chain into its operands."""
-            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-                return operands(node.left) + operands(node.right)
-            return [node]
-
-        # Fixed point: every name that transitively carries the span.
-        carriers = {"_VERB_MSG_BODY"}
-        for _ in range(8):
-            grew = False
-            for node in ast.walk(tree):
-                if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
-                    continue
-                target = node.targets[0]
-                if not isinstance(target, ast.Name) or target.id in carriers:
-                    continue
-                if any(
-                    isinstance(o, ast.Name) and o.id in carriers
-                    for o in operands(node.value)
-                ):
-                    carriers.add(target.id)
-                    grew = True
-            if not grew:
-                break
-
-        offenders = []
-        chains = 0
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)):
-                continue
-            ops = operands(node)
-            positions = [
-                i for i, o in enumerate(ops)
-                if isinstance(o, ast.Name) and o.id in carriers
-            ]
-            if not positions:
-                continue
-            chains += 1
-            trailing = ops[max(positions) + 1:]
-            if trailing:
-                offenders.append((node.lineno, [ast.unparse(t) for t in trailing]))
+        carriers, offenders, resolved, unbound = _carrier_span_analysis()
 
         # Non-vacuity: if the span is renamed or the carriers restructured, this
         # test must fail loudly rather than pass over an empty population.
-        assert len(carriers) > 1, (
+        #
+        # The floor is a FLOOR, not a census — it cannot notice carriers that
+        # stopped being found. So pin the count against the population that
+        # actually exists: every `_VERB_MSG_BODY` mention in the source that is
+        # not a comment and not the definition itself. If a carrier is added or
+        # removed, update the expected count deliberately; do not relax this
+        # bound, which is how a shrinking population goes unnoticed.
+        import re as _re
+
+        from shared import merge_guard_common
+
+        _src = Path(merge_guard_common.__file__).read_text(encoding="utf-8")
+        _use_sites = [
+            ln for ln in _src.splitlines()
+            if "_VERB_MSG_BODY" in ln
+            and not ln.lstrip().startswith("#")
+            and not _re.match(r"\s*_VERB_MSG_BODY\s*=", ln)
+        ]
+        assert resolved >= 1, (
             "no local name was found carrying _VERB_MSG_BODY — the carrier "
             "construction changed shape and this test is now vacuous. Re-point "
             "it at the new shape; do not delete it."
         )
-        assert chains, (
-            "no concatenation chain embedding the span was found — this test is "
-            "vacuous. Re-point it rather than delete it."
+        # Named carriers PLUS unbound carrier expressions must account for every
+        # use site. The unbound term is derived, not a constant: it was formerly
+        # a hard-coded `- 1` standing for the one inline `re.sub(r"..." +
+        # _VERB_MSG_BODY, ...)`, which silently granted a second inline carrier
+        # the same exemption. Both kinds are now checked for terminality, so
+        # both are counted.
+        assert len(carriers) + unbound >= len(_use_sites), (
+            f"resolver found {len(carriers)} named carrier(s) + {unbound} "
+            f"unbound carrier expression(s) but the source has "
+            f"{len(_use_sites)} non-comment _VERB_MSG_BODY use site(s). A use "
+            f"site the resolver cannot see is a carrier this pin does not "
+            f"check. Re-point the resolver; do not lower this bound."
         )
 
         assert not offenders, (
@@ -14420,6 +14750,18 @@ class TestD2QuoteAwareSpanRemediation:
         succeeds. `fullmatch` requires the span to consume to end-of-string, so
         an input it cannot fully consume forces the same exhaustive backtracking
         that a required suffix does. Sibling of the terminality pin above.
+
+        THE CARRIER SET INCLUDES COMPILED NAMES, and it must. This module's
+        dominant idiom is `_X_RE = re.compile(...)` followed by `_X_RE.method()`,
+        so a predicate that only recognises a carrier name written literally at
+        the `fullmatch` call site misses `re.compile(_carrier)` then
+        `.fullmatch()` — the most ordinary way to write the very thing this pin
+        forbids. Measured: that spelling produced a 0.5s strip on the old
+        40 KB probe input while the whole suite stayed green. The shared
+        resolver therefore follows compiled bindings before this scan runs.
+
+        SAME RESIDUAL AS THE SIBLING: one module only. A `fullmatch` on a
+        carrier in `merge_guard_pre.py`/`merge_guard_post.py` is not seen here.
         """
         import ast
 
@@ -14428,34 +14770,17 @@ class TestD2QuoteAwareSpanRemediation:
         source = Path(merge_guard_common.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
 
-        def operands(node):
-            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-                return operands(node.left) + operands(node.right)
-            return [node]
+        carriers, _offenders, _resolved, _unbound = _carrier_span_analysis()
 
-        carriers = {"_VERB_MSG_BODY"}
-        for _ in range(8):
-            grew = False
-            for node in ast.walk(tree):
-                if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
-                    continue
-                target = node.targets[0]
-                if not isinstance(target, ast.Name) or target.id in carriers:
-                    continue
-                if any(
-                    isinstance(o, ast.Name) and o.id in carriers
-                    for o in operands(node.value)
-                ):
-                    carriers.add(target.id)
-                    grew = True
-            if not grew:
-                break
-
+        # Attribute calls (`re.fullmatch(...)`, `pat.fullmatch(...)`) AND bare
+        # `fullmatch(...)` from a `from re import fullmatch`-style binding.
         calls = [
             n for n in ast.walk(tree)
             if isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Attribute)
-            and n.func.attr == "fullmatch"
+            and (
+                (isinstance(n.func, ast.Attribute) and n.func.attr == "fullmatch")
+                or (isinstance(n.func, ast.Name) and n.func.id == "fullmatch")
+            )
         ]
         # Non-vacuity: `fullmatch` is used in this module for unrelated tokens,
         # so the population is genuinely non-empty and the scan has something to
@@ -14465,16 +14790,93 @@ class TestD2QuoteAwareSpanRemediation:
             "scan broke. This assertion would pass vacuously; re-point it."
         )
 
+        # Match NAME NODES, not a substring of the unparsed source: a substring
+        # test both misses (a carrier reached through an alias) and misfires (a
+        # longer identifier that merely contains a carrier name).
         offenders = [
             (n.lineno, ast.unparse(n)[:120])
             for n in calls
-            if any(name in ast.unparse(n) for name in carriers)
+            if any(
+                isinstance(sub, ast.Name) and sub.id in carriers
+                for sub in ast.walk(n)
+            )
         ]
         assert not offenders, (
             f"a carrier span is consumed by fullmatch at {offenders}. Under "
             f"fullmatch the span must reach end-of-string, so an input it "
             f"cannot fully consume forces the exponential backtracking that "
             f"terminality otherwise prevents. Use search/sub, or bound the span."
+        )
+
+    # ---- 7.F — the safe-shape negative control, and its non-vacuity twin. ----
+
+    @pytest.mark.parametrize("label,snippet", _SAFE_CARRIER_SHAPES)
+    def test_safe_carrier_shape_is_not_refused(self, label, snippet):
+        """A legitimate carrier must NOT be reported, whatever spelling built it.
+
+        This is the control the pin never had. The shipped module passing only
+        ever covered the three shapes it happens to contain, so a spelling
+        nobody had written yet could be refused and no run would say so — which
+        is how the first draft of this analysis shipped an over-block on safe
+        code and needed an arm added by hand to find it.
+
+        Two of these rows exist because they were REGRESSIONS: `never bound to a
+        name` and `rebound, span still terminal` are the safe halves of the two
+        shapes an earlier form of this analysis stopped examining.
+        """
+        _carriers, offenders, resolved, _unbound = _carrier_span_analysis(
+            source=snippet
+        )
+        assert resolved >= 1, (
+            f"the {label} shape was not recognised as a carrier at all. It is "
+            f"not being refused, it is being SKIPPED, which is the quieter and "
+            f"worse failure — a trailing element in this spelling would go "
+            f"unreported. Teach value_of to resolve it."
+        )
+        assert not offenders, (
+            f"the {label} shape is SAFE — the span is terminal — but it was "
+            f"reported as {offenders}. Refusing a legitimate carrier spelling "
+            f"pushes authors toward a spelling this analysis happens to "
+            f"understand. Widen value_of; do not delete this row."
+        )
+
+    @pytest.mark.parametrize("label,snippet", _UNSAFE_CARRIER_SHAPES)
+    def test_unsafe_carrier_shape_is_reported(self, label, snippet):
+        """Non-vacuity twin: every unsafe spelling must be caught.
+
+        Without this family the safe family above would pass against an
+        analysis that returned no offenders for anything. The last two rows are
+        the exact breakages that regressed: a name rebound so the span stops
+        being terminal, and a carrier re-concatenated into a second name.
+        """
+        _carriers, offenders, _resolved, _unbound = _carrier_span_analysis(
+            source=snippet
+        )
+        assert offenders, (
+            f"the {label} shape puts a required element AFTER the span and was "
+            f"NOT reported. The span is exponentially backtrackable; it is safe "
+            f"only while nothing after it can fail. This spelling re-arms that "
+            f"explosion silently."
+        )
+
+    @pytest.mark.parametrize("label,snippet", _KNOWN_REFUSED_CARRIER_SHAPES)
+    def test_known_refused_shape_is_still_refused(self, label, snippet):
+        """Pins a LIMITATION so it stays visible. Reddening here is GOOD NEWS.
+
+        These spellings are safe but this analysis cannot value them, so it
+        refuses or skips them. That is a real over-block, recorded rather than
+        hidden. If you widen `value_of` and this test fails, the fix worked:
+        move the row into `_SAFE_CARRIER_SHAPES` and add its unsafe twin to
+        `_UNSAFE_CARRIER_SHAPES`. Do NOT satisfy this test by narrowing the
+        evaluator back.
+        """
+        _carriers, offenders, resolved, _unbound = _carrier_span_analysis(
+            source=snippet
+        )
+        assert offenders or resolved == 0, (
+            f"the {label} shape is now handled cleanly — it resolved with no "
+            f"offender. That is an improvement, and this row is stale. Move it "
+            f"to _SAFE_CARRIER_SHAPES and give it an unsafe twin."
         )
 
 
