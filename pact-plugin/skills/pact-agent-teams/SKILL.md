@@ -1,8 +1,9 @@
 ---
 name: pact-agent-teams
 description: |
-  Agent Teams interaction protocol for PACT specialist agents. Auto-loaded via agent frontmatter.
-  Defines how teammates start work, communicate, report completion, and handle blockers.
+  Agent Teams interaction protocol for PACT specialist agents. Invoke it at spawn, and again before
+  you append to your MEMORY.md index. Defines how teammates start work, communicate, report
+  completion, handle blockers, and append to a shared index without dropping another instance's entries.
 ---
 
 # Agent Teams Protocol
