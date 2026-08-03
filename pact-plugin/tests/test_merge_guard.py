@@ -14306,29 +14306,176 @@ class TestD2QuoteAwareSpanRemediation:
 
         assert not is_dangerous_command('gh pr edit 5 --title "git branch -D x"')
 
-    # ---- 7.E — ReDoS guard for the span ITSELF (the quote-aware body's own
-    #            linear profile; distinct from the M1 D3 ladder ReDoS). ----
+    # ---- 7.E — ReDoS: the span's safety is POSITIONAL, not intrinsic. ----
 
-    def test_span_redos_linear_profile(self):
-        """The quote-aware span `(?:[^&|;\\n"']+|"(?:...)*"|'[^']*')*` has three
-        DISJOINT-first-char alternatives, so the nested `*` cannot backtrack
-        ambiguously — the match is LINEAR. A 40 KB unterminated-double-quote
-        input (the classic `(a+)*` catastrophic trigger) completes well under
-        a generous bound.
+    def test_verb_msg_body_is_terminal_in_every_carrier(self):
+        """`_VERB_MSG_BODY` IS catastrophically backtrackable. Only POSITION stops it.
 
-        # non-vacuity: pins that the span does not REGRESS into catastrophic
-        #   backtracking. The generous bound (100 ms vs the measured sub-ms)
-        #   is revert-proving without timing flakiness.
+        MEASURED, not reasoned. Give the span a required element after it that
+        fails to match, and it is EXPONENTIAL — roughly 2x per added input
+        character: n=12 0.1ms, n=20 34ms, n=24 539ms, n=2000 >5s. The shape is
+        `(?:...|[^&|;\\n"'$\\\\]+|...)*` — a `+` arm inside an outer `*`, which is
+        the textbook `(a+)*` explosion.
+
+        WHAT ACTUALLY MAKES THE SHIPPED CODE SAFE IS POSITION. In every carrier
+        the span is the LAST element, so nothing after it can fail, so the match
+        always succeeds and the engine never backtracks into the span. The
+        safety property lives at the CALL SITES, not in the pattern.
+
+        WHAT BREAKS IT — each of these makes the guard exponentially
+        backtrackable on ordinary input, with NO change to the regex at all:
+          * append anything required after the span in a carrier — a closing
+            token, a literal, another sub-pattern;
+          * add an end anchor (`$`, `\\Z`) after it;
+          * consume a carrier with `re.fullmatch` instead of `search`/`sub`
+            (pinned by the sibling test below).
+
+        THIS TEST IS THE ONLY THING THAT WOULD NOTICE, and a timing test cannot
+        replace it. With the span terminal, injecting an ambiguous nested
+        quantifier moves the measured scaling exponent from 1.09 to 1.10 — so a
+        timing guard here has no mutation that can redden it, and would be
+        unprovable by construction. This one has one: append a required element
+        to any carrier and it fails deterministically, with no clock involved.
+
+        The check is TRANSITIVE. A carrier is bound to a local name and could be
+        re-concatenated downstream, so following only `_VERB_MSG_BODY` itself
+        would miss `_git_commit_span + r"..."`. The fixed point below collects
+        every name that carries the span before checking any of them.
         """
-        import time
+        import ast
 
-        from merge_guard_pre import _strip_non_executable_content
+        from shared import merge_guard_common
 
-        worst = 'gh issue create --title "' + "a" * 40000
-        start = time.perf_counter()
-        _strip_non_executable_content(worst)
-        elapsed = time.perf_counter() - start
-        assert elapsed < 0.1, f"span strip took {elapsed*1000:.1f}ms (ReDoS?)"
+        source = Path(merge_guard_common.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        def operands(node):
+            """Flatten a left-associative `a + b + c` chain into its operands."""
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                return operands(node.left) + operands(node.right)
+            return [node]
+
+        # Fixed point: every name that transitively carries the span.
+        carriers = {"_VERB_MSG_BODY"}
+        for _ in range(8):
+            grew = False
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+                    continue
+                target = node.targets[0]
+                if not isinstance(target, ast.Name) or target.id in carriers:
+                    continue
+                if any(
+                    isinstance(o, ast.Name) and o.id in carriers
+                    for o in operands(node.value)
+                ):
+                    carriers.add(target.id)
+                    grew = True
+            if not grew:
+                break
+
+        offenders = []
+        chains = 0
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)):
+                continue
+            ops = operands(node)
+            positions = [
+                i for i, o in enumerate(ops)
+                if isinstance(o, ast.Name) and o.id in carriers
+            ]
+            if not positions:
+                continue
+            chains += 1
+            trailing = ops[max(positions) + 1:]
+            if trailing:
+                offenders.append((node.lineno, [ast.unparse(t) for t in trailing]))
+
+        # Non-vacuity: if the span is renamed or the carriers restructured, this
+        # test must fail loudly rather than pass over an empty population.
+        assert len(carriers) > 1, (
+            "no local name was found carrying _VERB_MSG_BODY — the carrier "
+            "construction changed shape and this test is now vacuous. Re-point "
+            "it at the new shape; do not delete it."
+        )
+        assert chains, (
+            "no concatenation chain embedding the span was found — this test is "
+            "vacuous. Re-point it rather than delete it."
+        )
+
+        assert not offenders, (
+            f"{len(offenders)} carrier(s) require something AFTER the span: "
+            f"{offenders}. The span is exponentially backtrackable (measured "
+            f"~2x per input character); it is safe ONLY because nothing after "
+            f"it can fail, so the match always succeeds and the engine never "
+            f"backtracks into it. Appending a required element re-arms that "
+            f"explosion on ordinary input. Put the required element BEFORE the "
+            f"span, or bound the span so it cannot backtrack ambiguously."
+        )
+
+    def test_no_carrier_span_is_consumed_by_fullmatch(self):
+        """`fullmatch` re-arms the explosion without touching the pattern.
+
+        A terminal span is safe under `search`/`sub` because the match always
+        succeeds. `fullmatch` requires the span to consume to end-of-string, so
+        an input it cannot fully consume forces the same exhaustive backtracking
+        that a required suffix does. Sibling of the terminality pin above.
+        """
+        import ast
+
+        from shared import merge_guard_common
+
+        source = Path(merge_guard_common.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        def operands(node):
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                return operands(node.left) + operands(node.right)
+            return [node]
+
+        carriers = {"_VERB_MSG_BODY"}
+        for _ in range(8):
+            grew = False
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+                    continue
+                target = node.targets[0]
+                if not isinstance(target, ast.Name) or target.id in carriers:
+                    continue
+                if any(
+                    isinstance(o, ast.Name) and o.id in carriers
+                    for o in operands(node.value)
+                ):
+                    carriers.add(target.id)
+                    grew = True
+            if not grew:
+                break
+
+        calls = [
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "fullmatch"
+        ]
+        # Non-vacuity: `fullmatch` is used in this module for unrelated tokens,
+        # so the population is genuinely non-empty and the scan has something to
+        # bite on. If that ever stops being true, say so rather than pass mute.
+        assert calls, (
+            "no fullmatch call sites found — either the module changed or the "
+            "scan broke. This assertion would pass vacuously; re-point it."
+        )
+
+        offenders = [
+            (n.lineno, ast.unparse(n)[:120])
+            for n in calls
+            if any(name in ast.unparse(n) for name in carriers)
+        ]
+        assert not offenders, (
+            f"a carrier span is consumed by fullmatch at {offenders}. Under "
+            f"fullmatch the span must reach end-of-string, so an input it "
+            f"cannot fully consume forces the exponential backtracking that "
+            f"terminality otherwise prevents. Use search/sub, or bound the span."
+        )
 
 
 # =============================================================================
