@@ -582,6 +582,8 @@ Ask these three questions to decide where to save the memory:
 - **Queryable knowledge for on-demand retrieval by any agent?** (architectural decisions, recurring patterns, calibration data) → Delegate to the secretary — query via `SendMessage` for reads; delegate saves via harvest triggers or ad-hoc save requests.
 - **Agent-specific expertise?** → Skip — specialists manage their own accumulated domain knowledge.
 
+You keep a persistent agent-memory index of your own, and it is subject to the same head-of-index limits as every specialist's — see the index-upkeep rule in [pact-agent-teams](../skills/pact-agent-teams/SKILL.md) for the enforced limits and why pointers belong at the head.
+
 #### Pin to CLAUDE.md mid-session
 
 Pin to `CLAUDE.md` immediately when an insight surfaces mid-session that meets any of these triggers — do not defer to wrap-up:
