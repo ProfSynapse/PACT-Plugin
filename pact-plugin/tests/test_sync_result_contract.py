@@ -223,7 +223,12 @@ class TestTheReasonSurvivesTheProcessBoundary:
     """
 
     def _save(self, tmp_path, project, extra_args=(), pytest_marker=None):
-        """Run the REAL CLI in a child process; return (envelope, file bytes)."""
+        """Run the REAL CLI in a child process.
+
+        Returns (envelope, file bytes, stderr). The third element exists because
+        stderr is the CLI's structured JSON channel, so what an arm writes there
+        is part of its observable contract and not merely diagnostic noise.
+        """
         pkg_root = str(Path(__file__).parent.parent / "skills" / "pact-memory")
         db = str(tmp_path / "probe.db")
         child = (
@@ -255,7 +260,7 @@ class TestTheReasonSurvivesTheProcessBoundary:
         payload = json.loads(proc.stdout)
         assert payload["ok"] is True, payload
         md = project / "CLAUDE.md"
-        return payload["result"], md.read_bytes()
+        return payload["result"], md.read_bytes(), proc.stderr
 
     @pytest.fixture
     def project(self, tmp_path):
@@ -267,7 +272,7 @@ class TestTheReasonSurvivesTheProcessBoundary:
     def test_suppressed_reaches_the_parent(self, tmp_path, project):
         """ARM 1 -- the caller declined the sync."""
         before = (project / "CLAUDE.md").read_bytes()
-        result, after = self._save(tmp_path, project, extra_args=("--no-sync",))
+        result, after, _ = self._save(tmp_path, project, extra_args=("--no-sync",))
 
         assert result["sync_status"] == "suppressed", result
         assert after == before, "a suppressed save wrote to CLAUDE.md"
@@ -279,7 +284,7 @@ class TestTheReasonSurvivesTheProcessBoundary:
         non-critical, and the parent previously saw only an untouched file.
         """
         before = (project / "CLAUDE.md").read_bytes()
-        result, after = self._save(
+        result, after, _ = self._save(
             tmp_path, project, pytest_marker="probe.py::test_x (call)"
         )
 
@@ -291,7 +296,7 @@ class TestTheReasonSurvivesTheProcessBoundary:
     ):
         """ARM 3 -- the positive control. See the class docstring."""
         before = (project / "CLAUDE.md").read_bytes()
-        result, after = self._save(tmp_path, project)
+        result, after, _ = self._save(tmp_path, project)
 
         assert result["sync_status"] == "wrote", result
         assert after != before, (
@@ -316,16 +321,31 @@ class TestTheReasonSurvivesTheProcessBoundary:
         db_a.mkdir()
         db_b.mkdir()
 
-        suppressed, after_suppressed = self._save(
+        suppressed, after_suppressed, err_suppressed = self._save(
             db_a, project, extra_args=("--no-sync",)
         )
-        refused, after_refused = self._save(
+        refused, after_refused, err_refused = self._save(
             db_b, project, pytest_marker="probe.py::test_x (call)"
         )
 
         assert after_suppressed == after_refused, (
             "precondition: the two outcomes must be indistinguishable on disk, "
             "otherwise this test is not measuring what it claims"
+        )
+
+        # THE SAME THESIS, ON THE SECOND CHANNEL. stderr is where this CLI puts
+        # its error envelope, so a free-text line there is not diagnostic noise
+        # -- it is corruption of a channel callers parse. A DIFFERENTIAL rather
+        # than an emptiness check on purpose: several pre-existing emitters can
+        # write here when the sqlite/vector dependencies are absent, and those
+        # fire identically in both arms. Comparing the arms cancels them and
+        # measures only what the REFUSAL adds, which is the thing under test.
+        assert err_suppressed == err_refused, (
+            "the two outcomes are distinguishable on stderr, which is this "
+            "CLI's structured JSON channel. The status field is supposed to be "
+            "the ONLY thing that separates them.\n"
+            f"  suppressed stderr: {err_suppressed!r}\n"
+            f"  refused stderr:    {err_refused!r}"
         )
         assert suppressed["sync_status"] != refused["sync_status"], (
             "the two outcomes collapsed back into one observation"

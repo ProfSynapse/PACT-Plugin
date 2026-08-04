@@ -500,7 +500,11 @@ class PACTMemory:
                 # from any other failure -- and a refusal is the one outcome that
                 # is deliberate rather than broken.
                 self._last_sync_status = SyncResult.REFUSED
-                logger.warning(f"Refused to sync to CLAUDE.md: {e}")
+                # DEBUG, NOT WARNING. The refusal is ALREADY on the structured
+                # channel: `sync_status='refused'` reaches the caller on stdout
+                # one line above. A WARNING here would also reach stderr via
+                # logging.lastResort, which the CLI's callers parse as JSON.
+                logger.debug(f"Refused to sync to CLAUDE.md: {e}")
             except Exception as e:
                 self._last_sync_status = SyncResult.FAILED
                 logger.warning(f"Failed to sync to CLAUDE.md: {e}")
