@@ -317,12 +317,40 @@ _GH_GLOBAL_FLAGS  = r"(?:\S+\s+){0,%d}" % _MAX_GLOBAL_FLAG_TOKENS
 # unrepresentable — a dash-initial token can only ever be a flag, a
 # non-dash-initial token can only ever be a value, and the partition is unique.
 #
-# THE MATCHED LANGUAGE IS UNCHANGED. A value that genuinely starts with `-`
-# (`--subject -x 42`) is still consumed, by the NEXT iteration as a flag rather
-# than by this one as a value, so the same tokens are swallowed and the same
-# number is extracted. Verified across 14 forms with zero divergence, including
-# every legitimate shape the merge-guard suite pins. Measured after: 2000 flags
-# in 0.25 ms.
+# THE MATCHED LANGUAGE IS NOT UNCHANGED, AND THIS ARM IS THEREFORE LOAD-BEARING
+# FOR CORRECTNESS, NOT ONLY FOR BACKTRACKING. A value that genuinely starts with
+# `-` (`--subject -x 42`) is still consumed — by the NEXT iteration as a flag
+# rather than by this one as a value — but the flag run then STOPS IN A
+# DIFFERENT PLACE, which moves the capture and the match end together. The broad
+# form reads a NUMERIC FLAG ARGUMENT as the pull-request number:
+#
+#     gh pr merge --squash --subject 2024 42     this arm -> 42   broad -> 2024
+#     gh pr merge --squash --body-file 1 42      this arm -> 42   broad -> 1
+#
+# On a control that binds an approval to a specific pull request, that is a
+# TARGET-IDENTIFICATION defect: approve one, authorise another.
+#
+# THE TRIGGER IS ORDINARY RATHER THAN ADVERSARIAL — a subject line that is a
+# year, a body file named `1`. Under this guard's honest-mistake threat model
+# that is the reachable case, not an exotic one.
+#
+# ENUMERATED, NOT SAMPLED, and the distinction is why this paragraph is a
+# correction. An earlier version of it claimed the two forms matched the same
+# language, "verified across 14 forms with zero divergence" — a hand-picked
+# corpus, which is the identical failure this comment diagnoses three
+# paragraphs above. Two later reviewers reproduced the claim by hand and got
+# zero divergence as well; every such corpus contains the shapes its author was
+# already thinking about. Enumerating the space instead:
+#   * 1554 generated `gh pr merge|close` commands -> 100 diverge, EVERY one of
+#     them carrying TWO leading dash-tokens. No single-flag shape can reach it,
+#     which is why three hand-picked corpora in a row missed it.
+#   * 3772 real gh flag sets with one positional -> no divergence.
+#   * 168 real flag sets with a value-taking flag whose value is NUMERIC ->
+#     all 168 diverge.
+# NOT enumerated, so not claimed either way: bundled short clusters, and
+# `--flag=value` spellings.
+#
+# Measured after: 2000 flags in 0.25 ms.
 _GH_FLAG_TOKENS   = r"(?:-\S*(?:\s+[^-\s]\S*)?\s+)*"
 _GIT_GLOBAL_FLAGS = r"(?:\S+\s+){0,%d}" % _MAX_GLOBAL_FLAG_TOKENS
 
