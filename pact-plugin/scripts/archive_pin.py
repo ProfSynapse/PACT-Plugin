@@ -37,7 +37,8 @@ that is governed by the invariant below, not by a per-failure enumeration.
    "occurrences": 1}
   {"outcome": "ARCHIVED_DELETE_UNSAFE", "heading": str, "claude_md_path": str,
    "delete_string": str, "memory_id": str, "occurrences": int,
-   "locations": [int], "reason": str}
+   "locations": [int], "reason": str,
+   "sync_status": str, "sync_scope": str}   # both ONLY on the sync-breach arm
   {"outcome": "NOT_ARCHIVED",           "heading": str, "claude_md_path": str,
    "delete_string": str, "memory_id": str|null, "reason": str}
   {"outcome": "UNEVALUABLE",            "heading": str|null,
@@ -53,8 +54,24 @@ archive worked, so it is present on NOT_ARCHIVED and on a located-pin
 UNEVALUABLE too. Uniqueness is verified after the save. Presence is governed
 by the invariant below.
 
-ARCHIVED_DELETE_UNSAFE means the archive SUCCEEDED and the removal is unsafe:
-the block is not unique, so an Edit keyed on it would be ambiguous. It is a
+ARCHIVED_DELETE_UNSAFE means the archive SUCCEEDED and the removal must not
+proceed automatically. TWO CONDITIONS REACH IT, and they share ONE disposition
+-- content safe, no automatic Edit, remove by hand, no escape hatch -- which is
+why they share one outcome NAME rather than forking into a fifth:
+
+  NOT UNIQUE       the block is not unique, so an Edit keyed on it would be
+                   ambiguous.
+  SYNC NOT SUPPRESSED  the save reported a `sync_status` other than
+                   `suppressed`, so the CLAUDE.md projection that `--no-sync`
+                   exists to prevent was attempted or performed. That arm adds
+                   `sync_status` and `sync_scope`, because `occurrences` and
+                   `locations` describe the TARGET file and a stray projection
+                   may sit in a DIFFERENT CLAUDE.md under the declared anchor.
+
+Two conditions under one outcome is NOT the reason-table hazard named below:
+that hazard is one outcome carrying two DISPOSITIONS, distinguished only by
+prose. These two carry the same disposition, and `_unsafe_reason` already
+varies its prose across two conditions for the same reason. It is a
 distinct outcome rather than a reason on another one because THE OUTCOME NAME
 MUST DETERMINE THE DISPOSITION -- one outcome with two dispositions forces a
 reason table, which is how a permission gets inherited by a condition it was
@@ -725,6 +742,85 @@ def _unsafe_reason(occurrences: int, claude_md_path: str, memory_id: str) -> str
     )
 
 
+def _suppression_breach_reason(
+    sync_status: str, claude_md_path: str, sync_scope: str, memory_id: str
+) -> str:
+    """Explain a save whose CLAUDE.md projection was not suppressed.
+
+    ONE PREDICATE FOR THE DECISION, TWO SHAPES FOR THE MESSAGE. The gate is
+    `!= suppressed`: the archival save passes `--no-sync` explicitly, so
+    `suppressed` is the ONLY status this route ever asks for, and keying on
+    the REQUESTED value rather than enumerating the unwanted ones covers a
+    SEVENTH `SyncResult` reason the moment it is added, fail-safe, with no
+    edit here. `suppressed` is the PRODUCTION-NORMAL value and nothing may
+    fire on it -- that would be a cardinal over-block on the curator's own
+    routine path.
+
+    BUT THE GATE'S ONE FACT IS NOT THE MESSAGE'S ONE FACT, AND COLLAPSING
+    THEM SHIPS THE DEFECT THIS CHANGE EXISTS TO REMOVE. Only `wrote` means a
+    projection LANDED. `refused`, `unresolved` and `missing` mean no write was
+    performed, and `failed` means the write did not complete. Telling a
+    curator to go looking for a stray copy on `failed` asserts that a copy
+    exists when none is known to -- a claim true of a narrower case than the
+    one it is read for, which is precisely the shape being fixed. So the two
+    shapes are:
+
+      wrote        A PROJECTION LANDED. Name where it can be, and point at
+                   the anchor. Bounded, because the save leg passes
+                   `--claude-md-root` and a write outside it is refused --
+                   so a stray copy CANNOT be outside `sync_scope`.
+
+      everything   THE SYNC DID NOT COMPLETE AND ITS OUTCOME IS UNKNOWN. Say
+      else         that, and claim NOTHING about a copy. Not "no copy
+                   exists" either: `failed` can in principle raise after the
+                   atomic rename, so the honest word is UNKNOWN, not NONE.
+
+    WHY THIS DOES NOT DUPLICATE THE OCCURRENCE CHECK. A projection into the
+    SAME file is already caught downstream by `occurrences != 1`, and that
+    check is BETTER evidence because it measures the artifact rather than a
+    reported status. Two things are left over:
+
+      SAME FILE   the occurrence check fires, but `_unsafe_reason` then tells
+                  the curator to "check for an editor or another process" --
+                  when THIS RUN wrote it. Right outcome, wrong cause.
+
+      OTHER FILE  the occurrence check reads ONLY the target, so a projection
+                  into a DIFFERENT CLAUDE.md leaves the target at exactly one
+                  occurrence and the archive reports CLEAN. Nothing else on
+                  this path can see it.
+
+    A bounded scope is not a located file. The `wrote` arm says WHERE a stray
+    copy must be if one exists; it does not claim one does.
+    """
+    archived = (
+        f"The archive SUCCEEDED (memory_id {memory_id}) -- the content is "
+        f"safe. Remove the pin manually."
+    )
+    common = (
+        f"`occurrences` and `locations` below describe {claude_md_path} ONLY. "
+    )
+    if sync_status == "wrote":
+        return (
+            f"the archival save WROTE a CLAUDE.md working-memory projection, "
+            f"which `--no-sync` exists to prevent. THIS RUN made that write; "
+            f"it is not a concurrent editor. {common}"
+            f"They do NOT measure where that projection landed: resolution is "
+            f"ambient, so a copy of the pin may sit in any CLAUDE.md under "
+            f"{sync_scope} (the declared anchor bounds it there and no "
+            f"further). Check that directory before removing anything. "
+            f"{archived}"
+        )
+    return (
+        f"the archival save ATTEMPTED a CLAUDE.md projection that `--no-sync` "
+        f"should have suppressed, and reported '{sync_status}'. The "
+        f"suppression did not take effect, so this run and the memory CLI "
+        f"disagree about whether this save projects. The sync DID NOT "
+        f"COMPLETE and its outcome is UNKNOWN -- this verdict does not claim "
+        f"a copy of the pin was written anywhere, and does not claim none "
+        f"was. {common}{archived}"
+    )
+
+
 def _occurrence_offsets(text: str, needle: str) -> list:
     """Character offsets of every occurrence of `needle`, for the unsafe verdict.
 
@@ -1003,6 +1099,56 @@ def archive_pin(index: int, db_path=None) -> dict:
         )
 
     occurrences = post.count(block)
+
+    # --- the projection this save was told NOT to make --------------------
+    #
+    # READS `sync_status` OFF THE SAVE ENVELOPE ALREADY IN HAND. The field
+    # crosses the process boundary on the `save` route and, before this,
+    # nothing read it -- a channel with no consumer.
+    #
+    # PRESENT-VALUE-ONLY, AND ABSENCE IS NOT SUCCESS. An absent field is NO
+    # EVIDENCE, so nothing fires on it. That is not the same as reading absence
+    # as a clean sync, which `cli.py` explicitly forbids: the check below acts
+    # on a value that IS there and disagrees with what this call requested.
+    # Absence is safe to pass here for a reason particular to this call site --
+    # `_MEMORY_CLI` is a sibling path of this file, so parent and child are the
+    # same tree and cannot disagree about the envelope's shape. A real-CLI test
+    # pins that premise rather than leaving it assumed.
+    #
+    # CHECKED BEFORE `occurrences != 1`, DELIBERATELY. When both conditions
+    # hold, the breached suppression is the CAUSE and the duplicate block is
+    # the SYMPTOM, so the curator is told the cause. Nothing is lost by the
+    # ordering: this verdict carries `occurrences` and `locations` too.
+    #
+    # THIS IS A REGRESSION GUARD, NOT A FIX FOR A LIVE DEFECT. While
+    # `--no-sync` works the status is `suppressed` and this never fires. It
+    # converts "we pass the flag and assume it worked" into "we verify it
+    # worked" -- on a path whose own comment records that the suppression is
+    # load-bearing and was measured.
+    sync_status = result.get("sync_status") if isinstance(result, dict) else None
+    if sync_status is not None and sync_status != "suppressed":
+        return {
+            "outcome": "ARCHIVED_DELETE_UNSAFE",
+            "heading": heading,
+            "claude_md_path": claude_md_path,
+            "delete_string": block,
+            "memory_id": memory_id,
+            "chars": len(block),
+            "contained": True,
+            "occurrences": occurrences,
+            "locations": _occurrence_offsets(post, block),
+            # NAMES THE STRAY PROJECTION. Without these two keys the verdict's
+            # only evidence would be `occurrences`/`locations`, which describe
+            # the target file -- clean, in the case that matters. `sync_scope`
+            # is the declared anchor, so it BOUNDS where a stray copy can be
+            # rather than leaving the curator to search everywhere.
+            "sync_status": sync_status,
+            "sync_scope": str(project_dir),
+            "reason": _suppression_breach_reason(
+                sync_status, claude_md_path, str(project_dir), memory_id
+            ),
+        }
+
     if occurrences != 1:
         # ARCHIVE SUCCEEDED, REMOVAL IS UNSAFE -- a distinct outcome, not a
         # variant of another. Not UNEVALUABLE: that means "cannot tell", and
