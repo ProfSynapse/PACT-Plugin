@@ -442,6 +442,25 @@ class TestExtractPrNumberFlagFormAsymmetry:
         assert "--repo" not in _mgc._GH_PR_VALUE_TAKING_FLAGS
         assert _mgc._extract_pr_number("gh pr merge --squash --repo 2024 42") == "2024"
 
+    def test_the_split_holds_identically_for_the_close_verb(self, broadened):
+        """The three arms above are merge-only; this is the close half.
+
+        The comment on `_GH_FLAG_TOKENS` claims the split holds on BOTH verbs,
+        and a claim is only pinned where a test exercises it. Long forms in the
+        frozenset neutralise, short aliases and `--repo` misbind — same
+        partition, same remedies, no crossover.
+
+        Close matters independently rather than as a symmetry check: it reaches
+        `_extract_close_target` in the caller, not the merge path, so "merge
+        works" is not evidence about it.
+        """
+        assert _mgc._extract_pr_number("gh pr close --admin --comment 2024 42") is None
+        assert _mgc._extract_pr_number("gh pr close --admin --body 2024 42") is None
+
+        assert _mgc._extract_pr_number("gh pr close --admin -c 2024 42") == "2024"
+        assert _mgc._extract_pr_number("gh pr close --admin -b 2024 42") == "2024"
+        assert _mgc._extract_pr_number("gh pr close --admin --repo 2024 42") == "2024"
+
     def test_a_single_leading_dash_token_never_diverges(self, broadened):
         """TWO leading dash-tokens are required before the forms can disagree.
 
