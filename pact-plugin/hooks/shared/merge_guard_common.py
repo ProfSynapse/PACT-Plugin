@@ -328,7 +328,10 @@ _GH_GLOBAL_FLAGS  = r"(?:\S+\s+){0,%d}" % _MAX_GLOBAL_FLAG_TOKENS
 #     gh pr merge --squash --body-file 1 42      this arm -> 42   broad -> 1
 #
 # On a control that binds an approval to a specific pull request, that is a
-# TARGET-IDENTIFICATION defect: approve one, authorise another.
+# TARGET-IDENTIFICATION defect: THE APPROVAL BINDS TO A PULL REQUEST OTHER THAN
+# THE ONE THAT MERGES. If you are reading this because you want to simplify the
+# pattern, that sentence is the cost — not a slower match, a merge the user did
+# not authorise.
 #
 # THE TRIGGER IS ORDINARY RATHER THAN ADVERSARIAL — a subject line that is a
 # year, a body file named `1`. Under this guard's honest-mistake threat model
