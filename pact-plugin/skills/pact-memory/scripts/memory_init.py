@@ -21,6 +21,7 @@ Thread-safety: Uses threading.Lock for the session-scoped initialization flag.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import uuid
@@ -290,6 +291,31 @@ except ImportError:
 # for every later session permanently. A process-unique name is fail-SAFE — the
 # worst case is that a sweep runs more than once.
 _PROCESS_MARKER_TOKEN = f"process-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+
+def _remove_process_marker() -> None:
+    """Delete this process's own fallback marker as the process exits.
+
+    The fallback marker's ONLY remaining job is to suppress a retry within the
+    process that created it, so its useful life ends when that process does.
+    Left behind it is pure litter: no other process can ever match the token,
+    and every CLI invocation is a fresh process.
+
+    Scoped to the process-unique token alone. A session-scoped marker MUST
+    survive process exit -- suppressing the sweep across the calls of one
+    session is the whole point of it -- so this must never touch that path.
+    """
+    try:
+        (Path("/tmp") / f"pact_embedding_attempted_{_PROCESS_MARKER_TOKEN}").unlink(
+            missing_ok=True
+        )
+    except OSError:
+        pass
+
+
+# Registered unconditionally: it is a no-op when no fallback marker was created,
+# and registering here cannot miss a creation site the way a call-site hook could.
+atexit.register(_remove_process_marker)
 
 
 def _get_embedding_attempted_path() -> Path:

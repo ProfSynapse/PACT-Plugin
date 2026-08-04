@@ -10,6 +10,7 @@ Tests cover:
 
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -1713,3 +1714,67 @@ def reset_init_state():
     reset_initialization()
     yield
     reset_initialization()
+
+
+class TestProcessMarkerDoesNotOutliveItsProcess:
+    """The fallback marker is per-process, so it must not survive the process.
+
+    Route F removed the marker DELETION but not its CREATION, and the fallback
+    token made every process's marker unique — so each one became permanent
+    litter that nothing could ever match again. Measured at 100 files per suite
+    run before this was fixed.
+
+    NON-VACUITY: asserting "no marker exists afterwards" passes both when the
+    cleanup works AND when no marker was ever created. So the child proves
+    creation from the inside and reports the path; the parent then proves the
+    same path is gone. Without the child's assertion this test could not tell
+    a working cleanup from a marker that never existed.
+    """
+
+    def _run_child(self, extra_body=""):
+        scripts = str(Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts")
+        child = (
+            "import sys, pathlib\n"
+            f"sys.path.insert(0, {scripts!r})\n"
+            "import memory_init\n"
+            "p = memory_init._get_embedding_attempted_path()\n"
+            "p.touch()\n"
+            # POSITIVE ARM: the marker demonstrably existed while the process ran.
+            "assert p.exists(), 'child failed to create its own marker'\n"
+            "print(str(p))\n"
+            f"{extra_body}"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", child], capture_output=True, text=True, timeout=60
+        )
+        assert proc.returncode == 0, f"child failed: {proc.stderr}"
+        return Path(proc.stdout.strip().splitlines()[-1])
+
+    def test_fallback_marker_is_removed_when_the_process_exits(self):
+        marker = self._run_child()
+
+        assert "process-" in marker.name, (
+            "precondition: the child had no session context, so it must have "
+            f"used the process-unique fallback; got {marker.name}"
+        )
+        assert not marker.exists(), (
+            f"{marker.name} outlived the process that created it; nothing can "
+            "ever match that token again, so it is permanent litter"
+        )
+
+    def test_a_session_scoped_marker_is_left_alone(self):
+        """The atexit cleanup must target ONLY the process-unique token.
+
+        A session-scoped marker exists precisely to suppress the sweep ACROSS
+        the processes of one session, so removing it at process exit would
+        destroy the mechanism it protects.
+        """
+        session_marker = Path("/tmp") / "pact_embedding_attempted_test-session-keepme"
+        session_marker.touch()
+        try:
+            self._run_child()
+            assert session_marker.exists(), (
+                "process-exit cleanup removed a session-scoped marker"
+            )
+        finally:
+            session_marker.unlink(missing_ok=True)
