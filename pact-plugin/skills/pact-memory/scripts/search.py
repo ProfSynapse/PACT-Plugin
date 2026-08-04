@@ -66,7 +66,7 @@ def vector_search(
     Perform semantic vector search on memories.
 
     Uses sqlite-vec for efficient similarity search. Requires:
-    1. pysqlite3-binary (for extension loading)
+    1. pysqlite3 (for extension loading)
     2. sqlite-vec (for vector operations)
 
     Args:
@@ -437,7 +437,7 @@ def get_search_capabilities() -> Dict[str, Any]:
     Get information about available search capabilities.
 
     Vector storage requires both:
-    1. SQLITE_EXTENSIONS_ENABLED (pysqlite3-binary installed)
+    1. SQLITE_EXTENSIONS_ENABLED (pysqlite3 installed)
     2. Embedding generation available (model + backend)
 
     Returns:

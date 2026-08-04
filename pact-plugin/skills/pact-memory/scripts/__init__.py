@@ -135,6 +135,7 @@ from .embedding_catchup import (
 from .memory_init import (
     ensure_memory_ready,
     reset_initialization,
+    clear_embedding_marker,
     is_initialized,
     check_and_install_dependencies,
     maybe_migrate_embeddings,
@@ -251,6 +252,7 @@ __all__ = [
     # Lazy Initialization
     "ensure_memory_ready",
     "reset_initialization",
+    "clear_embedding_marker",
     "is_initialized",
     "check_and_install_dependencies",
     "maybe_migrate_embeddings",

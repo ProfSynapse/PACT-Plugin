@@ -8,7 +8,7 @@ for rich memory objects.
 Storage Location: ~/.claude/pact-memory/memory.db
 Uses WAL mode for corruption prevention and concurrent access safety.
 
-Note: Uses pysqlite3-binary when available for SQLite extension loading support.
+Note: Uses pysqlite3 when available for SQLite extension loading support.
 Standard library sqlite3 has enable_load_extension disabled by default.
 Falls back gracefully to keyword-only search when extensions unavailable.
 """
@@ -256,7 +256,7 @@ def _init_vector_table(conn: sqlite3.Connection) -> bool:
     Attempt to create the vector table for semantic search.
 
     Requires:
-    1. pysqlite3-binary package (for extension loading support)
+    1. pysqlite3 package (for extension loading support)
     2. sqlite-vec extension (for vector storage)
 
     Standard library sqlite3 has enable_load_extension disabled by default,
@@ -280,7 +280,7 @@ def _init_vector_table(conn: sqlite3.Connection) -> bool:
         logger.info(
             "SQLite extension loading unavailable (using standard sqlite3). "
             "Vector storage disabled - semantic search will fall back to keyword search. "
-            "Install pysqlite3-binary for full vector support: pip install pysqlite3-binary"
+            "Install pysqlite3 for full vector support: pip install pysqlite3"
         )
         return False
 

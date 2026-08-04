@@ -169,6 +169,12 @@ class PACTMemory:
         # Session file tracking (populated by hooks)
         self._session_files: List[str] = []
 
+        # Reason code from the most recent save() or update(), or None when the
+        # last write had nothing to report. save() returns a bare memory_id, so
+        # this is how a caller reaches the embedding outcome without changing
+        # that signature.
+        self._last_embedding_status: Optional[str] = None
+
         logger.debug(
             f"PACTMemory initialized: project={self._project_id}, session={self._session_id}"
         )
@@ -323,6 +329,15 @@ class PACTMemory:
         """Get the current session ID."""
         return self._session_id
 
+    @property
+    def last_embedding_status(self) -> Optional[str]:
+        """Reason code from the most recent save() or update().
+
+        None means there was nothing to report. A string is a reason code the
+        caller may surface: `degraded:<search_mode>` or `fault`.
+        """
+        return self._last_embedding_status
+
     def track_file(self, path: str) -> None:
         """
         Track a file modified in this session.
@@ -406,7 +421,9 @@ class PACTMemory:
                 )
 
             # Store embedding for semantic search
-            self._store_embedding(conn, memory_id, memory)
+            self._last_embedding_status = self._store_embedding(
+                conn, memory_id, memory
+            )
 
             logger.info(f"Saved memory {memory_id} with {len(files_to_link)} files")
 
@@ -437,13 +454,17 @@ class PACTMemory:
         conn: sqlite3.Connection,
         memory_id: str,
         memory: Dict[str, Any]
-    ) -> bool:
+    ) -> Optional[str]:
         """
         Generate and store embedding for a memory.
 
-        Requires SQLITE_EXTENSIONS_ENABLED (pysqlite3-binary) and sqlite-vec.
-        If extensions are unavailable, skips embedding storage silently -
-        search will fall back to keyword-only mode.
+        Requires SQLITE_EXTENSIONS_ENABLED (pysqlite3) and sqlite-vec.
+
+        Whenever this returns without writing a vector it first removes any
+        vector already stored for this memory, so a record can never keep a
+        vector describing text it no longer contains. A missing vector makes a
+        record invisible to semantic search; a stale one makes it findable for
+        the wrong query, which is the worse failure.
 
         Args:
             conn: Active database connection.
@@ -451,7 +472,11 @@ class PACTMemory:
             memory: Memory data for embedding generation.
 
         Returns:
-            True if embedding was stored, False otherwise.
+            None when there is nothing for the caller to report - either the
+            vector was stored, or storing none was correct for this input.
+            Otherwise a reason code the caller may surface:
+            `degraded:<search_mode>` when this process cannot embed at all, or
+            `fault` when storing raised.
         """
         # Check if SQLite extension loading is available
         if not SQLITE_EXTENSIONS_ENABLED:
@@ -459,18 +484,25 @@ class PACTMemory:
                 "Skipping embedding storage - SQLite extensions unavailable. "
                 "Search will use keyword mode."
             )
-            return False
+            # No extension means the vector table cannot be reached at all, so
+            # an existing vector cannot be removed here. It stays stale until a
+            # process that can embed rewrites or removes it.
+            return self._degraded_reason()
 
         # Generate text for embedding
         text = generate_embedding_text(memory)
         if not text:
-            return False
+            # Storing no vector is correct for a record with no embeddable
+            # text, but any vector already stored describes the previous text.
+            self._drop_existing_vector(conn, memory_id)
+            return None
 
         # Generate embedding
         embedding = generate_embedding(text)
         if embedding is None:
             logger.debug("Embedding generation unavailable, skipping")
-            return False
+            self._drop_existing_vector(conn, memory_id)
+            return self._degraded_reason()
 
         try:
             # Enable extension loading (safe because SQLITE_EXTENSIONS_ENABLED is True)
@@ -480,7 +512,9 @@ class PACTMemory:
                 sqlite_vec.load(conn)
             except ImportError:
                 logger.debug("sqlite-vec not installed, skipping embedding storage")
-                return False
+                # Same as the no-extension exit: the vector table is
+                # unreachable, so an existing vector cannot be removed here.
+                return self._degraded_reason()
 
             # Convert to blob
             embedding_blob = struct.pack(f'{len(embedding)}f', *embedding)
@@ -496,10 +530,48 @@ class PACTMemory:
             conn.commit()
 
             logger.debug(f"Stored embedding for memory {memory_id}")
-            return True
+            return None
 
         except Exception as e:
-            logger.debug(f"Failed to store embedding: {e}")
+            # This handler wraps both the insert and the commit, so it can be
+            # reached after a successful write. Removing the vector here could
+            # therefore destroy a good one; leave it and report the fault.
+            logger.warning(f"Failed to store embedding for {memory_id}: {e}")
+            return "fault"
+
+    @staticmethod
+    def _degraded_reason() -> str:
+        """Report this process's search capability as a reason code.
+
+        Reads the same capability the search path reports, so a caller is never
+        told one thing by `status` and another by a save.
+        """
+        try:
+            capabilities = get_search_capabilities()
+            return f"degraded:{capabilities.get('search_mode', 'unknown')}"
+        except Exception:
+            return "degraded:unknown"
+
+    @staticmethod
+    def _drop_existing_vector(conn: sqlite3.Connection, memory_id: str) -> bool:
+        """Remove any stored vector for this memory.
+
+        Keyed on the CONDITION (returning without a vector) rather than on the
+        caller, so it covers an update that fails to re-embed and an orphaned
+        row left by any other path.
+
+        Returns True if the delete ran. False means the vector table could not
+        be reached, so a stale vector may survive.
+        """
+        try:
+            conn.enable_load_extension(True)
+            import sqlite_vec
+            sqlite_vec.load(conn)
+            conn.execute("DELETE FROM vec_memories WHERE memory_id = ?", (memory_id,))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.debug(f"Could not drop existing vector for {memory_id}: {e}")
             return False
 
     def search(
@@ -706,7 +778,9 @@ class PACTMemory:
                 if memory_dict and _content_fields_changed(
                     before_snapshot or {}, memory_dict, content_keys_in_update,
                 ):
-                    self._store_embedding(conn, memory_id, memory_dict)
+                    self._last_embedding_status = self._store_embedding(
+                        conn, memory_id, memory_dict
+                    )
 
             return memory_id if success else None
 

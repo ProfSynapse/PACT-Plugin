@@ -208,9 +208,11 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" delete abc123
 ## Search Capabilities
 
 ### Semantic Search
-Uses embeddings to find semantically similar memories. Requires either:
-- sqlite-lembed with GGUF model (preferred)
-- sentence-transformers (fallback)
+Uses embeddings to find semantically similar memories. Requires both:
+- `pysqlite3` — enables SQLite extension loading, which `sqlite-vec` needs
+- `model2vec` — the embedding backend (model `minishlab/potion-base-8M`, 256 dimensions)
+
+`model2vec` is the only embedding backend the code implements.
 
 ### Graph-Enhanced Search
 When searching while working on a file, memories linked to:
@@ -228,16 +230,31 @@ context, goal, lessons_learned, and decisions fields.
 
 ### Dependencies
 
+These are the three packages the memory system installs and imports:
+
 ```bash
-# Required for database
+# Enables SQLite extension loading — required before sqlite-vec can load
+pip install pysqlite3
+
+# Vector storage and similarity search
 pip install sqlite-vec
 
-# For local embeddings (recommended)
-pip install sqlite-lembed
-
-# Alternative embedding backend
-pip install sentence-transformers
+# Embedding backend for semantic search
+pip install model2vec
 ```
+
+Install `pysqlite3`, not `pysqlite3-binary`. The two are different
+distributions and only `pysqlite3` publishes artifacts for macOS on arm64.
+
+`setup` installs all three automatically. Run it rather than installing by
+hand:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" setup
+```
+
+If any of the three is missing, semantic search is unavailable and search
+falls back to keyword mode. `status` reports which mode is active.
 
 ### Initialize and Check Status
 

@@ -412,17 +412,29 @@ def ensure_memory_ready() -> dict:
 
 def reset_initialization() -> None:
     """
-    Reset the initialization state.
+    Reset the in-memory initialization state.
 
     Useful for testing or when forcing re-initialization.
-    Clears both the in-memory flag and the session marker file.
+
+    This resets the in-memory flag ONLY. It deliberately does not delete the
+    embedding marker: the marker path is shared with any real session running
+    on the same machine, so deleting it here would reach outside the caller.
+    Call clear_embedding_marker() when the marker itself needs removing.
     """
     global _initialized
     with _init_lock:
         _initialized = False
-        # Also clear the session marker file so maybe_embed_pending() can run again
-        marker_path = _get_embedding_attempted_path()
-        marker_path.unlink(missing_ok=True)
+
+
+def clear_embedding_marker() -> None:
+    """
+    Delete the embedding attempt marker so maybe_embed_pending() can run again.
+
+    Separated from reset_initialization() so that resetting the in-memory flag
+    cannot remove a marker belonging to another process.
+    """
+    marker_path = _get_embedding_attempted_path()
+    marker_path.unlink(missing_ok=True)
 
 
 def is_initialized() -> bool:

@@ -138,6 +138,50 @@ class TestResetInitialization:
             assert result2['already_initialized'] is False
             assert mock_deps.call_count == 2
 
+    def test_reset_leaves_existing_marker_in_place(self):
+        """reset_initialization() must not delete the embedding marker.
+
+        The marker path resolves to a location shared with a real session, so a
+        reset that unlinks it reaches outside the test process. Resetting the
+        in-memory flag is the only behaviour tests need.
+        """
+        from memory_init import reset_initialization, _get_embedding_attempted_path
+
+        test_session_id = f"test-routef-{time.time()}"
+
+        with patch("memory_init.get_session_id_from_context_file", return_value=test_session_id):
+            marker_path = _get_embedding_attempted_path()
+            marker_path.touch()
+            try:
+                assert marker_path.exists(), "precondition: marker was created"
+
+                reset_initialization()
+
+                assert marker_path.exists(), (
+                    "reset_initialization() deleted the embedding marker; "
+                    "the reset must not touch the filesystem"
+                )
+            finally:
+                marker_path.unlink(missing_ok=True)
+
+    def test_clear_embedding_marker_removes_it(self):
+        """The deletion still exists, but only under its own name."""
+        from memory_init import clear_embedding_marker, _get_embedding_attempted_path
+
+        test_session_id = f"test-clearmarker-{time.time()}"
+
+        with patch("memory_init.get_session_id_from_context_file", return_value=test_session_id):
+            marker_path = _get_embedding_attempted_path()
+            marker_path.touch()
+            try:
+                assert marker_path.exists(), "precondition: marker was created"
+
+                clear_embedding_marker()
+
+                assert not marker_path.exists()
+            finally:
+                marker_path.unlink(missing_ok=True)
+
 
 class TestIsInitialized:
     """Tests for is_initialized() - checks current initialization state."""
