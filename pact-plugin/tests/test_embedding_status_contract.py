@@ -335,3 +335,68 @@ class TestSqliteVecAbsenceIsReportedAsKeyword:
             "with sqlite-vec absent no vector can be stored and none can be "
             f"searched, so the capability must not claim semantic; got {result!r}"
         )
+
+
+class TestAmbientWorkingMemorySyncIsRefusedUnderPytest:
+    """The third path to live operator state, which had no guard at all.
+
+    The database and the session marker both refuse a test process. The
+    CLAUDE.md sync did not, so a CLI save from a test wrote into the operator's
+    real Working Memory -- and a sandboxed HOME never covered it, because the
+    target is resolved from CLAUDE_PROJECT_DIR and the working directory rather
+    than from HOME.
+
+    NON-VACUITY: asserting a file was not written passes whether the guard
+    fired or the save never ran. So the child runs WITHOUT --no-sync against a
+    SANDBOXED project dir, and the assertions prove BOTH halves -- that the
+    save genuinely happened, and that the sync it would have performed did not
+    reach the file. No operator state is touched: the ambient target is
+    redirected into tmp for the duration.
+    """
+
+    def test_save_succeeds_while_the_ambient_sync_is_refused(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        claude_md = project / "CLAUDE.md"
+        claude_md.write_text(
+            "# Project\n\n## Working Memory\n", encoding="utf-8"
+        )
+        before = claude_md.read_text(encoding="utf-8")
+
+        pkg_root = str(Path(__file__).parent.parent / "skills" / "pact-memory")
+        db = str(tmp_path / "probe.db")
+        child = (
+            "import sys, json\n"
+            f"sys.path.insert(0, {pkg_root!r})\n"
+            "from scripts import cli\n"
+            # NOTE: deliberately NO --no-sync. The guard, not the flag, is what
+            # must stop this.
+            "cli.main(['save', '--db-path', " + repr(db) + ", "
+            "json.dumps({'context': 'ambient sync probe'})])\n"
+        )
+        env = dict(os.environ)
+        env["CLAUDE_PROJECT_DIR"] = str(project)
+        env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        env["PYTEST_CURRENT_TEST"] = "test_save_succeeds_while_the_ambient_sync_is_refused (call)"
+        proc = subprocess.run(
+            [sys.executable, "-c", child], capture_output=True, text=True,
+            timeout=120, env=env,
+        )
+
+        # POSITIVE ARM 1: the save actually ran and succeeded.
+        payload = json.loads(proc.stdout)
+        assert payload["ok"] is True
+        assert payload["result"]["memory_id"], "no save occurred, so nothing was refused"
+
+        # POSITIVE ARM 2: the record really is in the database, so the sync is
+        # the ONLY thing that did not happen.
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(db) as con:
+            count = con.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        assert count == 1, f"expected the probe record to be stored, found {count}"
+
+        # THE GUARD: the ambient target is untouched.
+        assert claude_md.read_text(encoding="utf-8") == before, (
+            "the working-memory sync reached an ambiently-resolved CLAUDE.md "
+            "from a test process"
+        )

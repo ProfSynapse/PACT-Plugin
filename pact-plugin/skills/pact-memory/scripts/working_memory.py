@@ -1087,6 +1087,58 @@ def _project_root_of(claude_md_path: Path) -> Path:
     return parent.parent if parent.name == ".claude" else parent
 
 
+class AmbientSyncRefused(RuntimeError):
+    """Raised when a test process would sync to an ambiently-resolved CLAUDE.md."""
+
+
+def _refuse_ambient_target_under_pytest(target: Optional[Path]) -> None:
+    """Refuse an AMBIENT working-memory sync when a TEST PROCESS spawned us.
+
+    THE GAP THIS CLOSES, AND WHY A FLAG WAS NOT ENOUGH. Three paths reach live
+    operator state from a test: the database, refused by
+    `cli._refuse_live_db_under_pytest`; the session marker, refused by the
+    `PYTEST_CURRENT_TEST` check in `pact_session`; and this one, which had no
+    refusal at all. Two of three failed closed and the third always wrote.
+
+    `--no-sync` exists and works, but it is a CONVENTION -- it must be
+    remembered at every call site. It was forgotten twice in one evening by the
+    two people most alert to this exact hazard, so roughly twenty probe saves
+    reached the operator's real file. A refusal keyed on the condition needs
+    nobody to remember anything.
+
+    AND A SANDBOXED HOME NEVER COVERED IT, which is why it went unnoticed: the
+    target is not under HOME. It is resolved from CLAUDE_PROJECT_DIR, then two
+    git anchors, then the working directory -- and that resolver is TOTAL, so
+    there is no configuration in which it declines to pick a file.
+
+    SCOPE, mirroring `_refuse_live_db_under_pytest` deliberately rather than
+    inventing a second shape:
+    - An EXPLICIT `target` is always allowed. A caller that names its file has
+      said which file it means, and tests legitimately sync to a tmp path.
+    - An IN-PROCESS caller (`pytest` already imported) is out of scope, because
+      the suite's own working-memory tests call this ambiently on purpose.
+    - The same bounded gap applies: pytest pops `PYTEST_CURRENT_TEST` between
+      items, so a spawn during collection or session-fixture setup is NOT
+      covered.
+
+    Raises AmbientSyncRefused rather than returning False, because save()
+    already treats a sync failure as non-critical and logs it -- a quiet False
+    would leave the refusal invisible, which is the failure mode being fixed.
+    """
+    if target is not None:
+        return
+    if "pytest" in sys.modules:
+        return
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    raise AmbientSyncRefused(
+        "refusing to sync working memory to an ambiently-resolved CLAUDE.md: "
+        "PYTEST_CURRENT_TEST is set in this process's environment, so the "
+        "destination would be the operator's live file. Pass an explicit "
+        "target=, or use the CLI's --no-sync flag."
+    )
+
+
 def sync_to_claude_md(
     memory: Dict[str, Any],
     files: Optional[List[str]] = None,
@@ -1155,6 +1207,8 @@ def sync_to_claude_md(
     Returns:
         True if sync succeeded, False otherwise.
     """
+    _refuse_ambient_target_under_pytest(target)
+
     if target is not None:
         claude_md_path = Path(target)
         project_root = _project_root_of(claude_md_path)
