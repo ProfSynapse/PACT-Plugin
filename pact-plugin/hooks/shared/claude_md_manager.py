@@ -430,6 +430,25 @@ def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
             or a descendant of it; or the boundary could not be established at
             all. Fail-CLOSED in every case, with a distinct message per cause.
     """
+    # A MISSING ANCHOR IS REFUSED AT THE CONTROL, not left to the callers.
+    #
+    # None is not reachable here today: both writers guard, and the resolver
+    # returns a PAIRED (None, None). But both of those guards test the TARGET
+    # path, not the anchor, so the containment guarantee currently rests on a
+    # resolver invariant that neither writer states. A resolver branch returning
+    # `(path, None)` would put None here.
+    #
+    # AND TODAY IT WOULD FAIL CLOSED BY ACCIDENT, WHICH IS THE REASON THIS LINE
+    # EXISTS. `os.stat(str(None))` stats the literal relative path "None",
+    # which raises -- until a directory named `None` exists in the working
+    # directory, at which point that directory silently BECOMES the containment
+    # anchor and every write is measured against it. A security control must not
+    # depend on a filename not existing. Make the state unrepresentable here.
+    if project_root is None:
+        raise ContainmentError(
+            "refusing write: no containment anchor was supplied"
+        )
+
     # #1247 CONTAINMENT, fail-CLOSED, BEFORE anything is created: kernel object
     # ancestry on a pinned directory descriptor. No Path.resolve(), no
     # os.path.realpath, no string comparison takes part in this decision.

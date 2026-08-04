@@ -563,6 +563,21 @@ def _run_memory_cli(args, db_path=None, stdin_data=None, cwd=None):
     if db_path:
         argv += ["--db-path", db_path]
 
+    # AUTOMATIC ANCHOR SUPPLY, for the one verb that can sync.
+    #
+    # `cwd` is the caller's statement of which project owns this invocation --
+    # the same value that pins CLAUDE_PROJECT_DIR below -- so it is also the
+    # boundary a CLAUDE.md write must stay inside. Supplying it here is what
+    # makes the anchor DECLARED rather than derived: the child does not compute
+    # it, it is told.
+    #
+    # THIS IS A SUPPLY, NOT A CAPABILITY. `--claude-md-root` is a CLI flag that
+    # any subprocess route can pass for itself. This wrapper adds it
+    # automatically only because it alone knows the declared directory; what is
+    # limited to this route is the automation, never the availability.
+    if cwd and args and args[0] == "save":
+        argv += ["--claude-md-root", str(cwd)]
+
     # Pin the project for the child process. CLAUDE_PROJECT_DIR is the memory
     # layer's PRIMARY detection strategy and is deterministic, unlike the git
     # and CWD-walk fallbacks.

@@ -107,6 +107,11 @@ MSG_CAP_WALK = (
 )
 MSG_CAP_TEMP = "refusing write: platform lacks directory-descriptor file creation"
 MSG_CAP_RENAME = "refusing write: platform lacks directory-descriptor rename"
+# The anchor is validated BEFORE the containment walk, so this refusal reports a
+# caller error rather than a boundary result. It is registered here because the
+# contract is the full rendered SET: an unregistered message is a refusal path
+# nobody certified, which is the gap this file exists to close.
+MSG_NO_ANCHOR = "refusing write: no containment anchor was supplied"
 
 ALL_MESSAGES = (
     MSG_BOUNDARY,
@@ -115,6 +120,7 @@ ALL_MESSAGES = (
     MSG_CAP_WALK,
     MSG_CAP_TEMP,
     MSG_CAP_RENAME,
+    MSG_NO_ANCHOR,
 )
 
 CANONICAL_REL = "hooks/shared/claude_md_manager.py"

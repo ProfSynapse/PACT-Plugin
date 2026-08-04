@@ -233,6 +233,12 @@ def cmd_save(args, db_path=None):
         save_kwargs = {}
         if getattr(args, "no_sync", False):
             save_kwargs["sync_to_claude"] = False
+        # Same conditional-kwarg discipline as --no-sync above, for the same
+        # reason: an unflagged save must still call `memory.save(memory_dict)`
+        # byte-identically, not merely equivalently.
+        claude_md_root = getattr(args, "claude_md_root", None)
+        if claude_md_root:
+            save_kwargs["claude_md_root"] = Path(claude_md_root)
         memory_id = memory.save(memory_dict, **save_kwargs)
     except ValueError as exc:
         _error(
@@ -282,8 +288,18 @@ def cmd_search(args, db_path=None):
     # channel. Both facts can change. If this argument ever becomes
     # caller-controlled, or the sibling gains a reason channel, this envelope
     # needs the field too; do not read its absence as "search never syncs".
+    # Conditional kwarg, for the reason `cmd_save` states two functions up: an
+    # unflagged call must stay BYTE-IDENTICAL, not merely equivalent, because
+    # the suite pins these calls exactly. Passing `claude_md_root=None`
+    # unconditionally is equivalent in behaviour and different in argv, and the
+    # exact-call assertions were right to catch it.
+    search_kwargs = {}
+    search_root = getattr(args, "claude_md_root", None)
+    if search_root:
+        search_kwargs["claude_md_root"] = Path(search_root)
     results = memory.search(
-        args.query, current_file=current_file, limit=args.limit, sync_to_claude=False
+        args.query, current_file=current_file, limit=args.limit,
+        sync_to_claude=False, **search_kwargs
     )
     _success([r.to_dict() for r in results])
 
@@ -502,6 +518,16 @@ def build_parser():
             "archiving a pin that is about to be removed from CLAUDE.md."
         ),
     )
+    save_parser.add_argument(
+        "--claude-md-root",
+        default=None,
+        help=(
+            "Declare the directory the CLAUDE.md write must stay inside. The "
+            "write is refused if it would land outside. This does NOT choose "
+            "which CLAUDE.md is written -- resolution is unchanged -- it "
+            "bounds where the result may be."
+        ),
+    )
 
     # search
     search_parser = subparsers.add_parser(
@@ -510,6 +536,19 @@ def build_parser():
     search_parser.add_argument("query", help="Search query text")
     search_parser.add_argument(
         "--limit", type=_positive_int, default=5, help="Max results (default: 5)"
+    )
+    # PLUMBED EVEN THOUGH THE SEARCH PATH CANNOT SYNC TODAY. `cmd_search`
+    # passes `sync_to_claude=False`, so this is inert right now -- which is
+    # exactly why it is here. That suppression is an observation about one call
+    # site, not a property of the command; the day it changes, the anchor is
+    # already available rather than needing to be discovered as missing.
+    search_parser.add_argument(
+        "--claude-md-root",
+        default=None,
+        help=(
+            "Declare the directory a Retrieved Context write must stay inside. "
+            "Inert while the search path suppresses its sync."
+        ),
     )
     search_parser.add_argument(
         "--current-file", help="Current file path for graph-enhanced relevance boosting"

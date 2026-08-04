@@ -394,7 +394,8 @@ class PACTMemory:
         memory: Dict[str, Any],
         files: Optional[List[str]] = None,
         include_tracked: bool = True,
-        sync_to_claude: bool = True
+        sync_to_claude: bool = True,
+        claude_md_root: Optional[Path] = None
     ) -> str:
         """
         Save a memory to the database.
@@ -416,6 +417,9 @@ class PACTMemory:
                 CLAUDE.md, and syncing writes the same bytes back, so the pin
                 SLOT is freed while the file is not. Mirrors `search`'s
                 parameter of the same name.
+            claude_md_root: Declared containment anchor forwarded to the sync.
+                The write must land inside it or the containment check refuses.
+                It does not steer resolution. Omit for today's behaviour.
 
         Returns:
             The ID of the saved memory.
@@ -486,7 +490,8 @@ class PACTMemory:
         if sync_to_claude:
             try:
                 result = sync_to_claude_md(
-                    memory, files_to_link if files_to_link else None, memory_id
+                    memory, files_to_link if files_to_link else None, memory_id,
+                    claude_md_root=claude_md_root
                 )
                 self._last_sync_status = result.reason
             except AmbientSyncRefused as e:
@@ -649,7 +654,8 @@ class PACTMemory:
         query: str,
         current_file: Optional[str] = None,
         limit: int = 5,
-        sync_to_claude: bool = True
+        sync_to_claude: bool = True,
+        claude_md_root: Optional[Path] = None
     ) -> List[MemoryObject]:
         """
         Search memories using semantic similarity and graph relationships.
@@ -659,6 +665,8 @@ class PACTMemory:
             current_file: Optional current file for context boosting.
             limit: Maximum number of results.
             sync_to_claude: Whether to sync top result to CLAUDE.md Retrieved Context.
+            claude_md_root: Declared containment anchor forwarded to the
+                retrieved-context sync, exactly as on `save`.
 
         Returns:
             List of matching MemoryObject instances.
@@ -680,7 +688,10 @@ class PACTMemory:
                 memory_dicts = [r.to_dict() for r in results]
                 memory_ids = [r.id for r in results]
                 # graph_enhanced_search doesn't return scores, so pass None
-                sync_retrieved_to_claude_md(memory_dicts, query, None, memory_ids)
+                sync_retrieved_to_claude_md(
+                    memory_dicts, query, None, memory_ids,
+                    claude_md_root=claude_md_root
+                )
             except Exception as e:
                 logger.warning(f"Failed to sync retrieved context to CLAUDE.md: {e}")
 

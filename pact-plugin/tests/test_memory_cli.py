@@ -1535,7 +1535,7 @@ class TestCliSubprocess:
         # Save
         save_result = subprocess.run(
             [sys.executable, cli_script_path, "save", json_str,
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
         assert save_result.returncode == 0, f"save stderr: {save_result.stderr}"
@@ -1989,7 +1989,7 @@ class TestCliSubprocess:
 
         result = subprocess.run(
             [sys.executable, cli_script_path, "save", "--stdin",
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             input=json_str,
             capture_output=True, text=True, timeout=60,
         )
@@ -2001,7 +2001,7 @@ class TestCliSubprocess:
     def test_save_invalid_json_exits_1(self, cli_script_path, cli_db):
         result = subprocess.run(
             [sys.executable, cli_script_path, "save", "not{valid",
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 1
@@ -2016,7 +2016,7 @@ class TestCliSubprocess:
         # Save first
         subprocess.run(
             [sys.executable, cli_script_path, "save", json_str,
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
 
@@ -2040,7 +2040,7 @@ class TestCliSubprocess:
         # Save first
         subprocess.run(
             [sys.executable, cli_script_path, "save", json_str,
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
 
@@ -2076,7 +2076,7 @@ class TestCliSubprocess:
             memory_dict = make_cli_memory_dict(context=f"limit test {i}")
             subprocess.run(
                 [sys.executable, cli_script_path, "save", json.dumps(memory_dict),
-                 "--db-path", str(cli_db)],
+                 "--no-sync", "--db-path", str(cli_db)],
                 capture_output=True, text=True, timeout=60,
             )
 
@@ -2093,7 +2093,7 @@ class TestCliSubprocess:
     def test_save_non_dict_exits_1(self, cli_script_path, cli_db):
         result = subprocess.run(
             [sys.executable, cli_script_path, "save", '"just a string"',
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 1
@@ -2117,7 +2117,7 @@ class TestCliSubprocess:
         # Save
         save_result = subprocess.run(
             [sys.executable, cli_script_path, "save", json_str,
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
         assert save_result.returncode == 0
@@ -2162,7 +2162,7 @@ class TestCliSubprocess:
         # Save
         save_result = subprocess.run(
             [sys.executable, cli_script_path, "save", json_str,
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
         assert save_result.returncode == 0
