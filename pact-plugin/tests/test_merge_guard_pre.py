@@ -384,6 +384,10 @@ from shared import merge_guard_common as _mgc  # noqa: E402
 
 _BROAD_FLAG_TOKENS = r"(?:-\S*(?:\s+\S+)?\s+)*"
 
+# Captured at import, before any fixture swaps the module attribute, so a test
+# can compare the two arms within one broadened run.
+_SHIPPED_PR_NUMBER_RE = _mgc._GH_PR_NUMBER_RE
+
 
 class TestExtractPrNumberFlagFormAsymmetry:
     """What the value-taking-flag re-check repairs, and what it leaves broken."""
@@ -437,3 +441,51 @@ class TestExtractPrNumberFlagFormAsymmetry:
         extending the frozenset — the two halves have different remedies."""
         assert "--repo" not in _mgc._GH_PR_VALUE_TAKING_FLAGS
         assert _mgc._extract_pr_number("gh pr merge --squash --repo 2024 42") == "2024"
+
+    def test_a_single_leading_dash_token_never_diverges(self, broadened):
+        """TWO leading dash-tokens are required before the forms can disagree.
+
+        This is why hand-picked corpora kept missing the defect: an author
+        writes `gh pr merge --subject X 42`, sees both forms agree, and
+        concludes they are equivalent. The divergence needs a VALUELESS flag
+        *followed by* a value-taking one, and that shape does not occur to
+        someone illustrating a single flag.
+
+        Enumerated rather than sampled, over both verbs — which is the point,
+        since sampling is the failure being pinned. Measured: zero divergence
+        across every one-token form, against total divergence at two.
+        """
+        verbs = ("merge", "close")
+        value_flags = ("--subject", "--body", "--body-file", "--comment",
+                       "--author-email", "--match-head-commit",
+                       "-t", "-b", "-F", "-c", "-A", "-R", "--repo")
+        booleans = ("--squash", "--auto", "--admin", "--merge", "--rebase",
+                    "--delete-branch", "-d")
+
+        singles = [f"gh pr {v} {f} {n} 42"
+                   for v in verbs for f in value_flags for n in ("2024", "1", "7")]
+        singles += [f"gh pr {v} {b} 42" for v in verbs for b in booleans]
+
+        # NON-VACUITY: the fixture is active, so a TWO-token form must diverge.
+        # Without this, an inert fixture would make every assertion below pass
+        # for the wrong reason — the shipped pattern agrees with itself.
+        assert _mgc._extract_pr_number("gh pr merge --squash -t 2024 42") == "2024", (
+            "the broadened fixture is not in effect, so the absence of "
+            "divergence below says nothing. Check the fixture, not the claim."
+        )
+
+        for cmd in singles:
+            broad = _mgc._extract_pr_number(cmd)
+            shipped_re = _mgc._GH_PR_NUMBER_RE
+            try:
+                _mgc._GH_PR_NUMBER_RE = _SHIPPED_PR_NUMBER_RE
+                shipped = _mgc._extract_pr_number(cmd)
+            finally:
+                _mgc._GH_PR_NUMBER_RE = shipped_re
+            assert shipped == broad, (
+                f"a SINGLE leading dash-token diverged: {cmd!r} gives "
+                f"shipped={shipped!r} broad={broad!r}. The comment on "
+                f"`_GH_FLAG_TOKENS` states that two are required, and that "
+                f"claim explains why hand-picked corpora missed the defect. "
+                f"If one token now suffices, the explanation is wrong."
+            )

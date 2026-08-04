@@ -369,18 +369,34 @@ _GH_GLOBAL_FLAGS  = r"(?:\S+\s+){0,%d}" % _MAX_GLOBAL_FLAG_TOKENS
 # dash-initial classes in tests/test_merge_guard_pre.py and
 # tests/test_merge_guard_perf.py:
 #   * a divergent form needs TWO leading dash-tokens; no single-flag shape
-#     reaches it, which is why hand-picked corpora kept missing it;
+#     reaches it, which is why hand-picked corpora kept missing it —
+#     `test_a_single_leading_dash_token_never_diverges`;
 #   * the split is CLEAN BY FLAG FORM — long-forms in the frozenset neutralise,
-#     short aliases and `--repo` misbind, with no crossover.
-# Deliberately NOT recorded here: corpus sizes and divergence counts. Four such
-# figures stood in this paragraph and none was reproducible, because no
+#     short aliases and `--repo` misbind, with no crossover, on BOTH the merge
+#     and close verbs — `TestExtractPrNumberFlagFormAsymmetry`.
+# Deliberately NOT recorded here: corpus sizes and divergence counts. Several
+# such figures stood in this paragraph and none was reproducible, because no
 # enumeration harness was ever committed. A count that cannot be re-derived is
-# the artifact that has failed repeatedly in this exact spot.
+# the artifact that has failed repeatedly in this exact spot — including, once,
+# a throughput figure sitting five lines below this very sentence.
+#
+# WHAT THE TWO BULLETS DO NOT COVER, because both were derived from the flag
+# lists in THIS FILE rather than from `gh` itself: a value-taking flag that is
+# real but absent from BOTH `_GH_PR_VALUE_TAKING_FLAGS` and
+# `_INERT_HELP_EXTRA_VALUE_FLAGS` would be missing from any corpus built the way
+# these were, and no amount of agreement between such corpora would reveal it.
+# That is not hypothetical: `--repo` IS such a flag, and it was caught only
+# because the second frozenset happened to list it. So read the bullets as
+# holding FOR THE FLAGS THIS FILE ENUMERATES — deriving the alphabet from
+# `gh pr merge --help` is the independent check, and it has not been done.
 #
 # NOT enumerated, so not claimed either way: bundled short clusters, and
 # `--flag=value` spellings.
 #
-# Measured after: 2000 flags in 0.25 ms.
+# Linearity after the repair is pinned by
+# `TestGhFlagTokenAmbiguityStaysRemoved` in tests/test_merge_guard_perf.py,
+# which holds 36 consecutive valueless flags under a 1 s ceiling against a
+# pre-fix cost of ~4 s at the same width.
 _GH_FLAG_TOKENS   = r"(?:-\S*(?:\s+[^-\s]\S*)?\s+)*"
 _GIT_GLOBAL_FLAGS = r"(?:\S+\s+){0,%d}" % _MAX_GLOBAL_FLAG_TOKENS
 
