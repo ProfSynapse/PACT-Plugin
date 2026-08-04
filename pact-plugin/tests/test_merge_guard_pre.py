@@ -261,3 +261,35 @@ class TestGH_PR_NumberRE_BoundaryCorrect:
         # `\b` works correctly between digit and letter.
         cmd = "gh pr merge 7352abc --squash"
         assert _capture(cmd) is None
+
+
+# =============================================================================
+# Dash-initial flag VALUES — the forms the value arm's `[^-\s]` looks like it
+# should break, and does not.
+# =============================================================================
+# `_GH_FLAG_TOKENS` constrains a flag's optional value to `[^-\s]\S*`, so a
+# dash-initial token cannot be consumed AS A VALUE by that iteration. Read on
+# its own that looks like a narrowing, and it is not: the outer `(?:...)*` then
+# consumes the same token AS A FLAG on the next iteration. The partition
+# changes, the consumed span does not, and the same number is captured.
+#
+# These forms were certified in prose when that constraint was introduced and
+# pinned by NO test. A form certified by a comment and by no test is a claim
+# with no guard — and a comment asserting unmeasured behaviour on this control
+# is what allowed an exponential to ship here once already. Measured across
+# seven forms, shipped versus the unconstrained predecessor: zero divergence.
+
+
+class TestGH_PR_NumberRE_DashInitialValues:
+    """A value that starts with `-` still yields the same PR number."""
+
+    def test_dash_initial_value_before_the_pr_number(self):
+        assert _capture("gh pr merge --subject -x 42") == "42"
+
+    def test_dash_initial_value_with_a_following_flag(self):
+        assert _capture("gh pr merge --body -weird --auto 99") == "99"
+
+    def test_dash_initial_value_that_is_itself_a_digit_token(self):
+        """The form most able to steal the capture: the dash-initial value is a
+        number, so a pattern that mis-partitioned here would return 1, not 55."""
+        assert _capture("gh pr merge --body -1 --auto 55") == "55"

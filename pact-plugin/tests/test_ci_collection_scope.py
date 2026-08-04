@@ -30,19 +30,33 @@ MEASURED, so door 2 is not taken on faith (both restored afterward):
     the entry resolves to a directory that does not exist and pytest ignores
     it in silence.
 
-The second result is why the config check below scans a FAMILY of filenames in
-both directories rather than the one config file that exists today. That file
-is the repository-root ``pyproject.toml`` — which is the single placement where
-the door does not open. A check scoped to the config it can see would be a
-check aimed at the only harmless location.
+THAT SECOND ARM IS DORMANT, NOT HARMLESS, AND THE DIFFERENCE IS THE REASON THIS
+CHECK SCANS A WHOLE FAMILY. It fails to narrow because ``<repo-root>/tests``
+does not exist — which is a fact about the FILESYSTEM, not a property of the
+placement. Anyone who creates a ``tests/`` directory at the repository root arms
+it, and no promise anywhere forbids that.
+
+Armed, it is WORSE than the other arm rather than equal to it. A ``pytest.ini``
+in ``pact-plugin/`` collects the right tree 48 modules short — a narrowing. The
+repository-root entry makes rootdir the repository root, so it collects
+``<repo-root>/tests``, a DIFFERENT tree, while every module under
+``pact-plugin/tests`` goes uncollected — a REDIRECTION. And pytest ignores the
+missing path silently, so the transition from dormant to armed announces
+nothing. That silence is the same signature as the original 48-module drop,
+which is what makes it worth a guard instead of a comment.
+
+So the config check is scoped to a FAMILY of filenames across both directories.
+The one config file that exists today is the repository-root ``pyproject.toml``,
+which is precisely the placement where the door is currently shut — a check
+scoped to the config it can see would be a check aimed at the dormant arm.
 
 WHY NO ASSERTION HERE COUNTS ANYTHING
 -------------------------------------
 A pinned collected-test total goes red on every legitimate test addition, which
 trains its readers to bump the number rather than investigate — so the guard
-that cried wolf is retired right before the run where it was right. These
-assertions are directional on SCOPE: they fire when a test root becomes
-unreachable, and say nothing about how many tests live in it.
+that cried wolf is retired right before the run where it was right. The parity
+check compares SETS OF NODE IDS and reports which tests went missing; the other
+two are directional on SCOPE. None of them pins a number.
 
 PARSE FAILURE AND DRIFT ARE REPORTED SEPARATELY, ALWAYS
 -------------------------------------------------------
@@ -55,6 +69,8 @@ green of exactly the genus the whole file is about. Convention followed from
 """
 
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -160,6 +176,34 @@ def _the_pytest_command(workflow_text):
     return commands[0]
 
 
+def _pytest_args(command):
+    """Everything after the `pytest` token, or None when it cannot be found."""
+    words = command.split()
+    if "pytest" not in words:
+        return None
+    return words[words.index("pytest") + 1:]
+
+
+def _assert_ci_runs_from_plugin_root(workflow_text):
+    """The pytest step must declare `working-directory: pact-plugin`.
+
+    The parity comparison runs both arms from that directory, so if CI ever
+    stops doing the same, the comparison stops describing CI — it would still
+    pass, over an invocation nobody runs. Pinned rather than assumed.
+    """
+    declared = [
+        line.strip() for line in workflow_text.splitlines()
+        if line.strip().startswith("working-directory:") and not line.strip().startswith("#")
+    ]
+    assert declared == ["working-directory: pact-plugin"], (
+        f"PARSE FAILURE or a CI RELOCATION: expected exactly one "
+        f"`working-directory: pact-plugin` declaration, found {declared}. The "
+        f"parity check below runs both arms from pact-plugin/ on the strength "
+        f"of that line — if CI now runs from somewhere else, this test is "
+        f"comparing two invocations that CI does not perform. Re-point it."
+    )
+
+
 def _path_operands(command, working_dir):
     """Path operands in a pytest command — non-flag words naming a real path.
 
@@ -197,20 +241,50 @@ def _discovered_test_roots(plugin_root):
     return roots
 
 
+def _collect_node_ids(args, cwd):
+    """Node IDs pytest actually collects, by running it. Returns (ids, result).
+
+    A real collection rather than a prediction: the whole defect is that a
+    narrowed invocation LOOKS correct, so the only claim worth making is about
+    what pytest DOES, not about what an argument list should imply.
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q",
+         "-p", "no:cacheprovider", *args],
+        cwd=str(cwd), capture_output=True, text=True,
+    )
+    ids = {line.strip() for line in result.stdout.splitlines() if "::" in line}
+    return ids, result
+
+
 class TestCiInvocationCollectsTheWholeCorpus:
     """The CI pytest step must reach every test root, through either door."""
 
-    def test_no_test_root_is_unreachable_from_the_ci_invocation(self):
-        """Every test root on disk must be collected by the CI invocation.
+    def test_ci_invocation_and_full_corpus_collect_the_same_tests(self):
+        """COLLECTION PARITY: what CI collects must equal the whole corpus.
 
-        Directional on purpose: this fires when a root becomes UNREACHABLE,
-        which is the drift that actually happens. It permits path arguments
-        that name every root, and it is indifferent to how many tests exist —
-        so it survives test additions without ever needing a number bumped.
+        This runs pytest twice and compares the two sets of node IDs. It does
+        NOT compare counts, and the distinction is the issue's own: a pinned
+        total goes red on every legitimate test addition, which teaches its
+        readers to bump the number instead of investigating, so the guard is
+        relaxed exactly before the run where it was right. A SET comparison
+        fires only when the membership differs, and it names the tests that
+        went missing rather than a delta a reader has to interpret.
+
+        Both arms run from the CI working directory, so rootdir resolves
+        identically and the node IDs are directly comparable — verified: the
+        two arms produce byte-identical sets today, with no normalisation.
+
+        This measures the property directly instead of predicting it from the
+        argument list. A structural check on the arguments is a proxy: it
+        reasons about what an invocation OUGHT to collect, and every silent
+        narrowing in this repo's history happened because what an invocation
+        ought to collect and what it did collect had quietly diverged.
         """
         _, workflow_text = _require_checkout()
         plugin_root = _plugin_root()
         command = _the_pytest_command(workflow_text)
+        _assert_ci_runs_from_plugin_root(workflow_text)
 
         discovered = _discovered_test_roots(plugin_root)
 
@@ -221,42 +295,68 @@ class TestCiInvocationCollectsTheWholeCorpus:
             f"SCAN FAILURE, not a scope regression: the test-root scan of "
             f"{plugin_root} returned {sorted(discovered)}, which omits 'tests' "
             f"— yet this module lives in tests/ and is running. The scan is "
-            f"therefore broken, and the comparison below would pass over a set "
-            f"that does not describe the tree."
+            f"broken, and the corpus arm below would be built from a set that "
+            f"does not describe the tree."
         )
-
-        # The scan must be able to see PAST tests/, or the comparison is
-        # trivially satisfied and this guard is dead while green.
         assert discovered - {"tests"}, (
             "THIS GUARD IS NOW VACUOUS — read the message before changing "
             "anything. Every test module under pact-plugin/ lives in tests/, so "
-            "no path-scoped invocation could drop one and this comparison "
-            "cannot fail. That is a legitimate state: it is what moving the "
-            "skill-adjacent test modules into tests/ would produce, which was "
-            "one of the proposed fixes. If that move was deliberate, RETIRE "
-            "this test or re-point it at the new structure. Do not delete this "
-            "assertion and leave the comparison standing — a guard that cannot "
-            "fail is worse than none, because it is counted as coverage."
+            "the two arms below name the same tree and cannot disagree. That is "
+            "a legitimate state: it is what moving the skill-adjacent test "
+            "modules into tests/ would produce, which was one of the proposed "
+            "fixes. If that move was deliberate, RETIRE this test or re-point "
+            "it. Do not delete this assertion and leave the comparison "
+            "standing — a guard that cannot fail is worse than none, because it "
+            "is counted as coverage."
         )
 
-        operands = _path_operands(command, plugin_root)
-        assert operands is not None, (
+        ci_args = _pytest_args(command)
+        assert ci_args is not None, (
             f"PARSE FAILURE, not a scope regression: no `pytest` token in the "
-            f"CI command {command!r}, so its path operands cannot be read."
+            f"CI command {command!r}, so its arguments cannot be read."
         )
 
-        # No operands: a bare pytest collects the whole working directory, so
-        # every root is reachable. Otherwise only the named roots are.
-        covered = discovered if not operands else {Path(op).parts[0] for op in operands}
-        missing = sorted(discovered - covered)
-        assert not missing, (
-            f"CI DOES NOT COLLECT {missing}. Test modules live under "
-            f"{missing} and would pass locally while NEVER RUNNING IN CI — the "
-            f"run would be green over a silently narrowed corpus, and nothing "
-            f"in its output would say so. The CI command is {command!r}. Either "
-            f"drop the path arguments (a bare `python -m pytest` collects "
-            f"whatever is there, so new roots are picked up automatically) or "
-            f"name every root above."
+        ci_ids, ci_run = _collect_node_ids(ci_args, plugin_root)
+        corpus_ids, corpus_run = _collect_node_ids(sorted(discovered), plugin_root)
+
+        # Both collections must have SUCCEEDED and be non-empty before their
+        # difference means anything: two failed collections agree perfectly.
+        for label, ids, run in (("CI", ci_ids, ci_run), ("corpus", corpus_ids, corpus_run)):
+            assert run.returncode == 0, (
+                f"COLLECTION FAILURE, not a scope regression: the {label} arm "
+                f"exited {run.returncode}. Comparing a failed collection would "
+                f"be meaningless. stderr tail:\n{run.stderr[-600:]}"
+            )
+            assert ids, (
+                f"COLLECTION FAILURE, not a scope regression: the {label} arm "
+                f"collected NOTHING, so the comparison below would pass "
+                f"vacuously — two empty sets are equal. stdout tail:\n"
+                f"{run.stdout[-600:]}"
+            )
+
+        # Ground truth independent of both collections: this module is running,
+        # so it is collectable, so a correct collection contains it.
+        this_module = f"{Path(__file__).parent.name}/{Path(__file__).name}"
+        for label, ids in (("CI", ci_ids), ("corpus", corpus_ids)):
+            assert any(this_module in node for node in ids), (
+                f"COLLECTION FAILURE, not a scope regression: the {label} arm "
+                f"does not contain {this_module}, yet that module is executing "
+                f"right now. The node-ID parse is wrong, not the scope."
+            )
+
+        missing = corpus_ids - ci_ids
+        extra = ci_ids - corpus_ids
+        assert not missing and not extra, (
+            f"CI COLLECTION DIVERGES FROM THE CORPUS.\n"
+            f"  {len(missing)} test(s) exist but CI does NOT collect them — "
+            f"they pass locally and NEVER RUN IN CI, over a green run whose "
+            f"output says nothing about it.\n"
+            f"  {len(extra)} test(s) collected by CI but not by the corpus arm "
+            f"(usually means a test root moved).\n"
+            f"  CI command: {command!r} (args {ci_args})\n"
+            f"  corpus roots: {sorted(discovered)}\n"
+            f"  missing sample: {sorted(missing)[:5]}\n"
+            f"  extra sample: {sorted(extra)[:5]}"
         )
 
     def test_the_ci_invocation_carries_no_path_arguments(self):

@@ -524,22 +524,11 @@ class TestGhFlagTokenAmbiguityStaysRemoved:
             f"flag's value and every added token doubles the partitions."
         )
 
-    def test_dash_initial_values_still_yield_the_same_pr_number(self):
-        """The repair must not have narrowed what the pattern matches.
-
-        A value that genuinely starts with `-` is still consumed — by the NEXT
-        iteration as a flag rather than by this one as a value — so the same
-        tokens are swallowed and the same number comes out. These two forms are
-        where a naive reading of the fix would predict a behaviour change, which
-        makes them the pair worth pinning.
-
-        GREEN-STAYS-GREEN under the perf revert above, and that is correct: the
-        ambiguous form matched these too. This pins the fix against a NARROWING,
-        which is a different failure from the one the timing check guards, so it
-        has no counter-test red of its own.
-        """
-        assert _GH_PR_NUMBER_RE.search("gh pr merge --subject -x 42").group(1) == "42"
-        assert _GH_PR_NUMBER_RE.search("gh pr merge --body -weird --auto 99").group(1) == "99"
+    # The matched-language half of this repair — that a dash-initial VALUE is
+    # still consumed and still yields the same PR number — is pinned in
+    # test_merge_guard_pre.py, beside the rest of the extraction corpus. It is
+    # a behavioural property, not a timing one, and it is GREEN-STAYS-GREEN
+    # under the revert above: the ambiguous form matched those forms too.
 
 
 class TestShellTokenizerCostIsBoundedByCommandLength:
@@ -573,49 +562,22 @@ class TestShellTokenizerCostIsBoundedByCommandLength:
     the acceptance sound: 0.015 ms at 100 characters, 0.27 ms at 2,000, 1.14 ms
     at 8,000.
 
-    WHAT THIS TEST IS FOR, stated precisely because it is easy to mistake: it
-    does NOT detect the known super-linearity, which is expected and permitted.
-    It pins the PREMISE THE ACCEPTANCE RESTS ON — that the cost at absurd length
-    stays negligible. If that stops holding, the acceptance is void and someone
-    must revisit it rather than inherit a decision whose grounds have expired.
-    The ceiling is 2 s against a measured 75 ms at a length no honest command
-    approaches, so it separates "still bounded" from "replaced by something
-    catastrophic", not two nearby numbers.
+    THE RISK IS RATIFIED, AND DELIBERATELY NOT GUARDED BY A TIMING TEST.
+    Accepted by the team lead on review of these measurements, on the grounds
+    the issue itself states: the finding is LOW and must not be reported as a
+    denial-of-service. Recorded here rather than only in the tracker so the
+    acceptance is discoverable from the code it applies to.
+
+    NO RECURRING TIMING ARM IS SHIPPED FOR THIS, and the omission is the
+    decision rather than an oversight. A wall-clock arm on an ACCEPTED risk
+    buys no gate value — there is no defect for it to catch, because the
+    super-linearity is expected and permitted — while adding flake surface to
+    a suite where a timing bound reding on a loaded runner is a known,
+    separately-tracked problem. The standing rule for a finding with no
+    defensible action is to RECORD it, not to answer it with a test. The
+    numbers above are the record; only the behavioural contract below is
+    pinned, and it costs no time to assert.
     """
-
-    def test_quote_dense_tokenisation_stays_bounded(self):
-        # 160 KB, odd quote count — orders of magnitude past any real command.
-        witness = "a'" * 80000 + "'"
-        elapsed = _best_time(_shell_tokenize, witness)
-        assert elapsed < 2.0, (
-            f"_shell_tokenize took {elapsed * 1000:.1f} ms on a "
-            f"{len(witness)}-character quote-dense witness; measured cost is "
-            f"~75 ms. The accepted super-linear bound rests on cost staying "
-            f"negligible at real command lengths, and that premise no longer "
-            f"holds. Re-open the acceptance — do NOT raise this ceiling."
-        )
-
-    def test_cost_is_paid_on_the_success_path_too(self):
-        """Both quote parities cost the same, so the bound cannot be justified
-        by "only malformed commands are slow".
-
-        Ratio rather than two absolute bounds: this compares two arms measured
-        on the same machine in the same run, so it is invariant to runner speed.
-        """
-        odd = "a'" * 40000 + "'"          # raises inside shlex -> abstain
-        even = "a'" * 40000               # tokenises successfully
-        assert _shell_tokenize(odd) is None
-        assert _shell_tokenize(even) is not None
-
-        t_odd = _best_time(_shell_tokenize, odd)
-        t_even = _best_time(_shell_tokenize, even)
-        assert 0.5 < (t_odd / t_even) < 2.0, (
-            f"the abstain path ({t_odd * 1000:.1f} ms) and the success path "
-            f"({t_even * 1000:.1f} ms) have diverged. The recorded acceptance "
-            f"treats them as one cost; if one path is now materially more "
-            f"expensive, the measurement behind that acceptance no longer "
-            f"describes this code."
-        )
 
     def test_unbalanced_input_abstains_rather_than_tokenising(self):
         """The failure mode is abstention, which is why the cost is tolerable —
