@@ -2041,9 +2041,18 @@ class TestArchivePin_SyncSuppressionBreach:
         a write -- so an edit that adds or drops the key on any status fails
         here rather than being noticed by whoever reads the verdict second.
 
-        Compared against the module's own constant rather than a literal set,
-        so the test and the code cannot drift into disagreeing about which
-        statuses those are.
+        COMPARED AGAINST THE SPELLED `_WRITE_ATTEMPTED_LITERAL`, NEVER AGAINST
+        `archive_pin._WRITE_ATTEMPTED_STATUSES`. A set read off the module would
+        FOLLOW a mutation of that constant and pass over it, which is the one
+        failure this arm exists to catch. `test_the_write_attempted_constant_
+        matches_the_spelled_set` is the tie-back that keeps the two honest.
+
+        DO NOT "SIMPLIFY" THIS TO IMPORT THE CONSTANT. An earlier draft of this
+        docstring recommended exactly that, describing a design that was
+        rejected before the code was written -- so the comment licensed the
+        edit the code below it forbids. A docstring that recommends disarming
+        its own test is worse than a missing one, because it reads as
+        permission rather than as description.
         """
         carriers = {
             status
@@ -2053,6 +2062,70 @@ class TestArchivePin_SyncSuppressionBreach:
         assert carriers == set(_WRITE_ATTEMPTED_LITERAL), (
             f"the scope must be carried by exactly the statuses that attempted "
             f"a write; got {carriers}"
+        )
+
+    def test_the_write_call_is_inside_the_handler_that_returns_failed(self):
+        """STRUCTURAL LICENCE for the `failed` arm's central claim.
+
+        `_suppression_breach_reason` tells a curator that a `failed` sync "can
+        be raised AFTER the write completed", and the whole reason `failed`
+        carries `sync_scope` rests on that. Until now the claim was established
+        by READING `sync_to_claude_md`, which is exactly the kind of premise
+        that goes stale silently when someone restructures the function.
+
+        PINS CONTAINMENT, NOT A SYNTHETIC FAULT. A fault-injection arm would
+        prove the same thing more narrowly AND has a silent-rot mode this does
+        not: a refactor could lift the write out from under the post-write
+        statements while the injected fault still fired, leaving the test green
+        over a dead property. Containment is the property the prose actually
+        depends on, so containment is what is asserted.
+
+        If this fails, do NOT relax it -- the `failed` arm's reason string and
+        its membership in `_WRITE_ATTEMPTED_STATUSES` both stop being true.
+        """
+        wm_path = (
+            Path(archive_pin.__file__).resolve().parent.parent
+            / "skills" / "pact-memory" / "scripts" / "working_memory.py"
+        )
+        tree = ast.parse(wm_path.read_text(encoding="utf-8"))
+
+        func = next(
+            (n for n in ast.walk(tree)
+             if isinstance(n, ast.FunctionDef) and n.name == "sync_to_claude_md"),
+            None,
+        )
+        assert func is not None, "sync_to_claude_md not found -- test is blind"
+
+        def _returns_failed(handler):
+            return any(
+                isinstance(n, ast.Attribute) and n.attr == "FAILED"
+                for n in ast.walk(handler)
+            )
+
+        tries = [
+            n for n in ast.walk(func)
+            if isinstance(n, ast.Try)
+            and any(_returns_failed(h) for h in n.handlers)
+        ]
+        assert tries, (
+            "no `try` in sync_to_claude_md has a handler returning FAILED -- "
+            "the `failed` status no longer originates where the reason string "
+            "claims, so that prose and the scope-presence rule are both stale"
+        )
+
+        def _calls_atomic_write(node):
+            return any(
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Name)
+                and n.func.id == "_atomic_write_text"
+                for n in ast.walk(node)
+            )
+
+        assert any(_calls_atomic_write(t) for t in tries), (
+            "`_atomic_write_text` is NOT inside the try whose handler returns "
+            "FAILED. A completed write can then no longer surface as `failed`, "
+            "so the `failed` arm must stop claiming it may have landed -- and "
+            "`failed` must leave _WRITE_ATTEMPTED_STATUSES"
         )
 
     def test_the_write_attempted_constant_matches_the_spelled_set(self):

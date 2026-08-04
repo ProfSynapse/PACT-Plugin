@@ -73,7 +73,10 @@ why they share one outcome NAME rather than forking into a fifth:
                    one exists, never that one does, which is why `failed` may
                    carry it. The statuses that never reach the write --
                    `refused`, `unresolved`, `missing` -- omit it because the
-                   bound there is true but VACUOUS, not because it is false.
+                   bound there is true but VACUOUS, not because it is false,
+                   and because the key's ABSENCE is itself the signal that no
+                   write was attempted. See `_WRITE_ATTEMPTED_STATUSES` for
+                   why a uniform key would destroy that signal.
 
 Two conditions under one outcome is NOT the reason-table hazard named below:
 that hazard is one outcome carrying two DISPOSITIONS, distinguished only by
@@ -282,9 +285,34 @@ _SYNC_CAPABLE_SUBCOMMANDS = frozenset({"save"})
 # to bound. Their bound would be TRUE but VACUOUS -- they are excluded for
 # vacuity, never because the scope would be false.
 #
-# NOT DERIVED FROM `SyncResult`, deliberately: this names a property of the
-# ARCHIVE's route, not of the enum, and a seventh reason must be classified by
-# whoever adds it rather than defaulted in by a filter.
+# ⚠️ AND THE VACUITY ARGUMENT ALONE DOES NOT DEFEND THIS SET. THIS IS THE
+# CANONICAL STATEMENT OF WHY; the other sites point here.
+#
+# Vacuity says the key would be POINTLESS on those three. It gives no ground
+# to refuse the edit this set actually has to survive -- adding the key
+# everywhere "for schema uniformity", which is not pointless, it is TIDY. A
+# maintainer can accept every word above and still make that change.
+#
+# THE REASON THAT REFUSES IT IS ABOUT SIGNAL, NOT WASTE: under a
+# present-iff-attempted rule, THE ABSENCE OF THE KEY IS ITSELF INFORMATION --
+# it says no write was attempted, and a consumer can branch on that. Add the
+# key to all five and it stops distinguishing anything: a meaningful signal is
+# traded for a uniform one, which is the exact trade this whole consumer
+# exists to reverse. So the uniform version is not merely wasteful, it is
+# DESTRUCTIVE, and that is what makes this set defensible rather than
+# arbitrary.
+#
+# Keep both reasons. Vacuity explains why nobody wanted the key there; signal
+# is what stops someone adding it anyway.
+#
+# NOT DERIVED FROM `SyncResult`, deliberately, AND THE SAME PAIR APPLIES. The
+# classification reason is that this names a property of the ARCHIVE's route
+# rather than of the enum, so a seventh reason must be classified by whoever
+# adds it instead of being defaulted in by a filter. That is true and it is
+# also defeasible on its own -- it argues about CORRECTNESS OF CLASSIFICATION
+# and says nothing against a uniform set. The signal argument above is what
+# refuses that edit here too; both guards defend the same change, so they are
+# stated together rather than left to defend it separately and fail.
 _WRITE_ATTEMPTED_STATUSES = frozenset({"wrote", "failed"})
 
 
@@ -804,6 +832,14 @@ def _suppression_breach_reason(
                    searching. Omitted for that reason, NOT because it would
                    be false.
 
+    THIS SITE GOVERNS THE SENTENCE, NOT THE KEY, and the reason is deliberately
+    vacuity ALONE. The `sync_scope` KEY carries a second argument -- that its
+    absence is machine-readable signal -- which does NOT apply here: no
+    consumer reads this prose and branches on whether a bound sentence appears.
+    Importing that argument to a string would be stating a reason that does not
+    describe what it is attached to. If you are sweeping the signal reason
+    through this file, STOP at the two key sites; this asymmetry is deliberate.
+
     THE BOUND IS SOUND ON `failed`, WHICH IS THE ONLY WAY THIS COULD MISLEAD.
     The save leg passes `--claude-md-root`, and a write OUTSIDE the anchor is
     refused by `_atomic_write_text` -- which raises, and so yields `failed`
@@ -868,6 +904,13 @@ def _suppression_breach_reason(
     # VACUITY RATHER THAN FALSEHOOD: these three exit before the write is
     # attempted, so there is no projection from this save to bound and a scope
     # would name nothing worth searching.
+    #
+    # VACUITY IS THE WHOLE REASON AT THIS SITE, unlike the `sync_scope` KEY,
+    # which also rests on its absence being machine-readable signal. That
+    # second argument is about a consumer branching on a key and has no
+    # purchase on a string, so it is deliberately NOT repeated here. The
+    # asymmetry between this comment and the one at
+    # `_WRITE_ATTEMPTED_STATUSES` is intended, not an unfinished sweep.
     #
     # This arm says NO PROJECTION WAS ATTEMPTED, which is stronger than the
     # `failed` arm's "cannot tell" and is warranted here -- it is a fact about
@@ -1216,6 +1259,12 @@ def archive_pin(index: int, db_path=None) -> dict:
         #   refused, unresolved,       all exit BEFORE the write is attempted.
         #   missing                    The bound is true but VACUOUS, so it is
         #                              omitted -- for vacuity, never falsehood.
+        #                              AND NOT ONLY FOR VACUITY: absence of the
+        #                              key is ITSELF the signal that no write
+        #                              was attempted, so adding it "for schema
+        #                              uniformity" would destroy a distinction
+        #                              rather than merely add noise. Full
+        #                              argument at `_WRITE_ATTEMPTED_STATUSES`.
         #
         # This still satisfies the module's invariant at the top of the file,
         # EACH FIELD IS PRESENT IFF THE FACT IT NAMES WAS ACTUALLY ESTABLISHED,
