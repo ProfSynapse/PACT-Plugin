@@ -38,7 +38,8 @@ that is governed by the invariant below, not by a per-failure enumeration.
   {"outcome": "ARCHIVED_DELETE_UNSAFE", "heading": str, "claude_md_path": str,
    "delete_string": str, "memory_id": str, "occurrences": int,
    "locations": [int], "reason": str,
-   "sync_status": str, "sync_scope": str}   # both ONLY on the sync-breach arm
+   "sync_status": str,        # ONLY on the sync-breach arm
+   "sync_scope": str}         # ONLY when that arm's status is `wrote`
   {"outcome": "NOT_ARCHIVED",           "heading": str, "claude_md_path": str,
    "delete_string": str, "memory_id": str|null, "reason": str}
   {"outcome": "UNEVALUABLE",            "heading": str|null,
@@ -64,9 +65,12 @@ why they share one outcome NAME rather than forking into a fifth:
   SYNC NOT SUPPRESSED  the save reported a `sync_status` other than
                    `suppressed`, so the CLAUDE.md projection that `--no-sync`
                    exists to prevent was attempted or performed. That arm adds
-                   `sync_status` and `sync_scope`, because `occurrences` and
-                   `locations` describe the TARGET file and a stray projection
-                   may sit in a DIFFERENT CLAUDE.md under the declared anchor.
+                   `sync_status`, and adds `sync_scope` ONLY when the status is
+                   `wrote` -- because `occurrences` and `locations` describe
+                   the TARGET file, and only a write that LANDED puts a stray
+                   copy somewhere to bound. On any other status the sync did
+                   not complete and its outcome is unknown, so the verdict
+                   claims nothing about a copy in either direction.
 
 Two conditions under one outcome is NOT the reason-table hazard named below:
 that hazard is one outcome carrying two DISPOSITIONS, distinguished only by
@@ -1125,9 +1129,31 @@ def archive_pin(index: int, db_path=None) -> dict:
     # converts "we pass the flag and assume it worked" into "we verify it
     # worked" -- on a path whose own comment records that the suppression is
     # load-bearing and was measured.
+    # AN ABSENT `sync_status` LEAVES THIS GUARD INERT, AND NOBODY IS TOLD.
+    # RECORDED RATHER THAN ANSWERED, because neither available answer is
+    # defensible: failing closed would refuse every archive against a CLI that
+    # predates the field, which is an over-block on the curator's own path;
+    # and treating absence as a clean sync is the inference `cli.py` forbids.
+    # So absence is NO EVIDENCE and nothing fires -- with the limitation
+    # written here rather than left for a reader to discover. What makes that
+    # tolerable at THIS call site, and nowhere else, is that `_MEMORY_CLI` is
+    # a sibling path of this file: parent and child are the same tree and
+    # cannot disagree about the envelope's shape. A real-CLI test pins that.
     sync_status = result.get("sync_status") if isinstance(result, dict) else None
     if sync_status is not None and sync_status != "suppressed":
-        return {
+        # THE DECISION IS ONE PREDICATE; THE PAYLOAD IS TWO SHAPES. Only
+        # `wrote` establishes that a projection LANDED, so only `wrote` may
+        # carry `sync_scope` -- the bound on where a stray copy can be. On
+        # every other status the sync did not complete and its outcome is
+        # unknown, so naming a search scope would assert a copy exists when
+        # none is known to. That is the same defect this consumer removes,
+        # and this is the likeliest place to reproduce it.
+        #
+        # The presence rule is the module's own, stated at the top of this
+        # file: EACH FIELD IS PRESENT IFF THE FACT IT NAMES WAS ACTUALLY
+        # ESTABLISHED. `sync_scope` names where a stray copy can be, which is
+        # a fact only once a write is known to have happened.
+        verdict = {
             "outcome": "ARCHIVED_DELETE_UNSAFE",
             "heading": heading,
             "claude_md_path": claude_md_path,
@@ -1137,17 +1163,14 @@ def archive_pin(index: int, db_path=None) -> dict:
             "contained": True,
             "occurrences": occurrences,
             "locations": _occurrence_offsets(post, block),
-            # NAMES THE STRAY PROJECTION. Without these two keys the verdict's
-            # only evidence would be `occurrences`/`locations`, which describe
-            # the target file -- clean, in the case that matters. `sync_scope`
-            # is the declared anchor, so it BOUNDS where a stray copy can be
-            # rather than leaving the curator to search everywhere.
             "sync_status": sync_status,
-            "sync_scope": str(project_dir),
             "reason": _suppression_breach_reason(
                 sync_status, claude_md_path, str(project_dir), memory_id
             ),
         }
+        if sync_status == "wrote":
+            verdict["sync_scope"] = str(project_dir)
+        return verdict
 
     if occurrences != 1:
         # ARCHIVE SUCCEEDED, REMOVAL IS UNSAFE -- a distinct outcome, not a

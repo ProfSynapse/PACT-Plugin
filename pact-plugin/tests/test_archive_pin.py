@@ -1934,7 +1934,7 @@ class TestArchivePin_SyncSuppressionBreach:
         verdict, _ = self._drive(claude_md, monkeypatch, None)
         assert verdict["outcome"] == "ARCHIVED"
 
-    def test_the_verdict_names_where_a_stray_projection_can_be(
+    def test_wrote_names_where_a_stray_projection_can_be(
         self, claude_md, monkeypatch
     ):
         """The payload must NAME the stray projection, not just carry a reason.
@@ -1957,6 +1957,56 @@ class TestArchivePin_SyncSuppressionBreach:
         )
         assert verdict["claude_md_path"] in verdict["reason"], (
             "the reason must say which file `occurrences`/`locations` describe"
+        )
+
+    @pytest.mark.parametrize(
+        "status", [s for s in _NON_SUPPRESSED_STATUSES if s != "wrote"]
+    )
+    def test_a_sync_that_did_not_complete_claims_no_copy_anywhere(
+        self, claude_md, monkeypatch, status
+    ):
+        """ONE PREDICATE FOR THE DECISION, TWO SHAPES FOR THE PAYLOAD.
+
+        Only `wrote` establishes that a projection LANDED. `refused`,
+        `unresolved` and `missing` performed no write, and `failed` did not
+        complete one. Sending the curator to search a scope on those statuses
+        asserts a copy exists when none is known to -- a claim true of a
+        narrower case than the one it is read for, which is the defect this
+        whole consumer exists to remove. The likeliest place to reproduce a
+        defect is inside its own fix, so this arm pins the asymmetry.
+
+        The presence rule is the module's own: EACH FIELD IS PRESENT IFF THE
+        FACT IT NAMES WAS ACTUALLY ESTABLISHED.
+        """
+        verdict, _ = self._drive(claude_md, monkeypatch, status)
+        assert verdict["outcome"] == "ARCHIVED_DELETE_UNSAFE"
+        assert "sync_scope" not in verdict, (
+            f"status={status!r} performed no completed write, so there is no "
+            f"established scope for a stray copy -- offering one tells the "
+            f"curator to hunt for something that may not exist"
+        )
+        assert "UNKNOWN" in verdict["reason"], (
+            "the reason must say the sync's outcome is UNKNOWN rather than "
+            "asserting either that a copy exists or that none does"
+        )
+
+    def test_only_wrote_ever_carries_a_search_scope(
+        self, claude_md, monkeypatch
+    ):
+        """DIFFERENTIAL over the whole alphabet, in one arm.
+
+        The two arms above assert each side separately. This one records the
+        INVARIANT -- `sync_scope` appears for exactly one status -- so a later
+        edit that adds the key to a second status fails here rather than being
+        noticed by whoever reads the verdict second.
+        """
+        carriers = {
+            status
+            for status in _NON_SUPPRESSED_STATUSES
+            if "sync_scope" in self._drive(claude_md, monkeypatch, status)[0]
+        }
+        assert carriers == {"wrote"}, (
+            f"exactly one status may bound a stray-copy search; got {carriers}"
         )
 
     def test_wrote_is_attributed_to_this_run_not_a_concurrent_editor(
