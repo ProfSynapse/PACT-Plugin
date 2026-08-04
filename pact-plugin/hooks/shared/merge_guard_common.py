@@ -345,6 +345,12 @@ _GH_GLOBAL_FLAGS  = r"(?:\S+\s+){0,%d}" % _MAX_GLOBAL_FLAG_TOKENS
 #     not match it. This is the half that governs most of the misbinding forms.
 #   * `--repo`. Long-form and visible to the re-check, but genuinely absent from
 #     the frozenset. This half IS fixable by extending it.
+# The same seven flags are enumerated as `_INERT_HELP_EXTRA_VALUE_FLAGS` below,
+# for an unrelated purpose (inert-help recognition), and that block already
+# NAMES this misbind and scopes it out on purpose. Read as a POINTER, not a
+# dependency: the two sets coincide because both derive from "value-taking flags
+# the long-form SSOT does not cover", but they can drift — move `--repo` into
+# the SSOT and it stops misbinding while plausibly staying in the inert set.
 # An earlier version of this paragraph illustrated the defect with `--subject`
 # and `--body-file` — both in the frozenset, so NEITHER example misbound, and a
 # maintainer who checked them would have concluded the warning overclaimed and

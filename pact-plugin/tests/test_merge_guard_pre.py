@@ -366,6 +366,15 @@ class TestGH_PR_NumberRE_NumericFlagValueDoesNotStealTheCapture:
 # frozenset exists to catch a MISBEHAVING pattern. So the only way to observe
 # what it does and does not repair is to supply one, which this class does by
 # swapping the compiled pattern for its unconstrained predecessor.
+#
+# IF YOU ARE ASKING WHY NO EXISTING TEST CAUGHT THIS, THE ANSWER IS STRUCTURAL
+# AND NOT AN OVERSIGHT TO APPORTION: none could have. The claim being guarded is
+# about what a FUTURE change would do, and a property of a change that has not
+# been made is not observable in the tree that has not made it. Every arm here
+# agrees on shipped code — that is the control below, not a weakness. So until
+# someone built the counterfactual the claim had nowhere to live except prose,
+# and prose is the one carrier with no failure mode. That is also why this class
+# looks unusual: a counterfactual claim needs a counterfactual harness.
 
 import re  # noqa: E402
 
