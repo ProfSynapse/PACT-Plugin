@@ -15,7 +15,15 @@ Used by: pytest.
 """
 import os
 
+import pytest
+
 from shared.paths import get_claude_config_dir
+
+# Read at IMPORT time — collection runs before any function-scoped autouse
+# fixture, so this is the ambient value the scrub will later remove. Capturing
+# it is what lets the session-id cell below tell "the scrub fired" apart from
+# "there was nothing to scrub", which absence alone cannot distinguish.
+_AMBIENT_SESSION_ID = os.environ.get("CLAUDE_CODE_SESSION_ID")
 
 
 class TestAutouseConfigRootIsolationPinned:
@@ -82,3 +90,35 @@ class TestAutouseConfigRootIsolationPinned:
             "would leak through and shadow the HOME fallthrough (precedence-1)."
         )
         assert get_claude_config_dir() == tmp_path / ".claude"
+
+    def test_scrub_removes_an_ambient_session_id(self):
+        """Pin the SECOND autouse scrub, ``_scrub_session_id_from_test_env``.
+
+        That fixture removes ``CLAUDE_CODE_SESSION_ID`` so a test process cannot
+        resolve the developer's live session and compute paths belonging to it.
+        It is deliberately NOT redundant with the ``PYTEST_CURRENT_TEST`` refusal
+        in ``pact_session._discover_session_id``: the two fail on different
+        signals, and the scrub is the one that still holds if a spawn-environment
+        allowlist keeps the session id and drops the pytest marker. Nothing else
+        in the suite observes it — removing the fixture body leaves every other
+        test green.
+
+        STRONGER THAN THE CELL ABOVE, deliberately. Absence alone cannot tell
+        "the scrub fired" from "there was nothing to scrub", so this cell SKIPS
+        rather than passes when the ambient value was never present. A skip is
+        visible in the pytest header; a trivial pass is not.
+        """
+        if _AMBIENT_SESSION_ID is None:
+            pytest.skip(
+                "no ambient CLAUDE_CODE_SESSION_ID was present at collection, so "
+                "this cell cannot discriminate a working scrub from an absent "
+                "input — it is meaningful only when the suite runs under a "
+                "session that exports one"
+            )
+
+        assert "CLAUDE_CODE_SESSION_ID" not in os.environ, (
+            "CLAUDE_CODE_SESSION_ID survived into the test body although the "
+            "ambient environment carried one at collection — the autouse scrub "
+            "did not fire, and a test resolving the developer's live session id "
+            "can compute and write paths that belong to it."
+        )
