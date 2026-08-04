@@ -530,3 +530,102 @@ class TestEmbedSingleMemory:
 
         result = ec_module.embed_single_memory("test-id")
         assert result is False
+
+
+class TestInabilityIsDistinguishableFromEmptiness:
+    """`get_unembedded_memories` used to report INABILITY AS EMPTINESS.
+
+    Three of its four exits return no IDs because it COULD NOT LOOK -- the
+    vector extension is unavailable, the vector table is absent, or the query
+    raised -- and one returns none because there are none. All four were an
+    identical `[]`, and the caller reads empty as nothing-to-do. So in the
+    degraded state, which is the exact condition the recovery sweep exists for,
+    the sweep reported nothing to do precisely when it could do nothing.
+
+    THE SAME GENUS AS THE REST OF THIS FOLD: a signal true about a narrower
+    proposition than the one being read for. `[]` was true about "no ids
+    returned" and was being read as "no work outstanding".
+    """
+
+    def test_the_four_outcomes_are_distinguishable(self, ec_module):
+        ec = ec_module
+        R = ec.UnembeddedResult
+        answered_empty = R()
+        answered_full = R(["a"])
+        no_ext = R(reason=R.NO_EXTENSIONS)
+        no_tbl = R(reason=R.NO_VECTOR_TABLE)
+        failed = R(reason=R.QUERY_FAILED)
+
+        # All four inability/answered reasons are distinct values.
+        assert len({no_ext.reason, no_tbl.reason, failed.reason,
+                    answered_empty.reason}) == 4
+
+        # ONLY the answered ones may be read as an answer.
+        assert answered_empty.answerable is True
+        assert answered_full.answerable is True
+        assert no_ext.answerable is False
+        assert no_tbl.answerable is False
+        assert failed.answerable is False
+
+    def test_every_existing_list_use_is_unchanged(self, ec_module):
+        """The shape is a `list` so callers keep working.
+
+        This is the property that made the subclass the right choice over a
+        None-or-list return: iteration, len, truthiness and indexing are all
+        exactly what they were.
+        """
+        ec = ec_module
+        r = ec.UnembeddedResult(["a", "b"])
+        assert list(r) == ["a", "b"]
+        assert len(r) == 2
+        assert r[0] == "a"
+        assert bool(r) is True
+        assert bool(ec.UnembeddedResult()) is False
+        assert isinstance(r, list)
+
+    def test_an_unanswerable_sweep_reports_why_instead_of_a_clean_no_op(self, ec_module):
+        """THE CONSUMER ARM. A channel nothing reads is not a channel."""
+        ec = ec_module
+        R = ec.UnembeddedResult
+        with patch.object(ec, "get_available_ram_mb", return_value=99999), \
+             patch.object(ec, "get_unembedded_memories",
+                          return_value=R(reason=R.NO_EXTENSIONS)):
+            result = ec.embed_pending_memories()
+
+        assert result["unembedded_unknown"] == R.NO_EXTENSIONS, (
+            "the sweep reported a clean no-op while it could not look"
+        )
+        assert result["processed"] == 0
+
+    def test_an_answered_empty_sweep_reports_no_reason(self, ec_module):
+        """POSITIVE CONTROL for the arm above.
+
+        Without it, a `unembedded_unknown` that was ALWAYS set would satisfy the
+        assertion there while destroying the distinction it exists to make.
+        """
+        ec = ec_module
+        R = ec.UnembeddedResult
+        with patch.object(ec, "get_available_ram_mb", return_value=99999), \
+             patch.object(ec, "get_unembedded_memories", return_value=R()):
+            result = ec.embed_pending_memories()
+
+        assert result["unembedded_unknown"] is None, (
+            "a genuinely empty sweep was reported as unable to look"
+        )
+
+    def test_a_plain_list_keeps_its_historical_meaning(self, ec_module):
+        """A producer that returns a BARE list must not change behaviour.
+
+        The caller reads `answerable` through a defaulting lookup precisely so
+        that a plain list still means `these ids, question answered`. Reading
+        the attribute directly rejected plain lists and broke twelve existing
+        tests -- the shape is supposed to leave existing callers alone, and a
+        read that only accepts the new type abandons that.
+        """
+        ec = ec_module
+        with patch.object(ec, "get_available_ram_mb", return_value=99999), \
+             patch.object(ec, "get_unembedded_memories", return_value=[]):
+            result = ec.embed_pending_memories()
+
+        assert result["unembedded_unknown"] is None
+        assert result["processed"] == 0

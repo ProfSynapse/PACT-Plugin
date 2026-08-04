@@ -117,6 +117,12 @@ from .working_memory import (
     # without the type left the export unusable for any caller that wants the
     # reason rather than just the truthiness.
     SyncResult,
+    # And it can RAISE this one. An exported function whose exception cannot be
+    # named is uncatchable by anything but a bare `except Exception`, which is
+    # the handler that swallows everything else too -- so the caller either
+    # over-catches or cannot respond to the one outcome that is deliberate
+    # rather than broken.
+    AmbientSyncRefused,
     sync_to_claude_md,
     sync_retrieved_to_claude_md,
     WORKING_MEMORY_HEADER,
@@ -239,6 +245,7 @@ __all__ = [
 
     # Working Memory (CLAUDE.md sync)
     "SyncResult",
+    "AmbientSyncRefused",
     "sync_to_claude_md",
     "sync_retrieved_to_claude_md",
     "WORKING_MEMORY_HEADER",
