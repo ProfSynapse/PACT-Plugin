@@ -275,19 +275,26 @@ class TestGH_PR_NumberRE_BoundaryCorrect:
 # flag run stops decides which token is read as the positional PR number, and
 # the unconstrained predecessor stops in a different place:
 #
-#   gh pr merge --squash --subject 2024 42   constrained -> 42   pre-fix -> 2024
-#   gh pr merge --squash --body-file 1 42    constrained -> 42   pre-fix -> 1
+#   gh pr merge --squash -t 2024 42       constrained -> 42   pre-fix -> 2024
+#   gh pr merge --squash --repo 2024 42   constrained -> 42   pre-fix -> 2024
 #
 # The predecessor captures the FLAG'S OWN ARGUMENT as the pull-request number.
 # On a guard that binds an approval to a specific pull request, that is a
 # TARGET-IDENTIFICATION defect: approve one pull request, authorise another.
 #
-# REACHABLE ON GOOD-FAITH COMMANDS, which is what makes it worth pinning. Over
-# real `gh pr merge|close` flag sets with a single positional, the two forms
-# agree on all 3772 enumerated commands. Introduce a value-taking flag whose
-# VALUE IS NUMERIC — a subject that is a year, a body file named `1` — and all
-# 168 enumerated forms diverge. No exotic input is required, only a number in
-# the wrong place.
+# THE EXAMPLES ARE SHORT-FORM AND `--repo` BECAUSE THE LONG FORMS DO NOT SHOW
+# IT. `_extract_pr_number` abstains when the token before the captured digit is
+# in `_GH_PR_VALUE_TAKING_FLAGS`, and the caller then recovers the right target
+# via `_extract_merge_target`. Every member of that frozenset is long-form, so
+# `--subject`/`--body-file` are silently repaired while short aliases and
+# `--repo` are not — see TestExtractPrNumberFlagFormAsymmetry below, which pins
+# both arms. An earlier version of this comment used `--subject` and
+# `--body-file`, so NEITHER of its examples actually misbound: a reader who
+# checked them would have concluded the warning overclaimed.
+#
+# REACHABLE ON GOOD-FAITH COMMANDS, which is what makes it worth pinning: a
+# `-t` subject that is a year, a `-F` body file named `1`. No exotic input is
+# required, only a number in the wrong place.
 #
 # WHY THIS WAS NOT CAUGHT BY THE PROSE THAT CERTIFIED IT: the divergent shape
 # needs a VALUELESS flag followed by a VALUE-TAKING flag before the positional.
@@ -340,3 +347,84 @@ class TestGH_PR_NumberRE_NumericFlagValueDoesNotStealTheCapture:
 
     def test_close_verb_is_covered_by_the_same_partition(self):
         assert _capture("gh pr close --admin --comment 99 42") == "42"
+
+
+# =============================================================================
+# The long-form / short-form asymmetry, at the layer where it exists
+# =============================================================================
+# EVERY TEST ABOVE USES THE RAW REGEX, AND THE RAW REGEX TREATS A SHORT FLAG AND
+# A LONG FLAG IDENTICALLY. The asymmetry lives one layer up, in
+# `_extract_pr_number`, which re-checks the token preceding the captured digit
+# against `_GH_PR_VALUE_TAKING_FLAGS` and abstains on a hit so the caller can
+# recover the target. No test reached that layer, which is why prose was
+# carrying the whole claim.
+#
+# THE ASYMMETRY IS COUNTERFACTUAL, and that is why no green-tree observation
+# exhibits it. On the shipped pattern all of these return "42" and agree — the
+# re-check never even fires, because the shipped capture is already the
+# positional, so the token before it is a value rather than a flag. The
+# frozenset exists to catch a MISBEHAVING pattern. So the only way to observe
+# what it does and does not repair is to supply one, which this class does by
+# swapping the compiled pattern for its unconstrained predecessor.
+
+import re  # noqa: E402
+
+import pytest  # noqa: E402
+
+from shared import merge_guard_common as _mgc  # noqa: E402
+
+_BROAD_FLAG_TOKENS = r"(?:-\S*(?:\s+\S+)?\s+)*"
+
+
+class TestExtractPrNumberFlagFormAsymmetry:
+    """What the value-taking-flag re-check repairs, and what it leaves broken."""
+
+    @pytest.fixture
+    def broadened(self, monkeypatch):
+        """Swap in the unconstrained predecessor for the duration of one test.
+
+        Patched on `merge_guard_common` because `_extract_pr_number` reads the
+        module global at call time. `monkeypatch` re-arms per test, so a later
+        module reload cannot silently disarm it mid-run.
+        """
+        broad = re.compile(
+            _mgc._GH_PR_NUMBER_RE.pattern.replace(
+                _mgc._GH_FLAG_TOKENS, _BROAD_FLAG_TOKENS
+            )
+        )
+        assert broad.pattern != _mgc._GH_PR_NUMBER_RE.pattern, (
+            "the arm swap produced an identical pattern, so this fixture is "
+            "inert and both assertions below would describe the shipped form. "
+            "`_GH_FLAG_TOKENS` was renamed or is no longer a literal substring "
+            "of the composed pattern — re-point this, do not delete it."
+        )
+        monkeypatch.setattr(_mgc, "_GH_PR_NUMBER_RE", broad)
+
+    def test_shipped_pattern_binds_correctly_for_both_flag_forms(self):
+        """CONTROL, and it is the reason the class needs the fixture at all:
+        with no broadening there is no asymmetry to see."""
+        assert _mgc._extract_pr_number("gh pr merge --squash --subject 2024 42") == "42"
+        assert _mgc._extract_pr_number("gh pr merge --squash -t 2024 42") == "42"
+
+    def test_long_form_in_the_frozenset_is_neutralised(self, broadened):
+        """A long form IS re-checked, so the extractor abstains and the caller
+        recovers the target. This is why `--subject` cannot demonstrate the
+        defect — it is repaired before anything downstream sees it."""
+        assert _mgc._extract_pr_number("gh pr merge --squash --subject 2024 42") is None
+
+    def test_short_alias_is_not_neutralised_and_misbinds(self, broadened):
+        """A SHORT alias is invisible to the re-check, which is `(--[\\w-]+)$`
+        and can only match a long form. So the extractor returns the FLAG'S
+        argument as the pull-request number.
+
+        ADDING `-t` TO THE FROZENSET WOULD NOT FIX THIS — the re-check would
+        still not match it. That is the half of the mechanism a reader is most
+        likely to get wrong, so it is pinned rather than described."""
+        assert _mgc._extract_pr_number("gh pr merge --squash -t 2024 42") == "2024"
+
+    def test_repo_is_long_form_but_absent_from_the_frozenset(self, broadened):
+        """`--repo` IS visible to the re-check and still misbinds, because it is
+        not a member. Unlike the short aliases, this half WOULD be fixed by
+        extending the frozenset — the two halves have different remedies."""
+        assert "--repo" not in _mgc._GH_PR_VALUE_TAKING_FLAGS
+        assert _mgc._extract_pr_number("gh pr merge --squash --repo 2024 42") == "2024"

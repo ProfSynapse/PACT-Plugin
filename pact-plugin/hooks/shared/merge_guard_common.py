@@ -324,8 +324,8 @@ _GH_GLOBAL_FLAGS  = r"(?:\S+\s+){0,%d}" % _MAX_GLOBAL_FLAG_TOKENS
 # DIFFERENT PLACE, which moves the capture and the match end together. The broad
 # form reads a NUMERIC FLAG ARGUMENT as the pull-request number:
 #
-#     gh pr merge --squash --subject 2024 42     this arm -> 42   broad -> 2024
-#     gh pr merge --squash --body-file 1 42      this arm -> 42   broad -> 1
+#     gh pr merge --squash -t 2024 42        this arm -> 42   broad -> 2024
+#     gh pr merge --squash --repo 2024 42    this arm -> 42   broad -> 2024
 #
 # On a control that binds an approval to a specific pull request, that is a
 # TARGET-IDENTIFICATION defect: THE APPROVAL BINDS TO A PULL REQUEST OTHER THAN
@@ -333,23 +333,44 @@ _GH_GLOBAL_FLAGS  = r"(?:\S+\s+){0,%d}" % _MAX_GLOBAL_FLAG_TOKENS
 # pattern, that sentence is the cost — not a slower match, a merge the user did
 # not authorise.
 #
-# THE TRIGGER IS ORDINARY RATHER THAN ADVERSARIAL — a subject line that is a
-# year, a body file named `1`. Under this guard's honest-mistake threat model
-# that is the reachable case, not an exotic one.
+# THE EXAMPLES ARE SHORT-FORM AND `--repo` ON PURPOSE, BECAUSE THE LONG FORMS DO
+# NOT DEMONSTRATE IT. `_extract_pr_number` re-checks the token preceding the
+# captured digit against `_GH_PR_VALUE_TAKING_FLAGS` and ABSTAINS on a hit, so
+# the caller falls through to `_extract_merge_target` and recovers the right
+# target. Every member of that frozenset is long-form, so a broadened arm is
+# silently repaired for `--subject`/`--body-file`/`--body` and NOT repaired for:
+#   * SHORT ALIASES (-t -b -F -c -A -R). The re-check is `(--[\w-]+)$` — it can
+#     only see a LONG form, so a short alias never reaches the membership test.
+#     ADDING ONE TO THE FROZENSET WOULD CHANGE NOTHING; the regex would still
+#     not match it. This is the half that governs most of the misbinding forms.
+#   * `--repo`. Long-form and visible to the re-check, but genuinely absent from
+#     the frozenset. This half IS fixable by extending it.
+# An earlier version of this paragraph illustrated the defect with `--subject`
+# and `--body-file` — both in the frozenset, so NEITHER example misbound, and a
+# maintainer who checked them would have concluded the warning overclaimed and
+# broadened the arm anyway. A true warning with a demonstration that refutes it
+# on inspection fails in the same direction as a false one.
 #
-# ENUMERATED, NOT SAMPLED, and the distinction is why this paragraph is a
-# correction. An earlier version of it claimed the two forms matched the same
-# language, "verified across 14 forms with zero divergence" — a hand-picked
-# corpus, which is the identical failure this comment diagnoses three
-# paragraphs above. Two later reviewers reproduced the claim by hand and got
-# zero divergence as well; every such corpus contains the shapes its author was
-# already thinking about. Enumerating the space instead:
-#   * 1554 generated `gh pr merge|close` commands -> 100 diverge, EVERY one of
-#     them carrying TWO leading dash-tokens. No single-flag shape can reach it,
-#     which is why three hand-picked corpora in a row missed it.
-#   * 3772 real gh flag sets with one positional -> no divergence.
-#   * 168 real flag sets with a value-taking flag whose value is NUMERIC ->
-#     all 168 diverge.
+# THE TRIGGER IS ORDINARY RATHER THAN ADVERSARIAL — a `-t` subject that is a
+# year, a `-F` body file named `1`. Under this guard's honest-mistake threat
+# model that is the reachable case, not an exotic one.
+#
+# WHAT IS CLAIMED, AND AT WHICH LAYER. The divergence is a property of the
+# EXTRACTED TARGET, not merely of the regex capture, and the distinction is
+# what the earlier version got wrong: it counted regex-level divergences and
+# wrote them under a sentence about what the guard binds. Structural claims,
+# pinned by tests rather than asserted here — see the flag-token and
+# dash-initial classes in tests/test_merge_guard_pre.py and
+# tests/test_merge_guard_perf.py:
+#   * a divergent form needs TWO leading dash-tokens; no single-flag shape
+#     reaches it, which is why hand-picked corpora kept missing it;
+#   * the split is CLEAN BY FLAG FORM — long-forms in the frozenset neutralise,
+#     short aliases and `--repo` misbind, with no crossover.
+# Deliberately NOT recorded here: corpus sizes and divergence counts. Four such
+# figures stood in this paragraph and none was reproducible, because no
+# enumeration harness was ever committed. A count that cannot be re-derived is
+# the artifact that has failed repeatedly in this exact spot.
+#
 # NOT enumerated, so not claimed either way: bundled short clusters, and
 # `--flag=value` spellings.
 #
