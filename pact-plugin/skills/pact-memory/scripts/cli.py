@@ -242,7 +242,20 @@ def cmd_save(args, db_path=None):
             exit_code=2,
             allowed_fields=sorted(CALLER_FACING_CREATE_FIELDS),
         )
-    _success({"memory_id": memory_id})
+    # Carry the embedding outcome to the command-line caller. Without this the
+    # CLI reports a bare memory_id, so a save that stored no vector is
+    # indistinguishable from one that did -- which is the defect this field
+    # exists to close, for the only consumer most callers have.
+    #
+    # `degraded:<mode>` is a SUCCESS state, not an error: the record saved, and
+    # only semantic search is unavailable. It is added to the success envelope
+    # alone; the error envelope's key set is pinned by a test and a degraded
+    # save is not an error.
+    result = {"memory_id": memory_id}
+    embedding_status = memory.last_embedding_status
+    if embedding_status is not None:
+        result["embedding_status"] = embedding_status
+    _success(result)
 
 
 def cmd_search(args, db_path=None):

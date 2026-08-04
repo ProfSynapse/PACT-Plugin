@@ -179,3 +179,46 @@ class TestStaleVectorIsRemoved:
         conn.enable_load_extension.side_effect = RuntimeError("no extension support")
 
         assert mem._drop_existing_vector(conn, "mem-42") is False
+
+
+class TestCliSuccessEnvelopeCarriesTheStatus:
+    """The CLI is the only consumer most callers have.
+
+    If the API captures the reason and the envelope drops it, a command-line
+    caller still receives unqualified success and R3 is unfinished where it
+    matters most.
+    """
+
+    def _run_cmd_save(self, last_status):
+        import json as _json
+        from types import SimpleNamespace
+        from scripts import cli
+
+        fake = MagicMock()
+        fake.save.return_value = "mem-1"
+        fake.last_embedding_status = last_status
+
+        captured = {}
+        with patch.object(cli, "PACTMemory", return_value=fake), \
+             patch.object(cli, "_success", side_effect=lambda r: captured.setdefault("r", r)):
+            cli.cmd_save(
+                SimpleNamespace(stdin=False, json_data=_json.dumps({"context": "c"}),
+                                no_sync=False),
+                db_path=None,
+            )
+        return captured["r"]
+
+    def test_degraded_save_reports_its_status(self):
+        result = self._run_cmd_save("degraded:keyword")
+        assert result["memory_id"] == "mem-1"
+        assert result["embedding_status"] == "degraded:keyword"
+
+    def test_fault_is_reported_too(self):
+        assert self._run_cmd_save("fault")["embedding_status"] == "fault"
+
+    def test_clean_save_omits_the_field_entirely(self):
+        """Nothing to report must stay silent, so the common case is unchanged
+        and no caller has to interpret a null."""
+        result = self._run_cmd_save(None)
+        assert result == {"memory_id": "mem-1"}
+        assert "embedding_status" not in result
