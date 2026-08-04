@@ -38,7 +38,28 @@ logger = logging.getLogger(__name__)
 # from 5 to 3 entries to limit token overlap between the two systems while
 # retaining the structured format that auto-memory does not provide.
 WORKING_MEMORY_HEADER = "## Working Memory"
-WORKING_MEMORY_COMMENT = "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. Full history searchable via pact-memory skill. -->"
+# THE COUNT CLAUSE WAS REMOVED BECAUSE IT WAS FALSE IN THE COMMON REGIME, NOT
+# BECAUSE IT WAS UNTIDY. `_apply_token_budget` never compresses `entries[0]`
+# and its drop loop is `while len(result) > 1`, so when the newest entry ALONE
+# exceeds the whole-section budget -- as a typical full entry does -- the older
+# entries are dropped and the section shows ONE entry. This string is written
+# INTO the artifact it describes, so every agent loading a CLAUDE.md read the
+# false claim inline, beside a section that often held a single entry.
+#
+# WHAT REPLACED IT IS UNCONDITIONAL. The searchability clause is TRUE in every
+# regime and is kept: it is the clause that tells a reader where the durable
+# copy lives. Deleting the whole comment would have removed a true, useful
+# statement along with the false one.
+#
+# DO NOT "RESTORE" A COUNT, and do not replace it with "entries are not
+# addressable by ID" either -- that is a NEW false claim in the other
+# direction, because only OLDER entries lose their ID. The newest entry is
+# always full and always carries its Memory ID.
+#
+# MIRRORED IN TWO OTHER DEFINITIONS -- `hooks/shared/session_resume.py` and
+# `hooks/shared/claude_md_manager.py`. Change all three in ONE commit: fixing
+# two of three converts one consistent falsehood into a three-way disagreement.
+WORKING_MEMORY_COMMENT = "<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. -->"
 MAX_WORKING_MEMORIES = 3
 
 # Constants for retrieved context section (searched/retrieved memories)

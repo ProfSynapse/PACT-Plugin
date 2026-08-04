@@ -1022,7 +1022,7 @@ def ensure_project_memory_md() -> str | None:
 ## Pinned Context
 
 ## Working Memory
-<!-- Auto-managed by pact-memory skill. Last 3 memories shown. Full history searchable via pact-memory skill. -->
+<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. -->
 {MEMORY_END_MARKER}
 
 {MANAGED_END_MARKER}

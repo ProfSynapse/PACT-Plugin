@@ -693,7 +693,7 @@ class TestSyncToClaudeMdWithCTFields:
         claude_md.write_text(
             "# Project Memory\n\n"
             "## Working Memory\n"
-            "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. "
+            "<!-- Auto-managed by pact-memory skill. "
             "Full history searchable via pact-memory skill. -->\n",
             encoding="utf-8"
         )

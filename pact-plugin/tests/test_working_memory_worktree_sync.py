@@ -47,7 +47,7 @@ from scripts.memory_api import PACTMemory
 WORKING_MEMORY_SCAFFOLD = (
     "# {title}\n\n"
     "## Working Memory\n"
-    "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. "
+    "<!-- Auto-managed by pact-memory skill. "
     "Full history searchable via pact-memory skill. -->\n"
 )
 RETRIEVED_CONTEXT_SCAFFOLD = (
