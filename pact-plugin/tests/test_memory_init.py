@@ -10,8 +10,12 @@ Tests cover:
 
 import os
 import re
+import json
+import shutil
 import subprocess
 import sys
+import tempfile
+import uuid
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1762,19 +1766,68 @@ class TestProcessMarkerDoesNotOutliveItsProcess:
             "ever match that token again, so it is permanent litter"
         )
 
-    def test_a_session_scoped_marker_is_left_alone(self):
-        """The atexit cleanup must target ONLY the process-unique token.
+    def test_the_processes_own_session_scoped_marker_survives(self):
+        """A SESSION-scoped marker must outlive the process that made it.
 
-        A session-scoped marker exists precisely to suppress the sweep ACROSS
-        the processes of one session, so removing it at process exit would
-        destroy the mechanism it protects.
+        SUBJECT MATTERS HERE, and an earlier version of this test got it wrong.
+        It touched an unrelated bystander file while the child still resolved to
+        the FALLBACK token, so its subject was "an unrelated marker is not
+        deleted" — a different noun from the requirement, which is "the
+        process's OWN session-scoped marker survives". A handler rebuilt as
+        `_get_embedding_attempted_path()` — the plausible "there is already a
+        helper" simplification — deleted the process's own session marker and
+        that version passed anyway, because the child's path WAS the fallback
+        and the bystander was never at risk.
+
+        So this child RESOLVES a real session id and asserts its own path is
+        session-scoped before creating it. Now the process's own marker is the
+        thing under test, and that mutant kills this test.
         """
-        session_marker = Path("/tmp") / "pact_embedding_attempted_test-session-keepme"
-        session_marker.touch()
+        session_id = f"test-survives-{uuid.uuid4().hex[:12]}"
+        home = tempfile.mkdtemp(prefix="pact-marker-home-")
+        ctx = Path(home) / ".claude" / "pact-sessions" / "some-project" / session_id
+        ctx.mkdir(parents=True, exist_ok=True)
+        (ctx / "pact-session-context.json").write_text(
+            json.dumps({"session_id": session_id, "project_dir": "/x/some-project"}),
+            encoding="utf-8",
+        )
+
+        env = dict(os.environ)
+        env["HOME"] = home
+        env["CLAUDE_CODE_SESSION_ID"] = session_id
+        # The discovery route refuses under pytest, and a child inherits that
+        # marker — so it must be cleared or the child falls back to the process
+        # token and this test silently reverts to the defective version.
+        env.pop("PYTEST_CURRENT_TEST", None)
+
+        scripts = str(Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts")
+        child = (
+            "import sys\n"
+            f"sys.path.insert(0, {scripts!r})\n"
+            "import memory_init\n"
+            "p = memory_init._get_embedding_attempted_path()\n"
+            # POSITIVE ARM: prove the path really is session-scoped. Without
+            # this the child could fall back and the test would pass vacuously.
+            f"assert {session_id!r} in p.name, 'child did not resolve the session id: ' + p.name\n"
+            "assert 'process-' not in p.name, 'child used the fallback token: ' + p.name\n"
+            "p.touch()\n"
+            "assert p.exists(), 'child failed to create its own marker'\n"
+            "print(str(p))\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", child], capture_output=True, text=True,
+            timeout=60, env=env,
+        )
+        assert proc.returncode == 0, f"child failed: {proc.stderr}"
+        marker = Path(proc.stdout.strip().splitlines()[-1])
+
         try:
-            self._run_child()
-            assert session_marker.exists(), (
-                "process-exit cleanup removed a session-scoped marker"
+            assert session_id in marker.name, "precondition: marker is session-scoped"
+            assert marker.exists(), (
+                f"{marker.name} was removed at process exit; a session-scoped "
+                "marker must survive, because suppressing the sweep ACROSS the "
+                "processes of one session is its entire purpose"
             )
         finally:
-            session_marker.unlink(missing_ok=True)
+            marker.unlink(missing_ok=True)
+            shutil.rmtree(home, ignore_errors=True)

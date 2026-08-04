@@ -304,6 +304,13 @@ def _remove_process_marker() -> None:
     Scoped to the process-unique token alone. A session-scoped marker MUST
     survive process exit -- suppressing the sweep across the calls of one
     session is the whole point of it -- so this must never touch that path.
+    Rebuild the path from the token here rather than calling
+    _get_embedding_attempted_path(): that helper returns whichever path this
+    process resolved, so reusing it would delete a session-scoped marker.
+
+    BEST EFFORT. A process killed by a signal, or exiting through os._exit,
+    never runs atexit handlers and leaves its marker behind. Those markers are
+    empty and unmatchable rather than harmful, so nothing recovers them.
     """
     try:
         (Path("/tmp") / f"pact_embedding_attempted_{_PROCESS_MARKER_TOKEN}").unlink(
