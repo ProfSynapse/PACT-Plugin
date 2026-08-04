@@ -23,6 +23,11 @@ numbers would re-introduce the list that section 4.1 exists to remove:
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -222,3 +227,73 @@ class TestCliSuccessEnvelopeCarriesTheStatus:
         result = self._run_cmd_save(None)
         assert result == {"memory_id": "mem-1"}
         assert "embedding_status" not in result
+
+
+class TestCliStderrStaysCleanOnTheFaultPath:
+    """The CLI's stderr is a structured JSON channel; the fault must not reach it.
+
+    cli.py configures no logging, so `logging.lastResort` emits WARNING and
+    above to stderr. A fault logged at WARNING therefore lands in the middle of
+    a channel that callers parse, corrupting it.
+
+    THE SUBPROCESS IS THE POINT. In-process tests cannot catch this: pytest
+    installs its own handlers, so lastResort never engages. The CLI tests that
+    exist mock the memory object, so the real fault branch never runs. This is
+    the only arm that puts a REAL object on the REAL fault path in a process
+    with no logging configured -- which is exactly how a user runs it.
+
+    NON-VACUITY: an empty-stderr assertion passes whether the fix works or the
+    fault never fired. So the positive arm reads `embedding_status` from stdout
+    and requires it to be `fault` -- proving the branch under test executed.
+    """
+
+    def _run_cli_save_with_a_forced_fault(self, tmp_path):
+        pkg_root = str(Path(__file__).parent.parent / "skills" / "pact-memory")
+        db = str(tmp_path / "probe.db")
+        child = (
+            "import sys, json\n"
+            # memory_api uses relative imports, so it must load as part of the
+            # `scripts` package rather than as a bare module.
+            f"sys.path.insert(0, {pkg_root!r})\n"
+            "from scripts import memory_api\n"
+            # Force the real except-branch from INSIDE its try block, so the
+            # code under test runs rather than a stand-in for it.
+            "class _Boom:\n"
+            "    @staticmethod\n"
+            "    def pack(*a, **k):\n"
+            "        raise RuntimeError('forced storage fault')\n"
+            "memory_api.struct = _Boom\n"
+            "from scripts import cli\n"
+            # --db-path is a hidden parent-parser flag and goes AFTER the
+            # subcommand, so the child writes to a scratch database.
+            "cli.main(['save', '--db-path', " + repr(db) + ", "
+            "json.dumps({'context': 'a record with embeddable text'})])\n"
+        )
+        # Suppress the model backend's own progress bar. huggingface_hub writes
+        # "Fetching N files" to stderr even on a cache hit, which is THIRD-PARTY
+        # pollution of the same channel and not what this test is measuring.
+        # Controlling it out is what lets the assertion below be exact rather
+        # than a substring match that a future emission could slip past.
+        env = dict(os.environ)
+        env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        return subprocess.run(
+            [sys.executable, "-c", child], capture_output=True, text=True,
+            timeout=120, env=env,
+        )
+
+    def test_fault_is_reported_on_stdout_and_stderr_stays_empty(self, tmp_path):
+        proc = self._run_cli_save_with_a_forced_fault(tmp_path)
+
+        payload = json.loads(proc.stdout)
+        assert payload["ok"] is True
+
+        # POSITIVE ARM: the fault branch demonstrably executed.
+        assert payload["result"].get("embedding_status") == "fault", (
+            "the forced fault did not reach the reason code, so this test "
+            f"never exercised the fault path: {payload}"
+        )
+
+        assert proc.stderr == "", (
+            "the CLI emitted free text on its structured JSON channel:\n"
+            f"{proc.stderr!r}"
+        )

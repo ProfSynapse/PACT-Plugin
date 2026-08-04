@@ -50,7 +50,41 @@ def _context_file_path(session_id: str, project_dir: str) -> Path | None:
 
 
 _DISCOVERY_UNSET = object()
+# Cached RESULT OF THE FILESYSTEM LOOKUP only, plus the session id it was
+# resolved for. Deliberately NOT a cache of the function's return value: the
+# guards below must be re-evaluated on every call, because a cached answer must
+# never outlive the conditions that permitted it.
 _discovered_session_id = _DISCOVERY_UNSET
+_discovered_for_env = None
+
+
+def _resolve_context_on_disk(env_session: str) -> str:
+    """Find the one context file naming this session id, and read the id back.
+
+    The expensive half of discovery, split out so it can be cached without the
+    guards being cached with it.
+    """
+    try:
+        sessions_root = Path.home() / ".claude" / "pact-sessions"
+        matches = list(sessions_root.glob(f"*/{env_session}/pact-session-context.json"))
+    except OSError:
+        return ""
+
+    # Fail closed on anything but a single match. Uniqueness was measured on one
+    # machine, not guaranteed, so picking the first would be a coin toss over
+    # which project's session this is.
+    if len(matches) != 1:
+        return ""
+
+    try:
+        data = json.loads(matches[0].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return ""
+
+    if not isinstance(data, dict):
+        return ""
+    found = data.get("session_id", "")
+    return found if isinstance(found, str) else ""
 
 
 def _discover_session_id() -> str:
@@ -76,27 +110,14 @@ def _discover_session_id() -> str:
     if not env_session:
         return ""
 
-    try:
-        sessions_root = Path.home() / ".claude" / "pact-sessions"
-        matches = list(sessions_root.glob(f"*/{env_session}/pact-session-context.json"))
-    except OSError:
-        return ""
-
-    # Fail closed on anything but a single match. Uniqueness was measured on one
-    # machine, not guaranteed, so picking the first would be a coin toss over
-    # which project's session this is.
-    if len(matches) != 1:
-        return ""
-
-    try:
-        data = json.loads(matches[0].read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, ValueError):
-        return ""
-
-    if not isinstance(data, dict):
-        return ""
-    found = data.get("session_id", "")
-    return found if isinstance(found, str) else ""
+    # Cache the filesystem lookup ONLY, and key it on the id it was resolved
+    # for. Both guards above have already run, so a cached value can never be
+    # returned to a caller the guards would now refuse.
+    global _discovered_session_id, _discovered_for_env
+    if _discovered_session_id is _DISCOVERY_UNSET or _discovered_for_env != env_session:
+        _discovered_session_id = _resolve_context_on_disk(env_session)
+        _discovered_for_env = env_session
+    return _discovered_session_id
 
 
 def get_session_id_from_context_file(
@@ -131,12 +152,12 @@ def get_session_id_from_context_file(
     # Compute session-scoped path (requires both identifiers)
     path = _context_file_path(resolved_session, resolved_project)
     if path is None:
-        # Cached per process: this runs on every memory operation and the glob
-        # walks one directory per session ever recorded.
-        global _discovered_session_id
-        if _discovered_session_id is _DISCOVERY_UNSET:
-            _discovered_session_id = _discover_session_id()
-        return _discovered_session_id
+        # Call discovery EVERY time. Caching here instead would return a stored
+        # answer without re-running the guards inside it, so a process that had
+        # once resolved an id would keep handing it out after the conditions
+        # that permitted it had gone. The expensive filesystem work is cached
+        # inside _discover_session_id, below its guards.
+        return _discover_session_id()
 
     try:
         data = json.loads(path.read_text(encoding="utf-8"))

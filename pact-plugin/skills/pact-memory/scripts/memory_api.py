@@ -536,7 +536,16 @@ class PACTMemory:
             # This handler wraps both the insert and the commit, so it can be
             # reached after a successful write. Removing the vector here could
             # therefore destroy a good one; leave it and report the fault.
-            logger.warning(f"Failed to store embedding for {memory_id}: {e}")
+            #
+            # DEBUG, NOT WARNING, AND RAISING IT BREAKS A CONTRACT. cli.py
+            # configures no logging, so logging.lastResort emits WARNING and
+            # above to STDERR -- and the CLI's stderr is a structured JSON
+            # channel that callers parse. One free-text line corrupts that
+            # parse. The fault is not being swallowed: it reaches the caller as
+            # `embedding_status: "fault"` on stdout, which is the channel a
+            # caller can actually act on. See the measured table in
+            # memory_init.check_and_install_dependencies for the same hazard.
+            logger.debug(f"Failed to store embedding for {memory_id}: {e}")
             return "fault"
 
     @staticmethod

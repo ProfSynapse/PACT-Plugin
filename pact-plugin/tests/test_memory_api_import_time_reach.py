@@ -15,7 +15,13 @@ Used by/with:
 WHY THIS IS A TEST AND NOT A COMMENT. Both isolation guards are blind in the
 same window: pytest sets PYTEST_CURRENT_TEST per test, around setup/call/
 teardown, so it is absent while modules are imported; and a per-test fixture
-cannot undo an import that already happened during collection. Nothing enters
+cannot undo an import that already happened during collection.
+
+AND THE LEAK WOULD BE WHOLE-RUN, NOT ONE-SHOT. An import-time resolution does
+not merely leak once: the resolved id would be cached, and every later caller in
+that process would receive it. So the cost of this tripwire failing is the whole
+run, not the collection window alone. The earlier wording here described a
+single escaped import and understated it. Nothing enters
 that window today. A note asking a future reader to remember this has no failure
 mode; this test has exactly one, and it is loud.
 

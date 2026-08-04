@@ -174,13 +174,13 @@ class TestPerProcessCache:
         _write_context(SYNTHETIC_ID)
 
         calls = []
-        real = pact_session._discover_session_id
+        real = pact_session._resolve_context_on_disk
 
-        def counting():
+        def counting(env_session):
             calls.append(1)
-            return real()
+            return real(env_session)
 
-        monkeypatch.setattr(pact_session, "_discover_session_id", counting)
+        monkeypatch.setattr(pact_session, "_resolve_context_on_disk", counting)
 
         first = pact_session.get_session_id_from_context_file()
         second = pact_session.get_session_id_from_context_file()
@@ -188,20 +188,23 @@ class TestPerProcessCache:
         assert first == second == SYNTHETIC_ID
         assert len(calls) == 1, "discovery must run once per process, not per call"
 
-    def test_cache_holds_a_negative_result_too(self, monkeypatch):
-        """An empty answer is still an answer; re-globbing to fail again is waste."""
+    def test_no_filesystem_work_when_the_guard_refuses(self, monkeypatch):
+        """No env id means the guard answers before any filesystem work."""
         enable_discovery(monkeypatch)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
         calls = []
-        real = pact_session._discover_session_id
+        real = pact_session._resolve_context_on_disk
         monkeypatch.setattr(
-            pact_session, "_discover_session_id", lambda: (calls.append(1), real())[1]
+            pact_session, "_resolve_context_on_disk",
+            lambda e: (calls.append(1), real(e))[1],
         )
 
+        # With no env id the guard returns before the lookup, so the expensive
+        # call must not happen at all -- not merely happen once.
         assert pact_session.get_session_id_from_context_file() == ""
         assert pact_session.get_session_id_from_context_file() == ""
-        assert len(calls) == 1
+        assert len(calls) == 0
 
 
 class TestExplicitArgumentsBypassDiscovery:
@@ -222,3 +225,49 @@ class TestExplicitArgumentsBypassDiscovery:
         )
 
         assert result == SYNTHETIC_ID
+
+
+class TestCacheDoesNotOutliveTheGuards:
+    """A cached answer must never be returned to a caller the guards refuse.
+
+    The cache used to sit ABOVE _discover_session_id, so once populated it
+    short-circuited both guards for the life of the process: a caller kept
+    receiving the real session id after PYTEST_CURRENT_TEST was set, and after
+    CLAUDE_CODE_SESSION_ID was removed.
+    """
+
+    def _prime(self, monkeypatch):
+        enable_discovery(monkeypatch)
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SYNTHETIC_ID)
+        _write_context(SYNTHETIC_ID)
+        # POSITIVE ARM: the cache must actually be populated, or the assertions
+        # below would pass against a resolver that had simply never worked.
+        assert pact_session.get_session_id_from_context_file() == SYNTHETIC_ID
+        return SYNTHETIC_ID
+
+    def test_pytest_guard_applies_after_the_cache_is_populated(self, monkeypatch):
+        self._prime(monkeypatch)
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "some_test (call)")
+
+        assert pact_session.get_session_id_from_context_file() == "", (
+            "a populated cache returned the session id to a caller the pytest "
+            "guard should have refused"
+        )
+
+    def test_absent_env_id_applies_after_the_cache_is_populated(self, monkeypatch):
+        self._prime(monkeypatch)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+        assert pact_session.get_session_id_from_context_file() == "", (
+            "a populated cache returned the session id after the environment "
+            "no longer supplied one"
+        )
+
+    def test_a_different_env_id_is_not_served_from_the_cache(self, monkeypatch):
+        """The cache is keyed on the id it was resolved for."""
+        self._prime(monkeypatch)
+        other = "synthetic-session-0002"
+        _write_context(other, slug="other-project")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", other)
+
+        assert pact_session.get_session_id_from_context_file() == other
