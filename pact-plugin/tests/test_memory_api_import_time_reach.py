@@ -17,19 +17,35 @@ same window: pytest sets PYTEST_CURRENT_TEST per test, around setup/call/
 teardown, so it is absent while modules are imported; and a per-test fixture
 cannot undo an import that already happened during collection.
 
-AND THE CONSEQUENCE IS DESTRUCTION, NOT ONLY DISCLOSURE — STATED AT FULL
-STRENGTH BECAUSE EARLIER WORDINGS HERE WERE WRONG IN DEGREE TWICE. An import-time
-resolution does not leak once and stop: the id is resolved before the guards can
-refuse, so **the exposure lasts FOR THE LIFE OF THE PROCESS**, not for the
-collection window alone.
+TWO SEPARATE QUESTIONS, AND CONFLATING THEM IS WHAT MADE EVERY EARLIER VERSION
+OF THIS PARAGRAPH WRONG. Ask how long the RESOLVER is exposed, and separately
+how long the DAMAGE lasts. They have different answers.
 
-And the harm is not that a name is read. `clear_embedding_marker()` resolves the
-SESSION-SCOPED marker path and unlinks it. It has no production caller and no CLI
-surface, but any process that imports the module can call it — and "no caller" is
-a different claim from "no primitive". **A wrongly created marker suppresses a
-sweep; a wrongly deleted one destroys a live session's state.** So a test process
-that resolves a real session id past a bypassed guard can DESTROY that session's
-marker, not merely learn its name.
+- **THE RESOLVER EXPOSURE IS ONE-SHOT.** The guards are re-evaluated on every
+  call and the cache sits below them, so an id resolved during collection is not
+  served to any later caller: import time returns the live id, and every call
+  after that returns empty.
+- **THE FILESYSTEM DAMAGE FROM THAT ONE SHOT IS DURABLE.** A marker created or
+  deleted in that single moment stays that way for the session, and **a deleted
+  session marker is never recreated.** One resolution is enough.
+
+The second half carries the severity, and it is why "one-shot" is not a
+reassurance. `clear_embedding_marker()` resolves the SESSION-SCOPED marker path
+and unlinks it. It has no production caller and no CLI surface, but any process
+that imports the module can call it — and "no caller" is a different claim from
+"no primitive". **A wrongly created marker suppresses a sweep; a wrongly deleted
+one destroys a live session's state.** So a process that resolves a real session
+id past a bypassed guard can DESTROY that session's marker, not merely learn its
+name.
+
+THIS PARAGRAPH HAS BEEN WRONG IN DEGREE THREE TIMES, IN ALTERNATING DIRECTIONS,
+AND THE REASON IS WORTH MORE THAN THE CORRECTION. It said one-shot (understated),
+then whole-run (true when written), then whole-run again after the cache fix had
+made it one-shot once more. **Each version described the behaviour at the moment
+it was written, and the behaviour kept changing underneath the words.** The split
+above is meant to stop that: it states the PROPERTY — guards re-run, filesystem
+writes persist — rather than the current mechanism. Prefer that shape if you
+revise this again.
 
 Nothing enters
 that window today. A note asking a future reader to remember this has no failure
