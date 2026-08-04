@@ -194,7 +194,7 @@ class TestCliSuccessEnvelopeCarriesTheStatus:
     matters most.
     """
 
-    def _run_cmd_save(self, last_status):
+    def _run_cmd_save(self, last_status, sync_status="wrote"):
         import json as _json
         from types import SimpleNamespace
         from scripts import cli
@@ -202,6 +202,12 @@ class TestCliSuccessEnvelopeCarriesTheStatus:
         fake = MagicMock()
         fake.save.return_value = "mem-1"
         fake.last_embedding_status = last_status
+        # CONFIGURED, NOT LEFT TO THE MOCK. An unset attribute on a MagicMock is
+        # not None -- it is a fresh child mock, which is never None, so the
+        # envelope would carry a mock object and the key-set assertion below
+        # would fail for a reason that has nothing to do with either status.
+        # `wrote` is the honest default because a real save always reports one.
+        fake.last_sync_status = sync_status
 
         captured = {}
         with patch.object(cli, "PACTMemory", return_value=fake), \
@@ -223,9 +229,18 @@ class TestCliSuccessEnvelopeCarriesTheStatus:
 
     def test_clean_save_omits_the_field_entirely(self):
         """Nothing to report must stay silent, so the common case is unchanged
-        and no caller has to interpret a null."""
+        and no caller has to interpret a null.
+
+        THE ENVELOPE'S TWO STATUS FIELDS FOLLOW OPPOSITE RULES, ON PURPOSE, and
+        this assertion is where that shows. `embedding_status` is PARTIAL: it
+        appears only when there is a problem, which is what this test pins.
+        `sync_status` is TOTAL: a save always performed, suppressed or refused a
+        sync, so it always says which. Its presence here is the contract, not
+        noise -- the omission-based reading is correct for one field and would
+        be a silent failure for the other.
+        """
         result = self._run_cmd_save(None)
-        assert result == {"memory_id": "mem-1"}
+        assert result == {"memory_id": "mem-1", "sync_status": "wrote"}
         assert "embedding_status" not in result
 
 

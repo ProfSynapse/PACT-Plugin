@@ -1087,6 +1087,61 @@ def _project_root_of(claude_md_path: Path) -> Path:
     return parent.parent if parent.name == ".claude" else parent
 
 
+class SyncResult:
+    """Outcome of a working-memory sync: DID IT WRITE, and WHY NOT.
+
+    `__bool__` is `wrote`, so every existing read of the result keeps its exact
+    present meaning. `.reason` carries the discrimination that a bare bool
+    could not: a refusal, a suppression and an unresolved target were all
+    `False`, and arm 3 of the archival suppression suite proved that a refused
+    sync and a suppressed one leave identical evidence on disk.
+
+    THIS DELIBERATELY DOES NOT FOLLOW `_store_embedding`'s CONVENTION, AND THE
+    POLARITY IS THE REASON. That function treats `None` as success and a string
+    as a problem. THIS function treats `True` as success. The two conventions
+    are inverted, so they cannot be shared: adopting the sibling's convention
+    here would make a truthiness read report success on a refusal.
+
+    THE ARGUMENT IS THE PRESERVED MEANING, NOT A COUNT OF CALL SITES.
+    `__bool__ == wrote` returns exactly what this function returned before, so
+    NO caller changes behaviour -- neither the callers that exist now, nor one
+    written later by an author who never reads this class. Do not restate that
+    argument as a tally of reads in the suite. A tally rots the next time a
+    test lands, and it invites a future editor to re-derive the decision from a
+    population instead of from the property. State the property.
+
+    Do not "fix" the inconsistency with `_store_embedding`; it is load-bearing.
+    """
+
+    __slots__ = ("wrote", "reason")
+
+    # Reasons. WROTE is the only one for which `bool()` is True.
+    WROTE = "wrote"
+    REFUSED = "refused"          # guard declined; raised, then caught upstream
+    SUPPRESSED = "suppressed"    # caller passed sync_to_claude=False
+    UNRESOLVED = "unresolved"    # no CLAUDE.md resolved
+    MISSING = "missing"          # resolved a path that does not exist
+    FAILED = "failed"            # the write itself raised
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        self.wrote = reason == self.WROTE
+
+    def __bool__(self) -> bool:
+        return self.wrote
+
+    def __repr__(self) -> str:
+        return f"SyncResult({self.reason!r})"
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, SyncResult):
+            return self.reason == other.reason
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self.reason)
+
+
 class AmbientSyncRefused(RuntimeError):
     """Raised when a test process would sync to an ambiently-resolved CLAUDE.md."""
 
@@ -1144,7 +1199,7 @@ def sync_to_claude_md(
     files: Optional[List[str]] = None,
     memory_id: Optional[str] = None,
     target: Optional[Path] = None
-) -> bool:
+) -> "SyncResult":
     """
     Sync a memory entry to the Working Memory section of CLAUDE.md.
 
@@ -1205,7 +1260,15 @@ def sync_to_claude_md(
             never created if absent.
 
     Returns:
-        True if sync succeeded, False otherwise.
+        A `SyncResult`. It is TRUTHY exactly when the write happened, so a
+        caller that only asks "did it write" reads it unchanged. `.reason`
+        names the outcome in EVERY case, the successful one included, so a
+        caller that must tell a refusal from a suppression now can.
+
+        A REFUSAL DOES NOT COME BACK THIS WAY. The ambient-target guard RAISES
+        `AmbientSyncRefused` before any of these returns, so `SyncResult.REFUSED`
+        is produced by whoever catches it, not here. See the guard's own
+        docstring for why it raises rather than returns.
     """
     _refuse_ambient_target_under_pytest(target)
 
@@ -1215,9 +1278,23 @@ def sync_to_claude_md(
     else:
         claude_md_path, project_root = _resolve_display_claude_md_with_base()
 
-    if claude_md_path is None:
+    # BOTH HALVES, BECAUSE THE PAIRING IS THE RESOLVER'S PROMISE AND NOT THIS
+    # FUNCTION'S. `_resolve_display_claude_md_with_base` returns either two
+    # paths or two Nones -- every one of its five exits is guarded by an
+    # `if found is not None` -- so today `project_root` cannot be None once
+    # `claude_md_path` is not. MEASURED, and it is the ONLY reason the anchor
+    # below is safe.
+    #
+    # That is exactly the arrangement the existence guard further down was moved
+    # for: a caller depending on a property of a resolver it does not own. A
+    # later branch returning `(found, None)` would slip a None past a check that
+    # only asks about the path, and `_atomic_write_text` would stat the literal
+    # relative path "None" as its containment anchor -- which raises today, but
+    # silently anchors on a directory named `None` if one ever exists. Naming
+    # both halves here costs one condition and depends on nobody's promise.
+    if claude_md_path is None or project_root is None:
         logger.debug("CLAUDE.md not found, skipping working memory sync")
-        return False
+        return SyncResult(SyncResult.UNRESOLVED)
 
     # EXISTENCE GUARD, BELOW THE JOIN SO IT COVERS BOTH BRANCHES.
     #
@@ -1267,7 +1344,7 @@ def sync_to_claude_md(
                 "the display resolver stopped returning only existing paths, "
                 "or the file was removed after it resolved.", claude_md_path
             )
-        return False
+        return SyncResult(SyncResult.MISSING)
 
     try:
         # Serialize the FULL read-modify-write window under the shared sidecar
@@ -1320,11 +1397,11 @@ def sync_to_claude_md(
             _atomic_write_text(claude_md_path, new_content, project_root)
 
         logger.info("Synced memory to CLAUDE.md Working Memory section")
-        return True
+        return SyncResult(SyncResult.WROTE)
 
     except Exception as e:
         logger.warning(f"Failed to sync memory to CLAUDE.md: {e}")
-        return False
+        return SyncResult(SyncResult.FAILED)
 
 
 def _parse_retrieved_context_section(

@@ -265,7 +265,9 @@ class TestSites89DisplayOverBlockAnchorIdentity:
         finally:
             os.chdir(str(prev))
 
-        assert result is True
+        # The ALLOW decision is what this cert is about, so name the outcome
+        # rather than only asking whether it is truthy.
+        assert result.reason == wm.SyncResult.WROTE
         wt_text = (worktree / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
         assert "external worktree entry" in wt_text
 
@@ -293,9 +295,13 @@ class TestSites89DisplayOverBlockAnchorIdentity:
 
         result = wm.sync_to_claude_md({"context": "should be refused"}, None, "id2")
 
-        # sync swallows the ContainmentError and returns False (write skipped);
-        # the worktree file is byte-unchanged.
-        assert result is False
+        # sync swallows the ContainmentError inside its degradation handler, so
+        # the write is skipped and the worktree file is byte-unchanged. Pin the
+        # REASON, not just the falsiness: `failed` says the write was attempted
+        # and refused, which is the whole point of this mutation arm. A bare
+        # falsy result would also be satisfied by `unresolved` or `missing` --
+        # a target that was never reached, which would make the arm vacuous.
+        assert result.reason == wm.SyncResult.FAILED
         assert target.read_text(encoding="utf-8") == before
 
 

@@ -251,10 +251,22 @@ def cmd_save(args, db_path=None):
     # only semantic search is unavailable. It is added to the success envelope
     # alone; the error envelope's key set is pinned by a test and a degraded
     # save is not an error.
+    #
+    # `sync_status` JOINS IT HERE, AND THE TWO FIELDS DO NOT READ ALIKE.
+    # `embedding_status` is PARTIAL: it reports a problem and is absent when the
+    # embedding succeeded. `sync_status` is TOTAL: save() sets it on every
+    # branch, `wrote` included, so it is absent only when no save ran. Do NOT
+    # read an absent `sync_status` as a successful sync. That inference is the
+    # defect the field exists to remove -- across this process boundary a
+    # refused sync and a suppressed one both used to reach the parent as
+    # nothing at all, which is indistinguishable from a sync that worked.
     result = {"memory_id": memory_id}
     embedding_status = memory.last_embedding_status
     if embedding_status is not None:
         result["embedding_status"] = embedding_status
+    sync_status = memory.last_sync_status
+    if sync_status is not None:
+        result["sync_status"] = sync_status
     _success(result)
 
 
@@ -262,6 +274,14 @@ def cmd_search(args, db_path=None):
     """Handle the 'search' subcommand."""
     memory = PACTMemory(db_path=db_path)
     current_file = getattr(args, "current_file", None)
+    # NO `sync_status` HERE, AND THE REASON IS AN OBSERVATION RATHER THAN A
+    # PROPERTY. As of 2026-08-04 this call passes `sync_to_claude=False`
+    # unconditionally, so no sync can happen on the search path -- and the sync
+    # `search` would otherwise perform is `sync_retrieved_to_claude_md`, the
+    # SIBLING writer, which still returns a bare bool and feeds no reason
+    # channel. Both facts can change. If this argument ever becomes
+    # caller-controlled, or the sibling gains a reason channel, this envelope
+    # needs the field too; do not read its absence as "search never syncs".
     results = memory.search(
         args.query, current_file=current_file, limit=args.limit, sync_to_claude=False
     )
@@ -392,6 +412,12 @@ def cmd_update(args, db_path=None):
     # invisible to semantic search, while an update leaves a vector describing
     # text the record no longer contains. Reporting on save alone would close
     # the milder path and leave the worse one silent.
+    #
+    # NO `sync_status` HERE EITHER, and again as an observation: as of
+    # 2026-08-04 `update()` performs no CLAUDE.md sync at all, so the field
+    # would either be absent or -- on a reused instance -- carry a PREVIOUS
+    # save's outcome and misreport it as this update's. If `update` ever gains
+    # a sync, add the field here rather than letting it inherit one.
     result = {"memory_id": resolved_id}
     embedding_status = memory.last_embedding_status
     if embedding_status is not None:

@@ -712,7 +712,11 @@ class TestSyncToClaudeMdWithCTFields:
         with patch("scripts.working_memory._resolve_display_claude_md_with_base", return_value=(claude_md, claude_md.parent)):
             result = sync_to_claude_md(memory, memory_id="test-ct-sync")
 
-        assert result is True
+        # Precondition, not the subject: this test is about the CT fields in the
+        # file below. A truthiness read says "the write happened" without tying
+        # the test to a classification it does not care about; the repr names the
+        # reason if it ever fails.
+        assert result
 
         # Read back and verify CT field content appears
         content = claude_md.read_text(encoding="utf-8")

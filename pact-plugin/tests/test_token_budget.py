@@ -240,7 +240,11 @@ class TestSyncToClaudeMdBudgetEnforcement:
                 memory_id="test123"
             )
 
-        assert result is True
+        # Every sync assertion in this class is a PRECONDITION: the subject is
+        # the budget behaviour in the file, not the outcome classification. A
+        # truthiness read states "the write happened" and leaves the reason to
+        # the repr if it ever fails.
+        assert result
         new_content = claude_md.read_text(encoding="utf-8")
         assert "## Working Memory" in new_content
         assert "New context entry" in new_content
@@ -265,7 +269,7 @@ class TestSyncToClaudeMdBudgetEnforcement:
         # The synced entry must actually be rendered into the Working Memory
         # block. A no-op sync that left the file untouched would still satisfy
         # the structural assertions below, so pin the entry content directly.
-        assert result is True
+        assert result
         wm_block = re.search(
             r"## Working Memory\n(.*?)(?=\n## |\Z)", new_content, re.DOTALL
         ).group(1)
@@ -300,7 +304,7 @@ class TestSyncToClaudeMdBudgetEnforcement:
                 memory_id="new123"
             )
 
-        assert result is True
+        assert result
         new_content = claude_md.read_text(encoding="utf-8")
 
         # Count ### YYYY-MM-DD entries in the Working Memory section.

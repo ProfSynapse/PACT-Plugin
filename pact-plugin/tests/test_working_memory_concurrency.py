@@ -175,9 +175,14 @@ class TestFailOpenOnTimeout:
     """A lock TimeoutError must fail open (skip the sync, return False) — the
     existing try/except contract, not a hard crash."""
 
-    def test_sync_to_claude_md_returns_false_on_timeout(self, tmp_path, monkeypatch):
-        """If file_lock raises TimeoutError, sync_to_claude_md returns False and
-        does not raise (next save retries)."""
+    def test_sync_to_claude_md_reports_failed_on_timeout(self, tmp_path, monkeypatch):
+        """If file_lock raises TimeoutError, sync_to_claude_md reports `failed`
+        and does not raise (next save retries).
+
+        The name says `failed` rather than `false` because the result is a
+        `SyncResult` now. The sibling test below still says `false`, and that is
+        correct: `sync_retrieved_to_claude_md` really does return a bool.
+        """
         import working_memory as wm
 
         claude_md = _seed_claude_md(tmp_path)
@@ -195,7 +200,11 @@ class TestFailOpenOnTimeout:
         result = wm.sync_to_claude_md(
             {"context": "should-not-be-written", "goal": "g"}, None, "id"
         )
-        assert result is False
+        # `failed` is the subject here, not mere falsiness. A timeout means the
+        # write was ATTEMPTED and lost; `unresolved` or `missing` would mean the
+        # target was never reached and the lock was never in play, which would
+        # make this arm pass for the wrong reason.
+        assert result.reason == wm.SyncResult.FAILED
         # The sync was skipped — the failing entry must NOT have been written.
         assert "should-not-be-written" not in claude_md.read_text(encoding="utf-8")
 

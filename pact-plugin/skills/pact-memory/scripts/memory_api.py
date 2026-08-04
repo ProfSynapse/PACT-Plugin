@@ -62,6 +62,8 @@ from .search import (
     get_search_capabilities
 )
 from .working_memory import (
+    AmbientSyncRefused,
+    SyncResult,
     sync_to_claude_md,
     sync_retrieved_to_claude_md,
 )
@@ -174,6 +176,12 @@ class PACTMemory:
         # this is how a caller reaches the embedding outcome without changing
         # that signature.
         self._last_embedding_status: Optional[str] = None
+
+        # Outcome of the most recent save()'s CLAUDE.md sync, or None before
+        # any save has run. Unlike the embedding status above, this is set on
+        # EVERY save, success included -- see `last_sync_status` for why the
+        # two neighbours differ.
+        self._last_sync_status: Optional[str] = None
 
         logger.debug(
             f"PACTMemory initialized: project={self._project_id}, session={self._session_id}"
@@ -338,6 +346,27 @@ class PACTMemory:
         """
         return self._last_embedding_status
 
+    @property
+    def last_sync_status(self) -> Optional[str]:
+        """Outcome of the most recent save()'s CLAUDE.md sync.
+
+        One of `SyncResult`'s reasons: `wrote`, `refused`, `suppressed`,
+        `unresolved`, `missing` or `failed`. None means no save has run yet on
+        this instance.
+
+        READ THIS BESIDE `last_embedding_status`, BECAUSE THE TWO DIFFER IN
+        MORE THAN POLARITY. That one is PARTIAL: it reports a PROBLEM, and it
+        is None when the embedding succeeded. This one is TOTAL: it names the
+        outcome in every case, `wrote` included.
+
+        So an ABSENT `sync_status` NEVER MEANS SUCCESS. It means no save has
+        run. Reading absence as success is the exact inference this channel
+        exists to make impossible -- a refused sync and a suppressed one used
+        to be one indistinguishable silence, and treating silence as a good
+        outcome is how that silence stayed invisible.
+        """
+        return self._last_sync_status
+
     def track_file(self, path: str) -> None:
         """
         Track a file modified in this session.
@@ -391,6 +420,13 @@ class PACTMemory:
         Returns:
             The ID of the saved memory.
         """
+        # Clear the sync status FIRST, so a save that raises before the sync
+        # cannot leave the PREVIOUS save's outcome behind for a caller to read
+        # as this one's. `last_sync_status` promises to describe the most recent
+        # save; a stale value would make that promise false in exactly the
+        # silent way this channel exists to remove.
+        self._last_sync_status = None
+
         # Ensure memory system is ready (lazy initialization)
         _ensure_ready()
 
@@ -441,11 +477,30 @@ class PACTMemory:
         # This is non-critical - failures are logged but don't fail the save.
         # Gated on sync_to_claude (default True): callers that omit the
         # parameter reach this call exactly as before.
+        #
+        # EVERY BRANCH BELOW RECORDS A REASON, including the suppressed one and
+        # the successful one. That totality is the point: a caller must never
+        # have to read an absent status as success. `suppressed` has no other
+        # producer -- `sync_to_claude_md` is never called on that path, so the
+        # gate itself is the only place the fact exists.
         if sync_to_claude:
             try:
-                sync_to_claude_md(memory, files_to_link if files_to_link else None, memory_id)
+                result = sync_to_claude_md(
+                    memory, files_to_link if files_to_link else None, memory_id
+                )
+                self._last_sync_status = result.reason
+            except AmbientSyncRefused as e:
+                # MUST precede the general handler. The guard RAISES rather than
+                # returning, so without this clause a refusal is indistinguishable
+                # from any other failure -- and a refusal is the one outcome that
+                # is deliberate rather than broken.
+                self._last_sync_status = SyncResult.REFUSED
+                logger.warning(f"Refused to sync to CLAUDE.md: {e}")
             except Exception as e:
+                self._last_sync_status = SyncResult.FAILED
                 logger.warning(f"Failed to sync to CLAUDE.md: {e}")
+        else:
+            self._last_sync_status = SyncResult.SUPPRESSED
 
         return memory_id
 

@@ -220,7 +220,10 @@ class TestWorkingMemoryParserMarkerPreservation:
         }
 
         result = sync_to_claude_md(memory, memory_id="test-123")
-        assert result is True
+        # Truthiness in this file: the subject is MARKER SURVIVAL across the
+        # round-trip. The write succeeding is the precondition for that, so the
+        # test does not pin which non-write reason it would otherwise be.
+        assert result
 
         final = claude_md.read_text(encoding="utf-8")
         assert _MEMORY_END in final, (
@@ -307,7 +310,7 @@ class TestMigrationSyncPipeline:
         }
 
         result = sync_to_claude_md(memory, memory_id="mig-1")
-        assert result is True
+        assert result
 
         final = claude_md.read_text(encoding="utf-8")
         self._assert_markers_paired(final)
@@ -447,7 +450,7 @@ class TestMigrationSyncPipeline:
         }
 
         result = sync_to_claude_md(memory, memory_id="pipeline-1")
-        assert result is True
+        assert result
 
         final = claude_md.read_text(encoding="utf-8")
 

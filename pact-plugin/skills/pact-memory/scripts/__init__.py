@@ -113,6 +113,10 @@ from .memory_api import (
 
 # Working Memory (CLAUDE.md sync)
 from .working_memory import (
+    # `sync_to_claude_md` RETURNS one of these, so exporting the function
+    # without the type left the export unusable for any caller that wants the
+    # reason rather than just the truthiness.
+    SyncResult,
     sync_to_claude_md,
     sync_retrieved_to_claude_md,
     WORKING_MEMORY_HEADER,
@@ -234,6 +238,7 @@ __all__ = [
     "list_memories_simple",
 
     # Working Memory (CLAUDE.md sync)
+    "SyncResult",
     "sync_to_claude_md",
     "sync_retrieved_to_claude_md",
     "WORKING_MEMORY_HEADER",

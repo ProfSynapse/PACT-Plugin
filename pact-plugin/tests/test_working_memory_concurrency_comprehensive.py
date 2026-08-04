@@ -358,9 +358,12 @@ class TestSyncSemanticsUnchangedUnderLock:
 
         total = wm.MAX_WORKING_MEMORIES + 2
         for i in range(total):
+            # Truthiness throughout this class: the subject is sync SEMANTICS
+            # under the lock, so each call's success is a precondition for the
+            # structural assertions that follow, not the thing being classified.
             assert wm.sync_to_claude_md(
                 {"context": f"ROLL-{i}", "goal": f"g{i}"}, None, f"id{i}"
-            ) is True
+            )
 
         final = (tmp_path / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
         # Most-recent MAX survive; the oldest (total - MAX) are trimmed.
@@ -384,8 +387,8 @@ class TestSyncSemanticsUnchangedUnderLock:
         _seed_claude_md(tmp_path)
 
         mem = {"context": "IDEMPOTENT", "goal": "same"}
-        assert wm.sync_to_claude_md(mem, None, "same-id") is True
-        assert wm.sync_to_claude_md(mem, None, "same-id") is True
+        assert wm.sync_to_claude_md(mem, None, "same-id")
+        assert wm.sync_to_claude_md(mem, None, "same-id")
 
         final = (tmp_path / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
         assert final.count("## Working Memory") == 1, (
@@ -419,7 +422,7 @@ class TestSyncSemanticsUnchangedUnderLock:
 
         assert wm.sync_to_claude_md(
             {"context": "MARKER-SAFE", "goal": "g"}, None, "id"
-        ) is True
+        )
 
         final = claude_md.read_text(encoding="utf-8")
         markers = [
