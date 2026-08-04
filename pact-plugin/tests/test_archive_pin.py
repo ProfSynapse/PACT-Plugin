@@ -1827,6 +1827,17 @@ class TestArchivePin_CliContract:
 # this sweep. Do not "tidy" these into imports.
 _NON_SUPPRESSED_STATUSES = ("wrote", "refused", "failed", "unresolved", "missing")
 
+# The two halves of the scope-presence rule, SPELLED for the same reason the
+# alphabet above is: a set read off `archive_pin._WRITE_ATTEMPTED_STATUSES`
+# would FOLLOW a mutation of that constant and pass over it. Spelled here, a
+# mutation reddens. `test_the_write_attempted_constant_matches_the_spelled_set`
+# below is the tie-back that turns a deliberate rename into a loud failure
+# rather than a silent divergence.
+_WRITE_ATTEMPTED_LITERAL = ("wrote", "failed")
+_NO_WRITE_ATTEMPTED_STATUSES = tuple(
+    s for s in _NON_SUPPRESSED_STATUSES if s not in _WRITE_ATTEMPTED_LITERAL
+)
+
 
 class TestArchivePin_SyncSuppressionBreach:
     """The archival path CONSUMES `sync_status`, which nothing read before.
@@ -1959,54 +1970,107 @@ class TestArchivePin_SyncSuppressionBreach:
             "the reason must say which file `occurrences`/`locations` describe"
         )
 
-    @pytest.mark.parametrize(
-        "status", [s for s in _NON_SUPPRESSED_STATUSES if s != "wrote"]
-    )
-    def test_a_sync_that_did_not_complete_claims_no_copy_anywhere(
+    @pytest.mark.parametrize("status", _NO_WRITE_ATTEMPTED_STATUSES)
+    def test_a_status_that_never_reached_the_write_carries_no_scope(
         self, claude_md, monkeypatch, status
     ):
-        """ONE PREDICATE FOR THE DECISION, TWO SHAPES FOR THE PAYLOAD.
+        """THE SPLIT IS "WAS A WRITE ATTEMPTED", NOT "DID ONE LAND".
 
-        Only `wrote` establishes that a projection LANDED. `refused`,
-        `unresolved` and `missing` performed no write, and `failed` did not
-        complete one. Sending the curator to search a scope on those statuses
-        asserts a copy exists when none is known to -- a claim true of a
-        narrower case than the one it is read for, which is the defect this
-        whole consumer exists to remove. The likeliest place to reproduce a
-        defect is inside its own fix, so this arm pins the asymmetry.
+        These three exit BEFORE the write is attempted, so there is no
+        projection from this save to bound. Their scope would be TRUE but
+        VACUOUS, and a scope that is unconditionally true names nothing worth
+        searching -- so it is omitted for VACUITY, never for falsehood.
 
-        The presence rule is the module's own: EACH FIELD IS PRESENT IFF THE
-        FACT IT NAMES WAS ACTUALLY ESTABLISHED.
+        `failed` is deliberately NOT in this set. An earlier design put it
+        here on the reasoning that no write had landed; that reasoning was
+        wrong, because the `except` producing `failed` wraps the atomic
+        rename. See the sibling arm below.
         """
         verdict, _ = self._drive(claude_md, monkeypatch, status)
         assert verdict["outcome"] == "ARCHIVED_DELETE_UNSAFE"
         assert "sync_scope" not in verdict, (
-            f"status={status!r} performed no completed write, so there is no "
-            f"established scope for a stray copy -- offering one tells the "
-            f"curator to hunt for something that may not exist"
+            f"status={status!r} exits before the write is attempted, so there "
+            f"is no projection from this save to bound -- offering a scope "
+            f"sends the curator searching for something this save never wrote"
         )
-        assert "UNKNOWN" in verdict["reason"], (
-            "the reason must say the sync's outcome is UNKNOWN rather than "
-            "asserting either that a copy exists or that none does"
+        assert "NO PROJECTION WAS ATTEMPTED" in verdict["reason"], (
+            "this arm knows more than `failed` does and must say so: no write "
+            "was attempted at all, which is stronger than 'cannot tell'"
         )
 
-    def test_only_wrote_ever_carries_a_search_scope(
+    def test_failed_carries_the_scope_because_a_write_may_have_landed(
+        self, claude_md, monkeypatch
+    ):
+        """`failed` IS THE STATUS WHERE A STRAY COPY IS MOST PLAUSIBLE.
+
+        The `except` that produces it wraps the atomic rename, and a lock
+        release and a log call run after that rename inside the same `try`.
+        So a durable, completed write can still report `failed` -- and the
+        bound still holds, because a write outside the declared anchor is
+        refused and also yields `failed`, with no write.
+
+        An earlier design dropped the scope here, which removed it from
+        precisely the status that most needed it. This arm is what stops that
+        from being reintroduced.
+        """
+        verdict, _ = self._drive(claude_md, monkeypatch, "failed")
+        assert verdict["sync_scope"], (
+            "a write was ATTEMPTED and may have completed, so the bound is "
+            "non-vacuous and must be reported"
+        )
+        assert verdict["sync_scope"] in verdict["reason"], (
+            "a payload carrying a scope its prose never explains is the same "
+            "disclosure mismatch this consumer exists to remove"
+        )
+        reason = verdict["reason"]
+        assert "neither that a copy exists nor that none does" in reason, (
+            "the `failed` arm must claim nothing in either direction"
+        )
+        assert "NO PROJECTION WAS ATTEMPTED" not in reason, (
+            "that is the no-write arm's stronger claim and is false here -- a "
+            "write WAS attempted and may have completed"
+        )
+
+    def test_exactly_the_write_attempting_statuses_carry_a_scope(
         self, claude_md, monkeypatch
     ):
         """DIFFERENTIAL over the whole alphabet, in one arm.
 
-        The two arms above assert each side separately. This one records the
-        INVARIANT -- `sync_scope` appears for exactly one status -- so a later
-        edit that adds the key to a second status fails here rather than being
-        noticed by whoever reads the verdict second.
+        The arms above assert each side separately. This records the
+        INVARIANT -- the scope appears for exactly the statuses that attempted
+        a write -- so an edit that adds or drops the key on any status fails
+        here rather than being noticed by whoever reads the verdict second.
+
+        Compared against the module's own constant rather than a literal set,
+        so the test and the code cannot drift into disagreeing about which
+        statuses those are.
         """
         carriers = {
             status
             for status in _NON_SUPPRESSED_STATUSES
             if "sync_scope" in self._drive(claude_md, monkeypatch, status)[0]
         }
-        assert carriers == {"wrote"}, (
-            f"exactly one status may bound a stray-copy search; got {carriers}"
+        assert carriers == set(_WRITE_ATTEMPTED_LITERAL), (
+            f"the scope must be carried by exactly the statuses that attempted "
+            f"a write; got {carriers}"
+        )
+
+    def test_the_write_attempted_constant_matches_the_spelled_set(self):
+        """TIE-BACK for the spelled literals above.
+
+        The arms in this class sweep SPELLED status sets so that a mutation of
+        the module constant cannot quietly shrink what they cover. That leaves
+        one gap: a deliberate, correct change to the constant would look like
+        a test failure with no explanation. This arm is the explanation -- it
+        fails HERE, naming the constant, rather than inside a parametrised
+        sweep whose set silently stopped matching the code.
+        """
+        assert set(archive_pin._WRITE_ATTEMPTED_STATUSES) == set(
+            _WRITE_ATTEMPTED_LITERAL
+        ), (
+            "the module's scope-presence constant and this file's spelled set "
+            "have diverged; update the literals deliberately, and check every "
+            "arm that sweeps them"
         )
 
     def test_wrote_is_attributed_to_this_run_not_a_concurrent_editor(

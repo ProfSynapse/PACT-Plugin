@@ -1256,8 +1256,24 @@ def sync_to_claude_md(
     """
     Sync a memory entry to the Working Memory section of CLAUDE.md.
 
-    Maintains a rolling window of the last 3 memories. New entries are added
-    at the top of the section, and entries beyond MAX_WORKING_MEMORIES are removed.
+    Maintains a rolling window of AT MOST MAX_WORKING_MEMORIES entries. New
+    entries are added at the top of the section, and older ones are removed.
+
+    THE COUNT IS A CAP, NOT A PROMISE, and this docstring said "the last 3"
+    until the claim was measured. `_apply_token_budget` keeps the newest entry
+    IN FULL and its drop loop is `while len(result) > 1`, so when that entry
+    ALONE exceeds the whole-section budget -- as a typical full entry does --
+    the older ones are dropped and the section shows ONE. Stating a fixed 3
+    here is the same false claim that was removed from the comment this
+    function WRITES INTO the file, left behind in the function that makes it
+    false.
+
+    Its sibling `sync_retrieved_to_claude_md` genuinely does hold the last 3,
+    and its docstring is correct as written -- `_format_retrieved_entry`
+    truncates each entry to 200 chars, so three of them cannot reach that
+    section's budget and its drop loop never runs. DO NOT "fix" the sibling to
+    match this wording: the two differ because one bounds its entries and the
+    other does not, which is the whole mechanism.
 
     This function is designed for graceful degradation - if CLAUDE.md doesn't
     exist or the sync fails for any reason, it logs a warning but doesn't

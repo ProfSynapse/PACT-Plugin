@@ -39,7 +39,7 @@ that is governed by the invariant below, not by a per-failure enumeration.
    "delete_string": str, "memory_id": str, "occurrences": int,
    "locations": [int], "reason": str,
    "sync_status": str,        # ONLY on the sync-breach arm
-   "sync_scope": str}         # ONLY when that arm's status is `wrote`
+   "sync_scope": str}         # ONLY when that arm ATTEMPTED a write
   {"outcome": "NOT_ARCHIVED",           "heading": str, "claude_md_path": str,
    "delete_string": str, "memory_id": str|null, "reason": str}
   {"outcome": "UNEVALUABLE",            "heading": str|null,
@@ -65,12 +65,15 @@ why they share one outcome NAME rather than forking into a fifth:
   SYNC NOT SUPPRESSED  the save reported a `sync_status` other than
                    `suppressed`, so the CLAUDE.md projection that `--no-sync`
                    exists to prevent was attempted or performed. That arm adds
-                   `sync_status`, and adds `sync_scope` ONLY when the status is
-                   `wrote` -- because `occurrences` and `locations` describe
-                   the TARGET file, and only a write that LANDED puts a stray
-                   copy somewhere to bound. On any other status the sync did
-                   not complete and its outcome is unknown, so the verdict
-                   claims nothing about a copy in either direction.
+                   `sync_status`, and adds `sync_scope` when the save ATTEMPTED
+                   a write (`wrote` or `failed`) -- because `occurrences` and
+                   `locations` describe the TARGET file, while a stray
+                   projection may sit in a DIFFERENT CLAUDE.md. `sync_scope`
+                   is EXISTENCE-INDEPENDENT: it says where a copy must be IF
+                   one exists, never that one does, which is why `failed` may
+                   carry it. The statuses that never reach the write --
+                   `refused`, `unresolved`, `missing` -- omit it because the
+                   bound there is true but VACUOUS, not because it is false.
 
 Two conditions under one outcome is NOT the reason-table hazard named below:
 that hazard is one outcome carrying two DISPOSITIONS, distinguished only by
@@ -264,6 +267,25 @@ _ARCHIVE_SUBCOMMAND = "save"
 # different predicate (which handlers project into CLAUDE.md), which the parser
 # does not expose.
 _SYNC_CAPABLE_SUBCOMMANDS = frozenset({"save"})
+
+# `SyncResult` statuses on which the save ATTEMPTED a CLAUDE.md projection, and
+# which therefore have a bound worth reporting as `sync_scope`.
+#
+# THE MEMBERSHIP TEST IS "WAS A WRITE ATTEMPTED", NOT "DID ONE LAND". `failed`
+# is a member because the `except` producing it wraps the atomic rename, with a
+# lock release and a log call running after that rename inside the same `try` --
+# so a durable write can still report `failed`. Excluding it would drop the
+# scope from the status where a stray copy is MOST plausible.
+#
+# `refused`, `unresolved` and `missing` are absent because all three return or
+# raise BEFORE the write is attempted, so there is no projection from this save
+# to bound. Their bound would be TRUE but VACUOUS -- they are excluded for
+# vacuity, never because the scope would be false.
+#
+# NOT DERIVED FROM `SyncResult`, deliberately: this names a property of the
+# ARCHIVE's route, not of the enum, and a seventh reason must be classified by
+# whoever adds it rather than defaulted in by a filter.
+_WRITE_ATTEMPTED_STATUSES = frozenset({"wrote", "failed"})
 
 
 def _load_hook_module(name: str):
@@ -751,7 +773,7 @@ def _suppression_breach_reason(
 ) -> str:
     """Explain a save whose CLAUDE.md projection was not suppressed.
 
-    ONE PREDICATE FOR THE DECISION, TWO SHAPES FOR THE MESSAGE. The gate is
+    ONE PREDICATE FOR THE DECISION, THREE SHAPES FOR THE MESSAGE. The gate is
     `!= suppressed`: the archival save passes `--no-sync` explicitly, so
     `suppressed` is the ONLY status this route ever asks for, and keying on
     the REQUESTED value rather than enumerating the unwanted ones covers a
@@ -760,24 +782,38 @@ def _suppression_breach_reason(
     fire on it -- that would be a cardinal over-block on the curator's own
     routine path.
 
-    BUT THE GATE'S ONE FACT IS NOT THE MESSAGE'S ONE FACT, AND COLLAPSING
-    THEM SHIPS THE DEFECT THIS CHANGE EXISTS TO REMOVE. Only `wrote` means a
-    projection LANDED. `refused`, `unresolved` and `missing` mean no write was
-    performed, and `failed` means the write did not complete. Telling a
-    curator to go looking for a stray copy on `failed` asserts that a copy
-    exists when none is known to -- a claim true of a narrower case than the
-    one it is read for, which is precisely the shape being fixed. So the two
-    shapes are:
+    BUT THE GATE'S ONE FACT IS NOT THE MESSAGE'S ONE FACT, AND THE MESSAGE
+    SPLITS THREE WAYS RATHER THAN TWO. The distinction is not "did a copy
+    land" -- it is WAS A WRITE EVEN ATTEMPTED, because that is what decides
+    whether there is anything to bound. Measured against the exits in
+    `sync_to_claude_md`:
 
-      wrote        A PROJECTION LANDED. Name where it can be, and point at
-                   the anchor. Bounded, because the save leg passes
-                   `--claude-md-root` and a write outside it is refused --
-                   so a stray copy CANNOT be outside `sync_scope`.
+      wrote        A PROJECTION LANDED. Name where it can be.
 
-      everything   THE SYNC DID NOT COMPLETE AND ITS OUTCOME IS UNKNOWN. Say
-      else         that, and claim NOTHING about a copy. Not "no copy
-                   exists" either: `failed` can in principle raise after the
-                   atomic rename, so the honest word is UNKNOWN, not NONE.
+      failed       A WRITE WAS ATTEMPTED AND MAY HAVE COMPLETED. The
+                   `except` that produces this status wraps the atomic
+                   rename, and a lock release and a log call run after that
+                   rename inside the same `try` -- so a durable write can
+                   still report `failed`. A copy MAY exist, and the bound
+                   still holds, so name it. This is the status where a stray
+                   copy is MOST plausible and the bound is SOUNDEST.
+
+      refused      NO WRITE WAS EVER ATTEMPTED -- all three exit before the
+      unresolved   `try` block opens. The bound is TRUE here but VACUOUS, and
+      missing      a scope that is unconditionally true names nothing worth
+                   searching. Omitted for that reason, NOT because it would
+                   be false.
+
+    THE BOUND IS SOUND ON `failed`, WHICH IS THE ONLY WAY THIS COULD MISLEAD.
+    The save leg passes `--claude-md-root`, and a write OUTSIDE the anchor is
+    refused by `_atomic_write_text` -- which raises, and so yields `failed`
+    with no write at all. So on `failed` there are exactly two possibilities:
+    no write, or a write INSIDE `sync_scope`. Never outside. The scope can
+    therefore never point a curator at the wrong directory.
+
+    NO ARM CLAIMS A COPY EXISTS, AND NONE CLAIMS ONE DOES NOT. "No copy
+    exists" would be as false on `failed` as "a copy exists" -- both assert
+    knowledge this path does not have.
 
     WHY THIS DOES NOT DUPLICATE THE OCCURRENCE CHECK. A projection into the
     SAME file is already caught downstream by `occurrences != 1`, and that
@@ -803,25 +839,46 @@ def _suppression_breach_reason(
     common = (
         f"`occurrences` and `locations` below describe {claude_md_path} ONLY. "
     )
+    # THE BOUND, WORDED IDENTICALLY FOR BOTH ARMS THAT CARRY IT. It is
+    # EXISTENCE-INDEPENDENT: it says where a copy must be IF one exists, and
+    # asserts nothing about whether one does. That is what lets `failed` carry
+    # it without claiming a write landed.
+    bound = (
+        f"They do NOT measure where a projection would have landed: "
+        f"resolution is ambient, so IF a copy of the pin exists it is in some "
+        f"CLAUDE.md under {sync_scope} -- the declared anchor bounds it there "
+        f"and no further. Check that directory before removing anything. "
+    )
     if sync_status == "wrote":
         return (
             f"the archival save WROTE a CLAUDE.md working-memory projection, "
             f"which `--no-sync` exists to prevent. THIS RUN made that write; "
-            f"it is not a concurrent editor. {common}"
-            f"They do NOT measure where that projection landed: resolution is "
-            f"ambient, so a copy of the pin may sit in any CLAUDE.md under "
-            f"{sync_scope} (the declared anchor bounds it there and no "
-            f"further). Check that directory before removing anything. "
+            f"it is not a concurrent editor. {common}{bound}{archived}"
+        )
+    if sync_status == "failed":
+        return (
+            f"the archival save ATTEMPTED a CLAUDE.md projection that "
+            f"`--no-sync` should have suppressed, and the attempt FAILED. "
+            f"The failure can be raised AFTER the write completed, so this "
+            f"verdict cannot tell whether a projection landed -- it claims "
+            f"neither that a copy exists nor that none does. {common}{bound}"
             f"{archived}"
         )
+    # refused / unresolved / missing. NO `bound` HERE, AND THE REASON IS
+    # VACUITY RATHER THAN FALSEHOOD: these three exit before the write is
+    # attempted, so there is no projection from this save to bound and a scope
+    # would name nothing worth searching.
+    #
+    # This arm says NO PROJECTION WAS ATTEMPTED, which is stronger than the
+    # `failed` arm's "cannot tell" and is warranted here -- it is a fact about
+    # THIS SAVE, established by which exit ran. It deliberately says nothing
+    # about the file's contents generally, which this path never measured.
     return (
-        f"the archival save ATTEMPTED a CLAUDE.md projection that `--no-sync` "
-        f"should have suppressed, and reported '{sync_status}'. The "
-        f"suppression did not take effect, so this run and the memory CLI "
-        f"disagree about whether this save projects. The sync DID NOT "
-        f"COMPLETE and its outcome is UNKNOWN -- this verdict does not claim "
-        f"a copy of the pin was written anywhere, and does not claim none "
-        f"was. {common}{archived}"
+        f"the archival save reported '{sync_status}', so the suppression "
+        f"`--no-sync` requested did not take effect and this run and the "
+        f"memory CLI disagree about whether this save projects. NO PROJECTION "
+        f"WAS ATTEMPTED on this status, so this save left no copy of the pin "
+        f"anywhere -- there is no scope to search. {common}{archived}"
     )
 
 
@@ -1141,18 +1198,35 @@ def archive_pin(index: int, db_path=None) -> dict:
     # cannot disagree about the envelope's shape. A real-CLI test pins that.
     sync_status = result.get("sync_status") if isinstance(result, dict) else None
     if sync_status is not None and sync_status != "suppressed":
-        # THE DECISION IS ONE PREDICATE; THE PAYLOAD IS TWO SHAPES. Only
-        # `wrote` establishes that a projection LANDED, so only `wrote` may
-        # carry `sync_scope` -- the bound on where a stray copy can be. On
-        # every other status the sync did not complete and its outcome is
-        # unknown, so naming a search scope would assert a copy exists when
-        # none is known to. That is the same defect this consumer removes,
-        # and this is the likeliest place to reproduce it.
+        # THE DECISION IS ONE PREDICATE; THE PAYLOAD IS TWO SHAPES, SPLIT ON
+        # WHETHER A WRITE WAS ATTEMPTED -- not on whether one landed.
         #
-        # The presence rule is the module's own, stated at the top of this
-        # file: EACH FIELD IS PRESENT IFF THE FACT IT NAMES WAS ACTUALLY
-        # ESTABLISHED. `sync_scope` names where a stray copy can be, which is
-        # a fact only once a write is known to have happened.
+        # `sync_scope` IS EXISTENCE-INDEPENDENT. It says where a copy MUST BE
+        # IF ONE EXISTS; it never claims one does. So the question it answers
+        # is not "did a projection land" but "is there a projection from this
+        # save to bound at all", and that is decided by which exit ran:
+        #
+        #   wrote, failed              a write was ATTEMPTED. `failed` is
+        #                              produced by an `except` wrapping the
+        #                              atomic rename, with a lock release and
+        #                              a log call after it inside the same
+        #                              `try`, so a completed write can still
+        #                              report `failed`. Both carry the scope.
+        #
+        #   refused, unresolved,       all exit BEFORE the write is attempted.
+        #   missing                    The bound is true but VACUOUS, so it is
+        #                              omitted -- for vacuity, never falsehood.
+        #
+        # This still satisfies the module's invariant at the top of the file,
+        # EACH FIELD IS PRESENT IFF THE FACT IT NAMES WAS ACTUALLY ESTABLISHED,
+        # because the fact `sync_scope` names is THE BOUND ON ANY PROJECTION
+        # FROM THIS SAVE -- established the moment a write is attempted under a
+        # checked anchor, not only once one is known to have landed.
+        #
+        # DO NOT NARROW THIS BACK TO `wrote` ALONE. That reading was tried and
+        # retired: it drops the scope from `failed`, which is precisely the
+        # status where a stray copy is most plausible and the bound is
+        # soundest, and it contradicts this function's own docstring.
         verdict = {
             "outcome": "ARCHIVED_DELETE_UNSAFE",
             "heading": heading,
@@ -1168,7 +1242,7 @@ def archive_pin(index: int, db_path=None) -> dict:
                 sync_status, claude_md_path, str(project_dir), memory_id
             ),
         }
-        if sync_status == "wrote":
+        if sync_status in _WRITE_ATTEMPTED_STATUSES:
             verdict["sync_scope"] = str(project_dir)
         return verdict
 
