@@ -524,11 +524,18 @@ class TestGhFlagTokenAmbiguityStaysRemoved:
             f"flag's value and every added token doubles the partitions."
         )
 
-    # The matched-language half of this repair — that a dash-initial VALUE is
-    # still consumed and still yields the same PR number — is pinned in
-    # test_merge_guard_pre.py, beside the rest of the extraction corpus. It is
-    # a behavioural property, not a timing one, and it is GREEN-STAYS-GREEN
-    # under the revert above: the ambiguous form matched those forms too.
+    # THE REPAIR ALSO CHANGED WHICH DIGIT IS CAPTURED, so it is not only a
+    # backtracking fix. Where the flag run stops decides which token is read as
+    # the positional pull-request number, and the unconstrained predecessor
+    # stops elsewhere — on a good-faith `gh pr merge --squash --subject 2024 42`
+    # it captures 2024, the flag's own argument, instead of 42. That is a
+    # target-identification difference on a guard whose job is to bind an
+    # approval to a specific pull request.
+    #
+    # So this timing check does NOT cover the whole revert. The capture
+    # behaviour is pinned in test_merge_guard_pre.py, beside the rest of the
+    # extraction corpus, and those pins redden under the same revert this one
+    # does — for a different and more serious reason.
 
 
 class TestShellTokenizerCostIsBoundedByCommandLength:

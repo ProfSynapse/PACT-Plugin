@@ -264,24 +264,51 @@ class TestGH_PR_NumberRE_BoundaryCorrect:
 
 
 # =============================================================================
-# Dash-initial flag VALUES — the forms the value arm's `[^-\s]` looks like it
-# should break, and does not.
+# The value arm's `[^-\s]` constraint — WHICH DIGIT IS THE PR NUMBER
 # =============================================================================
 # `_GH_FLAG_TOKENS` constrains a flag's optional value to `[^-\s]\S*`, so a
-# dash-initial token cannot be consumed AS A VALUE by that iteration. Read on
-# its own that looks like a narrowing, and it is not: the outer `(?:...)*` then
-# consumes the same token AS A FLAG on the next iteration. The partition
-# changes, the consumed span does not, and the same number is captured.
+# dash-initial token cannot be consumed AS A VALUE by that iteration; the outer
+# `(?:...)*` consumes it AS A FLAG on the next one instead.
 #
-# These forms were certified in prose when that constraint was introduced and
-# pinned by NO test. A form certified by a comment and by no test is a claim
-# with no guard — and a comment asserting unmeasured behaviour on this control
-# is what allowed an exponential to ship here once already. Measured across
-# seven forms, shipped versus the unconstrained predecessor: zero divergence.
+# THAT REPARTITIONING CHANGES WHICH DIGIT IS CAPTURED, and the constraint is
+# therefore load-bearing for CORRECTNESS, not only for backtracking. Where the
+# flag run stops decides which token is read as the positional PR number, and
+# the unconstrained predecessor stops in a different place:
+#
+#   gh pr merge --squash --subject 2024 42   constrained -> 42   pre-fix -> 2024
+#   gh pr merge --squash --body-file 1 42    constrained -> 42   pre-fix -> 1
+#
+# The predecessor captures the FLAG'S OWN ARGUMENT as the pull-request number.
+# On a guard that binds an approval to a specific pull request, that is a
+# TARGET-IDENTIFICATION defect: approve one pull request, authorise another.
+#
+# REACHABLE ON GOOD-FAITH COMMANDS, which is what makes it worth pinning. Over
+# real `gh pr merge|close` flag sets with a single positional, the two forms
+# agree on all 3772 enumerated commands. Introduce a value-taking flag whose
+# VALUE IS NUMERIC — a subject that is a year, a body file named `1` — and all
+# 168 enumerated forms diverge. No exotic input is required, only a number in
+# the wrong place.
+#
+# WHY THIS WAS NOT CAUGHT BY THE PROSE THAT CERTIFIED IT: the divergent shape
+# needs a VALUELESS flag followed by a VALUE-TAKING flag before the positional.
+# Hand-picked corpora do not contain it, because an author picks the shapes
+# they are already thinking about. Enumerating the space finds it immediately.
 
 
 class TestGH_PR_NumberRE_DashInitialValues:
-    """A value that starts with `-` still yields the same PR number."""
+    """A dash-initial VALUE is still consumed and the positional still wins.
+
+    ALL THREE OF THESE PASS ON THE BROADENED FORM TOO, and saying so is the
+    point rather than an apology. They pin the constraint against a NARROWING —
+    that adding `[^-\\s]` did not stop these forms extracting a number at all —
+    and both partitions reach the same digit here, so they cannot witness the
+    capture divergence. The class below is what discriminates the two forms.
+
+    These were the shapes certified in prose, and their agreement is exactly why
+    that prose read as a proof: a corpus of agreeing forms cannot distinguish
+    "the two patterns are equivalent" from "I picked the cases where they
+    agree". Kept, labelled, and no longer load-bearing for equivalence.
+    """
 
     def test_dash_initial_value_before_the_pr_number(self):
         assert _capture("gh pr merge --subject -x 42") == "42"
@@ -290,6 +317,26 @@ class TestGH_PR_NumberRE_DashInitialValues:
         assert _capture("gh pr merge --body -weird --auto 99") == "99"
 
     def test_dash_initial_value_that_is_itself_a_digit_token(self):
-        """The form most able to steal the capture: the dash-initial value is a
-        number, so a pattern that mis-partitioned here would return 1, not 55."""
         assert _capture("gh pr merge --body -1 --auto 55") == "55"
+
+
+class TestGH_PR_NumberRE_NumericFlagValueDoesNotStealTheCapture:
+    """A NUMERIC flag argument must never be read as the pull-request number.
+
+    These are the forms where the value arm's constraint actually decides the
+    answer — the unconstrained predecessor returns the flag's argument here.
+    Pinned because a form-pin containing only AGREEING shapes reproduces the
+    sampling error that let the false equivalence stand in the first place.
+    """
+
+    def test_numeric_subject_does_not_become_the_pr_number(self):
+        assert _capture("gh pr merge --squash --subject 2024 42") == "42"
+
+    def test_numeric_body_file_does_not_become_the_pr_number(self):
+        assert _capture("gh pr merge --squash --body-file 1 42") == "42"
+
+    def test_numeric_value_after_an_auto_flag(self):
+        assert _capture("gh pr merge --auto --body 7 1234") == "1234"
+
+    def test_close_verb_is_covered_by_the_same_partition(self):
+        assert _capture("gh pr close --admin --comment 99 42") == "42"
