@@ -379,3 +379,20 @@ def _isolate_config_root_to_tmp(tmp_path, monkeypatch):
         os.environ.pop("CLAUDE_CONFIG_DIR", None)
     else:
         os.environ["CLAUDE_CONFIG_DIR"] = original_cfg
+
+
+@pytest.fixture(autouse=True)
+def _scrub_session_id_from_test_env(monkeypatch):
+    """Remove the developer's live session id from the test environment.
+
+    NOT redundant with the ``PYTEST_CURRENT_TEST`` refusal in
+    ``pact_session._discover_session_id``. The two fail on DIFFERENT signals:
+    the refusal fails if a spawn-environment allowlist keeps
+    ``CLAUDE_CODE_SESSION_ID`` and drops ``PYTEST_CURRENT_TEST``; this scrub
+    still holds there, because it removes the id itself rather than depending
+    on the pytest signal. Removing either one leaves that case uncovered.
+
+    Both fail open if their signal goes missing, so this is a dependency
+    upgrade rather than a safety guarantee.
+    """
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 import struct
 import subprocess
 import sys
@@ -237,6 +238,12 @@ def maybe_migrate_embeddings() -> dict:
 
         success = 0
         for row in rows:
+            # Bound before the try so the handler below can always name the row.
+            # Assigning it inside meant a failure on the two lines that follow
+            # left it unbound, so the handler raised NameError instead of
+            # logging — masking the real error and killing the `continue`, which
+            # turned one bad row into the loss of the whole sweep.
+            mem_id = None
             try:
                 memory_dict = dict(row)
                 mem_id = memory_dict["id"]
@@ -274,9 +281,20 @@ except ImportError:
     from pact_session import get_session_id_from_context_file
 
 
+# Fallback marker name for when the session id cannot be resolved. Process-
+# unique, and stable for the life of the process so it still suppresses a retry
+# after a sweep raises.
+#
+# A shared constant here would be fail-OPEN: every unresolved process would land
+# on one machine-wide name, so the first sweep to finish would suppress recovery
+# for every later session permanently. A process-unique name is fail-SAFE — the
+# worst case is that a sweep runs more than once.
+_PROCESS_MARKER_TOKEN = f"process-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+
 def _get_embedding_attempted_path() -> Path:
     """Get path to session-scoped embedding attempt marker file."""
-    session_id = get_session_id_from_context_file() or "unknown"
+    session_id = get_session_id_from_context_file() or _PROCESS_MARKER_TOKEN
     return Path("/tmp") / f"pact_embedding_attempted_{session_id}"
 
 
