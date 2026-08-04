@@ -17,11 +17,21 @@ same window: pytest sets PYTEST_CURRENT_TEST per test, around setup/call/
 teardown, so it is absent while modules are imported; and a per-test fixture
 cannot undo an import that already happened during collection.
 
-AND THE LEAK WOULD BE WHOLE-RUN, NOT ONE-SHOT. An import-time resolution does
-not merely leak once: the resolved id would be cached, and every later caller in
-that process would receive it. So the cost of this tripwire failing is the whole
-run, not the collection window alone. The earlier wording here described a
-single escaped import and understated it. Nothing enters
+AND THE CONSEQUENCE IS DESTRUCTION, NOT ONLY DISCLOSURE — STATED AT FULL
+STRENGTH BECAUSE EARLIER WORDINGS HERE WERE WRONG IN DEGREE TWICE. An import-time
+resolution does not leak once and stop: the id is resolved before the guards can
+refuse, so **the exposure lasts FOR THE LIFE OF THE PROCESS**, not for the
+collection window alone.
+
+And the harm is not that a name is read. `clear_embedding_marker()` resolves the
+SESSION-SCOPED marker path and unlinks it. It has no production caller and no CLI
+surface, but any process that imports the module can call it — and "no caller" is
+a different claim from "no primitive". **A wrongly created marker suppresses a
+sweep; a wrongly deleted one destroys a live session's state.** So a test process
+that resolves a real session id past a bypassed guard can DESTROY that session's
+marker, not merely learn its name.
+
+Nothing enters
 that window today. A note asking a future reader to remember this has no failure
 mode; this test has exactly one, and it is loud.
 
