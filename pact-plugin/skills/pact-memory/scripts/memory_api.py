@@ -460,11 +460,17 @@ class PACTMemory:
 
         Requires SQLITE_EXTENSIONS_ENABLED (pysqlite3) and sqlite-vec.
 
-        Whenever this returns without writing a vector it first removes any
-        vector already stored for this memory, so a record can never keep a
-        vector describing text it no longer contains. A missing vector makes a
-        record invisible to semantic search; a stale one makes it findable for
-        the wrong query, which is the worse failure.
+        When this returns without writing a vector AND the vector table is
+        reachable, it first removes any vector already stored for this memory.
+        A missing vector makes a record invisible to semantic search; a stale
+        one makes it findable for the wrong query, which is the worse failure.
+
+        THREE EXITS DO NOT REMOVE, so a stale vector can survive all three.
+        The two capability exits cannot open the vector table to issue the
+        delete, so nothing here repairs them and nothing else does either. The
+        fault handler wraps both the insert and the commit, so it can be
+        entered AFTER a vector was written successfully -- dropping there could
+        destroy a good one, so that omission is deliberate and a test pins it.
 
         Args:
             conn: Active database connection.

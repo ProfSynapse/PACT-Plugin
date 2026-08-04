@@ -266,7 +266,13 @@ class TestCliStderrStaysCleanOnTheFaultPath:
             "from scripts import cli\n"
             # --db-path is a hidden parent-parser flag and goes AFTER the
             # subcommand, so the child writes to a scratch database.
-            "cli.main(['save', '--db-path', " + repr(db) + ", "
+            # --no-sync IS REQUIRED, NOT TIDINESS. --db-path scopes the
+            # DATABASE only; the save path still syncs to the developer's real
+            # CLAUDE.md Working Memory. Without this flag every run of this
+            # test writes an entry into the operator's live file -- a test
+            # reaching into real user state, which is the exact defect class
+            # this whole change set exists to close.
+            "cli.main(['save', '--no-sync', '--db-path', " + repr(db) + ", "
             "json.dumps({'context': 'a record with embeddable text'})])\n"
         )
         # Suppress the model backend's own progress bar. huggingface_hub writes
@@ -296,4 +302,36 @@ class TestCliStderrStaysCleanOnTheFaultPath:
         assert proc.stderr == "", (
             "the CLI emitted free text on its structured JSON channel:\n"
             f"{proc.stderr!r}"
+        )
+
+
+class TestSqliteVecAbsenceIsReportedAsKeyword:
+    """The one exit of six with no test: sqlite-vec missing.
+
+    `_store_embedding` reaches its `except ImportError` when sqlite-vec cannot
+    be imported, and reports the process capability. Before this was fixed the
+    capability said `semantic` -- because it checked pysqlite3 and the embedding
+    backend but never sqlite-vec -- so a save that could not store a vector
+    reported that semantic search was available.
+
+    The claim was FALSE ON THE SEARCH SIDE TOO, independently of any save:
+    `vector_search` does the same import and returns [] on ImportError, so
+    semantic search returns nothing on every query while the capability calls
+    the mode `semantic`. One subject, one predicate, one correction.
+
+    THE REAL PATH, NOT A STAND-IN: `get_search_capabilities` is deliberately
+    NOT patched here. A single environmental fact -- sqlite_vec unimportable --
+    drives both the exit under test and the capability that reports it.
+    """
+
+    def test_missing_sqlite_vec_reports_keyword_not_semantic(self, mem, conn):
+        with patch.dict("sys.modules", {"sqlite_vec": None}), \
+             patch("scripts.memory_api.SQLITE_EXTENSIONS_ENABLED", True), \
+             patch("scripts.memory_api.generate_embedding_text", return_value="text"), \
+             patch("scripts.memory_api.generate_embedding", return_value=[0.1] * 256):
+            result = mem._store_embedding(conn, "mem-1", _memory())
+
+        assert result == "degraded:keyword", (
+            "with sqlite-vec absent no vector can be stored and none can be "
+            f"searched, so the capability must not claim semantic; got {result!r}"
         )

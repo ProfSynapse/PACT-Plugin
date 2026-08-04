@@ -387,7 +387,16 @@ def cmd_update(args, db_path=None):
         )
     if resolved_id is None:
         _error("NOT_FOUND", f"Memory '{args.memory_id}' not found")
-    _success({"memory_id": resolved_id})
+    # Mirror of the save envelope. An update that failed to re-embed is the
+    # costlier case: a save that stored no vector leaves a record merely
+    # invisible to semantic search, while an update leaves a vector describing
+    # text the record no longer contains. Reporting on save alone would close
+    # the milder path and leave the worse one silent.
+    result = {"memory_id": resolved_id}
+    embedding_status = memory.last_embedding_status
+    if embedding_status is not None:
+        result["embedding_status"] = embedding_status
+    _success(result)
 
 
 def cmd_delete(args, db_path=None):

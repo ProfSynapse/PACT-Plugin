@@ -15,6 +15,7 @@ Used by:
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import struct
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -432,22 +433,50 @@ def search_by_file(
         return memories
 
 
+def _sqlite_vec_available() -> bool:
+    """Report whether sqlite-vec can be IMPORTED.
+
+    A module-level name on purpose, so a test can patch this term at the same
+    seam it already patches SQLITE_EXTENSIONS_ENABLED. Called inline, this
+    check would be unpatchable, and a test that patches the other two terms
+    would silently pass here only because sqlite-vec happens to be installed --
+    an environment-dependent result wearing the look of a pinned one.
+
+    IMPORTABILITY, not loadability. The exit this term describes is an
+    `except ImportError`; a `sqlite_vec.load(conn)` failure is an incident
+    reported as `fault`, not a claim about what this process can do.
+    """
+    try:
+        return importlib.util.find_spec("sqlite_vec") is not None
+    except (ImportError, ValueError):
+        # ValueError: the name is present in sys.modules but has no spec.
+        return False
+
+
 def get_search_capabilities() -> Dict[str, Any]:
     """
     Get information about available search capabilities.
 
-    Vector storage requires both:
+    Vector storage requires all three:
     1. SQLITE_EXTENSIONS_ENABLED (pysqlite3 installed)
-    2. Embedding generation available (model + backend)
+    2. sqlite-vec importable
+    3. Embedding generation available (model + backend)
 
     Returns:
         Dictionary describing search features and their availability.
     """
     embedding_status = check_embedding_availability()
 
-    # Vector storage requires extension loading AND embedding generation
+    # Vector storage requires extension loading, sqlite-vec, AND embedding
+    # generation. sqlite-vec was missing from this predicate, and its absence
+    # made the report FALSE ON BOTH SIDES: vector_search does the same import
+    # and returns [] on ImportError, so semantic search answered nothing while
+    # this function still called the mode "semantic". One subject, so the term
+    # belongs here rather than in a second predicate on the save side.
     vector_storage_available = (
-        SQLITE_EXTENSIONS_ENABLED and embedding_status["available"]
+        SQLITE_EXTENSIONS_ENABLED
+        and _sqlite_vec_available()
+        and embedding_status["available"]
     )
 
     # Determine active search mode for clear status reporting
