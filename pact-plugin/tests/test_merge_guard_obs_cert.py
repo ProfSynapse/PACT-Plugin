@@ -871,6 +871,74 @@ def _g_roundtrip(mint_cmd, exec_cmd, tok):
     return _g_mint(mint_cmd, tok), _g_execute(exec_cmd, tok)
 
 
+class TestObsGMintCountIsIdentityKeyed:
+    """The mint count must tell a real mint apart from a retirement.
+
+    `_g_mint` is asserted BEFORE the refusal on every DENY row in this file, so
+    it is what separates a legitimate refusal from an over-block wearing a
+    refusal's clothes. A name-keyed count cannot make that separation:
+    `write_token` retires the previous token by renaming it into the same glob,
+    so a mint that created NOTHING still counted 1 whenever a prior token
+    existed to retire — and the mint-side miss those rows exist to catch went
+    straight through them.
+
+    Reverting `_g_live_token_ids` to a name diff turns this test RED. That is
+    the point of it: the docstring there explains why the count is keyed on
+    inode, and this is what stops the explanation from being the only guard.
+    """
+
+    def test_a_mint_that_creates_nothing_counts_zero(self, tmp_path):
+        # A prior token has to exist, or there is no retirement to miscount and
+        # the two forms of the count agree — the case would not discriminate.
+        assert _g_mint(_PG + "origin main", tmp_path) == 1, (
+            "setup did not mint, so no retirement is available and the "
+            "assertion below would hold for the wrong reason"
+        )
+
+        fired = []
+        real_write_token = mgpost.write_token
+
+        def _write_token_that_creates_nothing(context, token_dir=None):
+            # `write_token` retires BEFORE its O_EXCL create, so its real
+            # failure path leaves a retirement behind and no new token. This
+            # reproduces that SHAPE; it does not reproduce any particular cause
+            # of the failure, and it stops being faithful if that order changes.
+            mgc.cleanup_unused_tokens(token_dir or mgpost.TOKEN_DIR)
+            fired.append(True)
+            return None
+
+        mgpost.write_token = _write_token_that_creates_nothing
+        try:
+            minted = _g_mint(_PG + "origin main", tmp_path)
+        finally:
+            mgpost.write_token = real_write_token
+
+        # NON-VACUITY, AND IT NEEDS THREE WITNESSES RATHER THAN ONE. Zero is
+        # also what this test yields when it measures nothing, so the number is
+        # worthless until the scenario is shown to have actually happened. The
+        # `fired` flag alone is NOT enough: the stub can fire with no prior
+        # token to retire, and the count then reads 0 for a reason that has
+        # nothing to do with what is being pinned.
+        assert fired, "the stub never ran, so this test measured nothing"
+        tokens = list(tmp_path.glob(mgc.TOKEN_PREFIX + "*"))
+        assert any(p.name.endswith(".consumed") for p in tokens), (
+            "no retirement on disk, so nothing was present for a name-keyed "
+            "count to mistake for a mint"
+        )
+        assert not [
+            p for p in tokens
+            if not p.name.endswith(".consumed")
+            and mgc.USE_MARKER_SUFFIX not in p.name
+        ], "a live token survived, so the mint did not fail and 0 would be wrong"
+
+        assert minted == 0, (
+            "a mint that created no token counted as one. The retirement of "
+            "the prior token was counted as a fresh mint, so a mint-side miss "
+            "passes the `minted == 1` assertion written to catch it, and a "
+            "DENY caused by an over-block is certified as a read decision."
+        )
+
+
 class TestObsGRealMintExecuteRoundTrip:
     def test_faithful_multi_ref_click_mints_and_self_authorizes(self, tmp_path):
         # THE over-block cure, end-to-end: the faithful multi-ref click MINTS (base
