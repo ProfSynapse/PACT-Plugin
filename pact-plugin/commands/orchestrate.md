@@ -90,11 +90,11 @@ B_id = TaskCreate(
     subject="{role}: {primary mission}",
     description="{full mission per Recommended Agent Prompting Structure}\n\n"
                 "FIRST claim this task (TaskUpdate status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\n"
-                "Per dogfood directive: DO NOT mark this task completed yourself. "
+                "DO NOT mark this task completed yourself. "
                 "After staging artifacts, write metadata.handoff, send notify SendMessage to team-lead, "
                 "SET intentional_wait{reason=awaiting_lead_completion}. Idle. Lead will mark "
                 "completed after HANDOFF validation. If team-lead rejects, team-lead writes metadata.handoff_rejection; "
-                "revise on this same task.\n\nUpstream: TEACHBACK Task #{A_id}.",
+                "revise on this same task.\n\nWrite the HANDOFF whatever the size of the diff — a task whose deliverable is a JUDGEMENT rather than a CHANGE carries its value in the rationale, not in the diff.\n\nUpstream: TEACHBACK Task #{A_id}.",
     metadata={
         "variety": {
             "novelty":               N,
@@ -764,7 +764,7 @@ Agent(
 )
 ```
 
-The auditor stores its final signal as `metadata.audit_summary` via `TaskUpdate` before marking the task completed. On RED signal: SendMessage to the affected coder and pause their work. On YELLOW: pass finding to test engineer as focus area. See [pact-audit.md](../protocols/pact-audit.md) for the full Concurrent Audit Protocol.
+The auditor stores its final signal as `metadata.audit_summary` via `TaskUpdate` before marking the task completed. On a RED signal, YOU SendMessage the affected coder and may pause their work — the auditor reports to you and never directs coders itself. On YELLOW: pass finding to test engineer as focus area. See [pact-audit.md](../protocols/pact-audit.md) for the full Concurrent Audit Protocol.
 
 When a coder reports stage-ready, send a wake-SendMessage to the concurrent auditor: "coder staged — observe the staged diff now." Send this on every stage-ready, including for later commits in the same phase.
 

@@ -1528,20 +1528,58 @@ class TestCliSubprocess:
         )
         assert result.returncode == 1
 
-    def test_save_and_get_roundtrip(self, cli_script_path, cli_db):
+    def test_save_and_get_roundtrip(self, cli_script_path, cli_db, tmp_path):
+        """E2E roundtrip, and THE ONLY E2E ARM THAT DECLARES A ROOT.
+
+        Its eight siblings in this class suppress with `--no-sync`, which is
+        correct for them but means the declared-anchor path had no coverage
+        through a real subprocess -- only through the archive wiring, which
+        supplies the flag itself. This arm passes `--claude-md-root` explicitly,
+        the way any caller can, and asserts BOTH that the sync was permitted
+        and that the write landed UNDER the declared root.
+
+        A DECLARED ROOT IS WHY THIS SAVE MAY SYNC AT ALL. The child inherits
+        PYTEST_CURRENT_TEST and has no pytest module, so the ambient guard would
+        refuse it; declaring a root exempts that refusal, and the write is then
+        bounded by containment instead of by the guard.
+        """
         memory_dict = make_cli_memory_dict()
         json_str = json.dumps(memory_dict)
+
+        # A sandbox project the write is allowed to land in.
+        declared_root = tmp_path / "declared-project"
+        declared_root.mkdir()
+        claude_md = declared_root / "CLAUDE.md"
+        claude_md.write_text(
+            "# Declared\n\n## Working Memory\n"
+            "<!-- Auto-managed by pact-memory skill. -->\n",
+            encoding="utf-8",
+        )
+        before = claude_md.read_bytes()
+
+        env = dict(os.environ)
+        env["CLAUDE_PROJECT_DIR"] = str(declared_root)
 
         # Save
         save_result = subprocess.run(
             [sys.executable, cli_script_path, "save", json_str,
-             "--db-path", str(cli_db)],
-            capture_output=True, text=True, timeout=60,
+             "--claude-md-root", str(declared_root), "--db-path", str(cli_db)],
+            capture_output=True, text=True, timeout=60, env=env,
         )
         assert save_result.returncode == 0, f"save stderr: {save_result.stderr}"
         save_output = json.loads(save_result.stdout)
         assert save_output["ok"] is True
         memory_id = save_output["result"]["memory_id"]
+
+        # THE VERDICT, and then WHERE IT LANDED. Asserting only the verdict
+        # would pass for a sync that reported success without writing.
+        assert save_output["result"]["sync_status"] == "wrote", (
+            f"a declared root did not permit the sync: {save_output}"
+        )
+        assert claude_md.read_bytes() != before, (
+            "the sync reported `wrote` but the file under the declared root is "
+            "unchanged"
+        )
 
         # Get
         get_result = subprocess.run(
@@ -1989,7 +2027,7 @@ class TestCliSubprocess:
 
         result = subprocess.run(
             [sys.executable, cli_script_path, "save", "--stdin",
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             input=json_str,
             capture_output=True, text=True, timeout=60,
         )
@@ -2001,7 +2039,7 @@ class TestCliSubprocess:
     def test_save_invalid_json_exits_1(self, cli_script_path, cli_db):
         result = subprocess.run(
             [sys.executable, cli_script_path, "save", "not{valid",
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 1
@@ -2016,7 +2054,7 @@ class TestCliSubprocess:
         # Save first
         subprocess.run(
             [sys.executable, cli_script_path, "save", json_str,
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
 
@@ -2040,7 +2078,7 @@ class TestCliSubprocess:
         # Save first
         subprocess.run(
             [sys.executable, cli_script_path, "save", json_str,
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
 
@@ -2076,7 +2114,7 @@ class TestCliSubprocess:
             memory_dict = make_cli_memory_dict(context=f"limit test {i}")
             subprocess.run(
                 [sys.executable, cli_script_path, "save", json.dumps(memory_dict),
-                 "--db-path", str(cli_db)],
+                 "--no-sync", "--db-path", str(cli_db)],
                 capture_output=True, text=True, timeout=60,
             )
 
@@ -2093,7 +2131,7 @@ class TestCliSubprocess:
     def test_save_non_dict_exits_1(self, cli_script_path, cli_db):
         result = subprocess.run(
             [sys.executable, cli_script_path, "save", '"just a string"',
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 1
@@ -2117,7 +2155,7 @@ class TestCliSubprocess:
         # Save
         save_result = subprocess.run(
             [sys.executable, cli_script_path, "save", json_str,
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
         assert save_result.returncode == 0
@@ -2162,7 +2200,7 @@ class TestCliSubprocess:
         # Save
         save_result = subprocess.run(
             [sys.executable, cli_script_path, "save", json_str,
-             "--db-path", str(cli_db)],
+             "--no-sync", "--db-path", str(cli_db)],
             capture_output=True, text=True, timeout=60,
         )
         assert save_result.returncode == 0

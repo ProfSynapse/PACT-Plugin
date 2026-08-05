@@ -118,10 +118,50 @@ def get_available_ram_mb() -> float:
     return -1.0
 
 
+class UnembeddedResult(list):
+    """The IDs needing embedding, and WHETHER THE QUESTION WAS ANSWERABLE.
+
+    This is a `list`, so every existing use is unchanged: iteration, `len`,
+    truthiness, indexing, and a test that patches this function with a plain
+    `[]` all keep working. `.reason` is the channel a bare list could not carry.
+
+    THE DEFECT IT CLOSES. Three of this function's four exits return no IDs
+    because it COULD NOT LOOK, and one returns none because there are none. All
+    four used to be an indistinguishable `[]`, and the caller reads empty as
+    nothing-to-do -- so in the degraded state, which is the exact condition the
+    recovery sweep exists for, the sweep reported nothing to do precisely when
+    it could do nothing.
+
+    SAME SHAPE AS `SyncResult`, DELIBERATELY, AND NOT THE OTHER SIBLING. The
+    `_store_embedding` convention returns None-or-value, which here would mean
+    None-or-list and would break every caller that iterates. Preserving what
+    callers already rely on and adding discrimination beside it is the whole
+    pattern; changing the shape they rely on is not.
+    """
+
+    # ANSWERED is the only reason for which an empty result means "nothing to do".
+    ANSWERED = "answered"
+    NO_EXTENSIONS = "extensions_unavailable"
+    NO_VECTOR_TABLE = "vector_table_missing"
+    QUERY_FAILED = "query_failed"
+
+    def __init__(self, ids=(), reason: str = ANSWERED) -> None:
+        super().__init__(ids)
+        self.reason = reason
+
+    @property
+    def answerable(self) -> bool:
+        """True when the emptiness of this list is INFORMATION rather than a gap."""
+        return self.reason == self.ANSWERED
+
+    def __repr__(self) -> str:
+        return f"UnembeddedResult({list(self)!r}, reason={self.reason!r})"
+
+
 def get_unembedded_memories(
     project_id: Optional[str] = None,
     limit: int = 50
-) -> List[str]:
+) -> "UnembeddedResult":
     """
     Find memory IDs that exist in memories table but not in vec_memories.
 
@@ -133,12 +173,19 @@ def get_unembedded_memories(
         limit: Maximum number of IDs to return.
 
     Returns:
-        List of memory_ids that need embedding.
+        An `UnembeddedResult` -- a list of memory_ids that need embedding, plus
+        `.reason` saying whether the question could be answered at all.
+
+        AN EMPTY RESULT DOES NOT MEAN THERE IS NOTHING TO DO. It means that
+        only when `.reason` is `answered`. The other three reasons report that
+        this function could not look: the vector extension is unavailable, the
+        vector table does not exist, or the query raised. Read `.answerable`
+        before reading emptiness as an answer.
     """
     # Check if extensions are available - no point checking if we can't embed
     if not SQLITE_EXTENSIONS_ENABLED:
         logger.debug("SQLite extensions unavailable, skipping unembedded check")
-        return []
+        return UnembeddedResult(reason=UnembeddedResult.NO_EXTENSIONS)
 
     try:
         with db_connection() as conn:
@@ -150,7 +197,9 @@ def get_unembedded_memories(
             )
             if cursor.fetchone() is None:
                 logger.debug("vec_memories table doesn't exist, skipping")
-                return []
+                return UnembeddedResult(
+                    reason=UnembeddedResult.NO_VECTOR_TABLE
+                )
 
             # Find memories without embeddings
             query = """
@@ -171,11 +220,12 @@ def get_unembedded_memories(
             cursor = conn.execute(query, params)
             rows = cursor.fetchall()
 
-            return [row[0] for row in rows]
+            # The ONLY exit whose emptiness is an answer.
+            return UnembeddedResult(row[0] for row in rows)
 
     except Exception as e:
         logger.debug(f"Error getting unembedded memories: {e}")
-        return []
+        return UnembeddedResult(reason=UnembeddedResult.QUERY_FAILED)
 
 
 def embed_single_memory(memory_id: str) -> bool:
@@ -270,7 +320,10 @@ def embed_pending_memories(
         "processed": 0,
         "failed": False,
         "skipped_ram": False,
-        "error": None
+        "error": None,
+        # None means the outstanding-work question WAS answered. A string names
+        # why it could not be, so a caller can tell "no work" from "no answer".
+        "unembedded_unknown": None,
     }
 
     # Check RAM before starting
@@ -285,6 +338,22 @@ def embed_pending_memories(
 
     # Get unembedded memories
     unembedded = get_unembedded_memories(project_id=project_id, limit=limit)
+    # READ THE REASON BEFORE READING THE EMPTINESS. An unanswerable result is
+    # empty for a reason that has nothing to do with how much work is
+    # outstanding, so reporting it as a clean no-op is the defect: it says
+    # "nothing to do" in exactly the state where the sweep can do nothing.
+    #
+    # `getattr` WITH A True DEFAULT, NOT A BARE ATTRIBUTE READ. A PLAIN list
+    # from any other producer keeps its historical meaning -- these ids, and
+    # the question was answered -- so nothing that already returns a list
+    # changes behaviour or has to learn a new type. Reading the attribute
+    # directly made this function reject a plain list, which broke callers the
+    # channel was supposed to leave untouched. Preserving what callers already
+    # rely on is the point of the shape; a read that only accepts the new type
+    # abandons it.
+    if not getattr(unembedded, "answerable", True):
+        result["unembedded_unknown"] = unembedded.reason
+        return result
     if not unembedded:
         return result
 

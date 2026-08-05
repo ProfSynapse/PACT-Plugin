@@ -736,30 +736,67 @@ class TestC4AnchorDriftDetector:
 
 
 # --- ReDoS LINEARITY pins (ReDoS is an over-block BY TIMEOUT).
+#
+# BOUNDS ARE SIZED AGAINST THE FAILURE THEY DETECT, NOT AGAINST TYPICAL RUNTIME.
+# The regression these pins exist to catch is catastrophic backtracking, which is
+# ORDERS OF MAGNITUDE — a non-terminal carrier span measured 60,662 ms where the
+# terminal one takes 8 ms. So the bound only has to sit far above the honest
+# runtime and far below a real blowup; every millisecond of the gap between those
+# two is free, and narrowing it buys nothing while costing flakiness.
+#
+# MEASURED (this module, moderately loaded): the slowest single call is ~600 ms.
+# The previous bounds were 1000 ms and 2000 ms — a margin of under 2x — and a
+# preceding comment claimed the runtime was "single-digit ms even at n=8000",
+# which is false and is what made those bounds look generous. Under a loaded
+# suite they failed at 1006.5 ms against 1000 ms, and 2040.6 ms against 2000 ms:
+# both under 3% over, i.e. pure load, not regression.
+_LINEAR_BOUND_MS = 8000.0        # ~13x the slowest honest call
+_LINEAR_BOUND_WIDE_MS = 12000.0  # for the heavier echo/printf cases
+
+# Re-sample only when a sample looks bad. Timing noise is ONE-SIDED — load can
+# only make a run slower — so the MINIMUM is the robust estimator and the mean is
+# not. Sampling three times unconditionally would triple this module's runtime;
+# re-sampling only above this threshold keeps the fast path at one sample and
+# pays the cost solely where a spike would otherwise produce a false red.
+_RESAMPLE_ABOVE_MS = 1500.0
+_RESAMPLE_TIMES = 3
+
+
 def _elapsed_ms(cmd):
+    """Milliseconds for one classification, robust to a transient load spike."""
     import time
-    start = time.perf_counter()
-    D(cmd)
-    return (time.perf_counter() - start) * 1000.0
+
+    def _once():
+        start = time.perf_counter()
+        D(cmd)
+        return (time.perf_counter() - start) * 1000.0
+
+    best = _once()
+    if best > _RESAMPLE_ABOVE_MS:
+        for _ in range(_RESAMPLE_TIMES - 1):
+            best = min(best, _once())
+    return best
 
 
 class TestReDoSLinearity:
     # A hang blocks a faithful click -> ReDoS is an over-block. Both the C4 anchor cluster and
-    # the FIX-R body must be linear. Bounds are generous vs a linear impl (single-digit ms even
-    # at n=8000) but a backtracking regression (O(n^2)+) blows them by orders of magnitude.
+    # the FIX-R body must be linear. The bound is sized against the REGRESSION (orders of
+    # magnitude), not against typical runtime -- see the _elapsed_ms header for the measured
+    # numbers. An earlier version of this comment claimed single-digit ms at n=8000; the real
+    # figure is ~450ms, and that false premise is what made a sub-2x bound look generous.
     @pytest.mark.parametrize("n", [2000, 8000])
     def test_c4_anchor_cluster_linear(self, n):
         # A huge VALID bundled cluster AND a pathological NO-`m` cluster (the input that forces a
         # greedy m-including variant to backtrack the whole run). C4 handles both in linear time.
-        assert _elapsed_ms('git commit -%sm "run %s"' % ("a" * n, BD)) < 1000.0, "valid cluster n=%d" % n
-        assert _elapsed_ms('git commit -%sx "run %s"' % ("a" * n, BD)) < 1000.0, "no-m cluster n=%d" % n
+        assert _elapsed_ms('git commit -%sm "run %s"' % ("a" * n, BD)) < _LINEAR_BOUND_MS, "valid cluster n=%d" % n
+        assert _elapsed_ms('git commit -%sx "run %s"' % ("a" * n, BD)) < _LINEAR_BOUND_MS, "no-m cluster n=%d" % n
 
     @pytest.mark.parametrize("n", [2000, 8000])
     def test_fixr_body_linear(self, n):
         # Pathological quote/escape runs that stress the multi-arm bash-faithful body's ambiguity.
-        assert _elapsed_ms('git commit -m ' + '"' * n) < 1000.0, "unclosed-dq run n=%d" % n
-        assert _elapsed_ms("git commit -m " + "$'" * n) < 1000.0, "ansi-c open run n=%d" % n
-        assert _elapsed_ms('git commit -m ' + '\\' * n) < 1000.0, "backslash run n=%d" % n
+        assert _elapsed_ms('git commit -m ' + '"' * n) < _LINEAR_BOUND_MS, "unclosed-dq run n=%d" % n
+        assert _elapsed_ms("git commit -m " + "$'" * n) < _LINEAR_BOUND_MS, "ansi-c open run n=%d" % n
+        assert _elapsed_ms('git commit -m ' + '\\' * n) < _LINEAR_BOUND_MS, "backslash run n=%d" % n
 
 
 # ===========================================================================
@@ -1095,15 +1132,15 @@ class TestFoldStripSurfaceMechanism:
 class TestFoldReDoSLinearity:
     @pytest.mark.parametrize("n", [4000, 16000])
     def test_f3_scanner_linear(self, n):
-        assert _elapsed_ms('git commit -m "' + "$(" * n + '"') < 1000.0, "unterminated $( n=%d" % n
-        assert _elapsed_ms('git commit -m "$(' + "(" * n + ")" * n + ')"') < 1000.0, "nested parens n=%d" % n
-        assert _elapsed_ms('git commit -m "' + "'" * n + '$(date)"') < 1000.0, "apostrophe-run n=%d" % n
-        assert _elapsed_ms('git commit -m "' + "$" * n + '"') < 1000.0, "dollar-run n=%d" % n
+        assert _elapsed_ms('git commit -m "' + "$(" * n + '"') < _LINEAR_BOUND_MS, "unterminated $( n=%d" % n
+        assert _elapsed_ms('git commit -m "$(' + "(" * n + ")" * n + ')"') < _LINEAR_BOUND_MS, "nested parens n=%d" % n
+        assert _elapsed_ms('git commit -m "' + "'" * n + '$(date)"') < _LINEAR_BOUND_MS, "apostrophe-run n=%d" % n
+        assert _elapsed_ms('git commit -m "' + "$" * n + '"') < _LINEAR_BOUND_MS, "dollar-run n=%d" % n
 
     @pytest.mark.parametrize("n", [4000, 16000])
     def test_f2_save_flag_run_linear(self, n):
         # The stash-save positional anchor `(save(?:\s+-[-\w]+)*\s+)` is a deterministic per-flag loop.
-        assert _elapsed_ms('git stash save ' + "-a " * n + '"msg"') < 1000.0, "save flag-run n=%d" % n
+        assert _elapsed_ms('git stash save ' + "-a " * n + '"msg"') < _LINEAR_BOUND_MS, "save flag-run n=%d" % n
 
 
 # ===========================================================================
@@ -1271,9 +1308,9 @@ class TestC4ReDoSLinearity:
     # linearity pin on the equals-form var-assignment path (measured ~73 ms at n=16000).
     @pytest.mark.parametrize("n", [4000, 16000])
     def test_equals_form_path_linear(self, n):
-        assert _elapsed_ms('FOO="' + "$(" * n + '"') < 1000.0, "FOO= unterminated $( n=%d" % n
-        assert _elapsed_ms('FOO="$(' + "(" * n + ")" * n + ')"') < 1000.0, "FOO= nested parens n=%d" % n
-        assert _elapsed_ms('FOO="' + "'" * n + '$(date)"') < 1000.0, "FOO= apostrophe-run n=%d" % n
+        assert _elapsed_ms('FOO="' + "$(" * n + '"') < _LINEAR_BOUND_MS, "FOO= unterminated $( n=%d" % n
+        assert _elapsed_ms('FOO="$(' + "(" * n + ")" * n + ')"') < _LINEAR_BOUND_MS, "FOO= nested parens n=%d" % n
+        assert _elapsed_ms('FOO="' + "'" * n + '$(date)"') < _LINEAR_BOUND_MS, "FOO= apostrophe-run n=%d" % n
 
 
 # ===========================================================================
@@ -1483,8 +1520,8 @@ class TestFC1ReDoSLinearity:
     # pin (measured ~46 ms at n=16000).
     @pytest.mark.parametrize("n", [4000, 16000])
     def test_carrier_scanner_linear(self, n):
-        assert _elapsed_ms('echo "' + "$(" * n + '"') < 1000.0, "echo unterminated $( n=%d" % n
-        assert _elapsed_ms('curl -d "$(' + "(" * n + ")" * n + ')" ' + _FC1_URL) < 1000.0, "curl -d nested parens n=%d" % n
+        assert _elapsed_ms('echo "' + "$(" * n + '"') < _LINEAR_BOUND_MS, "echo unterminated $( n=%d" % n
+        assert _elapsed_ms('curl -d "$(' + "(" * n + ")" * n + ')" ' + _FC1_URL) < _LINEAR_BOUND_MS, "curl -d nested parens n=%d" % n
 
 
 # ===========================================================================
@@ -1619,5 +1656,5 @@ class TestEchoPrintfCarveoutReDoS:
     # linear (measured ~142 ms at 16000 args, ~50 ms nested).
     @pytest.mark.parametrize("n", [4000, 16000])
     def test_carveout_linear(self, n):
-        assert _elapsed_ms('echo ' + '"a" ' * n + '"%s"' % BD) < 2000.0, "echo many-args n=%d" % n
-        assert _elapsed_ms('echo "$(' + "(" * n + ")" * n + ')"') < 2000.0, "echo nested parens n=%d" % n
+        assert _elapsed_ms('echo ' + '"a" ' * n + '"%s"' % BD) < _LINEAR_BOUND_WIDE_MS, "echo many-args n=%d" % n
+        assert _elapsed_ms('echo "$(' + "(" * n + ")" * n + ')"') < _LINEAR_BOUND_WIDE_MS, "echo nested parens n=%d" % n

@@ -113,6 +113,16 @@ from .memory_api import (
 
 # Working Memory (CLAUDE.md sync)
 from .working_memory import (
+    # `sync_to_claude_md` RETURNS one of these, so exporting the function
+    # without the type left the export unusable for any caller that wants the
+    # reason rather than just the truthiness.
+    SyncResult,
+    # And it can RAISE this one. An exported function whose exception cannot be
+    # named is uncatchable by anything but a bare `except Exception`, which is
+    # the handler that swallows everything else too -- so the caller either
+    # over-catches or cannot respond to the one outcome that is deliberate
+    # rather than broken.
+    AmbientSyncRefused,
     sync_to_claude_md,
     sync_retrieved_to_claude_md,
     WORKING_MEMORY_HEADER,
@@ -135,6 +145,7 @@ from .embedding_catchup import (
 from .memory_init import (
     ensure_memory_ready,
     reset_initialization,
+    clear_embedding_marker,
     is_initialized,
     check_and_install_dependencies,
     maybe_migrate_embeddings,
@@ -233,6 +244,8 @@ __all__ = [
     "list_memories_simple",
 
     # Working Memory (CLAUDE.md sync)
+    "SyncResult",
+    "AmbientSyncRefused",
     "sync_to_claude_md",
     "sync_retrieved_to_claude_md",
     "WORKING_MEMORY_HEADER",
@@ -251,6 +264,7 @@ __all__ = [
     # Lazy Initialization
     "ensure_memory_ready",
     "reset_initialization",
+    "clear_embedding_marker",
     "is_initialized",
     "check_and_install_dependencies",
     "maybe_migrate_embeddings",

@@ -190,7 +190,7 @@ def update_session_info(
                         "## Pinned Context\n"
                         "\n"
                         "## Working Memory\n"
-                        "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. Full history searchable via pact-memory skill. -->\n"
+                        "<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. -->\n"
                         f"{MEMORY_END_MARKER}\n"
                         "\n"
                         f"{MANAGED_END_MARKER}\n"

@@ -166,7 +166,7 @@ TaskUpdate(A_id, owner="{reviewer-name}")
 # Create Task B — per-dispatch variety stamping per pact-variety.md
 B_id = TaskCreate(
     subject="{reviewer-type}: review {feature}",
-    description="<full review mission>\n\nFIRST claim this task (TaskUpdate status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.",
+    description="<full review mission>\n\nFIRST claim this task (TaskUpdate status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\nWrite metadata.handoff whatever the size of the diff — a task whose deliverable is a JUDGEMENT rather than a CHANGE carries its value in the rationale, not in the diff.",
     metadata={
         "variety": {
             "novelty":               N,

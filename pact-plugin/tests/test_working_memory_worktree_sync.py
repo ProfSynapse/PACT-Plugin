@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "skills", "pact
 from scripts.working_memory import (
     _project_root_of,
     _resolve_display_claude_md_path,
+    SyncResult,
     sync_retrieved_to_claude_md,
     sync_to_claude_md,
 )
@@ -46,7 +47,7 @@ from scripts.memory_api import PACTMemory
 WORKING_MEMORY_SCAFFOLD = (
     "# {title}\n\n"
     "## Working Memory\n"
-    "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. "
+    "<!-- Auto-managed by pact-memory skill. "
     "Full history searchable via pact-memory skill. -->\n"
 )
 RETRIEVED_CONTEXT_SCAFFOLD = (
@@ -216,7 +217,14 @@ class TestAmbientBranchAbsentTarget:
             memory_id="e" * 32,
         )
 
-        assert ok is False, "an absent ambient destination must report failure"
+        # `missing` states DIRECTLY what this class previously had to infer from
+        # a proxy: the skip came from the existence GUARD, not from the read
+        # raising. A read failure reports `failed`, so the two are now distinct
+        # observations rather than one shared `False`. The sidecar assertion
+        # below is kept as independent evidence of the same thing.
+        assert ok.reason == SyncResult.MISSING, (
+            "an absent ambient destination must report `missing`"
+        )
         assert not missing.exists(), "the sync CREATED a CLAUDE.md"
         leftovers = sorted(p.name for p in project.iterdir())
         assert leftovers == [], (
@@ -249,7 +257,9 @@ class TestAmbientBranchAbsentTarget:
             memory_id="f" * 32,
         )
 
-        assert ok is True, "the control did not write — the harness is broken"
+        assert ok.reason == SyncResult.WROTE, (
+            "the control did not write -- the harness is broken"
+        )
         assert "live control writes" in present.read_text(encoding="utf-8")
 
     def test_ambient_absent_warns_while_explicit_absent_stays_quiet(
@@ -485,12 +495,22 @@ class TestBothWriteCallersAgreeOnAbsentDestinations:
             returned = drive()
             # tuple, not list: these are compared as a set below to detect
             # divergence between callers, and a list is unhashable.
+            #
+            # NORMALISED TO A BOOL ON PURPOSE. The two callers no longer share a
+            # return TYPE -- `sync_to_claude_md` reports a `SyncResult` and
+            # `sync_retrieved_to_claude_md` still returns a plain bool -- so a
+            # raw comparison would report divergence for a difference in
+            # richness rather than in behaviour. The invariant this class states
+            # is about BEHAVIOUR: did it write, and did it touch the filesystem.
+            # Both survive the normalisation. The reason a given caller declined
+            # is asserted in that caller's own class, not here, because a
+            # differential arm can only compare what every driver has.
             created = tuple(sorted(str(p.relative_to(root)) for p in root.rglob("*")))
-            observations[name] = (returned, created)
+            observations[name] = (bool(returned), created)
 
         assert len(observations) == len(self._drivers()), "a driver was skipped"
         for name, (returned, created) in observations.items():
-            assert returned is False, f"{name} reported success on an absent destination"
+            assert not returned, f"{name} reported success on an absent destination"
             assert created == (), (
                 f"{name} created filesystem entries under a path it only had to "
                 f"read: {list(created)}"
@@ -517,7 +537,10 @@ class TestBothWriteCallersAgreeOnAbsentDestinations:
             wm, "_resolve_display_claude_md_with_base", lambda: (None, None)
         )
         for name, drive in self._drivers():
-            assert drive() is False, (
+            # Truthiness, for the same reason the sibling arm normalises: the
+            # drivers do not share a return type, and the shared claim is only
+            # that neither of them wrote.
+            assert not drive(), (
                 f"{name} did not skip cleanly when the resolver found nothing"
             )
 
@@ -574,7 +597,7 @@ class TestExplicitSyncTarget:
             target=intended / "CLAUDE.md",
         )
 
-        assert ok is True
+        assert ok
         # POSITIVE: assert where it landed, not merely that the decoy is clean.
         # "The other file is untouched" is equally consistent with the sync
         # having silently skipped.
@@ -609,7 +632,13 @@ class TestExplicitSyncTarget:
             target=missing,
         )
 
-        assert ok is False, "an absent target must report failure, not success"
+        # The EXPLICIT-target twin of the ambient `missing` arm above. Pinning
+        # the reason separates the guard's skip from a read that raised, which
+        # is the distinction the directory-empty assertion below had to stand in
+        # for while the result was a bare bool.
+        assert ok.reason == SyncResult.MISSING, (
+            "an absent target must report `missing`, not success"
+        )
         assert not missing.exists(), (
             "the sync CREATED a CLAUDE.md that did not exist — this moves the "
             "file's lifecycle from the orchestrator to the memory layer"
@@ -640,7 +669,7 @@ class TestExplicitSyncTarget:
             memory_id="c" * 32,
         )
 
-        assert ok is True
+        assert ok
         assert "ambient path still works" in md.read_text(encoding="utf-8")
 
     def test_dot_claude_target_resolves_the_project_root_for_containment(
@@ -667,7 +696,7 @@ class TestExplicitSyncTarget:
             memory_id="d" * 32,
             target=md,
         )
-        assert ok is True
+        assert ok
         assert "dot layout target" in md.read_text(encoding="utf-8")
 
 

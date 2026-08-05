@@ -152,7 +152,7 @@ the packaging boundary and must never be read as a pass.
 
 That makes this module a self-aware member of the class "shipped artifact
 referencing a non-shipped path". The membership is unavoidable rather than
-careless: CI runs ``python -m pytest tests/`` with ``pact-plugin/`` as the
+careless: CI runs ``python -m pytest`` with ``pact-plugin/`` as the
 working directory, so a guard placed anywhere else would never execute.
 
 A CLASS-LEVEL SWEEP WAS MEASURED AND REJECTED — REMEASURE BEFORE ADDING ONE

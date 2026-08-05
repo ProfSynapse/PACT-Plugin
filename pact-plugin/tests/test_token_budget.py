@@ -227,7 +227,7 @@ class TestSyncToClaudeMdBudgetEnforcement:
         existing_content = (
             "# Project\n\n"
             "## Working Memory\n"
-            "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. "
+            "<!-- Auto-managed by pact-memory skill. "
             "Full history searchable via pact-memory skill. -->\n\n"
             f"### 2026-01-14 10:00\n**Context**: {long_text}\n**Goal**: Old goal\n\n"
             f"### 2026-01-13 10:00\n**Context**: {long_text}\n**Goal**: Older goal\n\n"
@@ -240,7 +240,11 @@ class TestSyncToClaudeMdBudgetEnforcement:
                 memory_id="test123"
             )
 
-        assert result is True
+        # Every sync assertion in this class is a PRECONDITION: the subject is
+        # the budget behaviour in the file, not the outcome classification. A
+        # truthiness read states "the write happened" and leaves the reason to
+        # the repr if it ever fails.
+        assert result
         new_content = claude_md.read_text(encoding="utf-8")
         assert "## Working Memory" in new_content
         assert "New context entry" in new_content
@@ -252,7 +256,7 @@ class TestSyncToClaudeMdBudgetEnforcement:
         content = (
             "# Project\n\n"
             "## Working Memory\n"
-            "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. "
+            "<!-- Auto-managed by pact-memory skill. "
             "Full history searchable via pact-memory skill. -->\n\n"
             "## Pinned Context\n\nSome pinned stuff\n"
         )
@@ -265,7 +269,7 @@ class TestSyncToClaudeMdBudgetEnforcement:
         # The synced entry must actually be rendered into the Working Memory
         # block. A no-op sync that left the file untouched would still satisfy
         # the structural assertions below, so pin the entry content directly.
-        assert result is True
+        assert result
         wm_block = re.search(
             r"## Working Memory\n(.*?)(?=\n## |\Z)", new_content, re.DOTALL
         ).group(1)
@@ -283,7 +287,7 @@ class TestSyncToClaudeMdBudgetEnforcement:
         existing_content = (
             "# Project\n\n"
             "## Working Memory\n"
-            "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. "
+            "<!-- Auto-managed by pact-memory skill. "
             "Full history searchable via pact-memory skill. -->\n\n"
             "### 2026-01-15 10:00\n**Context**: Entry one\n\n"
             "### 2026-01-14 09:00\n**Context**: Entry two\n\n"
@@ -300,7 +304,7 @@ class TestSyncToClaudeMdBudgetEnforcement:
                 memory_id="new123"
             )
 
-        assert result is True
+        assert result
         new_content = claude_md.read_text(encoding="utf-8")
 
         # Count ### YYYY-MM-DD entries in the Working Memory section.
@@ -350,7 +354,7 @@ class TestSyncRetrievedBudgetEnforcement:
             f"### 2026-01-14 10:00\n**Query**: \"old query\"\n**Context**: {long_text}\n\n"
             f"### 2026-01-13 10:00\n**Query**: \"older query\"\n**Context**: {long_text}\n\n"
             "## Working Memory\n"
-            "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. "
+            "<!-- Auto-managed by pact-memory skill. "
             "Full history searchable via pact-memory skill. -->\n\n"
         )
         claude_md = self._create_claude_md(tmp_path, existing_content)
@@ -550,7 +554,7 @@ class TestParseWorkingMemorySection:
         content = (
             "# Project\n\n"
             "## Working Memory\n"
-            "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. "
+            "<!-- Auto-managed by pact-memory skill. "
             "Full history searchable via pact-memory skill. -->\n\n"
             "### 2026-01-15 10:00\n"
             "**Context**: Some entry\n"
@@ -566,7 +570,7 @@ class TestParseWorkingMemorySection:
 
         content = (
             "## Working Memory\n"
-            "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. "
+            "<!-- Auto-managed by pact-memory skill. "
             "Full history searchable via pact-memory skill. -->\n\n"
             "### Not a date header\n"
             "Some content\n\n"
@@ -583,7 +587,7 @@ class TestParseWorkingMemorySection:
 
         content = (
             "## Working Memory\n"
-            "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. "
+            "<!-- Auto-managed by pact-memory skill. "
             "Full history searchable via pact-memory skill. -->\n\n"
             "## Pinned Context\n"
         )
@@ -598,7 +602,7 @@ class TestParseWorkingMemorySection:
 
         content = (
             "## Working Memory\n"
-            "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. "
+            "<!-- Auto-managed by pact-memory skill. "
             "Full history searchable via pact-memory skill. -->\n\n"
             "### 2026-01-15 10:00\n"
             "**Context**: First entry\n\n"

@@ -1365,12 +1365,18 @@ class TestCategoryC_MemoryScriptFallback:
 
         assert memory_init.get_session_id_from_context_file is get_session_id_from_context_file
 
-    def test_memory_init_embedding_path_falls_back_to_unknown_without_args(self, monkeypatch, tmp_path):
-        """_get_embedding_attempted_path falls back to 'unknown' when called without context.
+    def test_memory_init_embedding_path_falls_back_to_process_token_without_args(self, monkeypatch, tmp_path):
+        """_get_embedding_attempted_path falls back to a PROCESS-UNIQUE token.
 
         _get_embedding_attempted_path() calls get_session_id_from_context_file()
-        with no args. Without both session_id and project_dir, the function
-        returns empty string, and the path uses 'unknown' as fallback.
+        with no args. When discovery cannot name the session unambiguously the
+        function returns empty string, and the path falls back.
+
+        The fallback is deliberately process-unique rather than a shared
+        constant: a shared name is fail-open, because the first process to
+        finish a sweep would suppress recovery for every later session on the
+        machine. A per-process name is fail-safe - the worst case is a repeated
+        sweep.
         """
         from scripts import memory_init
 
@@ -1378,10 +1384,12 @@ class TestCategoryC_MemoryScriptFallback:
 
         result = memory_init._get_embedding_attempted_path()
 
-        assert "unknown" in str(result)
+        assert memory_init._PROCESS_MARKER_TOKEN in str(result)
+        assert str(os.getpid()) in str(result)
+        assert "_unknown" not in str(result)
 
-    def test_memory_init_embedding_path_falls_back_to_unknown(self, monkeypatch, tmp_path):
-        """_get_embedding_attempted_path should fall back to 'unknown' when no context file."""
+    def test_memory_init_embedding_path_falls_back_when_no_context_file(self, monkeypatch, tmp_path):
+        """_get_embedding_attempted_path falls back when no context file resolves."""
         from scripts import memory_init
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -1389,7 +1397,8 @@ class TestCategoryC_MemoryScriptFallback:
 
         result = memory_init._get_embedding_attempted_path()
 
-        assert "unknown" in str(result)
+        assert memory_init._PROCESS_MARKER_TOKEN in str(result)
+        assert "_unknown" not in str(result)
 
 
 class TestPathSync:

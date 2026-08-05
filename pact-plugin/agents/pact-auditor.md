@@ -207,7 +207,7 @@ Other agents in your team (coders, architect, test-engineer) do NOT self-complet
 
 ## PERSISTENT MEMORY
 
-Save accumulated audit patterns to `~/.claude/agent-memory/pact-auditor/`. If multiple instances may write the same agent-memory file concurrently across teams, namespace by `## team=` section (same convention as the secretary) so instances don't clobber each other.
+Save accumulated audit patterns to your agent-memory directory. The platform gives you its absolute path, under `~/.claude/agent-memory/` — use the path you are given, never one built from your agent type.
 
 Examples of patterns worth saving:
 - "Backend coders in this project tend to drift on error handling in auth modules"

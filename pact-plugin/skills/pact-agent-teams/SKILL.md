@@ -1,8 +1,9 @@
 ---
 name: pact-agent-teams
 description: |
-  Agent Teams interaction protocol for PACT specialist agents. Auto-loaded via agent frontmatter.
-  Defines how teammates start work, communicate, report completion, and handle blockers.
+  Agent Teams interaction protocol for PACT specialist agents. Invoke it at spawn, and again before
+  you append to your MEMORY.md index. Defines how teammates start work, communicate, report
+  completion, handle blockers, and append to a shared index without dropping another instance's entries.
 ---
 
 # Agent Teams Protocol
@@ -41,7 +42,7 @@ A reply to the user that contains content the team-lead needs to act on (a block
    - **DO NOT** call `Edit`, `Write`, or `Bash` for implementation work before storing your teachback
    - See [Teachback](#teachback-conversation-verification) below for the full skill reference
 5. **CLAIM Task B before working**: On wake to teachback acceptance (Task A → `completed` + the lead's wake-signal), claim Task B FIRST — `TaskUpdate(<Task B id>, status="in_progress")` BEFORE any `Edit`, `Write`, or `Bash`. Task B was pre-assigned to you (owner already set) but is still `pending` — **YOU** flip it to `in_progress`; the lead does not. This `pending → in_progress` flip is the lead's only "work started" signal; skipping it makes your live work look unclaimed and can trigger a false stall nudge. The durable Task A read is authoritative: if Task A already shows `completed` on disk, claim Task B and proceed even if the wake-signal message is not yet visible — wake messages can trail the status flip (see [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic)).
-6. Begin work on Task B — check your agent memory (`~/.claude/agent-memory/<your-name>/`) for relevant patterns and knowledge as part of your working process. When a memory file may be written by concurrent same-named instances across teams, namespace per team (a `## team={your team_id}` section) so instances don't clobber each other.
+6. Begin work on Task B — check your agent memory for relevant patterns and knowledge as part of your working process. The platform hands you its absolute path under `~/.claude/agent-memory/`, and the schema for writing to it, in your own context. If more than one instruction in your context offers you a memory directory, use the one whose path contains `.claude/agent-memory/` — the others are different memory systems, not other spellings of this one. Follow that instruction rather than any pattern restated elsewhere.
 
 > **Worktree Scope**: If you are working in a worktree, files that are gitignored (e.g., `CLAUDE.md`) do not exist there. Do not edit or create `CLAUDE.md` — the orchestrator manages it separately. If you need to reference `CLAUDE.md` content, it is auto-loaded into your context. If your task mentions updating `CLAUDE.md`, flag it in your handoff instead of editing it directly.
 
@@ -502,7 +503,9 @@ Before returning your final output:
 
    Examples: file locations, framework conventions → agent memory. Architectural decisions, cross-cutting concerns → HANDOFF.
 
-   Save concise notes to your persistent memory directory (`~/.claude/agent-memory/<your-name>/`) as you discover codepaths, patterns, and key decisions. If a memory file may be written by concurrent same-named instances across teams, namespace per team (a `## team={your team_id}` section) so instances don't clobber each other. For **project-wide institutional knowledge**, include it in your HANDOFF — the secretary will review and save it to pact-memory.
+   Save concise notes to your persistent agent memory as you discover codepaths, patterns, and key decisions — the platform hands you its absolute path under `~/.claude/agent-memory/`, and the schema for writing to it, in your own context. If more than one instruction in your context offers you a memory directory, use the one whose path contains `.claude/agent-memory/` — the others are different memory systems, not other spellings of this one. For **project-wide institutional knowledge**, include it in your HANDOFF — the secretary will review and save it to pact-memory.
+
+   **Index upkeep — pointers go in the head, never the tail.** Your `MEMORY.md` index is truncated to the first 200 lines and 25,000 UTF-16 code units, measured after trimming. Whichever limit binds first cuts the index there, and everything past the cut is dropped — so a pointer at the end is the first thing lost. Directly under the title, keep a short preamble that names satellite and archive files by NAMING CONVENTION rather than by filename — for example: "`MEMORY-*.md` and `INDEX_*.md` roll up a topic; `ARCHIVE_*.md` holds retired entries." Append new entries BELOW that preamble, never above it. Make that append with an `Edit` against the file as it is on disk, never a whole-file rewrite from a copy you read earlier — other instances of your agent type write this same index, including instances in other projects and other sessions, and a rewrite silently drops whatever they added while you worked. Never re-derive the limits from a rendered size warning — that string has lost its unit.
 
    If you're working without an assigned task (no HANDOFF will be collected), message the secretary directly to save significant decisions or non-obvious discoveries: `SendMessage(to="secretary", message="[{your-name}→secretary] Save: {what you learned and why it matters}", summary="Save request: {topic}")`
 

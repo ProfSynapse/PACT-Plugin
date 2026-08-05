@@ -14049,6 +14049,474 @@ class TestD3PushToMainAuthorizationEndToEnd:
 # =============================================================================
 
 
+# --- Shared carrier analysis for the 7.E positional-safety pins below. --------
+#
+# WHY THIS IS VALUE-BASED, NOT SHAPE-BASED. An earlier form of these pins walked
+# `ast.BinOp`/`Add` chains and asked whether a carrier NAME was the last operand.
+# That question is only meaningful for ONE spelling of concatenation. A carrier
+# composed with `%`, an f-string, `.format` or `str.join` produced no `Add` node
+# at all, so it entered neither the discovery fixed point nor the offender scan
+# and the pin passed while the span sat in a non-terminal position. Measured: a
+# `%`-composed carrier with a trailing `\Z` took 7.1 SECONDS on a ~30-character
+# command and the whole merge-guard suite stayed green.
+#
+# So we EVALUATE each carrier expression to its actual string instead of
+# inspecting its syntax, with `_VERB_MSG_BODY` replaced by a sentinel, and then
+# ask whether the result ENDS WITH that sentinel. Composition spelling stops
+# mattering: `+`, `%`, f-string and `.join` all reduce to the same string.
+#
+# FAIL-SAFE, AND ON WHICH AXIS. On the SPELLING axis the claim holds: a
+# composition this evaluator cannot value loses the sentinel, the carrier drops
+# out of the population, and the count assertion in the terminality pin fires.
+# On the POSITION axis it does NOT hold on its own — a carrier the population
+# never enumerates is silent, not loud. That is why the population below is
+# every BINDING of every name plus every UNBOUND carrier expression, and not
+# one binding per name. Two shapes lived outside "one binding per name" and
+# both were caught by the predecessor and missed here: the span handed straight
+# to `re.sub(...)` with no name at all, and a name assigned twice where the
+# second assignment moved the span off the end.
+#
+# WHICH DIRECTION IS WORSE HERE, WHICH IS THE OPPOSITE OF THE GUARD ITSELF.
+# In `is_dangerous_command` an over-block is the cardinal sin: it refuses a real
+# user's faithful click. This is a PIN OVER that control, and the blast radii
+# are not the same. An over-block here reddens CI for a developer — loud,
+# immediate, cheap, and it announces itself. An under-block here lets an edit
+# that re-arms the exponential backtracking ship SILENTLY into the SACROSANCT
+# control. So when a change to this analysis trades one direction for the
+# other, prefer the false alarm. Do not carry the guard's severity ordering
+# into the pin without re-deriving it; the subject changed underneath it.
+_SPAN_SENTINEL = "\x00CARRIER_SPAN\x00"
+_SPAN_SOURCE_NAME = "_VERB_MSG_BODY"
+
+
+def _all_merge_guard_modules():
+    """The THREE modules that make up the merge-guard implementation.
+
+    The span is defined in `merge_guard_common`, but a carrier can be built in
+    either hook that imports from it, and one there is exactly as dangerous.
+    Both pins below run over this list rather than over the shared module alone.
+    """
+    import merge_guard_post
+    import merge_guard_pre
+    from shared import merge_guard_common
+
+    return (merge_guard_common, merge_guard_pre, merge_guard_post)
+
+
+def _carrier_span_analysis(source=None, module=None):
+    """Resolve every carrier in ONE module and locate the span in each.
+
+    Returns (carriers, offenders, resolved, unbound) where `carriers` is the set
+    of local names carrying the span, `offenders` is [(lineno, name, tail)] for
+    carriers whose span is NOT terminal, `resolved` counts bindings we fully
+    valued, and `unbound` counts carrier expressions that are never assigned to
+    a name.
+
+    `source` overrides the module text, so the safe/unsafe shape families below
+    can drive this over synthetic carriers instead of only over whatever the
+    shipped module happens to contain today.
+
+    `module` selects WHICH module to read and whose globals resolve free names.
+    The implementation is THREE files — `merge_guard_common` plus the two hooks
+    that import from it — and a carrier in any of them is equally dangerous, so
+    every caller here runs over all three (see `_ALL_MERGE_GUARD_MODULES`).
+    Reading only the shared module was a latent gap: a carrier in
+    `merge_guard_pre`/`merge_guard_post` was unreachable BY CONSTRUCTION, and no
+    count assertion could notice because the population it counted was the one
+    module it looked at.
+    """
+    import ast
+
+    from shared import merge_guard_common
+
+    if module is None:
+        module = merge_guard_common
+    if source is None:
+        source = Path(module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    # The span is DEFINED in merge_guard_common, so in a sibling module it only
+    # ever arrives through an import — and an import may rename it. Resolve the
+    # local aliases from the module's own import statements rather than assuming
+    # the canonical name: `from ... import _VERB_MSG_BODY as _VMB` binds the span
+    # to `_VMB`, and a scan keyed on the canonical spelling sees nothing at all.
+    span_names = {_SPAN_SOURCE_NAME}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == _SPAN_SOURCE_NAME:
+                    span_names.add(alias.asname or alias.name)
+
+    # ...and the OTHER way a sibling module can reach the span: bind the whole
+    # module and go through it — `import shared.merge_guard_common as m` then
+    # `m._VERB_MSG_BODY`. That is an ast.Attribute, not an ast.Name, so a scan
+    # that only knows names walks straight past it and reports a clean zero.
+    #
+    # NOT hypothetical: `import shared.pact_context as pact_context` followed by
+    # `pact_context.init(...)` is already present in BOTH merge_guard_pre.py and
+    # merge_guard_post.py — the exact two modules this reaches. The idiom is one
+    # substitution away from a pattern an editor of those files already uses,
+    # and it fails toward MISSING a carrier, which is the unsafe direction.
+    module_aliases = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[-1] == "merge_guard_common":
+                    module_aliases.add(alias.asname or alias.name.split(".")[0])
+
+    def _dotted(node):
+        """`a.b.c` -> 'a.b.c' for a pure Name/Attribute chain, else None."""
+        parts = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if not isinstance(node, ast.Name):
+            return None
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+
+    def _is_span_ref(node):
+        """True for ANY static spelling of a reference to the span itself.
+
+        Three shapes reach here, and they are the complete set of ways Python
+        can name a value from another module WITHOUT constructing the name at
+        runtime: a bare local name (canonical, or bound by `from X import s as
+        alias`), an attribute on a module alias (`import X as m` -> `m.s`), and
+        an attribute on a DOTTED module path (`import X.Y` -> `X.Y.s`). The
+        receiver is walked as a chain rather than required to be a bare Name,
+        because the third shape's receiver is itself an Attribute.
+
+        Dynamic spellings (`getattr`, `globals()[...]`, `importlib`) are NOT
+        recognised here and deliberately so — see the module-level note on the
+        two-layer design. They are caught by the use-site census instead.
+        """
+        if isinstance(node, ast.Name):
+            return node.id in span_names
+        if isinstance(node, ast.Attribute) and node.attr == _SPAN_SOURCE_NAME:
+            path = _dotted(node.value)
+            if path is None:
+                return False
+            return (
+                path in module_aliases
+                or path.split(".")[-1] == "merge_guard_common"
+            )
+        return False
+
+    # Every single-target assignment in the module, by name. Carriers are locals
+    # inside _strip_non_executable_content, so `ast.walk` (not module globals)
+    # is what reaches them.
+    #
+    # A LIST per name, in source order — not one node per name. A name assigned
+    # twice has two bindings and BOTH are carriers. Keeping only the first is
+    # what let `_s = LIT + BODY` followed by `_s = _s + r"..."` pass: the second
+    # binding moved the span off the end and was never looked at.
+    assigns = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                assigns.setdefault(target.id, []).append(node)
+    for _bindings in assigns.values():
+        _bindings.sort(key=lambda n: n.lineno)
+
+    parents = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[id(child)] = node
+
+    class _Opaque(str):
+        """A resolved-but-unknown fragment. Truthy and non-empty on purpose."""
+
+    def value_of(node, seen, before=None):
+        """Evaluate an expression node to a string. Never raises.
+
+        `before` is the line the reference is made FROM. A name resolves to its
+        nearest binding above that line, so the second half of `_s = _s + r"x"`
+        reads the EARLIER `_s` rather than re-entering itself. `before` also
+        decreases strictly on every hop, so the walk terminates on its own.
+        """
+        if isinstance(node, ast.Constant):
+            return node.value if isinstance(node.value, str) else repr(node.value)
+        # `m._VERB_MSG_BODY` — the module-alias spelling. Deliberately NARROW:
+        # only this exact attribute on a name bound to merge_guard_common
+        # resolves to the span. Every other Attribute keeps falling through to
+        # the opaque marker below, so this widening cannot newly report an
+        # unrelated attribute access as a carrier.
+        if isinstance(node, ast.Attribute):
+            if _is_span_ref(node):
+                return _SPAN_SENTINEL
+            return _Opaque("?")
+        if isinstance(node, ast.Name):
+            if node.id in span_names:
+                return _SPAN_SENTINEL
+            if node.id in seen:                       # cycle guard
+                return _Opaque("?")
+            bindings = assigns.get(node.id, [])
+            earlier = [b for b in bindings if before is None or b.lineno < before]
+            # Fall back to the first binding for a genuine forward reference (a
+            # name defined below the function that reads it).
+            src = earlier[-1] if earlier else (bindings[0] if bindings else None)
+            if src is not None:
+                return value_of(src.value, seen | {node.id}, src.lineno)
+            # Module-level constant (e.g. _MAX_GLOBAL_FLAG_TOKENS, _GH_API_PREFIX).
+            if hasattr(module, node.id):
+                got = getattr(module, node.id)
+                return got if isinstance(got, str) else repr(got)
+            return _Opaque("?")
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return value_of(node.left, seen, before) + value_of(node.right, seen, before)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            left = value_of(node.left, seen, before)
+            right = value_of(node.right, seen, before)
+            try:
+                return left % right
+            except (TypeError, ValueError):
+                return left + _Opaque("?")
+        if isinstance(node, ast.JoinedStr):            # f-string
+            return "".join(value_of(v, seen, before) for v in node.values)
+        if isinstance(node, ast.FormattedValue):
+            return value_of(node.value, seen, before)
+        if isinstance(node, ast.Call):
+            func = node.func
+            # `re.compile(X)` is PATTERN-PRESERVING: it does not move the span,
+            # so it must resolve to X exactly. Appending an opaque tail here
+            # would report a compiled-then-`sub`'d carrier as non-terminal —
+            # an over-block in the guard itself, on a construct that is safe.
+            # Compiled bindings are still collected as carriers below, because
+            # the FULLMATCH pin does care about them.
+            if (
+                isinstance(func, ast.Attribute) and func.attr == "compile"
+                and node.args
+            ):
+                return value_of(node.args[0], seen, before)
+            # ONLY a string-COMPOSING call can pass the span through to its own
+            # value. `re.sub(pattern, repl, text)` returns the SUBSTITUTED TEXT,
+            # not its pattern argument. Resolving the arguments of an arbitrary
+            # call would make every `result = re.sub(_carrier, ...)` line in the
+            # strip pipeline render as a carrier with an opaque tail and report
+            # the whole module — an over-block created by the very widening that
+            # closed the terminality gap. Checking every binding of a name makes
+            # this reachable, so the two changes have to land together.
+            if not (
+                isinstance(func, ast.Attribute) and func.attr in ("join", "format")
+            ):
+                return _Opaque("?")
+            # `"".join([...])` and friends — resolve the pieces we can see so a
+            # span inside them still registers, then mark the rest opaque.
+            #
+            # KNOWN AND DELIBERATE: this arm cannot VALUE a `.join`/`.format`
+            # carrier, it can only notice one. `.join([...])` hands us an
+            # ast.List, which is not in the filter below, so the span is lost
+            # and the carrier drops out of `carriers` — the count assertion in
+            # the terminality pin is what catches that, not this scan. A safe
+            # `.format` carrier is likewise reported as an offender because the
+            # opaque tail is unconditional. Both are OVER-blocks: loud, at CI
+            # time, on an unusual spelling. Neither is in the safe-shape family
+            # below for that reason. Widening this arm to value them is worth
+            # doing; it is not worth doing at the same time as the terminality
+            # repair, because the two changes fail in opposite directions.
+            inner = "".join(
+                value_of(a, seen, before) for a in node.args
+                if isinstance(a, (ast.Constant, ast.Name, ast.BinOp, ast.JoinedStr))
+            )
+            return inner + _Opaque("?") if inner else _Opaque("?")
+        return _Opaque("?")
+
+    carriers, offenders, resolved = set(), [], 0
+    for name, bindings in assigns.items():
+        for node in bindings:
+            rendered = value_of(node.value, frozenset(), node.lineno)
+            if _SPAN_SENTINEL not in rendered:
+                continue
+            carriers.add(name)
+            resolved += 1
+            tail = rendered.rsplit(_SPAN_SENTINEL, 1)[1]
+            if tail:
+                offenders.append((node.lineno, name, tail[:80]))
+
+    # Carrier expressions that are NEVER BOUND to a name — the span handed
+    # straight to `re.sub(...)` as an argument. The loop above walks
+    # assignments, so an unassigned expression has no entry to be found under
+    # and was previously unreachable: appending a required element to the
+    # echo/printf carrier re-armed the explosion in total silence.
+    #
+    # Walk UP from each span mention through the nodes that can compose a
+    # string around it, and check the outermost one. Stopping at the composing
+    # boundary is what keeps the enclosing `re.sub(...)` call out of it — its
+    # attribute is `sub`, so it does not compose, and treating it as a carrier
+    # would append an opaque tail to every clean call site and report the whole
+    # module.
+    _COMPOSING_CALLS = {"join", "format", "compile"}
+
+    def _composes(node):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+            return True
+        if isinstance(node, (ast.JoinedStr, ast.FormattedValue)):
+            return True
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return True          # the argument list of a `.join(...)`
+        if isinstance(node, ast.Call):
+            func = node.func
+            return isinstance(func, ast.Attribute) and func.attr in _COMPOSING_CALLS
+        return False
+
+    assigned_values = {id(b.value) for bs in assigns.values() for b in bs}
+    unbound, seen_exprs = 0, set()
+    for node in ast.walk(tree):
+        # Both spellings: a bare name, and `m._VERB_MSG_BODY` through a
+        # module alias. Keying this scan on ast.Name alone was the hole.
+        if not _is_span_ref(node):
+            continue
+        if not isinstance(node.ctx, ast.Load):        # skip the definition itself
+            continue
+        top = node
+        while True:
+            up = parents.get(id(top))
+            if up is None or not _composes(up):
+                break
+            top = up
+        if id(top) in assigned_values or id(top) in seen_exprs:
+            continue                                   # already checked above
+        seen_exprs.add(id(top))
+        rendered = value_of(top, frozenset(), getattr(top, "lineno", None))
+        if _SPAN_SENTINEL not in rendered:
+            continue
+        unbound += 1
+        resolved += 1
+        tail = rendered.rsplit(_SPAN_SENTINEL, 1)[1]
+        if tail:
+            offenders.append((top.lineno, "<unbound carrier expression>", tail[:80]))
+
+    # Names bound to a COMPILED carrier (`_x_re = re.compile(_carrier_span)`).
+    # Compiling does not move the span, so these are not terminality offenders —
+    # but they ARE carriers for the fullmatch pin, which otherwise sees only a
+    # literal carrier name at the call site and misses this module's dominant
+    # compile-then-call idiom.
+    for _ in range(8):
+        grew = False
+        for name, bindings in assigns.items():
+            if name in carriers:
+                continue
+            for node in bindings:
+                if not isinstance(node.value, ast.Call):
+                    continue
+                func = node.value.func
+                if not (isinstance(func, ast.Attribute) and func.attr == "compile"):
+                    continue
+                if any(
+                    isinstance(sub, ast.Name) and sub.id in carriers
+                    for arg in node.value.args
+                    for sub in ast.walk(arg)
+                ):
+                    carriers.add(name)
+                    grew = True
+                    break
+        if not grew:
+            break
+
+    return carriers, offenders, resolved, unbound
+
+
+# --- Carrier-shape families: the safe-shape negative control. -----------------
+#
+# The shipped module passing is a negative control for exactly the THREE shapes
+# it happens to contain today (`LIT + BODY`, `(LIT % CONST) + BODY`,
+# `LIT + NAME + LIT + BODY`). Every other spelling was unprotected: nothing here
+# demonstrated that this analysis does not REFUSE safe code, and the
+# compile-then-`sub` branch it leans on never fires on the real module, so a
+# regression in it would redden nothing.
+#
+# The UNSAFE family is not decoration — it is what stops the safe family being
+# vacuous. A safe-only family would also pass against an analysis that reported
+# nothing at all, which is the failure this whole pin exists to prevent.
+#
+# Each snippet is parsed, never executed. `_VERB_MSG_BODY` resolves to a
+# sentinel by name, so these need no imports and no module state.
+_SAFE_CARRIER_SHAPES = (
+    ("plain concatenation",
+     '_s = r"\\bfind\\s+" + _VERB_MSG_BODY'),
+    ("percent-formatted prefix, then concatenation",
+     '_s = r"\\bgit\\s+(?:[^\\s]+\\s+){0,%d}tag\\b" % 32 + _VERB_MSG_BODY'),
+    ("percent wrapping the span",
+     '_s = r"\\bfind\\s+%s" % _VERB_MSG_BODY'),
+    ("f-string",
+     '_s = rf"\\bfind\\s+{_VERB_MSG_BODY}"'),
+    ("compiled, then consumed by sub",
+     '_s = re.compile(r"\\bfind\\s+" + _VERB_MSG_BODY)'),
+    ("prefix held in another local",
+     '_p = r"\\bfind\\s+"\n_s = _p + _VERB_MSG_BODY'),
+    ("never bound to a name",
+     're.sub(r"\\bfind\\s+" + _VERB_MSG_BODY, _f, _text)'),
+    ("rebound, span still terminal",
+     '_s = r"\\bfind\\s+"\n_s = _s + _VERB_MSG_BODY'),
+    # --- cross-module spellings. The span is DEFINED in merge_guard_common, so
+    # a sibling module can only reach it through an import, and there are three
+    # static ways to write that. Each must be accepted when the span is
+    # terminal, or the guard refuses correct code in a sibling.
+    ("from-import alias, span terminal",
+     'from shared.merge_guard_common import _VERB_MSG_BODY as _V\n'
+     '_s = r"\\bfind\\s+" + _V'),
+    ("module alias attribute, span terminal",
+     'import shared.merge_guard_common as _m\n'
+     '_s = r"\\bfind\\s+" + _m._VERB_MSG_BODY'),
+    ("dotted module path, span terminal",
+     'import shared.merge_guard_common\n'
+     '_s = r"\\bfind\\s+" + shared.merge_guard_common._VERB_MSG_BODY'),
+    ("unrelated attribute through the same alias, span terminal",
+     'import shared.merge_guard_common as _m\n'
+     '_s = r"\\bfind\\s+" + _m.TOKEN_PREFIX + _m._VERB_MSG_BODY'),
+    ("span rebound through an intermediate, still terminal",
+     'import shared.merge_guard_common as _m\n'
+     '_v = _m._VERB_MSG_BODY\n'
+     '_s = r"\\bfind\\s+" + _v'),
+)
+
+_UNSAFE_CARRIER_SHAPES = (
+    ("trailing literal after the span",
+     '_s = r"\\bfind\\s+" + _VERB_MSG_BODY + r"\\s*x"'),
+    ("end anchor after the span",
+     '_s = r"\\bfind\\s+" + _VERB_MSG_BODY + r"\\Z"'),
+    ("percent wrapping the span, with an anchor",
+     '_s = r"\\bfind\\s+%s\\Z" % _VERB_MSG_BODY'),
+    ("f-string with a trailing element",
+     '_s = rf"\\bfind\\s+{_VERB_MSG_BODY}\\s*x"'),
+    ("compiled with a trailing anchor",
+     '_s = re.compile(r"\\bfind\\s+" + _VERB_MSG_BODY + r"\\Z")'),
+    # --- the same three cross-module spellings, each made UNSAFE. A carrier in
+    # a sibling module is exactly as dangerous as one here, and each of these
+    # was invisible to an earlier draft of the resolver.
+    ("from-import alias with a trailing anchor",
+     'from shared.merge_guard_common import _VERB_MSG_BODY as _V\n'
+     '_s = r"\\bfind\\s+" + _V + r"\\Z"'),
+    ("module alias attribute with a trailing anchor",
+     'import shared.merge_guard_common as _m\n'
+     '_s = r"\\bfind\\s+" + _m._VERB_MSG_BODY + r"\\Z"'),
+    ("dotted module path with a trailing anchor",
+     'import shared.merge_guard_common\n'
+     '_s = r"\\bfind\\s+" + shared.merge_guard_common._VERB_MSG_BODY + r"\\Z"'),
+    ("span rebound through an intermediate, then extended",
+     'import shared.merge_guard_common as _m\n'
+     '_v = _m._VERB_MSG_BODY\n'
+     '_s = r"\\bfind\\s+" + _v + r"\\Z"'),
+    ("never bound to a name, with a trailing literal",
+     're.sub(r"\\bfind\\s+" + _VERB_MSG_BODY + r"\\s*x", _f, _text)'),
+    ("rebound so the span is no longer terminal",
+     '_s = r"\\bfind\\s+" + _VERB_MSG_BODY\n_s = _s + r"\\s*x"'),
+    ("re-concatenated into a new name",
+     '_s = r"\\bfind\\s+" + _VERB_MSG_BODY\n_t = _s + r"\\s*x"'),
+)
+
+# Shapes this analysis cannot value, and therefore refuses. Listed so the limit
+# is VISIBLE rather than discovered by whoever next writes one. See the Call
+# branch of `value_of` for why each fails.
+_KNOWN_REFUSED_CARRIER_SHAPES = (
+    ("str.join", '_s = "".join([r"\\bfind\\s+", _VERB_MSG_BODY])'),
+    ("str.format", '_s = r"\\bfind\\s+{}".format(_VERB_MSG_BODY)'),
+    ("group-wrapped whole span",
+     '_s = r"(?:" + r"\\bfind\\s+" + _VERB_MSG_BODY + r")"'),
+)
+
+
 class TestD2QuoteAwareSpanRemediation:
     """#933 M2/M3 — the quote-aware carrier span (design §7.A-E).
 
@@ -14306,29 +14774,360 @@ class TestD2QuoteAwareSpanRemediation:
 
         assert not is_dangerous_command('gh pr edit 5 --title "git branch -D x"')
 
-    # ---- 7.E — ReDoS guard for the span ITSELF (the quote-aware body's own
-    #            linear profile; distinct from the M1 D3 ladder ReDoS). ----
+    # ---- 7.E — ReDoS: the span's safety is POSITIONAL, not intrinsic. ----
 
-    def test_span_redos_linear_profile(self):
-        """The quote-aware span `(?:[^&|;\\n"']+|"(?:...)*"|'[^']*')*` has three
-        DISJOINT-first-char alternatives, so the nested `*` cannot backtrack
-        ambiguously — the match is LINEAR. A 40 KB unterminated-double-quote
-        input (the classic `(a+)*` catastrophic trigger) completes well under
-        a generous bound.
+    def test_verb_msg_body_is_terminal_in_every_carrier(self):
+        """`_VERB_MSG_BODY` IS catastrophically backtrackable. Only POSITION stops it.
 
-        # non-vacuity: pins that the span does not REGRESS into catastrophic
-        #   backtracking. The generous bound (100 ms vs the measured sub-ms)
-        #   is revert-proving without timing flakiness.
+        MEASURED, not reasoned. Give the span a required element after it that
+        fails to match, and it is EXPONENTIAL — roughly 2x per added input
+        character: n=12 0.1ms, n=20 34ms, n=24 539ms, n=2000 >5s. The shape is
+        `(?:...|[^&|;\\n"'$\\\\]+|...)*` — a `+` arm inside an outer `*`, which is
+        the textbook `(a+)*` explosion.
+
+        WHAT ACTUALLY MAKES THE SHIPPED CODE SAFE IS POSITION. In every carrier
+        the span is the LAST element, so nothing after it can fail, so the match
+        always succeeds and the engine never backtracks into the span. The
+        safety property lives at the CALL SITES, not in the pattern.
+
+        WHAT BREAKS IT — each of these makes the guard exponentially
+        backtrackable on ordinary input, with NO change to the regex at all:
+          * append anything required after the span in a carrier — a closing
+            token, a literal, another sub-pattern;
+          * add an end anchor (`$`, `\\Z`) after it;
+          * consume a carrier with `re.fullmatch` instead of `search`/`sub`
+            (pinned by the sibling test below).
+
+        WHAT THIS PIN COVERS, AND WHAT IT DOES NOT. It resolves each carrier to
+        its VALUE, so the first two breakages are caught whatever spelling built
+        the carrier: `+`, `%` and f-string all reduce to one string, and that
+        is measured, not asserted — the shape families below run each spelling
+        in both a safe and an unsafe form. `.join` and `.format` are the
+        exceptions and are NOT valued: `.join` loses the span (its argument is
+        an ast.List) and drops the carrier from the population, where the count
+        assertion below catches it; a `.format` carrier always reports an
+        opaque tail, safe or not. Both are OVER-blocks on unusual spellings,
+        both are listed in the known-refused family below so the next reader
+        meets them as a recorded limit rather than as a surprise.
+
+        COVERAGE, STATED PLAINLY. Both pins read ALL THREE implementation
+        modules — `merge_guard_common` plus the two hooks that import from it
+        (see `_all_merge_guard_modules`). A carrier built in `merge_guard_pre.py`
+        or `merge_guard_post.py` is as dangerous as one here and is checked the
+        same way, including when the span arrives under an import alias or
+        through a module attribute.
+
+        THIS PIN IS NOT THE ONLY THING THAT COULD NOTICE, and the claim that it
+        was is why the earlier form of it went unchallenged. A behavioural arm
+        catches these breakages too, from the other side: it is agnostic to how
+        the carrier was composed AND to which module holds it, but it only
+        reaches the carriers its input traverses. The two are complements, not
+        substitutes. Do not delete one because the other is green.
+
+        The check is TRANSITIVE, in both of the ways a carrier can travel. A
+        carrier bound to a local name can be re-concatenated into a NEW name
+        (`_other = _git_commit_span + r"..."`), and it can be re-concatenated
+        into the SAME name (`_s = _s + r"..."`). Following only
+        `_VERB_MSG_BODY` misses the first; keeping one binding per name misses
+        the second. The resolver collects every binding of every name, resolves
+        each reference to its nearest PRECEDING binding, and checks all of
+        them.
         """
-        import time
+        # ALL THREE modules, not just the shared one. A carrier in
+        # merge_guard_pre/merge_guard_post is exactly as dangerous and was
+        # previously unreachable by this pin.
+        carriers, offenders, resolved, unbound = set(), [], 0, 0
+        _use_sites = []
+        import re as _re
 
-        from merge_guard_pre import _strip_non_executable_content
+        for _mod in _all_merge_guard_modules():
+            _c, _o, _r, _u = _carrier_span_analysis(module=_mod)
+            _tag = Path(_mod.__file__).name
+            carriers |= {f"{_tag}::{n}" for n in _c}
+            offenders += [(_tag, *row) for row in _o]
+            resolved += _r
+            unbound += _u
 
-        worst = 'gh issue create --title "' + "a" * 40000
-        start = time.perf_counter()
-        _strip_non_executable_content(worst)
-        elapsed = time.perf_counter() - start
-        assert elapsed < 0.1, f"span strip took {elapsed*1000:.1f}ms (ReDoS?)"
+            # Count use sites PER MODULE, against that module's own span
+            # aliases — a sibling may import the span under another name, and a
+            # census keyed on the canonical spelling would score it zero and
+            # call the population complete.
+            _src = Path(_mod.__file__).read_text(encoding="utf-8")
+            _aliases = {_SPAN_SOURCE_NAME}
+            for _ln in _src.splitlines():
+                _m = _re.search(
+                    r"import\s+.*\b%s\b\s+as\s+(\w+)" % _SPAN_SOURCE_NAME, _ln
+                )
+                if _m:
+                    _aliases.add(_m.group(1))
+            for _ln in _src.splitlines():
+                if _ln.lstrip().startswith("#"):
+                    continue
+                if not any(_a in _ln for _a in _aliases):
+                    continue
+                if _re.match(r"\s*%s\s*=" % _SPAN_SOURCE_NAME, _ln):
+                    continue          # the definition itself
+                if _re.match(r"\s*(from|import)\s", _ln.lstrip()):
+                    continue          # the import that binds the alias
+                _use_sites.append(f"{_tag}:{_ln.strip()[:60]}")
+        assert resolved >= 1, (
+            "no local name was found carrying _VERB_MSG_BODY — the carrier "
+            "construction changed shape and this test is now vacuous. Re-point "
+            "it at the new shape; do not delete it."
+        )
+        # Named carriers PLUS unbound carrier expressions must account for every
+        # use site. The unbound term is derived, not a constant: it was formerly
+        # a hard-coded `- 1` standing for the one inline `re.sub(r"..." +
+        # _VERB_MSG_BODY, ...)`, which silently granted a second inline carrier
+        # the same exemption. Both kinds are now checked for terminality, so
+        # both are counted.
+        assert len(carriers) + unbound >= len(_use_sites), (
+            f"resolver found {len(carriers)} named carrier(s) + {unbound} "
+            f"unbound carrier expression(s) but the source has "
+            f"{len(_use_sites)} non-comment _VERB_MSG_BODY use site(s). A use "
+            f"site the resolver cannot see is a carrier this pin does not "
+            f"check. Re-point the resolver; do not lower this bound."
+        )
+
+        assert not offenders, (
+            f"{len(offenders)} carrier(s) require something AFTER the span: "
+            f"{offenders}. The span is exponentially backtrackable (measured "
+            f"~2x per input character); it is safe ONLY because nothing after "
+            f"it can fail, so the match always succeeds and the engine never "
+            f"backtracks into it. Appending a required element re-arms that "
+            f"explosion on ordinary input. Put the required element BEFORE the "
+            f"span, or bound the span so it cannot backtrack ambiguously."
+        )
+
+    def test_no_carrier_span_is_consumed_by_fullmatch(self):
+        """`fullmatch` re-arms the explosion without touching the pattern.
+
+        A terminal span is safe under `search`/`sub` because the match always
+        succeeds. `fullmatch` requires the span to consume to end-of-string, so
+        an input it cannot fully consume forces the same exhaustive backtracking
+        that a required suffix does. Sibling of the terminality pin above.
+
+        THE CARRIER SET INCLUDES COMPILED NAMES, and it must. This module's
+        dominant idiom is `_X_RE = re.compile(...)` followed by `_X_RE.method()`,
+        so a predicate that only recognises a carrier name written literally at
+        the `fullmatch` call site misses `re.compile(_carrier)` then
+        `.fullmatch()` — the most ordinary way to write the very thing this pin
+        forbids. Measured: that spelling produced a 0.5s strip on the old
+        40 KB probe input while the whole suite stayed green. The shared
+        resolver therefore follows compiled bindings before this scan runs.
+
+        SAME COVERAGE AS THE SIBLING: all three implementation modules. A
+        `fullmatch` on a carrier in `merge_guard_pre.py`/`merge_guard_post.py`
+        re-arms the same explosion and is checked here too.
+        """
+        import ast
+
+        # ALL THREE modules. A `fullmatch` on a carrier in merge_guard_pre or
+        # merge_guard_post re-arms the same explosion, and scanning only the
+        # shared module could never see it.
+        calls, offenders = [], []
+        for _mod in _all_merge_guard_modules():
+            _tree = ast.parse(
+                Path(_mod.__file__).read_text(encoding="utf-8")
+            )
+            # Carriers are resolved PER MODULE, so a name that is a carrier in
+            # one module does not taint an unrelated same-named local in another.
+            _carriers, _o, _r, _u = _carrier_span_analysis(module=_mod)
+            _tag = Path(_mod.__file__).name
+
+            # Attribute calls (`re.fullmatch(...)`, `pat.fullmatch(...)`) AND
+            # bare `fullmatch(...)` from a `from re import fullmatch` binding.
+            _calls = [
+                n for n in ast.walk(_tree)
+                if isinstance(n, ast.Call)
+                and (
+                    (isinstance(n.func, ast.Attribute)
+                     and n.func.attr == "fullmatch")
+                    or (isinstance(n.func, ast.Name) and n.func.id == "fullmatch")
+                )
+            ]
+            calls += _calls
+            # Match NAME NODES, not a substring of the unparsed source: a
+            # substring test both misses (a carrier reached through an alias)
+            # and misfires (a longer identifier that merely contains a carrier
+            # name).
+            offenders += [
+                (_tag, n.lineno, ast.unparse(n)[:120])
+                for n in _calls
+                if any(
+                    isinstance(sub, ast.Name) and sub.id in _carriers
+                    for sub in ast.walk(n)
+                )
+            ]
+
+        # Non-vacuity: `fullmatch` is used across these modules for unrelated
+        # tokens, so the population is genuinely non-empty and the scan has
+        # something to bite on. If that ever stops being true, say so rather
+        # than pass mute.
+        assert calls, (
+            "no fullmatch call sites found in any merge-guard module — either "
+            "they changed or the scan broke. This assertion would pass "
+            "vacuously; re-point it."
+        )
+        assert not offenders, (
+            f"a carrier span is consumed by fullmatch at {offenders}. Under "
+            f"fullmatch the span must reach end-of-string, so an input it "
+            f"cannot fully consume forces the exponential backtracking that "
+            f"terminality otherwise prevents. Use search/sub, or bound the span."
+        )
+
+    def test_catastrophic_backtracking_is_unreachable_end_to_end(self):
+        """The BEHAVIOURAL arm: run the real classifier and see if it returns.
+
+        WHY THIS EXISTS ALONGSIDE THE STRUCTURAL PINS. They read source text, so
+        they are bounded by what a reader can enumerate: the modules scanned and
+        the composition spellings the resolver values. This one runs the SHIPPED
+        CODE, so it is agnostic to BOTH — any carrier that the input reaches, in
+        any module, composed any way, including spellings nobody has thought of.
+        That property is exactly what the structural pins cannot have, and it is
+        why deleting the behavioural arm was a real loss even though the pins
+        catch more shapes today.
+
+        WHY IT IS NOT FLAKY, WHICH IS THE HARD PART. Earlier timing gates in
+        this suite failed under load because their signal-to-noise was ~3x — a
+        duration bound, and a scaling ratio whose small arm was ~68ms so noise
+        dominated the denominator. This arm is not a measurement at all; it is a
+        RETURNS-OR-DOES-NOT question, and the two answers are separated by four
+        to five ORDERS OF MAGNITUDE. Measured on the shipped tree:
+
+            terminal (as shipped)  n=30      8 ms      n=50000    42 ms
+            non-terminal (mutant)  n=14    821 ms      n=20    60,662 ms
+                                   growth ~4x per +2 input chars
+
+        At the n below, a non-terminal carrier needs roughly an HOUR. The bound
+        is seconds. Load can turn 8 ms into 800 ms; it cannot turn 8 ms into the
+        bound, and it cannot bring an hour under it. There is no threshold to
+        tune and no ratio to be noisy.
+
+        WHY A SUBPROCESS. `re` does not release the GIL or poll signals during a
+        match, so an in-process alarm never fires — the test would HANG rather
+        than fail. `subprocess.run(timeout=...)` kills the child outright, which
+        turns an unbounded hang into a deterministic failure.
+
+        WHAT THIS DOES NOT COVER, stated so a green run is not over-read: only
+        carriers that THIS INPUT traverses. It is a complement to the structural
+        pins, which cover the whole carrier population but only the spellings
+        they can value. Neither subsumes the other; keep both.
+        """
+        import subprocess
+
+        hooks_dir = Path(__file__).resolve().parent.parent / "hooks"
+        # Long enough that a non-terminal carrier needs ~an hour, short enough
+        # that the shipped code answers in milliseconds.
+        n = 26
+        command = "gh issue create --title " + "a" * n + "|"
+        bound_seconds = 15
+
+        probe = (
+            "import sys; sys.path.insert(0, %r)\n"
+            "from merge_guard_pre import is_dangerous_command as D\n"
+            "D(%r)\n"
+            "print('RETURNED')\n" % (str(hooks_dir), command)
+        )
+        try:
+            done = subprocess.run(
+                [sys.executable, "-c", probe],
+                capture_output=True, text=True, timeout=bound_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            raise AssertionError(
+                f"CATASTROPHIC BACKTRACKING REACHED. The classifier did not "
+                f"return within {bound_seconds}s on a {len(command)}-character "
+                f"command. As shipped this takes ~8ms, so this is not slowness "
+                f"— it is the exponential re-armed. A carrier's span has stopped "
+                f"being terminal, or is being consumed by fullmatch, somewhere "
+                f"the structural pins could not see. Command: {command!r}"
+            )
+
+        # Non-vacuity: a child that died for an unrelated reason (import error,
+        # bad path) would also "not time out", and would pass this test while
+        # exercising nothing. Require the probe to have actually run the
+        # classifier to completion.
+        assert done.returncode == 0, (
+            f"the probe subprocess failed (rc={done.returncode}) rather than "
+            f"exercising the classifier, so this test proved NOTHING about "
+            f"backtracking. stderr: {done.stderr[:400]}"
+        )
+        assert "RETURNED" in done.stdout, (
+            f"the probe did not reach its completion marker, so the classifier "
+            f"call cannot be assumed to have run. stdout: {done.stdout[:200]}"
+        )
+
+    # ---- 7.F — the safe-shape negative control, and its non-vacuity twin. ----
+
+    @pytest.mark.parametrize("label,snippet", _SAFE_CARRIER_SHAPES)
+    def test_safe_carrier_shape_is_not_refused(self, label, snippet):
+        """A legitimate carrier must NOT be reported, whatever spelling built it.
+
+        This is the control the pin never had. The shipped module passing only
+        ever covered the three shapes it happens to contain, so a spelling
+        nobody had written yet could be refused and no run would say so — which
+        is how the first draft of this analysis shipped an over-block on safe
+        code and needed an arm added by hand to find it.
+
+        Two of these rows exist because they were REGRESSIONS: `never bound to a
+        name` and `rebound, span still terminal` are the safe halves of the two
+        shapes an earlier form of this analysis stopped examining.
+        """
+        _carriers, offenders, resolved, _unbound = _carrier_span_analysis(
+            source=snippet
+        )
+        assert resolved >= 1, (
+            f"the {label} shape was not recognised as a carrier at all. It is "
+            f"not being refused, it is being SKIPPED, which is the quieter and "
+            f"worse failure — a trailing element in this spelling would go "
+            f"unreported. Teach value_of to resolve it."
+        )
+        assert not offenders, (
+            f"the {label} shape is SAFE — the span is terminal — but it was "
+            f"reported as {offenders}. Refusing a legitimate carrier spelling "
+            f"pushes authors toward a spelling this analysis happens to "
+            f"understand. Widen value_of; do not delete this row."
+        )
+
+    @pytest.mark.parametrize("label,snippet", _UNSAFE_CARRIER_SHAPES)
+    def test_unsafe_carrier_shape_is_reported(self, label, snippet):
+        """Non-vacuity twin: every unsafe spelling must be caught.
+
+        Without this family the safe family above would pass against an
+        analysis that returned no offenders for anything. The last two rows are
+        the exact breakages that regressed: a name rebound so the span stops
+        being terminal, and a carrier re-concatenated into a second name.
+        """
+        _carriers, offenders, _resolved, _unbound = _carrier_span_analysis(
+            source=snippet
+        )
+        assert offenders, (
+            f"the {label} shape puts a required element AFTER the span and was "
+            f"NOT reported. The span is exponentially backtrackable; it is safe "
+            f"only while nothing after it can fail. This spelling re-arms that "
+            f"explosion silently."
+        )
+
+    @pytest.mark.parametrize("label,snippet", _KNOWN_REFUSED_CARRIER_SHAPES)
+    def test_known_refused_shape_is_still_refused(self, label, snippet):
+        """Pins a LIMITATION so it stays visible. Reddening here is GOOD NEWS.
+
+        These spellings are safe but this analysis cannot value them, so it
+        refuses or skips them. That is a real over-block, recorded rather than
+        hidden. If you widen `value_of` and this test fails, the fix worked:
+        move the row into `_SAFE_CARRIER_SHAPES` and add its unsafe twin to
+        `_UNSAFE_CARRIER_SHAPES`. Do NOT satisfy this test by narrowing the
+        evaluator back.
+        """
+        _carriers, offenders, resolved, _unbound = _carrier_span_analysis(
+            source=snippet
+        )
+        assert offenders or resolved == 0, (
+            f"the {label} shape is now handled cleanly — it resolved with no "
+            f"offender. That is an improvement, and this row is stale. Move it "
+            f"to _SAFE_CARRIER_SHAPES and give it an unsafe twin."
+        )
 
 
 # =============================================================================

@@ -49,7 +49,7 @@ fi
 
 ### Step 1: Task Discovery
 
-You have two sources for finding completed agent tasks, in priority order:
+You have three sources for finding completed agent tasks. Sources 1 and 2 find tasks that emitted a HANDOFF; source 3 is required for coverage:
 
 1. **Session journal** (primary, GC-proof): `$SESSION_DIR/session-journal.jsonl` (the `$SESSION_DIR` resolved in Step 0) — read `agent_handoff` events via the existing `session_journal.py read` subcommand (explicit `--session-dir`, masked-read-safe):
 
@@ -60,12 +60,15 @@ You have two sources for finding completed agent tasks, in priority order:
 
    `read` prints a **JSON ARRAY** to stdout (`[ {...}, {...} ]`), NOT one JSON object per line. So parse the whole stdout once — `json.loads(EVENTS)` → a list of event dicts — then iterate the list (do **not** iterate line-by-line). Each event is `{"type": "agent_handoff", "agent": "...", "task_id": "...", "task_subject": "...", "handoff": {...}, "ts": "..."}` — full HANDOFF content inline, garbage-collection-proof. **Deduplicate**: extract unique task_ids only.
 2. **`TaskList`** (supplementary): Read `TaskList` for completed tasks owned by agents. Useful as a cross-reference and for catching tasks where the completion hook didn't fire. Note: the platform garbage-collects older task files during long sessions, so `TaskList` may be incomplete.
+3. **Task-file metadata census** (required for coverage): list the team's task files under `~/.claude/tasks/{team_id}/` and read the **metadata key set** of every completed task. A task is in scope when it carries ANY agent-authored key — `handoff`, `handoff_amendment`, `handoff_addendum`, `teachback_submit`, `post_completion_verification`, or any key not on this list. **Enumerate the keys each task carries; never test for one key.** A task whose content sits only in a non-`handoff` key emits no `agent_handoff` event, so sources 1 and 2 cannot see it — resolving `handoff` alone finds nothing on that task and reports success.
+
+Scope the census by the keys a task **carries**, never by a key family you expect. A census scoped to one key family fails the same way as one scoped to a single key.
 
 If none of these sources have completed agent tasks, report "No pending HANDOFFs to review" and complete — this is normal when HANDOFFs were already processed by an earlier trigger (idempotent).
 
 ### Step 2: Dedup Check (Processed Tasks)
 
-Read your processed task list from your team's section in agent memory (`~/.claude/agent-memory/pact-secretary/session_processed_tasks.md`). The file is namespaced by team — read **only** your own `## team={your team_id}` section (file-format contract: see Step 8). Skip any task IDs already processed — only review the delta. This enables incremental passes (e.g., after remediation).
+Read your processed task list from your team's section of `session_processed_tasks.md`, in the agent-memory directory the platform gave you — use the path you are given, never one built from your agent type. The file is namespaced by team — read **only** your own `## team={your team_id}` section (file-format contract: see Step 8). Skip any task IDs already processed — only review the delta. This enables incremental passes (e.g., after remediation).
 
 ### Step 3: Read All HANDOFFs
 
@@ -170,11 +173,11 @@ Save using the CLI with proper structure:
 
 ### Step 8: Update Processed Task Tracking
 
-**Save the processed task IDs to your team's section in agent memory.** Locate (or create) the `## team={your team_id}` section in `~/.claude/agent-memory/pact-secretary/session_processed_tasks.md` and overwrite **that section's** task-ID list to set the baseline for subsequent incremental passes. Overwrite only your own team's section — never modify, overwrite, or remove another team's `## team=` section. Multiple secretary instances (one per concurrent team) share this single file; each owns exactly its own section.
+**Save the processed task IDs to your team's section in agent memory.** Locate (or create) the `## team={your team_id}` section in `session_processed_tasks.md`, in the agent-memory directory the platform gave you, and overwrite **that section's** task-ID list to set the baseline for subsequent incremental passes. Overwrite only your own team's section — never modify, overwrite, or remove another team's `## team=` section. Multiple secretary instances (one per concurrent team) share this single file; each owns exactly its own section.
 
 This file is **namespaced by team** so that concurrent secretary instances (one per active team, all sharing this single user-scope file) never clobber each other's processed-task baselines. The file-format contract:
 
-File: `~/.claude/agent-memory/pact-secretary/session_processed_tasks.md`
+File: `session_processed_tasks.md`, in the agent-memory directory the platform gave you. Use the path you are given; never build one from your agent type.
 ```markdown
 ---
 name: session_processed_tasks
@@ -238,8 +241,8 @@ After processing HANDOFFs, gather calibration metrics for the orchestrator's var
 
 Triggered after remediation completes — processes only the delta since the last harvest pass. Fires only when remediation occurred and produced new completed tasks.
 
-1. **Check processed task tracking**: Read **only your own** `## team={your team_id}` section of `~/.claude/agent-memory/pact-secretary/session_processed_tasks.md` for already-processed task IDs
-2. **Discover new completions**: Check session journal `agent_handoff` events (primary) and `TaskList` (supplementary) for completed tasks not in the processed set — these are new completions from remediation.
+1. **Check processed task tracking**: Read **only your own** `## team={your team_id}` section of `session_processed_tasks.md`, in the agent-memory directory the platform gave you, for already-processed task IDs
+2. **Discover new completions**: Run all three Standard Harvest Step 1 sources — session journal `agent_handoff` events, `TaskList`, and the task-file metadata census — for completed tasks not in the processed set. Do not narrow to the journal: a new completion whose content sits only in a non-`handoff` key emits no `agent_handoff` event.
 3. **If no new completions**: Report "No new HANDOFFs since last harvest" and complete
 4. **Read new HANDOFFs** using the Standard Harvest Step 3 two-tier fallback: prefer journal inline content, fall back to `TaskGet`
 5. **Extract and save** using Steps 4-7 from Standard Harvest (extract knowledge, organizational state, dedup protocol, save)
@@ -256,7 +259,7 @@ Triggered during `/PACT:wrap-up` or `/PACT:pause`. This is the deep-clean pass �
 
 ### Step 1: Safety Net (Unprocessed HANDOFFs)
 
-Check the session journal for `agent_handoff` events not yet in the processed task set. If unprocessed entries exist, run the Standard Harvest workflow above first (earlier harvest triggers may have been missed). Then continue with consolidation.
+Run the Standard Harvest Step 1 discovery in full — all three sources, including the task-file metadata census — for tasks not yet in the processed task set. Checking `agent_handoff` events alone leaves any task whose content sits in a non-`handoff` key undiscovered, and this is the last pass that will look. If unprocessed entries exist, run the Standard Harvest workflow above first (earlier harvest triggers may have been missed). Then continue with consolidation.
 
 ### Step 2: Review Session Memories
 
@@ -266,7 +269,7 @@ Review all memories saved during this session by listing recent pact-memory entr
 
 - Merge overlapping memories (same topic, same entities, compatible conclusions)
 - Prune superseded memories (update or delete entries replaced by newer information)
-- **Prune stale `## team=` sections** in `~/.claude/agent-memory/pact-secretary/session_processed_tasks.md`: drop any `## team=` section older than ~30 days (judge by the section's `Last processed` timestamp) or whose team is known-complete (the session has wrapped/paused and will not resume). This is safe — the session journal's `agent_handoff` events are the authoritative dedup source, so a pruned-then-resurrected team re-derives its processed set from its own journal. Prune only stale/complete sections; never touch an active team's section. (Pruning happens only in this deep-clean Consolidation pass — the Standard/Incremental hot paths leave the file untouched apart from your own section.)
+- **Prune stale `## team=` sections** in `session_processed_tasks.md`, in the agent-memory directory the platform gave you: drop any `## team=` section older than ~30 days (judge by the section's `Last processed` timestamp) or whose team is known-complete (the session has wrapped/paused and will not resume). This is safe — a pruned-then-resurrected team re-derives its processed set by re-running Step 1 discovery over its own session. Re-deriving from `agent_handoff` events alone under-counts the processed set, because tasks found only by the metadata census emit no such event; the save-vs-update dedup absorbs the re-read. Prune only stale/complete sections; never touch an active team's section. (Pruning happens only in this deep-clean Consolidation pass — the Standard/Incremental hot paths leave the file untouched apart from your own section.)
 
 ### Step 4: Reconcile Working Memory
 
@@ -371,6 +374,6 @@ This is the Layer 4 fallback for completed handoffs left behind by sessions that
 
 1. Look for `session-journal.jsonl` in `~/.claude/pact-sessions/*/*/` directories. **Exclude the current session's directory** (available from the session context file at `~/.claude/pact-sessions/{slug}/{session_id}/pact-session-context.json`, or the session dir provided in your dispatch prompt) — that session's data is active, not orphaned.
 2. If found: report to team-lead "Found N orphaned HANDOFFs from prior session {session_dir}"
-3. Attempt to process them — prefer `agent_handoff` events from the session journal (full HANDOFF inline, read via `read_events_from(session_dir, 'agent_handoff')`); fall back to `TaskGet` (may fail for garbage-collected tasks)
+3. Attempt to process them — prefer `agent_handoff` events from the session journal (full HANDOFF inline, read via `read_events_from(session_dir, 'agent_handoff')`); fall back to `TaskGet` (may fail for garbage-collected tasks). Where that session's task files survive under `~/.claude/tasks/{team_id}/`, run the Step 1 metadata census over them as well — the journal carries only tasks that emitted a HANDOFF, so a journal-only pass reports a count it cannot support.
 4. Delete processed files after recovery (use `python3 -c "from pathlib import Path; Path(...).unlink(missing_ok=True)"` — not shell `rm`, to avoid sensitive-file permission prompts)
 5. Report summary of recovered knowledge (or gaps where all sources failed)

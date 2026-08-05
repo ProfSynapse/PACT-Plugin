@@ -298,9 +298,106 @@ _MAX_GLOBAL_FLAG_TOKENS = 32
 
 # Optional global flags between CLI tool and subcommand — BOUNDED (was `*`).
 _GH_GLOBAL_FLAGS  = r"(?:\S+\s+){0,%d}" % _MAX_GLOBAL_FLAG_TOKENS
-# Tight variant for PR-number extraction — UNCHANGED (already linear; requires
-# a leading `-` per token so it fails fast; used only by _GH_PR_NUMBER_RE).
-_GH_FLAG_TOKENS   = r"(?:-\S*(?:\s+\S+)?\s+)*"
+# Tight variant for PR-number extraction; used only by _GH_PR_NUMBER_RE.
+#
+# THE OPTIONAL VALUE MUST NOT START WITH `-`, AND THAT IS THE WHOLE POINT.
+# Requiring a leading `-` per FLAG does not make this linear on its own — an
+# earlier comment here claimed it did ("already linear ... fails fast"), and
+# that claim is why an exponential shipped: it was written down, so nobody
+# re-measured. MEASURED with the old `(?:\s+\S+)?` value arm, on consecutive
+# valueless dash-flags with the match failing: 18 flags 1.0 ms, 22 flags 6.6 ms,
+# 26 flags 45 ms — roughly 2.5x per two added flags, extrapolating to the 600 s
+# PreToolUse ceiling at ~46 flags. A hook that exceeds that ceiling is KILLED
+# AND THE TOOL CALL PROCEEDS, so a hang here is a silent guard BYPASS, not a
+# slow refusal.
+#
+# The ambiguity was structural: with `\S+` as the value, a `-x` token could be
+# EITHER the previous flag's value OR a flag in its own right, so every token
+# doubled the partitions the engine had to try. `[^-\s]\S*` makes that
+# unrepresentable — a dash-initial token can only ever be a flag, a
+# non-dash-initial token can only ever be a value, and the partition is unique.
+#
+# THE MATCHED LANGUAGE IS NOT UNCHANGED, AND THIS ARM IS THEREFORE LOAD-BEARING
+# FOR CORRECTNESS, NOT ONLY FOR BACKTRACKING. A value that genuinely starts with
+# `-` (`--subject -x 42`) is still consumed — by the NEXT iteration as a flag
+# rather than by this one as a value — but the flag run then STOPS IN A
+# DIFFERENT PLACE, which moves the capture and the match end together. The broad
+# form reads a NUMERIC FLAG ARGUMENT as the pull-request number:
+#
+#     gh pr merge --squash -t 2024 42        this arm -> 42   broad -> 2024
+#     gh pr merge --squash --repo 2024 42    this arm -> 42   broad -> 2024
+#
+# On a control that binds an approval to a specific pull request, that is a
+# TARGET-IDENTIFICATION defect: THE APPROVAL BINDS TO A PULL REQUEST OTHER THAN
+# THE ONE THAT MERGES. If you are reading this because you want to simplify the
+# pattern, that sentence is the cost — not a slower match, a merge the user did
+# not authorise.
+#
+# THE EXAMPLES ARE SHORT-FORM AND `--repo` ON PURPOSE, BECAUSE THE LONG FORMS DO
+# NOT DEMONSTRATE IT. `_extract_pr_number` re-checks the token preceding the
+# captured digit against `_GH_PR_VALUE_TAKING_FLAGS` and ABSTAINS on a hit, so
+# the caller falls through to `_extract_merge_target` and recovers the right
+# target. Every member of that frozenset is long-form, so a broadened arm is
+# silently repaired for `--subject`/`--body-file`/`--body` and NOT repaired for:
+#   * SHORT ALIASES (-t -b -F -c -A -R). The re-check is `(--[\w-]+)$` — it can
+#     only see a LONG form, so a short alias never reaches the membership test.
+#     ADDING ONE TO THE FROZENSET WOULD CHANGE NOTHING; the regex would still
+#     not match it. This is the half that governs most of the misbinding forms.
+#   * `--repo`. Long-form and visible to the re-check, but genuinely absent from
+#     the frozenset. This half IS fixable by extending it.
+# The same seven flags are enumerated as `_INERT_HELP_EXTRA_VALUE_FLAGS` below,
+# for an unrelated purpose (inert-help recognition), and that block already
+# NAMES this misbind and scopes it out on purpose. Read as a POINTER, not a
+# dependency: the two sets coincide because both derive from "value-taking flags
+# the long-form SSOT does not cover", but they can drift — move `--repo` into
+# the SSOT and it stops misbinding while plausibly staying in the inert set.
+# An earlier version of this paragraph illustrated the defect with `--subject`
+# and `--body-file` — both in the frozenset, so NEITHER example misbound, and a
+# maintainer who checked them would have concluded the warning overclaimed and
+# broadened the arm anyway. A true warning with a demonstration that refutes it
+# on inspection fails in the same direction as a false one.
+#
+# THE TRIGGER IS ORDINARY RATHER THAN ADVERSARIAL — a `-t` subject that is a
+# year, a `-F` body file named `1`. Under this guard's honest-mistake threat
+# model that is the reachable case, not an exotic one.
+#
+# WHAT IS CLAIMED, AND AT WHICH LAYER. The divergence is a property of the
+# EXTRACTED TARGET, not merely of the regex capture, and the distinction is
+# what the earlier version got wrong: it counted regex-level divergences and
+# wrote them under a sentence about what the guard binds. Structural claims,
+# pinned by tests rather than asserted here — see the flag-token and
+# dash-initial classes in tests/test_merge_guard_pre.py and
+# tests/test_merge_guard_perf.py:
+#   * a divergent form needs TWO leading dash-tokens; no single-flag shape
+#     reaches it, which is why hand-picked corpora kept missing it —
+#     `test_a_single_leading_dash_token_never_diverges`;
+#   * the split is CLEAN BY FLAG FORM — long-forms in the frozenset neutralise,
+#     short aliases and `--repo` misbind, with no crossover, on BOTH the merge
+#     and close verbs — `TestExtractPrNumberFlagFormAsymmetry`.
+# Deliberately NOT recorded here: corpus sizes and divergence counts. Several
+# such figures stood in this paragraph and none was reproducible, because no
+# enumeration harness was ever committed. A count that cannot be re-derived is
+# the artifact that has failed repeatedly in this exact spot — including, once,
+# a throughput figure sitting five lines below this very sentence.
+#
+# WHAT THE TWO BULLETS DO NOT COVER, because both were derived from the flag
+# lists in THIS FILE rather than from `gh` itself: a value-taking flag that is
+# real but absent from BOTH `_GH_PR_VALUE_TAKING_FLAGS` and
+# `_INERT_HELP_EXTRA_VALUE_FLAGS` would be missing from any corpus built the way
+# these were, and no amount of agreement between such corpora would reveal it.
+# That is not hypothetical: `--repo` IS such a flag, and it was caught only
+# because the second frozenset happened to list it. So read the bullets as
+# holding FOR THE FLAGS THIS FILE ENUMERATES — deriving the alphabet from
+# `gh pr merge --help` is the independent check, and it has not been done.
+#
+# NOT enumerated, so not claimed either way: bundled short clusters, and
+# `--flag=value` spellings.
+#
+# Linearity after the repair is pinned by
+# `TestGhFlagTokenAmbiguityStaysRemoved` in tests/test_merge_guard_perf.py,
+# which holds 36 consecutive valueless flags under a 1 s ceiling against a
+# pre-fix cost of ~4 s at the same width.
+_GH_FLAG_TOKENS   = r"(?:-\S*(?:\s+[^-\s]\S*)?\s+)*"
 _GIT_GLOBAL_FLAGS = r"(?:\S+\s+){0,%d}" % _MAX_GLOBAL_FLAG_TOKENS
 
 # Composed prefixes for DRY usage across all patterns.

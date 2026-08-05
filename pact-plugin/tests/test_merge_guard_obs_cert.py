@@ -21,6 +21,7 @@ Summary: GOOD-FAITH over-block sweep certification (PR #1195 OBS). Certifies aga
 
          Destructive verbs assembled at runtime so this file stays inert to the live guard.
 """
+import ast
 import io
 import json
 import sys
@@ -781,10 +782,40 @@ class TestObsGPushSetMintability:
 _G_ALLOW, _G_DENY = 0, 2
 
 
+def _g_live_token_ids(tok):
+    """Inode identity of the LIVE (non-retired) token files in `tok`.
+
+    Keyed on INODE and not on filename, because here the two are not
+    interchangeable. `cleanup_unused_tokens` retires the previous token with
+    `os.rename`, which PRESERVES its inode, while a mint is an `O_EXCL` create
+    that allocates a NEW one. So a name-keyed diff counts a retirement as a
+    mint, AND is blind to a mint that reuses the name the retirement just
+    vacated — which second-granularity token names make the ordinary case
+    rather than a rare one. Those two errors cancel often enough to look
+    correct: a same-second pair reads 1 by counting the retirement while the
+    real token is invisible. Neither error is reachable by narrowing the glob,
+    because the defect is the identity, not the filter.
+
+    Non-tokens are dropped by EXCLUSION, never by matching an expected token
+    shape. An inclusion pattern such as `merge-authorized-<digits>` silently
+    drops the millisecond-disambiguated fallback name that `write_token` falls
+    back to on collision — a real token — and would go on dropping every later
+    shape nobody thought to add. Exclusion can only ever over-count, which
+    fails loudly; inclusion under-counts, which does not.
+    """
+    ids = set()
+    for path in tok.glob(mgc.TOKEN_PREFIX + "*"):
+        if path.name.endswith(".consumed") or mgc.USE_MARKER_SUFFIX in path.name:
+            continue
+        ids.add(path.stat().st_ino)
+    return ids
+
+
 def _g_mint(cmd, tok):
     """Drive the REAL post hook with an approval embedding `cmd`; return the count of
-    tokens minted by this call."""
-    before = set(tok.glob("merge-authorized-*"))
+    tokens minted by this call. See `_g_live_token_ids` for why the count is
+    keyed on inode rather than on filename."""
+    before = _g_live_token_ids(tok)
     env = json.dumps({
         "tool_name": "AskUserQuestion",
         "tool_input": {"questions": [{
@@ -804,11 +835,23 @@ def _g_mint(cmd, tok):
             post_main()
         except SystemExit as e:
             assert e.code == 0, "post hook exited nonzero: %r" % (e.code,)
-    return len(set(tok.glob("merge-authorized-*")) - before)
+    return len(_g_live_token_ids(tok) - before)
 
 
 def _g_execute(cmd, tok):
-    """Run `cmd` through the REAL pre hook; return exit code (0=ALLOW, 2=DENY)."""
+    """Run `cmd` through the REAL pre hook; return exit code (0=ALLOW, 2=DENY).
+
+    AMBIGUOUS ON PURPOSE, AND THE CALLER RESOLVES IT. A return of 0 means only
+    that the hook did not DENY. It cannot distinguish "a token authorized this
+    command" from "this command was never gated at all", because an ungated
+    command reaches no decision and so exits 0 too.
+
+    The discriminator is the calling convention, not this function: every row
+    asserts `minted == 1` BEFORE `rc == _G_ALLOW`, and since only a gated
+    command mints, that mint assertion IS the proof that the command was gated.
+    Read `rc` alone and a never-gated command reads exactly like an authorized
+    one. Keep the mint assertion first.
+    """
     env = json.dumps({
         "tool_name": "Bash",
         "tool_input": {"command": cmd},
@@ -827,6 +870,289 @@ def _g_execute(cmd, tok):
 
 def _g_roundtrip(mint_cmd, exec_cmd, tok):
     return _g_mint(mint_cmd, tok), _g_execute(exec_cmd, tok)
+
+
+def _g_write_token_that_retires_then_fails_to_create(fired):
+    """Build a `write_token` stand-in that retires, then creates nothing.
+
+    `write_token` runs its retirement BEFORE the `O_EXCL` create, so a create
+    that fails leaves a retirement on disk and no new token. This reproduces
+    that SHAPE. It does not reproduce any particular CAUSE of the failure, and
+    it stops being faithful if that order changes —
+    `TestObsGStubTracksTheRealFailurePath` is what notices if it does.
+
+    The name states the POST-STATE rather than the outcome. "Creates nothing"
+    is true of all four ways `write_token` returns None; leaving a retirement
+    behind belongs to exactly one of them, and naming the shared outcome
+    claimed three modes this stand-in does not model.
+
+    Defined once and shared by the pin and by its guard on purpose: a guard
+    comparing against its own private copy of the stub would certify the copy,
+    not the stub, which is the defect this arrangement exists to close.
+    """
+    def _stub(context, token_dir=None):
+        mgc.cleanup_unused_tokens(token_dir or mgpost.TOKEN_DIR)
+        fired.append(True)
+        return None
+    return _stub
+
+
+def _g_token_shape(name):
+    """`merge-authorized-1785902062.consumed` -> `.consumed`.
+
+    Strips the prefix and the epoch stamp so two directories seeded moments
+    apart compare on WHICH ARTIFACTS EXIST rather than on when they were made.
+    A live token yields `''`, a retirement `'.consumed'`, a use marker `'.use-1'`.
+    """
+    return name[len(mgc.TOKEN_PREFIX):].lstrip("0123456789")
+
+
+class TestObsGStubTracksTheRealFailurePath:
+    """The zero-mint stub must still leave what the real failure path leaves.
+
+    `_g_write_token_that_retires_then_fails_to_create` names the post-state it produces:
+    retire the previous token, create nothing, return None. That claim used to
+    live only in a comment, which states a property rather than enforcing it. This drives the REAL function into failure at its
+    `os.open` and compares what each leaves on disk.
+
+    It compares the POST-STATE rather than the signature, because a signature
+    match holds while the retire-versus-create ORDER changes and the order is
+    the entire claim. It does not read the source, because a text check is a
+    proxy for the behaviour and reddens on comment-only edits.
+
+    WHAT THIS STAND-IN IS FOR, AND WHAT IT IS NOT FOR. It models one of the
+    four ways `write_token` returns None: the create failing after the
+    retirement has already run. The other three are refusal guards that return
+    BEFORE any disk operation — a non-dict context (578), a context carrying
+    no anchor key (590), and a context with no `operation_type` (605). Those
+    leave the directory exactly as they found it, so this stand-in is not a
+    model of them, and a test that needs one must build its own.
+
+    That is a statement of scope rather than a gap, and the reason is worth
+    keeping. With the directory untouched there is no retirement, and a
+    retirement is the only artifact a name-keyed count and an inode-keyed
+    count disagree about — both read zero in those three modes. Only the
+    create failure leaves something that tells the two forms apart, which is
+    why it is the mode worth modelling and why widening to the other three
+    would add no discrimination.
+
+    The three non-vacuity witnesses below are NOT redundant with the final
+    comparison. Witness (c) is what actually reddens when the retirement
+    disappears — it reaches that drift first, by ordering, and names it —
+    so removing any of them as "already covered by the comparison" would
+    trade a diagnostic failure for a bare inequality, and would reopen the
+    empty-directory pass that (c) exists to close.
+    """
+
+    def test_stub_leaves_what_the_real_failure_path_leaves(self, tmp_path):
+        # An operation_type is required, or the refusal guard returns before
+        # the retirement and this drives the wrong path entirely.
+        ctx = {"operation_type": "merge", "pr_number": "42"}
+
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        stub_dir = tmp_path / "stub"
+        stub_dir.mkdir()
+
+        def shapes(d):
+            return sorted(_g_token_shape(p.name)
+                          for p in d.glob(mgc.TOKEN_PREFIX + "*"))
+
+        # Both arms start from a real prior token. Without one there is no
+        # retirement to observe and both sides would land on empty.
+        assert _g_mint(_PG + "origin main", real_dir) == 1
+        assert _g_mint(_PG + "origin main", stub_dir) == 1
+
+        opened = []
+        real_open = mgpost.os.open
+
+        def _failing_open(*args, **kwargs):
+            opened.append(args[0] if args else None)
+            raise OSError(28, "forced failure for this test")
+
+        mgpost.os.open = _failing_open
+        try:
+            returned = mgpost.write_token(ctx, real_dir)
+        finally:
+            mgpost.os.open = real_open
+
+        fired = []
+        _g_write_token_that_retires_then_fails_to_create(fired)(ctx, stub_dir)
+
+        # NON-VACUITY. Two empty directories compare equal, so the match below
+        # means nothing until the scenario is shown to have actually run.
+        assert opened, (
+            "os.open was never reached, so the real create never failed and "
+            "the comparison is not about the path this stub stands in for"
+        )
+        assert returned is None, (
+            "the real write_token did not fail — this would compare a success "
+            "against a stubbed failure"
+        )
+        assert fired, "the stub never ran"
+        assert shapes(real_dir), "the compared state is empty; nothing was compared"
+        assert ".consumed" in shapes(real_dir), (
+            "no retirement on the real side, so the shape being compared is "
+            "not the retire-then-fail shape the stub claims to reproduce"
+        )
+
+        assert shapes(stub_dir) == shapes(real_dir), (
+            "the stub no longer leaves what the real failure path leaves: "
+            f"real={shapes(real_dir)} stub={shapes(stub_dir)}. The stub's "
+            "claim to reproduce the retire-then-fail shape has drifted, and "
+            "the zero-mint pin built on it is testing a path that changed."
+        )
+
+
+class TestObsGWriteTokenPreCleanupRefusalCount:
+    """Pin the refusal count the class above states as a fact about production.
+
+    `TestObsGStubTracksTheRealFailurePath` says `write_token` has three refusal
+    guards returning before the retirement, and rests a ruling on it: those
+    three leave the directory untouched, so they cannot tell a name-keyed count
+    from an inode-keyed one, which is why widening the stand-in to cover them
+    would add no discrimination. A fourth pre-cleanup refusal that DOES touch
+    disk makes that reasoning false. Nothing else would notice. This does.
+
+    It reads the parse tree of `write_token` and counts the `Return` nodes
+    above the retirement whose value is None — counting a bare `return` as well
+    as `return None`, since a predicate matching only the second would miss a
+    bare one added later.
+
+    WHAT THIS CANNOT SEE. It is a PARTIAL guard, and the boundary belongs here
+    rather than in a report, because a partial guard read as a total one leaves
+    a reader more confident than no guard would:
+
+      - A fourth refusal placed inside a HELPER called before the retirement.
+        The walk sees a `Call`, not a `Return`, and following calls into
+        arbitrary callees is unbounded. This is the ceiling.
+      - A guard whose CONDITION changes while its position holds. The count
+        pins how many, never which.
+      - A pre-cleanup `raise`, or a return of something that is not None —
+        both are exits this does not count.
+      - Reachability. A refusal made dead by an earlier unconditional return is
+        still counted; this reads structure, never execution.
+
+    What it does catch is the common edit: a fourth guard written inline. A
+    refactor of the existing three into a helper drops the count and also
+    reddens — a false positive, but a loud one.
+    """
+
+    def test_write_token_has_three_pre_cleanup_return_none_paths(self):
+        # Resolved through the imported module rather than a path literal, so
+        # the check follows the same import the suite itself uses.
+        tree = ast.parse(Path(mgpost.__file__).read_text(encoding="utf-8"))
+
+        found = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.FunctionDef) and n.name == "write_token"]
+        assert len(found) == 1, (
+            f"expected exactly one `write_token` definition, found {len(found)}"
+        )
+        fn = found[0]
+
+        nested = [n for n in ast.walk(fn)
+                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  and n is not fn]
+        assert not nested, (
+            "a nested function definition appeared inside `write_token`, and "
+            "ast.walk would absorb its returns into the count below"
+        )
+
+        cleanups = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                    and getattr(n.func, "id", None) == "_cleanup_unused_tokens"]
+        assert len(cleanups) == 1, (
+            f"expected exactly one `_cleanup_unused_tokens` call, found "
+            f"{len(cleanups)}. With any other number, `before the retirement` "
+            "is not a well-defined partition and the count below is a number "
+            "computed over nothing."
+        )
+        retirement = cleanups[0].lineno
+
+        returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return)]
+
+        def _returns_none(node):
+            return node.value is None or (
+                isinstance(node.value, ast.Constant) and node.value.value is None
+            )
+
+        # NON-VACUITY. Three `Return` nodes sit above the retirement whatever
+        # their shape, so a predicate that accepted everything would score 3
+        # and pass having read nothing. Require it to reject something.
+        assert any(not _returns_none(r) for r in returns), (
+            "the None-return predicate accepted every return in the function, "
+            "so the count below would hold for a predicate that discriminates "
+            "nothing"
+        )
+
+        pre_cleanup = [r for r in returns
+                       if r.lineno < retirement and _returns_none(r)]
+        assert len(pre_cleanup) == 3, (
+            f"`write_token` has {len(pre_cleanup)} paths returning None before "
+            f"the retirement, not 3 (lines {[r.lineno for r in pre_cleanup]}). "
+            "The class docstring above states three and rests a ruling on it: "
+            "a fourth that touches disk would falsify the reasoning that those "
+            "modes cannot discriminate the two count forms. Update the prose "
+            "AND re-check that reasoning — the count is not the only thing "
+            "that moved."
+        )
+
+
+class TestObsGMintCountIsIdentityKeyed:
+    """The mint count must tell a real mint apart from a retirement.
+
+    `_g_mint` is asserted BEFORE the refusal on every DENY row in this file, so
+    it is what separates a legitimate refusal from an over-block wearing a
+    refusal's clothes. A name-keyed count cannot make that separation:
+    `write_token` retires the previous token by renaming it into the same glob,
+    so a mint that created NOTHING still counted 1 whenever a prior token
+    existed to retire — and the mint-side miss those rows exist to catch went
+    straight through them.
+
+    Reverting `_g_live_token_ids` to a name diff turns this test RED. That is
+    the point of it: the docstring there explains why the count is keyed on
+    inode, and this is what stops the explanation from being the only guard.
+    """
+
+    def test_a_mint_that_creates_nothing_counts_zero(self, tmp_path):
+        # A prior token has to exist, or there is no retirement to miscount and
+        # the two forms of the count agree — the case would not discriminate.
+        assert _g_mint(_PG + "origin main", tmp_path) == 1, (
+            "setup did not mint, so no retirement is available and the "
+            "assertion below would hold for the wrong reason"
+        )
+
+        fired = []
+        real_write_token = mgpost.write_token
+        mgpost.write_token = _g_write_token_that_retires_then_fails_to_create(fired)
+        try:
+            minted = _g_mint(_PG + "origin main", tmp_path)
+        finally:
+            mgpost.write_token = real_write_token
+
+        # NON-VACUITY, AND IT NEEDS THREE WITNESSES RATHER THAN ONE. Zero is
+        # also what this test yields when it measures nothing, so the number is
+        # worthless until the scenario is shown to have actually happened. The
+        # `fired` flag alone is NOT enough: the stub can fire with no prior
+        # token to retire, and the count then reads 0 for a reason that has
+        # nothing to do with what is being pinned.
+        assert fired, "the stub never ran, so this test measured nothing"
+        tokens = list(tmp_path.glob(mgc.TOKEN_PREFIX + "*"))
+        assert any(p.name.endswith(".consumed") for p in tokens), (
+            "no retirement on disk, so nothing was present for a name-keyed "
+            "count to mistake for a mint"
+        )
+        assert not [
+            p for p in tokens
+            if not p.name.endswith(".consumed")
+            and mgc.USE_MARKER_SUFFIX not in p.name
+        ], "a live token survived, so the mint did not fail and 0 would be wrong"
+
+        assert minted == 0, (
+            "a mint that created no token counted as one. The retirement of "
+            "the prior token was counted as a fresh mint, so a mint-side miss "
+            "passes the `minted == 1` assertion written to catch it, and a "
+            "DENY caused by an over-block is certified as a read decision."
+        )
 
 
 class TestObsGRealMintExecuteRoundTrip:

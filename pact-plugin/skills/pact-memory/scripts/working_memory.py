@@ -38,7 +38,28 @@ logger = logging.getLogger(__name__)
 # from 5 to 3 entries to limit token overlap between the two systems while
 # retaining the structured format that auto-memory does not provide.
 WORKING_MEMORY_HEADER = "## Working Memory"
-WORKING_MEMORY_COMMENT = "<!-- Auto-managed by pact-memory skill. Last 3 memories shown. Full history searchable via pact-memory skill. -->"
+# THE COUNT CLAUSE WAS REMOVED BECAUSE IT WAS FALSE IN THE COMMON REGIME, NOT
+# BECAUSE IT WAS UNTIDY. `_apply_token_budget` never compresses `entries[0]`
+# and its drop loop is `while len(result) > 1`, so when the newest entry ALONE
+# exceeds the whole-section budget -- as a typical full entry does -- the older
+# entries are dropped and the section shows ONE entry. This string is written
+# INTO the artifact it describes, so every agent loading a CLAUDE.md read the
+# false claim inline, beside a section that often held a single entry.
+#
+# WHAT REPLACED IT IS UNCONDITIONAL. The searchability clause is TRUE in every
+# regime and is kept: it is the clause that tells a reader where the durable
+# copy lives. Deleting the whole comment would have removed a true, useful
+# statement along with the false one.
+#
+# DO NOT "RESTORE" A COUNT, and do not replace it with "entries are not
+# addressable by ID" either -- that is a NEW false claim in the other
+# direction, because only OLDER entries lose their ID. The newest entry is
+# always full and always carries its Memory ID.
+#
+# MIRRORED IN TWO OTHER DEFINITIONS -- `hooks/shared/session_resume.py` and
+# `hooks/shared/claude_md_manager.py`. Change all three in ONE commit: fixing
+# two of three converts one consistent falsehood into a three-way disagreement.
+WORKING_MEMORY_COMMENT = "<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. -->"
 MAX_WORKING_MEMORIES = 3
 
 # Constants for retrieved context section (searched/retrieved memories)
@@ -324,6 +345,25 @@ def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
             or a descendant of it; or the boundary could not be established at
             all. Fail-CLOSED in every case, with a distinct message per cause.
     """
+    # A MISSING ANCHOR IS REFUSED AT THE CONTROL, not left to the callers.
+    #
+    # None is not reachable here today: both writers guard, and the resolver
+    # returns a PAIRED (None, None). But both of those guards test the TARGET
+    # path, not the anchor, so the containment guarantee currently rests on a
+    # resolver invariant that neither writer states. A resolver branch returning
+    # `(path, None)` would put None here.
+    #
+    # AND TODAY IT WOULD FAIL CLOSED BY ACCIDENT, WHICH IS THE REASON THIS LINE
+    # EXISTS. `os.stat(str(None))` stats the literal relative path "None",
+    # which raises -- until a directory named `None` exists in the working
+    # directory, at which point that directory silently BECOMES the containment
+    # anchor and every write is measured against it. A security control must not
+    # depend on a filename not existing. Make the state unrepresentable here.
+    if project_root is None:
+        raise ContainmentError(
+            "refusing write: no containment anchor was supplied"
+        )
+
     # #1247 CONTAINMENT, fail-CLOSED, BEFORE anything is created: kernel object
     # ancestry on a pinned directory descriptor. No Path.resolve(), no
     # os.path.realpath, no string comparison takes part in this decision.
@@ -1087,17 +1127,153 @@ def _project_root_of(claude_md_path: Path) -> Path:
     return parent.parent if parent.name == ".claude" else parent
 
 
+class SyncResult:
+    """Outcome of a working-memory sync: DID IT WRITE, and WHY NOT.
+
+    `__bool__` is `wrote`, so every existing read of the result keeps its exact
+    present meaning. `.reason` carries the discrimination that a bare bool
+    could not: a refusal, a suppression and an unresolved target were all
+    `False`, and arm 3 of the archival suppression suite proved that a refused
+    sync and a suppressed one leave identical evidence on disk.
+
+    THIS DELIBERATELY DOES NOT FOLLOW `_store_embedding`'s CONVENTION, AND THE
+    POLARITY IS THE REASON. That function treats `None` as success and a string
+    as a problem. THIS function treats `True` as success. The two conventions
+    are inverted, so they cannot be shared: adopting the sibling's convention
+    here would make a truthiness read report success on a refusal.
+
+    THE ARGUMENT IS THE PRESERVED MEANING, NOT A COUNT OF CALL SITES.
+    `__bool__ == wrote` returns exactly what this function returned before, so
+    NO caller changes behaviour -- neither the callers that exist now, nor one
+    written later by an author who never reads this class. Do not restate that
+    argument as a tally of reads in the suite. A tally rots the next time a
+    test lands, and it invites a future editor to re-derive the decision from a
+    population instead of from the property. State the property.
+
+    Do not "fix" the inconsistency with `_store_embedding`; it is load-bearing.
+    """
+
+    __slots__ = ("wrote", "reason")
+
+    # Reasons. WROTE is the only one for which `bool()` is True.
+    WROTE = "wrote"
+    REFUSED = "refused"          # guard declined; raised, then caught upstream
+    SUPPRESSED = "suppressed"    # caller passed sync_to_claude=False
+    UNRESOLVED = "unresolved"    # no CLAUDE.md resolved
+    MISSING = "missing"          # resolved a path that does not exist
+    FAILED = "failed"            # the write itself raised
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        self.wrote = reason == self.WROTE
+
+    def __bool__(self) -> bool:
+        return self.wrote
+
+    def __repr__(self) -> str:
+        return f"SyncResult({self.reason!r})"
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, SyncResult):
+            return self.reason == other.reason
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self.reason)
+
+
+class AmbientSyncRefused(RuntimeError):
+    """Raised when a test process would sync to an ambiently-resolved CLAUDE.md."""
+
+
+def _refuse_ambient_target_under_pytest(
+    target: Optional[Path],
+    claude_md_root: Optional[Path] = None,
+) -> None:
+    """Refuse an AMBIENT working-memory sync when a TEST PROCESS spawned us.
+
+    THE GAP THIS CLOSES, AND WHY A FLAG WAS NOT ENOUGH. Three paths reach live
+    operator state from a test: the database, refused by
+    `cli._refuse_live_db_under_pytest`; the session marker, refused by the
+    `PYTEST_CURRENT_TEST` check in `pact_session`; and this one, which had no
+    refusal at all. Two of three failed closed and the third always wrote.
+
+    `--no-sync` exists and works, but it is a CONVENTION -- it must be
+    remembered at every call site. It was forgotten twice in one evening by the
+    two people most alert to this exact hazard, so roughly twenty probe saves
+    reached the operator's real file. A refusal keyed on the condition needs
+    nobody to remember anything.
+
+    AND A SANDBOXED HOME NEVER COVERED IT, which is why it went unnoticed: the
+    target is not under HOME. It is resolved from CLAUDE_PROJECT_DIR, then two
+    git anchors, then the working directory -- and that resolver is TOTAL, so
+    there is no configuration in which it declines to pick a file.
+
+    SCOPE, mirroring `_refuse_live_db_under_pytest` deliberately rather than
+    inventing a second shape:
+    - An EXPLICIT `target` is always allowed. A caller that names its file has
+      said which file it means, and tests legitimately sync to a tmp path.
+    - A DECLARED `claude_md_root` is always allowed, AND IT IS A STRONGER
+      WARRANT THAN `target` RATHER THAN A SECOND LOOSENING. `target` is blind
+      trust: the caller names a file and it is written. An anchor is CHECKED --
+      the write must land inside it or `_atomic_write_text` refuses -- so a
+      caller that declares a sandbox cannot escape it even by resolving to
+      somebody else's file. That is what makes exempting the refusal sound for
+      a test process instead of merely convenient.
+    - An IN-PROCESS caller (`pytest` already imported) is out of scope, because
+      the suite's own working-memory tests call this ambiently on purpose.
+    - The same bounded gap applies: pytest pops `PYTEST_CURRENT_TEST` between
+      items, so a spawn during collection or session-fixture setup is NOT
+      covered.
+
+    Raises AmbientSyncRefused rather than returning False, because save()
+    already treats a sync failure as non-critical and logs it -- a quiet False
+    would leave the refusal invisible, which is the failure mode being fixed.
+    """
+    if target is not None:
+        return
+    if claude_md_root is not None:
+        return
+    if "pytest" in sys.modules:
+        return
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    raise AmbientSyncRefused(
+        "refusing to sync working memory to an ambiently-resolved CLAUDE.md: "
+        "PYTEST_CURRENT_TEST is set in this process's environment, so the "
+        "destination would be the operator's live file. Pass an explicit "
+        "target=, or use the CLI's --no-sync flag."
+    )
+
+
 def sync_to_claude_md(
     memory: Dict[str, Any],
     files: Optional[List[str]] = None,
     memory_id: Optional[str] = None,
-    target: Optional[Path] = None
-) -> bool:
+    target: Optional[Path] = None,
+    claude_md_root: Optional[Path] = None
+) -> "SyncResult":
     """
     Sync a memory entry to the Working Memory section of CLAUDE.md.
 
-    Maintains a rolling window of the last 3 memories. New entries are added
-    at the top of the section, and entries beyond MAX_WORKING_MEMORIES are removed.
+    Maintains a rolling window of AT MOST MAX_WORKING_MEMORIES entries. New
+    entries are added at the top of the section, and older ones are removed.
+
+    THE COUNT IS A CAP, NOT A PROMISE, and this docstring said "the last 3"
+    until the claim was measured. `_apply_token_budget` keeps the newest entry
+    IN FULL and its drop loop is `while len(result) > 1`, so when that entry
+    ALONE exceeds the whole-section budget -- as a typical full entry does --
+    the older ones are dropped and the section shows ONE. Stating a fixed 3
+    here is the same false claim that was removed from the comment this
+    function WRITES INTO the file, left behind in the function that makes it
+    false.
+
+    Its sibling `sync_retrieved_to_claude_md` genuinely does hold the last 3,
+    and its docstring is correct as written -- `_format_retrieved_entry`
+    truncates each entry to 200 chars, so three of them cannot reach that
+    section's budget and its drop loop never runs. DO NOT "fix" the sibling to
+    match this wording: the two differ because one bounds its entries and the
+    other does not, which is the whole mechanism.
 
     This function is designed for graceful degradation - if CLAUDE.md doesn't
     exist or the sync fails for any reason, it logs a warning but doesn't
@@ -1151,19 +1327,67 @@ def sync_to_claude_md(
             CLAUDE.md is resolved ambiently exactly as before, so existing
             callers are unaffected. When given, it is used verbatim and is
             never created if absent.
+        claude_md_root: Declared containment anchor. The write must land inside
+            it or the containment check refuses. It does NOT steer resolution:
+            the target is still found the same way, and a target that resolves
+            outside the declared root is REFUSED rather than redirected. Omit it
+            for today's behaviour, where the anchor comes from the resolution.
+            Supplying it also exempts the ambient-sync refusal, because a
+            checked boundary is a stronger warrant than the unchecked `target`.
 
     Returns:
-        True if sync succeeded, False otherwise.
+        A `SyncResult`. It is TRUTHY exactly when the write happened, so a
+        caller that only asks "did it write" reads it unchanged. `.reason`
+        names the outcome in EVERY case, the successful one included, so a
+        caller that must tell a refusal from a suppression now can.
+
+        A REFUSAL DOES NOT COME BACK THIS WAY. The ambient-target guard RAISES
+        `AmbientSyncRefused` before any of these returns, so `SyncResult.REFUSED`
+        is produced by whoever catches it, not here. See the guard's own
+        docstring for why it raises rather than returns.
     """
+    _refuse_ambient_target_under_pytest(target, claude_md_root)
+
     if target is not None:
         claude_md_path = Path(target)
-        project_root = _project_root_of(claude_md_path)
+        resolved_root = _project_root_of(claude_md_path)
     else:
-        claude_md_path, project_root = _resolve_display_claude_md_with_base()
+        claude_md_path, resolved_root = _resolve_display_claude_md_with_base()
 
-    if claude_md_path is None:
+    # THE DECLARED ANCHOR REPLACES THE CONTAINMENT BASE. IT DOES NOT STEER
+    # RESOLUTION -- the target above is found exactly as it was before.
+    # Narrowing the two Nones HERE is the point: `claude_md_root is None` means
+    # "the caller declared nothing, behave as before", while `resolved_root is
+    # None` means "resolution found nothing at all". Those are different facts,
+    # so they are carried in different variables and only one decision reads
+    # both. A `claude_md_root or resolved_root` would merge them and silently
+    # treat a declared-nothing as a found-nothing.
+    #
+    # It is a PARAMETER and never a lookup: no line here derives an anchor. An
+    # anchor computed from the same resolution the target came from would agree
+    # with it by construction, which is precisely the independence the caller is
+    # trying to buy.
+    project_root = (
+        Path(claude_md_root) if claude_md_root is not None else resolved_root
+    )
+
+    # BOTH HALVES, BECAUSE THE PAIRING IS THE RESOLVER'S PROMISE AND NOT THIS
+    # FUNCTION'S. `_resolve_display_claude_md_with_base` returns either two
+    # paths or two Nones -- every one of its five exits is guarded by an
+    # `if found is not None` -- so today `project_root` cannot be None once
+    # `claude_md_path` is not. MEASURED, and it is the ONLY reason the anchor
+    # below is safe.
+    #
+    # That is exactly the arrangement the existence guard further down was moved
+    # for: a caller depending on a property of a resolver it does not own. A
+    # later branch returning `(found, None)` would slip a None past a check that
+    # only asks about the path, and `_atomic_write_text` would stat the literal
+    # relative path "None" as its containment anchor -- which raises today, but
+    # silently anchors on a directory named `None` if one ever exists. Naming
+    # both halves here costs one condition and depends on nobody's promise.
+    if claude_md_path is None or project_root is None:
         logger.debug("CLAUDE.md not found, skipping working memory sync")
-        return False
+        return SyncResult(SyncResult.UNRESOLVED)
 
     # EXISTENCE GUARD, BELOW THE JOIN SO IT COVERS BOTH BRANCHES.
     #
@@ -1213,7 +1437,7 @@ def sync_to_claude_md(
                 "the display resolver stopped returning only existing paths, "
                 "or the file was removed after it resolved.", claude_md_path
             )
-        return False
+        return SyncResult(SyncResult.MISSING)
 
     try:
         # Serialize the FULL read-modify-write window under the shared sidecar
@@ -1266,11 +1490,11 @@ def sync_to_claude_md(
             _atomic_write_text(claude_md_path, new_content, project_root)
 
         logger.info("Synced memory to CLAUDE.md Working Memory section")
-        return True
+        return SyncResult(SyncResult.WROTE)
 
     except Exception as e:
         logger.warning(f"Failed to sync memory to CLAUDE.md: {e}")
-        return False
+        return SyncResult(SyncResult.FAILED)
 
 
 def _parse_retrieved_context_section(
@@ -1395,7 +1619,8 @@ def sync_retrieved_to_claude_md(
     memories: List[Dict[str, Any]],
     query: str,
     scores: Optional[List[float]] = None,
-    memory_ids: Optional[List[str]] = None
+    memory_ids: Optional[List[str]] = None,
+    claude_md_root: Optional[Path] = None
 ) -> bool:
     """
     Sync retrieved memories to the Retrieved Context section of CLAUDE.md.
@@ -1409,16 +1634,43 @@ def sync_retrieved_to_claude_md(
         query: The search query used.
         scores: Optional list of similarity scores (same order as memories).
         memory_ids: Optional list of memory IDs (same order as memories).
+        claude_md_root: Declared containment anchor, exactly as on
+            `sync_to_claude_md`. Omit it for today's behaviour.
 
     Returns:
         True if sync succeeded, False otherwise.
+
+    THIS IS THE SECOND AMBIENT WRITER AND IT HAD NO REFUSAL AT ALL. The save
+    path at least had the `target` escape hatch; this one takes no target, so
+    every call resolved ambiently with nothing standing between a test process
+    and the operator's live file. It is reached from `PACTMemory.search()`
+    whenever `sync_to_claude` is true, WHICH IS THE DEFAULT -- so an ordinary
+    search was a write.
+
+    ITS SIGNATURE STAYS `bool` DELIBERATELY. The reason channel belongs to
+    `sync_to_claude_md`, whose callers read `True` as success; this function is
+    not being converted, and an annotation promising `SyncResult` here would
+    describe code that returns `False`.
     """
     if not memories:
         return False
 
-    claude_md_path, project_root = _resolve_display_claude_md_with_base()
+    # Same refusal as the save path, and the same exemptions: a declared anchor
+    # is checked, so it is a stronger warrant than a named target. There is no
+    # `target` parameter on this function, so the anchor is the ONLY way a test
+    # process can legitimately drive it.
+    _refuse_ambient_target_under_pytest(None, claude_md_root)
 
-    if claude_md_path is None:
+    claude_md_path, resolved_root = _resolve_display_claude_md_with_base()
+
+    # Declared anchor replaces the containment base; it does not steer
+    # resolution. The two Nones stay in separate variables for the same reason
+    # they do in the sibling.
+    project_root = (
+        Path(claude_md_root) if claude_md_root is not None else resolved_root
+    )
+
+    if claude_md_path is None or project_root is None:
         logger.debug("CLAUDE.md not found, skipping retrieved context sync")
         return False
 

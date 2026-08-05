@@ -8,7 +8,14 @@ Tests cover:
 4. Edge cases - graceful degradation, already-installed dependencies
 """
 
+import os
+import re
+import json
+import shutil
+import subprocess
 import sys
+import tempfile
+import uuid
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -136,6 +143,50 @@ class TestResetInitialization:
             assert result2['already_initialized'] is False
             assert mock_deps.call_count == 2
 
+    def test_reset_leaves_existing_marker_in_place(self):
+        """reset_initialization() must not delete the embedding marker.
+
+        The marker path resolves to a location shared with a real session, so a
+        reset that unlinks it reaches outside the test process. Resetting the
+        in-memory flag is the only behaviour tests need.
+        """
+        from memory_init import reset_initialization, _get_embedding_attempted_path
+
+        test_session_id = f"test-routef-{time.time()}"
+
+        with patch("memory_init.get_session_id_from_context_file", return_value=test_session_id):
+            marker_path = _get_embedding_attempted_path()
+            marker_path.touch()
+            try:
+                assert marker_path.exists(), "precondition: marker was created"
+
+                reset_initialization()
+
+                assert marker_path.exists(), (
+                    "reset_initialization() deleted the embedding marker; "
+                    "the reset must not touch the filesystem"
+                )
+            finally:
+                marker_path.unlink(missing_ok=True)
+
+    def test_clear_embedding_marker_removes_it(self):
+        """The deletion still exists, but only under its own name."""
+        from memory_init import clear_embedding_marker, _get_embedding_attempted_path
+
+        test_session_id = f"test-clearmarker-{time.time()}"
+
+        with patch("memory_init.get_session_id_from_context_file", return_value=test_session_id):
+            marker_path = _get_embedding_attempted_path()
+            marker_path.touch()
+            try:
+                assert marker_path.exists(), "precondition: marker was created"
+
+                clear_embedding_marker()
+
+                assert not marker_path.exists()
+            finally:
+                marker_path.unlink(missing_ok=True)
+
 
 class TestIsInitialized:
     """Tests for is_initialized() - checks current initialization state."""
@@ -262,11 +313,12 @@ class TestCheckAndInstallDependencies:
         assert 'installed' in result
         assert 'failed' in result
 
-    def test_subprocess_called_for_missing_deps(self):
+    def test_subprocess_called_for_missing_deps(self, monkeypatch):
         """Test that subprocess.run is called when deps are missing."""
         import builtins
         from memory_init import check_and_install_dependencies
 
+        monkeypatch.delenv("CI", raising=False)   # pins the installer, so the gate must be OPEN
         original_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
@@ -285,11 +337,12 @@ class TestCheckAndInstallDependencies:
             # Should have attempted pip install
             assert mock_run.called
 
-    def test_installation_failure_recorded(self):
+    def test_installation_failure_recorded(self, monkeypatch):
         """Test that installation failures are recorded in result."""
         import builtins
         from memory_init import check_and_install_dependencies
 
+        monkeypatch.delenv("CI", raising=False)   # pins the installer, so the gate must be OPEN
         original_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
@@ -308,12 +361,13 @@ class TestCheckAndInstallDependencies:
             assert result['status'] == 'failed'
             assert len(result['failed']) > 0
 
-    def test_installation_timeout_handled(self):
+    def test_installation_timeout_handled(self, monkeypatch):
         """Test that installation timeout is handled gracefully."""
         import builtins
         import subprocess
         from memory_init import check_and_install_dependencies
 
+        monkeypatch.delenv("CI", raising=False)   # pins the installer, so the gate must be OPEN
         original_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
@@ -330,6 +384,244 @@ class TestCheckAndInstallDependencies:
 
             # Should record timeout in failed list
             assert any('timeout' in str(f).lower() for f in result['failed'])
+
+    def test_install_path_inert_when_ci_set(self, monkeypatch):
+        """The gate FIRES: under CI the install path returns before subprocess."""
+        import builtins
+        from memory_init import check_and_install_dependencies
+
+        monkeypatch.setenv("CI", "true")
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == 'pysqlite3':
+                raise ImportError("No module named 'pysqlite3'")
+            return original_import(name, *args, **kwargs)
+
+        with patch.object(builtins, '__import__', mock_import), \
+             patch('memory_init.subprocess.run') as mock_run:
+
+            result = check_and_install_dependencies()
+
+            assert not mock_run.called
+            assert result['status'] == 'skipped_ci'
+            assert 'pysqlite3' in result['skipped']
+            # Must stay empty: ensure_memory_ready logs this key as
+            # "Failed to install", and nothing was attempted.
+            assert result['failed'] == []
+
+
+class TestDependencyDriftIsDetectable:
+    """The `skipped_ci` branch is SILENT. This class is why that is safe.
+
+    WHAT WAS MEASURED, so nobody re-opens this by "just adding a log line".
+    Under the shipping invocation (`python -m pytest`, no `-r`, no `-s`), with
+    `CI` set and a genuinely absent package, the DOMINANT caller of
+    `check_and_install_dependencies` is a CLI SUBPROCESS (`scripts/cli.py` via
+    `subprocess.run`), not the pytest process. On that path the CLI's stderr is
+    a STRUCTURED JSON CONTRACT — the CLI tests do `json.loads(result.stderr)`.
+    Drift forced, one variable changed at a time, `tests/test_memory_cli.py`:
+
+        no emission at all ................. 154 passed
+        print(..., file=sys.stderr) ........ 15 failed
+        logger.warning (lastResort→stderr) . 15 failed
+        warnings.warn (default→stderr) ..... 15 failed
+
+    So every in-process emission mechanism corrupts that contract identically,
+    and `warnings.warn` is NOT a safe substitute here even though it is the one
+    mechanism that IS visible from a passing test in the pytest process.
+    Visibility does not cross the process boundary regardless: pytest's warnings
+    summary only collects warnings raised in the pytest process.
+
+    Hence drift is caught STATICALLY, below. A failing test is louder than any
+    log line and is immune to capture, to the process boundary and to `-r`.
+    """
+
+    def _source_repo_root(self):
+        """Repo root by a POSITIVE marker, or None when this is not a checkout.
+
+        Deliberately NOT "did I find the workflow file?". "I cannot find it" and
+        "it is wrong" must never produce the same outcome — that equivalence is
+        the silent-narrowing defect this whole class exists to prevent. So the
+        skip decision is made on an INDEPENDENT positive marker, and the
+        workflow's own absence is then free to be a FAILURE.
+
+        Marker matches the convention already used by test_packaging_boundary.py.
+        """
+        for base in Path(__file__).resolve().parents:
+            if (base / ".claude-plugin" / "marketplace.json").exists():
+                return base
+        return None
+
+    def test_declared_packages_match_the_ci_install_line(self):
+        """Every package memory_init would install must be declared by CI.
+
+        WHAT THIS PROVES: the two lists cannot silently diverge. If a package is
+        added here and not to the workflow, this goes RED with the name in the
+        message — which is the drift signal the silent branch cannot emit.
+
+        WHAT IT DOES NOT PROVE: that any runtime message is visible in a CI log.
+        Nothing asserts that, because nothing safely can — see the class
+        docstring. It also does not prove the reverse direction: CI may install
+        packages this module does not know about, which is harmless.
+        """
+        from memory_init import check_and_install_dependencies  # noqa: F401
+        import inspect
+
+        import memory_init
+
+        source = inspect.getsource(memory_init.check_and_install_dependencies)
+        declared = re.findall(r"\(\s*'([^']+)'\s*,\s*'[^']+'\s*\)", source)
+        assert declared, (
+            "could not read the package list out of "
+            "check_and_install_dependencies — the list changed shape and this "
+            "parity test is now vacuous. Re-point it; do not delete it."
+        )
+
+        root = self._source_repo_root()
+        if root is None:
+            pytest.skip(
+                "SKIPPED, NOT PASSED — no .claude-plugin/marketplace.json above "
+                f"{Path(__file__).resolve()}, so this is not a PACT source "
+                "checkout. The expected case is an INSTALLED PLUGIN CACHE, "
+                "which has no .github/ tree by design. This skip is NO "
+                "INFORMATION about dependency drift — never read it as a pass."
+            )
+
+        # INSIDE a checkout, absence is a FAILURE. Reaching here means the
+        # marker was found, so the workflow is expected to exist and parse; if
+        # it does not, the drift detector is broken and must say so loudly
+        # rather than skip and read as green.
+        workflow = root / ".github" / "workflows" / "tests.yml"
+        assert workflow.exists(), (
+            f"source checkout detected at {root} (marketplace.json present) but "
+            f"{workflow} is missing. The drift detector cannot run. This is a "
+            f"FAILURE, not a skip: inside a checkout the workflow is required."
+        )
+        install_line = next(
+            (ln for ln in workflow.read_text(encoding="utf-8").splitlines()
+             if "pip install" in ln),
+            None,
+        )
+        assert install_line is not None, (
+            f"PARSE FAILURE, not dependency drift: {workflow} contains no "
+            f"'pip install' line, so the CI dependency declaration cannot be "
+            f"read. The workflow changed shape — re-point this parity test at "
+            f"the new shape; do not weaken it to a skip."
+        )
+
+        # Compare against TOKENS of the install line, never substrings of it.
+        # A substring test fails OPEN on the most plausible next edit: this
+        # module does `import pysqlite3 as sqlite3`, so an editor adding
+        # 'sqlite3' to the package list above would find it inside 'pysqlite3',
+        # pass, and assert a package is installed that is not. Measured against
+        # the real install line, 'sqlite3', 'sqlite', 'vec', 'yaml' and
+        # 'asyncio' are ALL substrings of it and none is declared by CI.
+        #
+        # Names are normalised per PEP 503 (lowercase, [-_.] runs collapse to
+        # '-') on BOTH sides, so a legitimate 'sqlite_vec'/'sqlite-vec' spelling
+        # difference does not read as drift. Version specifiers and extras are
+        # stripped so 'pytest>=8' still matches 'pytest'.
+        def _normalise(name):
+            head = re.split(r"[=<>!~;\[]", name)[0]
+            return re.sub(r"[-_.]+", "-", head).strip().lower()
+
+        # Model how pip itself reads argv: the package operands are the
+        # non-flag words AFTER the `install` verb. Everything before it is the
+        # invocation (`run:`, `python`, `-m`, `pip`) and is not an operand.
+        # Deriving the boundary structurally beats filtering a hand-maintained
+        # list of command words, which would need updating and would turn a
+        # package legitimately named after a command into false drift.
+        words = install_line.split()
+        operands = words[words.index("install") + 1:] if "install" in words else []
+        install_tokens = {
+            _normalise(tok) for tok in operands
+            if tok and not tok.startswith("-")
+        }
+
+        # PARSE NON-VACUITY — asserted BEFORE the drift comparison, and with a
+        # DISTINCT message, because "I could not read the line" and "a package
+        # is missing" must never produce the same outcome. If a workflow
+        # refactor defeats this parser, `install_tokens` silently empties and
+        # the set difference below passes VACUOUSLY: the guard would be dead
+        # while green, which is the exact failure it exists to prevent.
+        #
+        # The anchor has GROUND TRUTH INDEPENDENT OF THE PARSE: this code is
+        # executing under pytest, so CI demonstrably installs pytest. If a
+        # correct parse of the CI install line does not contain it, the parse
+        # is wrong — not the dependency set. That is what makes this a real
+        # non-vacuity check rather than a restatement of the thing being tested.
+        _PARSE_ANCHOR = "pytest"
+        assert install_tokens, (
+            f"PARSE FAILURE, not dependency drift: no package operands could be "
+            f"read from the CI install line. The line is {install_line.strip()!r}. "
+            f"The tokeniser models `pip install <flags> <packages>`; a refactor "
+            f"to a requirements file or a multi-line form defeats it. Re-point "
+            f"the parser — do NOT relax the assertion below, which would pass "
+            f"vacuously over an empty token set."
+        )
+        assert _PARSE_ANCHOR in install_tokens, (
+            f"PARSE FAILURE, not dependency drift: the parsed operands "
+            f"{sorted(install_tokens)} do not contain {_PARSE_ANCHOR!r}, but "
+            f"this test is RUNNING under pytest, so CI installs it. The parse "
+            f"is therefore wrong, not the dependency set. Re-point the parser."
+        )
+
+        declared_tokens = {_normalise(p) for p in declared}
+        missing = sorted(declared_tokens - install_tokens)
+        assert not missing, (
+            f"DEPENDENCY DRIFT: {missing} are installed by "
+            f"memory_init.check_and_install_dependencies but are NOT in the CI "
+            f"workflow's install line. Under CI the install path is skipped, so "
+            f"these would be absent at runtime and the branch reports it "
+            f"NOWHERE (it is deliberately silent — the CLI's stderr is a JSON "
+            f"contract). Add them to the workflow, or remove them here."
+        )
+
+    def test_ci_branch_emits_nothing_to_stderr(self):
+        """The silence is the CONTRACT, so pin it — a log line here breaks 15
+        CLI tests the moment real drift occurs, which is exactly when it fires.
+
+        Proxy, named honestly: this asserts the function writes nothing to
+        stderr and raises no warning IN THIS PROCESS. It does not re-run the
+        subprocess measurement; it pins the property that measurement justified.
+        """
+        import builtins
+        import io
+        import warnings
+        from contextlib import redirect_stderr
+
+        from memory_init import check_and_install_dependencies
+
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == 'pysqlite3':
+                raise ImportError("No module named 'pysqlite3'")
+            return original_import(name, *args, **kwargs)
+
+        buf = io.StringIO()
+        with patch.dict(os.environ, {"CI": "true"}), \
+                patch.object(builtins, '__import__', mock_import), \
+                patch('memory_init.subprocess.run') as mock_run, \
+                warnings.catch_warnings(record=True) as caught, \
+                redirect_stderr(buf):
+            warnings.simplefilter("always")
+            result = check_and_install_dependencies()
+
+        assert result['status'] == 'skipped_ci'      # the branch really fired
+        assert not mock_run.called
+        assert buf.getvalue() == "", (
+            f"the CI branch wrote to stderr: {buf.getvalue()!r}. The CLI's "
+            f"stderr is parsed as JSON by tests/test_memory_cli.py, so this "
+            f"breaks 15 of them under real drift. Detect drift with the parity "
+            f"test above instead."
+        )
+        assert not caught, (
+            f"the CI branch raised {[str(w.message) for w in caught]}. Python's "
+            f"default warning display writes to stderr, so in the CLI "
+            f"subprocess this corrupts the same JSON contract."
+        )
 
 
 class TestMaybeEmbedPending:
@@ -1426,3 +1718,116 @@ def reset_init_state():
     reset_initialization()
     yield
     reset_initialization()
+
+
+class TestProcessMarkerDoesNotOutliveItsProcess:
+    """The fallback marker is per-process, so it must not survive the process.
+
+    Route F removed the marker DELETION but not its CREATION, and the fallback
+    token made every process's marker unique — so each one became permanent
+    litter that nothing could ever match again. Measured at 100 files per suite
+    run before this was fixed.
+
+    NON-VACUITY: asserting "no marker exists afterwards" passes both when the
+    cleanup works AND when no marker was ever created. So the child proves
+    creation from the inside and reports the path; the parent then proves the
+    same path is gone. Without the child's assertion this test could not tell
+    a working cleanup from a marker that never existed.
+    """
+
+    def _run_child(self, extra_body=""):
+        scripts = str(Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts")
+        child = (
+            "import sys, pathlib\n"
+            f"sys.path.insert(0, {scripts!r})\n"
+            "import memory_init\n"
+            "p = memory_init._get_embedding_attempted_path()\n"
+            "p.touch()\n"
+            # POSITIVE ARM: the marker demonstrably existed while the process ran.
+            "assert p.exists(), 'child failed to create its own marker'\n"
+            "print(str(p))\n"
+            f"{extra_body}"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", child], capture_output=True, text=True, timeout=60
+        )
+        assert proc.returncode == 0, f"child failed: {proc.stderr}"
+        return Path(proc.stdout.strip().splitlines()[-1])
+
+    def test_fallback_marker_is_removed_when_the_process_exits(self):
+        marker = self._run_child()
+
+        assert "process-" in marker.name, (
+            "precondition: the child had no session context, so it must have "
+            f"used the process-unique fallback; got {marker.name}"
+        )
+        assert not marker.exists(), (
+            f"{marker.name} outlived the process that created it; nothing can "
+            "ever match that token again, so it is permanent litter"
+        )
+
+    def test_the_processes_own_session_scoped_marker_survives(self):
+        """A SESSION-scoped marker must outlive the process that made it.
+
+        SUBJECT MATTERS HERE, and an earlier version of this test got it wrong.
+        It touched an unrelated bystander file while the child still resolved to
+        the FALLBACK token, so its subject was "an unrelated marker is not
+        deleted" — a different noun from the requirement, which is "the
+        process's OWN session-scoped marker survives". A handler rebuilt as
+        `_get_embedding_attempted_path()` — the plausible "there is already a
+        helper" simplification — deleted the process's own session marker and
+        that version passed anyway, because the child's path WAS the fallback
+        and the bystander was never at risk.
+
+        So this child RESOLVES a real session id and asserts its own path is
+        session-scoped before creating it. Now the process's own marker is the
+        thing under test, and that mutant kills this test.
+        """
+        session_id = f"test-survives-{uuid.uuid4().hex[:12]}"
+        home = tempfile.mkdtemp(prefix="pact-marker-home-")
+        ctx = Path(home) / ".claude" / "pact-sessions" / "some-project" / session_id
+        ctx.mkdir(parents=True, exist_ok=True)
+        (ctx / "pact-session-context.json").write_text(
+            json.dumps({"session_id": session_id, "project_dir": "/x/some-project"}),
+            encoding="utf-8",
+        )
+
+        env = dict(os.environ)
+        env["HOME"] = home
+        env["CLAUDE_CODE_SESSION_ID"] = session_id
+        # The discovery route refuses under pytest, and a child inherits that
+        # marker — so it must be cleared or the child falls back to the process
+        # token and this test silently reverts to the defective version.
+        env.pop("PYTEST_CURRENT_TEST", None)
+
+        scripts = str(Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts")
+        child = (
+            "import sys\n"
+            f"sys.path.insert(0, {scripts!r})\n"
+            "import memory_init\n"
+            "p = memory_init._get_embedding_attempted_path()\n"
+            # POSITIVE ARM: prove the path really is session-scoped. Without
+            # this the child could fall back and the test would pass vacuously.
+            f"assert {session_id!r} in p.name, 'child did not resolve the session id: ' + p.name\n"
+            "assert 'process-' not in p.name, 'child used the fallback token: ' + p.name\n"
+            "p.touch()\n"
+            "assert p.exists(), 'child failed to create its own marker'\n"
+            "print(str(p))\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", child], capture_output=True, text=True,
+            timeout=60, env=env,
+        )
+        assert proc.returncode == 0, f"child failed: {proc.stderr}"
+        marker = Path(proc.stdout.strip().splitlines()[-1])
+
+        try:
+            assert session_id in marker.name, "precondition: marker is session-scoped"
+            assert marker.exists(), (
+                f"{marker.name} was removed at process exit; a session-scoped "
+                "marker must survive, because suppressing the sweep ACROSS the "
+                "processes of one session is its entire purpose"
+            )
+        finally:
+            marker.unlink(missing_ok=True)
+            shutil.rmtree(home, ignore_errors=True)

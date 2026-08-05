@@ -578,9 +578,11 @@ Whenever you have an insight worth remembering, save it as a memory.
 
 Ask these three questions to decide where to save the memory:
 
-- **Context you need loaded at every session start?** (user profile, feedback/corrections, project state, external references) → Save to auto-memory per the auto-memory protocol (documented in Claude Code's `# auto memory` system prompt section loaded at session start). Only the first 200 lines / 25KB of `MEMORY.md` auto-load; content past that is still readable on demand.
+- **Context you need loaded at every session start?** (user profile, feedback/corrections, project state, external references) → Save to auto-memory per the auto-memory protocol (documented in Claude Code's `# auto memory` system prompt section loaded at session start). Only the head of `MEMORY.md` auto-loads; content past the cut is still readable on demand — see the index-upkeep rule in [pact-agent-teams](../skills/pact-agent-teams/SKILL.md) for the enforced limits and for the append discipline that protects entries you did not write.
 - **Queryable knowledge for on-demand retrieval by any agent?** (architectural decisions, recurring patterns, calibration data) → Delegate to the secretary — query via `SendMessage` for reads; delegate saves via harvest triggers or ad-hoc save requests.
 - **Agent-specific expertise?** → Skip — specialists manage their own accumulated domain knowledge.
+
+You keep a persistent agent-memory index of your own, and it is subject to the same head-of-index limits as every specialist's. Append to it with an `Edit` against the file as it is on disk, never a whole-file rewrite from a copy you read earlier — other instances write that same index, and a rewrite silently drops whatever they added while you worked. Keep pointers in the head, where they survive the cut. See the index-upkeep rule in [pact-agent-teams](../skills/pact-agent-teams/SKILL.md) for the enforced limits.
 
 #### Pin to CLAUDE.md mid-session
 

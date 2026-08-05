@@ -62,10 +62,12 @@ from .search import (
     get_search_capabilities
 )
 from .working_memory import (
+    AmbientSyncRefused,
+    SyncResult,
     sync_to_claude_md,
     sync_retrieved_to_claude_md,
 )
-from .memory_init import ensure_memory_ready
+from .memory_init import ensure_memory_ready, get_embedding_catchup_status
 # Dual import: relative (when loaded as package) vs absolute (when tests add scripts/ to sys.path)
 try:
     from .pact_session import get_session_id_from_context_file
@@ -168,6 +170,18 @@ class PACTMemory:
 
         # Session file tracking (populated by hooks)
         self._session_files: List[str] = []
+
+        # Reason code from the most recent save() or update(), or None when the
+        # last write had nothing to report. save() returns a bare memory_id, so
+        # this is how a caller reaches the embedding outcome without changing
+        # that signature.
+        self._last_embedding_status: Optional[str] = None
+
+        # Outcome of the most recent save()'s CLAUDE.md sync, or None before
+        # any save has run. Unlike the embedding status above, this is set on
+        # EVERY save, success included -- see `last_sync_status` for why the
+        # two neighbours differ.
+        self._last_sync_status: Optional[str] = None
 
         logger.debug(
             f"PACTMemory initialized: project={self._project_id}, session={self._session_id}"
@@ -323,6 +337,36 @@ class PACTMemory:
         """Get the current session ID."""
         return self._session_id
 
+    @property
+    def last_embedding_status(self) -> Optional[str]:
+        """Reason code from the most recent save() or update().
+
+        None means there was nothing to report. A string is a reason code the
+        caller may surface: `degraded:<search_mode>` or `fault`.
+        """
+        return self._last_embedding_status
+
+    @property
+    def last_sync_status(self) -> Optional[str]:
+        """Outcome of the most recent save()'s CLAUDE.md sync.
+
+        One of `SyncResult`'s reasons: `wrote`, `refused`, `suppressed`,
+        `unresolved`, `missing` or `failed`. None means no save has run yet on
+        this instance.
+
+        READ THIS BESIDE `last_embedding_status`, BECAUSE THE TWO DIFFER IN
+        MORE THAN POLARITY. That one is PARTIAL: it reports a PROBLEM, and it
+        is None when the embedding succeeded. This one is TOTAL: it names the
+        outcome in every case, `wrote` included.
+
+        So an ABSENT `sync_status` NEVER MEANS SUCCESS. It means no save has
+        run. Reading absence as success is the exact inference this channel
+        exists to make impossible -- a refused sync and a suppressed one used
+        to be one indistinguishable silence, and treating silence as a good
+        outcome is how that silence stayed invisible.
+        """
+        return self._last_sync_status
+
     def track_file(self, path: str) -> None:
         """
         Track a file modified in this session.
@@ -350,7 +394,8 @@ class PACTMemory:
         memory: Dict[str, Any],
         files: Optional[List[str]] = None,
         include_tracked: bool = True,
-        sync_to_claude: bool = True
+        sync_to_claude: bool = True,
+        claude_md_root: Optional[Path] = None
     ) -> str:
         """
         Save a memory to the database.
@@ -372,10 +417,20 @@ class PACTMemory:
                 CLAUDE.md, and syncing writes the same bytes back, so the pin
                 SLOT is freed while the file is not. Mirrors `search`'s
                 parameter of the same name.
+            claude_md_root: Declared containment anchor forwarded to the sync.
+                The write must land inside it or the containment check refuses.
+                It does not steer resolution. Omit for today's behaviour.
 
         Returns:
             The ID of the saved memory.
         """
+        # Clear the sync status FIRST, so a save that raises before the sync
+        # cannot leave the PREVIOUS save's outcome behind for a caller to read
+        # as this one's. `last_sync_status` promises to describe the most recent
+        # save; a stale value would make that promise false in exactly the
+        # silent way this channel exists to remove.
+        self._last_sync_status = None
+
         # Ensure memory system is ready (lazy initialization)
         _ensure_ready()
 
@@ -406,7 +461,9 @@ class PACTMemory:
                 )
 
             # Store embedding for semantic search
-            self._store_embedding(conn, memory_id, memory)
+            self._last_embedding_status = self._store_embedding(
+                conn, memory_id, memory
+            )
 
             logger.info(f"Saved memory {memory_id} with {len(files_to_link)} files")
 
@@ -424,11 +481,35 @@ class PACTMemory:
         # This is non-critical - failures are logged but don't fail the save.
         # Gated on sync_to_claude (default True): callers that omit the
         # parameter reach this call exactly as before.
+        #
+        # EVERY BRANCH BELOW RECORDS A REASON, including the suppressed one and
+        # the successful one. That totality is the point: a caller must never
+        # have to read an absent status as success. `suppressed` has no other
+        # producer -- `sync_to_claude_md` is never called on that path, so the
+        # gate itself is the only place the fact exists.
         if sync_to_claude:
             try:
-                sync_to_claude_md(memory, files_to_link if files_to_link else None, memory_id)
+                result = sync_to_claude_md(
+                    memory, files_to_link if files_to_link else None, memory_id,
+                    claude_md_root=claude_md_root
+                )
+                self._last_sync_status = result.reason
+            except AmbientSyncRefused as e:
+                # MUST precede the general handler. The guard RAISES rather than
+                # returning, so without this clause a refusal is indistinguishable
+                # from any other failure -- and a refusal is the one outcome that
+                # is deliberate rather than broken.
+                self._last_sync_status = SyncResult.REFUSED
+                # DEBUG, NOT WARNING. The refusal is ALREADY on the structured
+                # channel: `sync_status='refused'` reaches the caller on stdout
+                # one line above. A WARNING here would also reach stderr via
+                # logging.lastResort, which the CLI's callers parse as JSON.
+                logger.debug(f"Refused to sync to CLAUDE.md: {e}")
             except Exception as e:
+                self._last_sync_status = SyncResult.FAILED
                 logger.warning(f"Failed to sync to CLAUDE.md: {e}")
+        else:
+            self._last_sync_status = SyncResult.SUPPRESSED
 
         return memory_id
 
@@ -437,13 +518,23 @@ class PACTMemory:
         conn: sqlite3.Connection,
         memory_id: str,
         memory: Dict[str, Any]
-    ) -> bool:
+    ) -> Optional[str]:
         """
         Generate and store embedding for a memory.
 
-        Requires SQLITE_EXTENSIONS_ENABLED (pysqlite3-binary) and sqlite-vec.
-        If extensions are unavailable, skips embedding storage silently -
-        search will fall back to keyword-only mode.
+        Requires SQLITE_EXTENSIONS_ENABLED (pysqlite3) and sqlite-vec.
+
+        When this returns without writing a vector AND the vector table is
+        reachable, it first removes any vector already stored for this memory.
+        A missing vector makes a record invisible to semantic search; a stale
+        one makes it findable for the wrong query, which is the worse failure.
+
+        THREE EXITS DO NOT REMOVE, so a stale vector can survive all three.
+        The two capability exits cannot open the vector table to issue the
+        delete, so nothing here repairs them and nothing else does either. The
+        fault handler wraps both the insert and the commit, so it can be
+        entered AFTER a vector was written successfully -- dropping there could
+        destroy a good one, so that omission is deliberate and a test pins it.
 
         Args:
             conn: Active database connection.
@@ -451,7 +542,11 @@ class PACTMemory:
             memory: Memory data for embedding generation.
 
         Returns:
-            True if embedding was stored, False otherwise.
+            None when there is nothing for the caller to report - either the
+            vector was stored, or storing none was correct for this input.
+            Otherwise a reason code the caller may surface:
+            `degraded:<search_mode>` when this process cannot embed at all, or
+            `fault` when storing raised.
         """
         # Check if SQLite extension loading is available
         if not SQLITE_EXTENSIONS_ENABLED:
@@ -459,18 +554,25 @@ class PACTMemory:
                 "Skipping embedding storage - SQLite extensions unavailable. "
                 "Search will use keyword mode."
             )
-            return False
+            # No extension means the vector table cannot be reached at all, so
+            # an existing vector cannot be removed here. It stays stale until a
+            # process that can embed rewrites or removes it.
+            return self._degraded_reason()
 
         # Generate text for embedding
         text = generate_embedding_text(memory)
         if not text:
-            return False
+            # Storing no vector is correct for a record with no embeddable
+            # text, but any vector already stored describes the previous text.
+            self._drop_existing_vector(conn, memory_id)
+            return None
 
         # Generate embedding
         embedding = generate_embedding(text)
         if embedding is None:
             logger.debug("Embedding generation unavailable, skipping")
-            return False
+            self._drop_existing_vector(conn, memory_id)
+            return self._degraded_reason()
 
         try:
             # Enable extension loading (safe because SQLITE_EXTENSIONS_ENABLED is True)
@@ -480,7 +582,9 @@ class PACTMemory:
                 sqlite_vec.load(conn)
             except ImportError:
                 logger.debug("sqlite-vec not installed, skipping embedding storage")
-                return False
+                # Same as the no-extension exit: the vector table is
+                # unreachable, so an existing vector cannot be removed here.
+                return self._degraded_reason()
 
             # Convert to blob
             embedding_blob = struct.pack(f'{len(embedding)}f', *embedding)
@@ -496,10 +600,57 @@ class PACTMemory:
             conn.commit()
 
             logger.debug(f"Stored embedding for memory {memory_id}")
-            return True
+            return None
 
         except Exception as e:
-            logger.debug(f"Failed to store embedding: {e}")
+            # This handler wraps both the insert and the commit, so it can be
+            # reached after a successful write. Removing the vector here could
+            # therefore destroy a good one; leave it and report the fault.
+            #
+            # DEBUG, NOT WARNING, AND RAISING IT BREAKS A CONTRACT. cli.py
+            # configures no logging, so logging.lastResort emits WARNING and
+            # above to STDERR -- and the CLI's stderr is a structured JSON
+            # channel that callers parse. One free-text line corrupts that
+            # parse. The fault is not being swallowed: it reaches the caller as
+            # `embedding_status: "fault"` on stdout, which is the channel a
+            # caller can actually act on. See the measured table in
+            # memory_init.check_and_install_dependencies for the same hazard.
+            logger.debug(f"Failed to store embedding for {memory_id}: {e}")
+            return "fault"
+
+    @staticmethod
+    def _degraded_reason() -> str:
+        """Report this process's search capability as a reason code.
+
+        Reads the same capability the search path reports, so a caller is never
+        told one thing by `status` and another by a save.
+        """
+        try:
+            capabilities = get_search_capabilities()
+            return f"degraded:{capabilities.get('search_mode', 'unknown')}"
+        except Exception:
+            return "degraded:unknown"
+
+    @staticmethod
+    def _drop_existing_vector(conn: sqlite3.Connection, memory_id: str) -> bool:
+        """Remove any stored vector for this memory.
+
+        Keyed on the CONDITION (returning without a vector) rather than on the
+        caller, so it covers an update that fails to re-embed and an orphaned
+        row left by any other path.
+
+        Returns True if the delete ran. False means the vector table could not
+        be reached, so a stale vector may survive.
+        """
+        try:
+            conn.enable_load_extension(True)
+            import sqlite_vec
+            sqlite_vec.load(conn)
+            conn.execute("DELETE FROM vec_memories WHERE memory_id = ?", (memory_id,))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.debug(f"Could not drop existing vector for {memory_id}: {e}")
             return False
 
     def search(
@@ -507,7 +658,8 @@ class PACTMemory:
         query: str,
         current_file: Optional[str] = None,
         limit: int = 5,
-        sync_to_claude: bool = True
+        sync_to_claude: bool = True,
+        claude_md_root: Optional[Path] = None
     ) -> List[MemoryObject]:
         """
         Search memories using semantic similarity and graph relationships.
@@ -517,6 +669,8 @@ class PACTMemory:
             current_file: Optional current file for context boosting.
             limit: Maximum number of results.
             sync_to_claude: Whether to sync top result to CLAUDE.md Retrieved Context.
+            claude_md_root: Declared containment anchor forwarded to the
+                retrieved-context sync, exactly as on `save`.
 
         Returns:
             List of matching MemoryObject instances.
@@ -538,7 +692,10 @@ class PACTMemory:
                 memory_dicts = [r.to_dict() for r in results]
                 memory_ids = [r.id for r in results]
                 # graph_enhanced_search doesn't return scores, so pass None
-                sync_retrieved_to_claude_md(memory_dicts, query, None, memory_ids)
+                sync_retrieved_to_claude_md(
+                    memory_dicts, query, None, memory_ids,
+                    claude_md_root=claude_md_root
+                )
             except Exception as e:
                 logger.warning(f"Failed to sync retrieved context to CLAUDE.md: {e}")
 
@@ -706,7 +863,9 @@ class PACTMemory:
                 if memory_dict and _content_fields_changed(
                     before_snapshot or {}, memory_dict, content_keys_in_update,
                 ):
-                    self._store_embedding(conn, memory_id, memory_dict)
+                    self._last_embedding_status = self._store_embedding(
+                        conn, memory_id, memory_dict
+                    )
 
             return memory_id if success else None
 
@@ -827,6 +986,17 @@ class PACTMemory:
             "tracked_files_count": len(self._session_files),
             "graph_stats": graph_stats,
             "capabilities": capabilities,
+            # THE SWEEP'S REASON, SURFACED WHERE SOMEBODY READS IT. The catch-up
+            # reports whether outstanding embedding work is KNOWABLE, and until
+            # this key existed that answer reached no consumer: `_ensure_ready`
+            # discards `ensure_memory_ready()`'s return, so every hop below
+            # carried the reason correctly into a value nothing looked at.
+            #
+            # None means the catch-up has not run in this process. Otherwise
+            # read its `status`: `ok` is "looked, found nothing", while
+            # `degraded` and `error` both mean OUTSTANDING WORK IS UNKNOWN.
+            # Do NOT read an absent backlog as an empty one.
+            "embedding_catchup": get_embedding_catchup_status(),
             "db_path": str(get_db_path())
         }
 

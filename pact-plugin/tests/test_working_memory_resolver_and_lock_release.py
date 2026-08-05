@@ -66,9 +66,9 @@ class TestLockReleaseOnException:
         self, tmp_path, monkeypatch
     ):
         """If setting the temp file's mode raises INSIDE the `with file_lock`
-        block, sync_to_claude_md must (a) return False (fail-open via the outer
-        try/except) and (b) leave the lock RE-ACQUIRABLE — proving the lock was
-        released on the exception path, not leaked.
+        block, sync_to_claude_md must (a) report `failed` (fail-open via the
+        outer try/except) and (b) leave the lock RE-ACQUIRABLE — proving the
+        lock was released on the exception path, not leaked.
 
         Mid-window failure SITE: _atomic_write_text sets the mode on the TEMP
         file before publishing it, so a boom there is a reachable mid-window
@@ -100,8 +100,11 @@ class TestLockReleaseOnException:
         result = wm.sync_to_claude_md(
             {"context": "MID-WINDOW-BOOM", "goal": "g"}, None, "id"
         )
-        # (a) fail-open
-        assert result is False
+        # (a) fail-open. `failed` is the load-bearing part: it says the write
+        # was entered and the exception was swallowed. A merely falsy result
+        # would also hold if the target had never resolved, in which case the
+        # lock was never taken and assertion (b) below would prove nothing.
+        assert result.reason == wm.SyncResult.FAILED
 
         # (b) lock released → re-acquirable fast (NOT the 5s timeout). Shrink
         # the timeout so a leak would surface as a quick TimeoutError, not a
@@ -140,7 +143,10 @@ class TestLockReleaseOnException:
 
         result = wm.sync_to_claude_md({"context": "TORN-CHECK", "goal": "g"}, None, "id")
 
-        assert result is False, "a mid-window failure must fail open"
+        assert result.reason == wm.SyncResult.FAILED, (
+            "a mid-window failure must fail open as `failed` -- a target that "
+            "never resolved is also falsy, and would not exercise the rollback"
+        )
         final = claude_md.read_text(encoding="utf-8")
         # Rollback is total: the atomic replace never ran, so not one byte of the
         # attempted new content reached the always-loaded file.
@@ -213,7 +219,9 @@ class TestReadOnlyDirectoryFailSafe:
             os.chmod(str(claude_dir), 0o700)  # restore so tmp cleanup can run
 
         # Fail-safe: the sync declined and the always-loaded file is untouched.
-        assert result is False, "read-only dir must make the sync fail open"
+        assert result.reason == wm.SyncResult.FAILED, (
+            "read-only dir must make the sync fail open as `failed`"
+        )
         assert claude_md.read_text(encoding="utf-8") == before, (
             "target was mutated on a read-only dir — the write did not fail safe"
         )

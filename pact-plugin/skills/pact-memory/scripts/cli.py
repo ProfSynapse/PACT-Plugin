@@ -233,6 +233,12 @@ def cmd_save(args, db_path=None):
         save_kwargs = {}
         if getattr(args, "no_sync", False):
             save_kwargs["sync_to_claude"] = False
+        # Same conditional-kwarg discipline as --no-sync above, for the same
+        # reason: an unflagged save must still call `memory.save(memory_dict)`
+        # byte-identically, not merely equivalently.
+        claude_md_root = getattr(args, "claude_md_root", None)
+        if claude_md_root:
+            save_kwargs["claude_md_root"] = Path(claude_md_root)
         memory_id = memory.save(memory_dict, **save_kwargs)
     except ValueError as exc:
         _error(
@@ -242,15 +248,58 @@ def cmd_save(args, db_path=None):
             exit_code=2,
             allowed_fields=sorted(CALLER_FACING_CREATE_FIELDS),
         )
-    _success({"memory_id": memory_id})
+    # Carry the embedding outcome to the command-line caller. Without this the
+    # CLI reports a bare memory_id, so a save that stored no vector is
+    # indistinguishable from one that did -- which is the defect this field
+    # exists to close, for the only consumer most callers have.
+    #
+    # `degraded:<mode>` is a SUCCESS state, not an error: the record saved, and
+    # only semantic search is unavailable. It is added to the success envelope
+    # alone; the error envelope's key set is pinned by a test and a degraded
+    # save is not an error.
+    #
+    # `sync_status` JOINS IT HERE, AND THE TWO FIELDS DO NOT READ ALIKE.
+    # `embedding_status` is PARTIAL: it reports a problem and is absent when the
+    # embedding succeeded. `sync_status` is TOTAL: save() sets it on every
+    # branch, `wrote` included, so it is absent only when no save ran. Do NOT
+    # read an absent `sync_status` as a successful sync. That inference is the
+    # defect the field exists to remove -- across this process boundary a
+    # refused sync and a suppressed one both used to reach the parent as
+    # nothing at all, which is indistinguishable from a sync that worked.
+    result = {"memory_id": memory_id}
+    embedding_status = memory.last_embedding_status
+    if embedding_status is not None:
+        result["embedding_status"] = embedding_status
+    sync_status = memory.last_sync_status
+    if sync_status is not None:
+        result["sync_status"] = sync_status
+    _success(result)
 
 
 def cmd_search(args, db_path=None):
     """Handle the 'search' subcommand."""
     memory = PACTMemory(db_path=db_path)
     current_file = getattr(args, "current_file", None)
+    # NO `sync_status` HERE, AND THE REASON IS AN OBSERVATION RATHER THAN A
+    # PROPERTY. As of 2026-08-04 this call passes `sync_to_claude=False`
+    # unconditionally, so no sync can happen on the search path -- and the sync
+    # `search` would otherwise perform is `sync_retrieved_to_claude_md`, the
+    # SIBLING writer, which still returns a bare bool and feeds no reason
+    # channel. Both facts can change. If this argument ever becomes
+    # caller-controlled, or the sibling gains a reason channel, this envelope
+    # needs the field too; do not read its absence as "search never syncs".
+    # Conditional kwarg, for the reason `cmd_save` states two functions up: an
+    # unflagged call must stay BYTE-IDENTICAL, not merely equivalent, because
+    # the suite pins these calls exactly. Passing `claude_md_root=None`
+    # unconditionally is equivalent in behaviour and different in argv, and the
+    # exact-call assertions were right to catch it.
+    search_kwargs = {}
+    search_root = getattr(args, "claude_md_root", None)
+    if search_root:
+        search_kwargs["claude_md_root"] = Path(search_root)
     results = memory.search(
-        args.query, current_file=current_file, limit=args.limit, sync_to_claude=False
+        args.query, current_file=current_file, limit=args.limit,
+        sync_to_claude=False, **search_kwargs
     )
     _success([r.to_dict() for r in results])
 
@@ -374,7 +423,22 @@ def cmd_update(args, db_path=None):
         )
     if resolved_id is None:
         _error("NOT_FOUND", f"Memory '{args.memory_id}' not found")
-    _success({"memory_id": resolved_id})
+    # Mirror of the save envelope. An update that failed to re-embed is the
+    # costlier case: a save that stored no vector leaves a record merely
+    # invisible to semantic search, while an update leaves a vector describing
+    # text the record no longer contains. Reporting on save alone would close
+    # the milder path and leave the worse one silent.
+    #
+    # NO `sync_status` HERE EITHER, and again as an observation: as of
+    # 2026-08-04 `update()` performs no CLAUDE.md sync at all, so the field
+    # would either be absent or -- on a reused instance -- carry a PREVIOUS
+    # save's outcome and misreport it as this update's. If `update` ever gains
+    # a sync, add the field here rather than letting it inherit one.
+    result = {"memory_id": resolved_id}
+    embedding_status = memory.last_embedding_status
+    if embedding_status is not None:
+        result["embedding_status"] = embedding_status
+    _success(result)
 
 
 def cmd_delete(args, db_path=None):
@@ -454,6 +518,16 @@ def build_parser():
             "archiving a pin that is about to be removed from CLAUDE.md."
         ),
     )
+    save_parser.add_argument(
+        "--claude-md-root",
+        default=None,
+        help=(
+            "Declare the directory the CLAUDE.md write must stay inside. The "
+            "write is refused if it would land outside. This does NOT choose "
+            "which CLAUDE.md is written -- resolution is unchanged -- it "
+            "bounds where the result may be."
+        ),
+    )
 
     # search
     search_parser = subparsers.add_parser(
@@ -462,6 +536,19 @@ def build_parser():
     search_parser.add_argument("query", help="Search query text")
     search_parser.add_argument(
         "--limit", type=_positive_int, default=5, help="Max results (default: 5)"
+    )
+    # PLUMBED EVEN THOUGH THE SEARCH PATH CANNOT SYNC TODAY. `cmd_search`
+    # passes `sync_to_claude=False`, so this is inert right now -- which is
+    # exactly why it is here. That suppression is an observation about one call
+    # site, not a property of the command; the day it changes, the anchor is
+    # already available rather than needing to be discovered as missing.
+    search_parser.add_argument(
+        "--claude-md-root",
+        default=None,
+        help=(
+            "Declare the directory a Retrieved Context write must stay inside. "
+            "Inert while the search path suppresses its sync."
+        ),
     )
     search_parser.add_argument(
         "--current-file", help="Current file path for graph-enhanced relevance boosting"

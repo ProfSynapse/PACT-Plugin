@@ -69,8 +69,18 @@ from shared.merge_guard_common import detect_command_operation_type  # noqa: E40
 # N_LARGE = 2 * N_SMALL — the scaling-ratio doubling. N is large enough that the
 # unbounded quadratic is unmistakable (~6 s for the git bank) yet the bounded
 # form stays well under ~0.2 s, so the test runs in a few seconds.
-N_SMALL = 2000
-N_LARGE = 4000
+#
+# FLOORED (measured): a RATIO removes machine-SPEED dependence but NOT NOISE
+# dependence, and a small denominator amplifies what is left. At N_SMALL=2000 the
+# smallest arm measured ~33 ms, so a single scheduler slice is a large fraction
+# of it; under a loaded suite this ratio was observed at 3.85 against a 3.0
+# ceiling while the honest value is ~2.0. That is a false red, and it is also
+# uncomfortably close to the 4.0 quadratic signature the ceiling exists to
+# separate — so the noise threatened BOTH directions, not just flakiness.
+# Doubling N puts every arm in the hundreds of milliseconds, where a scheduler
+# slice is a few percent rather than tens of percent.
+N_SMALL = 4000
+N_LARGE = 8000
 
 # best-of-K minimum: the dominant timing noise is upward (scheduler preemption,
 # GC), and a minimum is a clean lower bound on the true cost that a slow sample
@@ -117,6 +127,26 @@ _CEIL_GH_DETECT = 1.0
 # linear, so there is NO perf counter-test-RED for it; the bound's non-vacuity is
 # the >K-RESIDUAL FLIP in TestFlagTokenBoundary, not a perf revert. Bounded ~6 ms.
 _CEIL_PUSHWALK = 1.0
+
+# `_VALUE_TOKEN` HAS NO ARM IN THIS LADDER, AND THE ATTEMPT IS RECORDED SO IT IS
+# NOT REPEATED. A ratio arm on the `$''` witness was built, sized into the
+# hundreds-of-milliseconds band this N floor exists to reach (254 ms / 783 ms),
+# and it STILL FLAKED: measured 1.98 in isolation and 3.08 under a loaded
+# full-suite run, against the 3.0 ceiling. Being in the band is NECESSARY BUT
+# NOT SUFFICIENT — the floor fixes a small-denominator problem, and this is a
+# different one. Contention inflated the two arms UNEQUALLY (1.5x on the small,
+# 2.4x on the large), and a ratio cannot subtract that: the asymmetry lands
+# entirely in the quotient.
+#
+# The direction is what makes it unacceptable rather than merely annoying. A
+# ratio drifting up towards 4.0 is the QUADRATIC SIGNATURE this ceiling exists
+# to detect, so the false red is indistinguishable from the true one, and the
+# reader who dismisses it as flaky is being trained for the day it is real.
+#
+# `_VALUE_TOKEN` is guarded by TestValueTokenPositionalSafety instead — a
+# structural pin plus bounded absolute checks. That suits the property better
+# anyway: its hazard is EXPONENTIAL, and a ratio cannot measure an exponential
+# because the larger arm never returns.
 
 
 def _measure_scaling(fn, build):
@@ -261,3 +291,311 @@ class TestPrivilegedFlagScannerLinearity:
             f"quadratic scaling regression (t_small={t_small * 1000:.1f} ms, "
             f"t_large={t_large * 1000:.1f} ms)?"
         )
+
+
+# ---------------------------------------------------------------------------
+# WHY THE THREE CLASSES BELOW DO NOT USE THE RATIO INSTRUMENT
+#
+# A ratio separates LINEAR from QUADRATIC, and it is the right instrument for
+# every arm above, because a quadratic arm still TERMINATES — you get two
+# numbers and divide them. The properties below are EXPONENTIAL, and a ratio
+# cannot measure an exponential: computing it requires the larger arm to finish,
+# and the larger arm is the one that does not. A regression would arrive as a CI
+# TIMEOUT rather than a red test, which reports as infrastructure trouble rather
+# than as the defect.
+#
+# So these use a BOUNDED input with a generous absolute ceiling — and the
+# constants are justified by the complexity difference they separate, not by a
+# baseline on one machine. Each is measured in BOTH states below, and the gaps
+# are five orders of magnitude, so no runner is slow enough to confuse them.
+# ---------------------------------------------------------------------------
+
+import re  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from shared import merge_guard_common as _mgc  # noqa: E402
+from shared.merge_guard_common import _shell_tokenize, _strip_flag_values  # noqa: E402
+from merge_guard_pre import _GH_PR_NUMBER_RE  # noqa: E402
+
+
+class TestValueTokenPositionalSafety:
+    """`_VALUE_TOKEN` is linear because of WHERE it sits, not what it contains.
+
+    MEASURED, in both directions, because the shape alone predicts neither.
+
+    As shipped it is LINEAR: ~2.0x per doubling through `_strip_flag_values`,
+    through `is_dangerous_command` and through `detect_command_operation_type`,
+    on the worst witness available, and FLAT in the adversarial region — 0.12 ms
+    at 16 units and still 0.13 ms at 28, where a reachable form costs 42 s.
+
+    The pattern in ISOLATION is EXPONENTIAL, and worse than the `_GH_FLAG_TOKENS`
+    backtracker that was fixed on this branch. Forced to fail a full match, the
+    `$''` and `$""` witnesses cost roughly 16x PER ADDED UNIT — 7 ms at 16 units,
+    111 ms at 20, 1.75 s at 24, and 28.7 SECONDS at 28 units, which is an
+    85-CHARACTER input. The flag-token backtracker needed ~46 tokens to reach the
+    same place. Controls, so the cause is not guessed: a bare `$` repetition and
+    a plain-character run are FLAT (~1.2x), so the ambiguity is specifically the
+    three `$`-initial arms, where a `$` can begin `$'...'`, begin `$"..."`, or
+    stand alone.
+
+    THE TWO FACTS ARE RECONCILED BY POSITION. The token ends with `+` and NOTHING
+    FOLLOWS IT in the one pattern that uses it, so the greedy match always
+    succeeds and no alternative partition is ever explored. Add a required
+    element after it and every partition becomes reachable — the same positional
+    argument that makes the quote-aware span safe, and the same one that did NOT
+    hold for the flag-token walk, which had required elements after it.
+
+    So the load-bearing guard is STRUCTURAL, not a timing ladder. A ladder pins
+    the linearity; it cannot see the edit that removes the reason for it, because
+    the witness that would expose the edit depends on what the edit appended.
+    This class pins the precondition itself: no timing, no flake, no dependence
+    on a runner, and it reddens on the exact change that makes 28 seconds
+    reachable.
+    """
+
+    def _value_token_use_sites(self):
+        """Non-comment lines that USE `_VALUE_TOKEN`, excluding its definition."""
+        source = Path(_mgc.__file__).read_text(encoding="utf-8")
+        sites = []
+        for raw in source.splitlines():
+            line = raw.strip()
+            if "_VALUE_TOKEN" not in line:
+                continue
+            if line.startswith("#") or line.startswith("_VALUE_TOKEN"):
+                continue          # prose, and the definition itself
+            sites.append(line)
+        return source, sites
+
+    def test_value_token_is_defined_and_used_exactly_once(self):
+        """Parse anchor: the scan must find the definition and one use site.
+
+        Asserted before the positional check, and with a distinct message,
+        because that check is absence-shaped — "nothing is concatenated after
+        `_VALUE_TOKEN`" is satisfied perfectly by a scan that found no use sites
+        at all. Ground truth independent of the scan: the token is imported and
+        exercised by the arms above, so it demonstrably exists and is used.
+        """
+        source, sites = self._value_token_use_sites()
+
+        assert "_VALUE_TOKEN = (" in source, (
+            f"PARSE FAILURE, not a safety regression: no `_VALUE_TOKEN` "
+            f"definition found in {_mgc.__file__}. The constant was renamed or "
+            f"restructured. RE-POINT THIS SCAN — do not delete it; the "
+            f"positional property it guards is what keeps the token linear."
+        )
+        assert len(sites) == 1, (
+            f"PARSE FAILURE or a NEW USE SITE — either way this needs a human. "
+            f"Expected exactly one line using `_VALUE_TOKEN`; found "
+            f"{len(sites)}: {sites}. If a second consumer was added, its "
+            f"trailing-position property must be verified too and this count "
+            f"raised deliberately. If the count is ZERO the scan is broken and "
+            f"the check below would pass over nothing."
+        )
+
+    def test_nothing_is_concatenated_after_value_token(self):
+        """No required element may follow the token in a composed pattern.
+
+        This is the whole safety argument. `re.sub(flag_sep + _VALUE_TOKEN, ...)`
+        can always succeed once one unit matches; `re.sub(flag_sep +
+        _VALUE_TOKEN + anything_required, ...)` can fail, and a failing match is
+        what forces the engine through every partition.
+        """
+        _, sites = self._value_token_use_sites()
+        assert sites, "PARSE FAILURE: no `_VALUE_TOKEN` use site to check."
+
+        for line in sites:
+            assert re.search(r"_VALUE_TOKEN\s*[,)]", line), (
+                f"`_VALUE_TOKEN` IS NO LONGER IN TRAILING POSITION:\n\n"
+                f"    {line}\n\n"
+                f"Something now follows it in the composed pattern. That is the "
+                f"one edit that makes its exponential REACHABLE: with a required "
+                f"element after it, a failing match explores every partition of "
+                f"the `$`-initial arms — measured at roughly 16x per added unit, "
+                f"reaching 28 SECONDS on an 85-character input, and past the "
+                f"600 s hook ceiling shortly after. A hook that exceeds that "
+                f"ceiling is KILLED AND THE TOOL CALL PROCEEDS, so this is a "
+                f"silent guard BYPASS, not a slow refusal.\n\n"
+                f"If the addition is genuinely required, the token must first be "
+                f"made unambiguous — give each `$`-initial arm a distinguishing "
+                f"first character so the partition is unique, the way the "
+                f"flag-token walk was repaired."
+            )
+
+    def test_value_token_strip_is_fast_on_the_adversarial_witness(self):
+        """Bounded absolute check on the shipped consumer at the size where a
+        reachable exponential would already be seconds.
+
+        24 units is the point at which the isolated pattern measures 1.75 s
+        under a forced failure; the shipped strip does the same work in
+        microseconds. The ceiling separates those two, not two nearby numbers.
+
+        COUNTER-TESTED: appending a required element after `_VALUE_TOKEN` in
+        `_strip_flag_values` makes this arm measure 2.58 s — a red from one
+        added token, on a 75-character input.
+        """
+        witness = "-m " + "$''" * 24
+        elapsed = _best_time(lambda s: _strip_flag_values(s, r"(-m\s+)", lambda m: m.group(1) + "'X'"), witness)
+        assert elapsed < 1.0, (
+            f"_strip_flag_values took {elapsed * 1000:.1f} ms on a "
+            f"{len(witness)}-character witness. Shipped cost here is measured in "
+            f"MICROSECONDS, and the isolated pattern costs ~1.75 s at this size "
+            f"only when a match can FAIL — so this is the reachable-exponential "
+            f"signature. Check whether anything now follows `_VALUE_TOKEN`."
+        )
+
+    def test_public_entry_point_is_fast_on_the_adversarial_witness(self):
+        """The same bound through `is_dangerous_command`, which is what the hook
+        actually calls.
+
+        Not redundant with the check above: that one drives an internal helper
+        directly, and a helper being fast does not establish that the path
+        REACHING it is. The hook's cost is what the 600 s ceiling applies to, so
+        the public entry point is where the claim has to hold.
+
+        THE WITNESS IS `git commit -m`, AND THE CHOICE IS LOAD-BEARING. A
+        `gh pr merge --body` witness was tried first and is VACUOUS: it never
+        reaches `_strip_flag_values` at all, so it stayed green under the
+        mutation below while appearing to cover it. An end-to-end arm whose
+        input does not route through the code it names is not a weak test, it is
+        a test that cannot fail. Verified by instrumenting the strip and
+        recording which command shapes actually call it; `git commit -m`,
+        `git merge -m`, `git tag -m`, `gh release create --notes` and
+        `gh api -f` do, and the `gh pr merge` surface does not.
+
+        COUNTER-TESTED, with the tree state verified in the same step as the
+        measurement: shipped 0.12 ms, and ~10 s once a required element follows
+        `_VALUE_TOKEN`. Absolute-only — see the note above `_measure_scaling`
+        for why a ratio arm on this witness was built, measured, and rejected.
+        """
+        witness = "git commit -m " + "$''" * 26
+        elapsed = _best_time(is_dangerous_command, witness, k=2)
+        assert elapsed < 2.0, (
+            f"is_dangerous_command took {elapsed * 1000:.1f} ms on a "
+            f"{len(witness)}-character witness; shipped cost is ~0.12 ms. A "
+            f"reachable `_VALUE_TOKEN` exponential shows up here, because this "
+            f"is the path the hook runs — check whether anything now follows "
+            f"the token in `_strip_flag_values`."
+        )
+
+
+class TestGhFlagTokenAmbiguityStaysRemoved:
+    """The flag-token walk must stay unambiguous, so its exponential cannot return.
+
+    The repaired constant is `(?:-\\S*(?:\\s+[^-\\s]\\S*)?\\s+)*`. The `[^-\\s]`
+    on the optional value arm is the entire fix: a dash-initial token can only be
+    a flag and a non-dash-initial token can only be a value, so the partition is
+    unique and there is nothing to backtrack over.
+
+    MEASURED HERE, both forms, same machine, through the shipped pattern with
+    only that character class reverted — so the ceiling separates a real
+    difference rather than a remembered one. Counter-tested by mutation, not
+    assumed: reverting the value arm to `(?:\\s+\\S+)?` reds the check below at
+    the measured cost, and restoring it returns to microseconds.
+
+        flags   pre-fix (reverted)   shipped
+        34               1.554 s     0.0093 ms
+        36               4.170 s     ~0.01  ms
+        38              10.909 s     ~0.01  ms
+
+    36 IS CHOSEN FOR ITS MARGIN IN BOTH DIRECTIONS, and neither direction is
+    free. The 1 s ceiling sits 4.2x BELOW the pre-fix cost, so a runner several
+    times faster than this one still reds — 34 was rejected for exactly this
+    reason, at only 1.6x it could be outrun by a fast machine and miss the
+    regression. It sits ~100,000x ABOVE the shipped cost, so no contention can
+    red it falsely. And 36 rather than 40 keeps a red TERMINATING in seconds
+    rather than the 30 s that 40 costs: a test that hangs reports as
+    infrastructure trouble instead of as a defect.
+
+    A comment recording that this was measured once by hand is not a guard —
+    the constant it replaced carried exactly such a comment, asserting linearity
+    that had never been measured, and that comment is why the exponential
+    shipped. This is the same measurement wired to fail.
+    """
+
+    def test_consecutive_valueless_flags_do_not_backtrack(self):
+        witness = "gh " + "-a " * 36
+        elapsed = _best_time(lambda s: _GH_PR_NUMBER_RE.search(s), witness)
+        assert elapsed < 1.0, (
+            f"_GH_PR_NUMBER_RE took {elapsed * 1000:.1f} ms on {witness[:24]!r}"
+            f"... (36 valueless dash-flags). Shipped cost is ~0.01 ms; the "
+            f"ambiguous pre-fix form costs ~4.2 s here. The optional value arm "
+            f"has almost certainly lost its `[^-\\s]` first-character "
+            f"constraint, so a token can again be either a flag or the previous "
+            f"flag's value and every added token doubles the partitions."
+        )
+
+    # THE REPAIR ALSO CHANGED WHICH DIGIT IS CAPTURED, so it is not only a
+    # backtracking fix. Where the flag run stops decides which token is read as
+    # the positional pull-request number, and the unconstrained predecessor
+    # stops elsewhere — on a good-faith `gh pr merge --squash --subject 2024 42`
+    # it captures 2024, the flag's own argument, instead of 42. That is a
+    # target-identification difference on a guard whose job is to bind an
+    # approval to a specific pull request.
+    #
+    # So this timing check does NOT cover the whole revert. The capture
+    # behaviour is pinned in test_merge_guard_pre.py, beside the rest of the
+    # extraction corpus, and those pins redden under the same revert this one
+    # does — for a different and more serious reason.
+
+
+class TestShellTokenizerCostIsBoundedByCommandLength:
+    """`shlex.split` is super-linear on quote-dense input. ACCEPTED, not fixed.
+
+    THIS IS NOT A DENIAL-OF-SERVICE FINDING and must not be reported as one.
+    The cost is bounded by command length, and command length is bounded by what
+    a person types.
+
+    MEASURED through the shipped `_shell_tokenize`, and the pairing is the
+    finding: the cost tracks QUOTE DENSITY, and is indifferent to whether the
+    quotes balance. An odd quote count raises inside shlex and the wrapper
+    abstains; an even one tokenises successfully. Both cost the same:
+
+        length    odd quotes (abstains)   even quotes (succeeds)
+         40,001              7.19 ms                  7.08 ms
+        160,001             75.59 ms                 74.95 ms
+        320,001            291.76 ms                288.56 ms
+
+    k is roughly 1.7-2.2 on both. THE CONTROL IS WHAT LOCATES THE CAUSE: plain
+    input with NO quotes measures 1.99-2.03x per doubling — clean linear — so
+    the super-linearity belongs to quote handling, not to tokenisation in
+    general and not to the failure path.
+
+    That last point is worth stating plainly because the natural reading is the
+    opposite one. This cost is NOT confined to malformed commands; a
+    well-formed, successfully-tokenised command pays exactly the same. Reaching
+    it needs no mistake at all — only quotes.
+
+    AT REAL COMMAND LENGTHS THE COST IS STILL NEGLIGIBLE, which is what makes
+    the acceptance sound: 0.015 ms at 100 characters, 0.27 ms at 2,000, 1.14 ms
+    at 8,000.
+
+    THE RISK IS RATIFIED, AND DELIBERATELY NOT GUARDED BY A TIMING TEST.
+    Accepted by the team lead on review of these measurements, on the grounds
+    the issue itself states: the finding is LOW and must not be reported as a
+    denial-of-service. Recorded here rather than only in the tracker so the
+    acceptance is discoverable from the code it applies to.
+
+    NO RECURRING TIMING ARM IS SHIPPED FOR THIS, and the omission is the
+    decision rather than an oversight. A wall-clock arm on an ACCEPTED risk
+    buys no gate value — there is no defect for it to catch, because the
+    super-linearity is expected and permitted — while adding flake surface to
+    a suite where a timing bound reding on a loaded runner is a known,
+    separately-tracked problem. The standing rule for a finding with no
+    defensible action is to RECORD it, not to answer it with a test. The
+    numbers above are the record; only the behavioural contract below is
+    pinned, and it costs no time to assert.
+    """
+
+    def test_unbalanced_input_abstains_rather_than_tokenising(self):
+        """The failure mode is abstention, which is why the cost is tolerable —
+        callers fall back to the literal floor rather than trusting a partial
+        tokenisation.
+
+        The witness carries an ODD quote count deliberately. `"a'" * n` looks
+        unbalanced and is not: the quotes pair off and shlex returns a single
+        token, so an even-count witness silently exercises the success path
+        while reading as the failure path.
+        """
+        assert _shell_tokenize("a'" * 100 + "'") is None
+        assert _shell_tokenize("a'" * 100) == ["a" * 100]
+        assert _shell_tokenize("git push origin main") == ["git", "push", "origin", "main"]

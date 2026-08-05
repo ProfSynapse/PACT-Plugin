@@ -210,7 +210,7 @@ A_id = TaskCreate(
 TaskUpdate(A_id, owner="{specialist-name}")
 B_id = TaskCreate(
     subject="{specialist}: plan consultation for {feature}",
-    description="<consultation mission>",
+    description="<consultation mission>\n\nWrite metadata.handoff whatever the size of the deliverable — a consultation whose product is a JUDGEMENT rather than a CHANGE carries its value in the rationale, not in any diff.",
     metadata={
         "variety": {
             "novelty":               N,

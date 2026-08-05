@@ -1356,17 +1356,33 @@ class TestArchivePin_RealCLI:
         assert "`backticks`" in fetched["context"]
         assert "\t" in fetched["context"]
 
-    def test_save_writes_to_stderr_while_stdout_stays_clean_json(
-        self, claude_md, tmp_path
-    ):
-        """The never-`2>&1` constraint, measured rather than asserted.
+    def test_save_stdout_is_a_clean_json_envelope(self, claude_md, tmp_path):
+        """The real CLI's stdout parses, on any interpreter.
 
-        `save` writes an embedding progress bar to STDERR on SUCCESS. If the
-        streams were ever merged, that bar would splice into the envelope
-        and every parse would break. The stderr assertion is the NON-VACUITY
-        CONTROL: if the backend stops writing to stderr the hazard is gone
-        and this test is measuring nothing, so it should fail loudly and be
-        re-aimed rather than pass silently.
+        WHAT THIS COVERS. `save` succeeds and its stdout is a well-formed
+        envelope. If the streams were ever merged AND stderr happened to carry
+        anything, the parse below would break — so this catches the merged
+        stream OPPORTUNISTICALLY, whenever there is something to merge.
+
+        WHAT IT DELIBERATELY NO LONGER ASSERTS. It used to require non-empty
+        stderr as its non-vacuity control, on the grounds that `save` writes an
+        embedding progress bar. That bar is not a property of this code. It is
+        a property of the interpreter's dependency set and the model cache,
+        because `_run_memory_cli` spawns `sys.executable` — so the child
+        inherits whatever packages the parent has.
+
+        MEASURED, and the direction is the opposite of the obvious guess: with
+        `sentence_transformers` and `torch` PRESENT the warm-cache path prints
+        NOTHING and the old assertion FAILED; with them ABSENT the
+        `huggingface_hub` fallback prints `Fetching 10 files` even from cache
+        and it passed. Both runs returned 0 with a byte-identical stdout
+        envelope — nothing the test guards differed. So "install the missing
+        dependency to fix it" is backwards; installing more is what removes the
+        signal.
+
+        The guarantee therefore moved to `TestArchivePin_StreamSeparation`
+        below, which manufactures its own stderr payload and so does not depend
+        on any of that. Do NOT re-add a bare `assert stderr.strip()` here.
         """
         claude_md(_two_pin_file())
         pinned = _pinned_body(_two_pin_file())
@@ -1382,13 +1398,114 @@ class TestArchivePin_RealCLI:
             cwd=tmp_path,
         )
         assert rc == 0
-        assert stderr.strip(), (
-            "expected the embedding progress bar on stderr — without it "
-            "this test cannot detect a merged-stream regression"
+        # A merged stream returns stderr as None, not as "". Assert it before
+        # touching it: `stderr.strip()` on None raises AttributeError, and a
+        # crash and a detection must not look the same in the report.
+        assert stderr is not None, (
+            "stderr came back None — the child's streams are merged, so there "
+            "is no separate stderr to return"
         )
         envelope = json.loads(stdout)  # would raise if streams were merged
         assert envelope["ok"] is True
-        assert stderr.strip() not in stdout
+        # Not conditional on stderr being non-empty: when it IS empty this is
+        # trivially true, and when it is not, it is the real check.
+        assert not stderr.strip() or stderr.strip() not in stdout
+
+
+_SEPARATION_CANARY = "STREAM-SEPARATION-CANARY-2f8c1d"
+
+# A stand-in memory CLI that writes a KNOWN payload to each stream. The canary
+# is deliberately not valid JSON and not a JSON fragment, so if it ever reaches
+# stdout the envelope parse fails as well as the containment assertion — two
+# independent detections of one regression.
+_STUB_CLI = f'''import sys, json
+sys.stderr.write({_SEPARATION_CANARY!r} + "\\n")
+sys.stderr.flush()
+sys.stdout.write(json.dumps({{"ok": True, "result": {{"id": "stub"}}}}))
+'''
+
+
+class TestArchivePin_StreamSeparation:
+    """`_run_memory_cli` must never merge the child's streams.
+
+    WHY THIS EXISTS SEPARATELY FROM THE REAL-CLI TESTS. The guard is
+    `capture_output=True` in `_run_memory_cli` — separate pipes. The regression
+    is someone replacing it with `stderr=subprocess.STDOUT`, which splices
+    stderr into the JSON envelope and breaks every consumer.
+
+    To detect that, a test needs stderr to actually CARRY something. The
+    previous guard borrowed that from the real backend's embedding progress
+    bar, which made its verdict depend on the interpreter's dependency set and
+    the model cache rather than on this code — it failed on an interpreter with
+    a MORE complete stack, and passed on a barer one, while the behaviour under
+    test was byte-identical in both.
+
+    So the payload is manufactured here instead. A stub CLI writes a canary to
+    stderr and an envelope to stdout. The control is non-vacuous BY
+    CONSTRUCTION — this test wrote the canary, so it cannot be absent — and it
+    is identical on every interpreter, with no network, no model and no cache.
+    """
+
+    def _stub(self, tmp_path, monkeypatch):
+        stub = tmp_path / "stub_cli.py"
+        stub.write_text(_STUB_CLI, encoding="utf-8")
+        monkeypatch.setattr(archive_pin, "_MEMORY_CLI", stub)
+        return stub
+
+    def test_stderr_payload_never_reaches_stdout(self, tmp_path, monkeypatch):
+        """The guard: a canary on stderr must not appear on stdout."""
+        self._stub(tmp_path, monkeypatch)
+
+        rc, stdout, stderr = archive_pin._run_memory_cli(
+            ["save"], db_path=str(tmp_path / "mem.db"), cwd=tmp_path
+        )
+
+        assert rc == 0
+        # FIRST detection, and the one the mutation arm found: merging makes
+        # `proc.stderr` None rather than empty, so every later assertion would
+        # raise AttributeError/TypeError instead of failing. A crash and a
+        # detection must not look alike in the report.
+        assert stderr is not None, (
+            "stderr came back None — the streams are merged. _run_memory_cli "
+            "must keep separate pipes; there is no stderr to return once the "
+            "child's stderr is redirected into stdout."
+        )
+        # Non-vacuity, and it cannot silently lapse: the canary is written by
+        # the stub above, so an empty stderr here means the plumbing broke, not
+        # that the environment changed.
+        assert _SEPARATION_CANARY in stderr, (
+            "the stub CLI's stderr payload did not arrive — _run_memory_cli is "
+            "no longer capturing stderr, so this guard is measuring nothing"
+        )
+        assert _SEPARATION_CANARY not in stdout, (
+            "stderr content reached stdout — the streams are merged. Restore "
+            "separate pipes in _run_memory_cli; every consumer parses stdout "
+            "as JSON and a merged stream corrupts it."
+        )
+        assert json.loads(stdout)["ok"] is True
+
+    def test_a_merged_stream_would_be_caught(self, tmp_path, monkeypatch):
+        """Non-vacuity twin: prove the predicate above CAN fail.
+
+        Runs the same stub with the streams deliberately merged and asserts
+        that both detections fire — the canary lands in stdout AND the envelope
+        stops parsing. Without this, the test above is a predicate nobody has
+        ever seen return False, and a guard that has never failed is a guard
+        whose discrimination is unmeasured.
+        """
+        stub = self._stub(tmp_path, monkeypatch)
+
+        merged = subprocess.run(
+            [sys.executable, str(stub)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,      # the regression, made explicit
+            text=True,
+            timeout=30,
+        )
+
+        assert _SEPARATION_CANARY in merged.stdout
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(merged.stdout)
 
 
 def _cli_get(memory_id, db_path):
@@ -1700,3 +1817,425 @@ class TestArchivePin_CliContract:
         payload = json.loads(capsys.readouterr().out)
         assert payload["outcome"] == "UNEVALUABLE"
         assert "RuntimeError" in payload["reason"]
+
+
+# THE ALPHABET IS SPELLED, NOT READ OFF `SyncResult`, matching the convention
+# `test_sync_result_contract.py` states at length: a test whose input alphabet
+# comes from the implementation cannot falsify the implementation's choice of
+# alphabet. A rename fails loudly over there, in
+# `test_constants_match_the_declared_alphabet`, rather than silently shrinking
+# this sweep. Do not "tidy" these into imports.
+_NON_SUPPRESSED_STATUSES = ("wrote", "refused", "failed", "unresolved", "missing")
+
+# The two halves of the scope-presence rule, SPELLED for the same reason the
+# alphabet above is: a set read off `archive_pin._WRITE_ATTEMPTED_STATUSES`
+# would FOLLOW a mutation of that constant and pass over it. Spelled here, a
+# mutation reddens. `test_the_write_attempted_constant_matches_the_spelled_set`
+# below is the tie-back that turns a deliberate rename into a loud failure
+# rather than a silent divergence.
+_WRITE_ATTEMPTED_LITERAL = ("wrote", "failed")
+_NO_WRITE_ATTEMPTED_STATUSES = tuple(
+    s for s in _NON_SUPPRESSED_STATUSES if s not in _WRITE_ATTEMPTED_LITERAL
+)
+
+
+class TestArchivePin_SyncSuppressionBreach:
+    """The archival path CONSUMES `sync_status`, which nothing read before.
+
+    The save leg passes `--no-sync` because projecting the record would write
+    the pin block back into the file the archive exists to remove it from. So
+    `suppressed` is the only status this route asks for, and anything else
+    means the suppression did not take effect.
+
+    THESE ARE REGRESSION ARMS, NOT A LIVE-BUG REPRODUCTION. While `--no-sync`
+    works the status is `suppressed` and none of the refusing arms can fire in
+    production. They exist so that a change which breaks the flag fails HERE
+    rather than reaching a curator as a clean archive.
+
+    WHY EVERY FIXTURE BELOW LEAVES `occurrences == 1`. That is the whole
+    discrimination. The file is clean and the block is unique, so the existing
+    occurrence check returns "safe" -- and before this consumer these verdicts
+    were `ARCHIVED`. Any arm that let the block duplicate would pass through
+    the OLD check and prove nothing about the new one.
+    """
+
+    @staticmethod
+    def _drive(claude_md, monkeypatch, sync_status, content=None):
+        """Run one archival with a stubbed save envelope carrying `sync_status`.
+
+        `sync_status=None` omits the key entirely -- the absent-field case.
+        The `get` leg echoes the real block, so conjunct 3 (fidelity) PASSES
+        and the verdict turns solely on the sync field.
+        """
+        content = content or _two_pin_file()
+        claude_md(content)
+        pinned = _pinned_body(content)
+        block = archive_pin.extract_pin_block(
+            pinned, 0, pin_caps.parse_pins(pinned)
+        )
+
+        def _stub(args, **kwargs):
+            if args[0] == "save":
+                result = {"memory_id": "a" * 32}
+                if sync_status is not None:
+                    result["sync_status"] = sync_status
+                return 0, json.dumps({"ok": True, "result": result}), ""
+            return 0, json.dumps(
+                {"ok": True, "result": {"context": block}}
+            ), ""
+
+        monkeypatch.setattr(archive_pin, "_run_memory_cli", _stub)
+        return archive_pin.build_verdict(0, db_path=None), block
+
+    @pytest.mark.parametrize("status", _NON_SUPPRESSED_STATUSES)
+    def test_a_non_suppressed_status_never_reads_as_a_clean_archive(
+        self, claude_md, monkeypatch, status
+    ):
+        """EVERY reason but `suppressed`, because the predicate is `!=`.
+
+        Keyed on the value this route REQUESTS rather than on a list of
+        unwanted ones, so a seventh `SyncResult` reason is refused the day it
+        is added instead of falling through an enumeration that never heard
+        of it.
+        """
+        verdict, _ = self._drive(claude_md, monkeypatch, status)
+        assert verdict["outcome"] == "ARCHIVED_DELETE_UNSAFE", (
+            f"sync_status={status!r} reported as {verdict['outcome']} -- the "
+            f"suppression this save requested did not take effect, so the "
+            f"removal must not proceed automatically"
+        )
+        assert verdict["occurrences"] == 1, (
+            "the fixture must leave the block UNIQUE, or this arm would pass "
+            "through the pre-existing occurrence check and prove nothing"
+        )
+        assert verdict["memory_id"] == "a" * 32, (
+            "the archive succeeded, so the id must still be reported"
+        )
+
+    def test_suppressed_archives_cleanly(self, claude_md, monkeypatch):
+        """POSITIVE ARM -- and it is what makes the refusals above meaningful.
+
+        Every arm above is a refusal, and a refusal is indistinguishable from
+        a driver that never ran at all. This proves the fixture DOES reach a
+        clean `ARCHIVED` when the status is the production-normal one, so the
+        refusals are attributable to the status and not to a broken harness.
+
+        It is also the over-block guard: `suppressed` is what the curator's
+        own routine path reports on EVERY archive. Firing on it would refuse
+        every legitimate eviction.
+        """
+        verdict, _ = self._drive(claude_md, monkeypatch, "suppressed")
+        assert verdict["outcome"] == "ARCHIVED", (
+            "`suppressed` is the PRODUCTION-NORMAL value on this path; "
+            "refusing it is a cardinal over-block on the curator's own path"
+        )
+        assert "sync_status" not in verdict, (
+            "a clean archive must not carry the breach-only diagnostic keys"
+        )
+
+    def test_an_absent_sync_status_does_not_fire(self, claude_md, monkeypatch):
+        """PRESENT-VALUE-ONLY. Absence is no evidence, not a violation.
+
+        Nothing here reads absence as a SUCCESSFUL sync -- the guard simply
+        has no value to disagree with. What makes that safe at this call site
+        is that `_MEMORY_CLI` is a sibling path of `archive_pin.py`, so parent
+        and child are the same tree; the real-CLI arm below pins that premise
+        instead of leaving it assumed.
+        """
+        verdict, _ = self._drive(claude_md, monkeypatch, None)
+        assert verdict["outcome"] == "ARCHIVED"
+
+    def test_wrote_names_where_a_stray_projection_can_be(
+        self, claude_md, monkeypatch
+    ):
+        """The payload must NAME the stray projection, not just carry a reason.
+
+        `occurrences` and `locations` describe the TARGET file, which in the
+        different-file case is CLEAN. A verdict whose only evidence pointed
+        there would be true about a narrower subject than the one it is read
+        for -- the exact defect this consumer exists to remove, reproduced
+        inside its own fix.
+        """
+        verdict, _ = self._drive(claude_md, monkeypatch, "wrote")
+        assert verdict["sync_status"] == "wrote"
+        assert verdict["sync_scope"], (
+            "the verdict must bound WHERE a stray projection can be; the "
+            "declared anchor is that bound"
+        )
+        assert verdict["sync_scope"] in verdict["reason"], (
+            "the scope must be legible in the reason the curator reads, not "
+            "only in a key they may not inspect"
+        )
+        assert verdict["claude_md_path"] in verdict["reason"], (
+            "the reason must say which file `occurrences`/`locations` describe"
+        )
+
+    @pytest.mark.parametrize("status", _NO_WRITE_ATTEMPTED_STATUSES)
+    def test_a_status_that_never_reached_the_write_carries_no_scope(
+        self, claude_md, monkeypatch, status
+    ):
+        """THE SPLIT IS "WAS A WRITE ATTEMPTED", NOT "DID ONE LAND".
+
+        These three exit BEFORE the write is attempted, so there is no
+        projection from this save to bound. Their scope would be TRUE but
+        VACUOUS, and a scope that is unconditionally true names nothing worth
+        searching -- so it is omitted for VACUITY, never for falsehood.
+
+        `failed` is deliberately NOT in this set. An earlier design put it
+        here on the reasoning that no write had landed; that reasoning was
+        wrong, because the `except` producing `failed` wraps the atomic
+        rename. See the sibling arm below.
+        """
+        verdict, _ = self._drive(claude_md, monkeypatch, status)
+        assert verdict["outcome"] == "ARCHIVED_DELETE_UNSAFE"
+        assert "sync_scope" not in verdict, (
+            f"status={status!r} exits before the write is attempted, so there "
+            f"is no projection from this save to bound -- offering a scope "
+            f"sends the curator searching for something this save never wrote"
+        )
+        assert "NO PROJECTION WAS ATTEMPTED" in verdict["reason"], (
+            "this arm knows more than `failed` does and must say so: no write "
+            "was attempted at all, which is stronger than 'cannot tell'"
+        )
+
+    def test_failed_carries_the_scope_because_a_write_may_have_landed(
+        self, claude_md, monkeypatch
+    ):
+        """`failed` IS THE STATUS WHERE A STRAY COPY IS MOST PLAUSIBLE.
+
+        The `except` that produces it wraps the atomic rename, and a lock
+        release and a log call run after that rename inside the same `try`.
+        So a durable, completed write can still report `failed` -- and the
+        bound still holds, because a write outside the declared anchor is
+        refused and also yields `failed`, with no write.
+
+        An earlier design dropped the scope here, which removed it from
+        precisely the status that most needed it. This arm is what stops that
+        from being reintroduced.
+        """
+        verdict, _ = self._drive(claude_md, monkeypatch, "failed")
+        assert verdict["sync_scope"], (
+            "a write was ATTEMPTED and may have completed, so the bound is "
+            "non-vacuous and must be reported"
+        )
+        assert verdict["sync_scope"] in verdict["reason"], (
+            "a payload carrying a scope its prose never explains is the same "
+            "disclosure mismatch this consumer exists to remove"
+        )
+        reason = verdict["reason"]
+        assert "neither that a copy exists nor that none does" in reason, (
+            "the `failed` arm must claim nothing in either direction"
+        )
+        assert "NO PROJECTION WAS ATTEMPTED" not in reason, (
+            "that is the no-write arm's stronger claim and is false here -- a "
+            "write WAS attempted and may have completed"
+        )
+
+    def test_exactly_the_write_attempting_statuses_carry_a_scope(
+        self, claude_md, monkeypatch
+    ):
+        """DIFFERENTIAL over the whole alphabet, in one arm.
+
+        The arms above assert each side separately. This records the
+        INVARIANT -- the scope appears for exactly the statuses that attempted
+        a write -- so an edit that adds or drops the key on any status fails
+        here rather than being noticed by whoever reads the verdict second.
+
+        COMPARED AGAINST THE SPELLED `_WRITE_ATTEMPTED_LITERAL`, NEVER AGAINST
+        `archive_pin._WRITE_ATTEMPTED_STATUSES`. A set read off the module would
+        FOLLOW a mutation of that constant and pass over it, which is the one
+        failure this arm exists to catch. `test_the_write_attempted_constant_
+        matches_the_spelled_set` is the tie-back that keeps the two honest.
+
+        DO NOT "SIMPLIFY" THIS TO IMPORT THE CONSTANT. An earlier draft of this
+        docstring recommended exactly that, describing a design that was
+        rejected before the code was written -- so the comment licensed the
+        edit the code below it forbids. A docstring that recommends disarming
+        its own test is worse than a missing one, because it reads as
+        permission rather than as description.
+        """
+        carriers = {
+            status
+            for status in _NON_SUPPRESSED_STATUSES
+            if "sync_scope" in self._drive(claude_md, monkeypatch, status)[0]
+        }
+        assert carriers == set(_WRITE_ATTEMPTED_LITERAL), (
+            f"the scope must be carried by exactly the statuses that attempted "
+            f"a write; got {carriers}"
+        )
+
+    def test_the_write_call_is_inside_the_handler_that_returns_failed(self):
+        """STRUCTURAL LICENCE for the `failed` arm's central claim.
+
+        `_suppression_breach_reason` tells a curator that a `failed` sync "can
+        be raised AFTER the write completed", and the whole reason `failed`
+        carries `sync_scope` rests on that. Until now the claim was established
+        by READING `sync_to_claude_md`, which is exactly the kind of premise
+        that goes stale silently when someone restructures the function.
+
+        PINS CONTAINMENT, NOT A SYNTHETIC FAULT. A fault-injection arm would
+        prove the same thing more narrowly AND has a silent-rot mode this does
+        not: a refactor could lift the write out from under the post-write
+        statements while the injected fault still fired, leaving the test green
+        over a dead property. Containment is the property the prose actually
+        depends on, so containment is what is asserted.
+
+        If this fails, do NOT relax it -- the `failed` arm's reason string and
+        its membership in `_WRITE_ATTEMPTED_STATUSES` both stop being true.
+        """
+        wm_path = (
+            Path(archive_pin.__file__).resolve().parent.parent
+            / "skills" / "pact-memory" / "scripts" / "working_memory.py"
+        )
+        tree = ast.parse(wm_path.read_text(encoding="utf-8"))
+
+        func = next(
+            (n for n in ast.walk(tree)
+             if isinstance(n, ast.FunctionDef) and n.name == "sync_to_claude_md"),
+            None,
+        )
+        assert func is not None, "sync_to_claude_md not found -- test is blind"
+
+        def _returns_failed(handler):
+            return any(
+                isinstance(n, ast.Attribute) and n.attr == "FAILED"
+                for n in ast.walk(handler)
+            )
+
+        tries = [
+            n for n in ast.walk(func)
+            if isinstance(n, ast.Try)
+            and any(_returns_failed(h) for h in n.handlers)
+        ]
+        assert tries, (
+            "no `try` in sync_to_claude_md has a handler returning FAILED -- "
+            "the `failed` status no longer originates where the reason string "
+            "claims, so that prose and the scope-presence rule are both stale"
+        )
+
+        def _calls_atomic_write(node):
+            return any(
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Name)
+                and n.func.id == "_atomic_write_text"
+                for n in ast.walk(node)
+            )
+
+        assert any(_calls_atomic_write(t) for t in tries), (
+            "`_atomic_write_text` is NOT inside the try whose handler returns "
+            "FAILED. A completed write can then no longer surface as `failed`, "
+            "so the `failed` arm must stop claiming it may have landed -- and "
+            "`failed` must leave _WRITE_ATTEMPTED_STATUSES"
+        )
+
+    def test_the_write_attempted_constant_matches_the_spelled_set(self):
+        """TIE-BACK for the spelled literals above.
+
+        The arms in this class sweep SPELLED status sets so that a mutation of
+        the module constant cannot quietly shrink what they cover. That leaves
+        one gap: a deliberate, correct change to the constant would look like
+        a test failure with no explanation. This arm is the explanation -- it
+        fails HERE, naming the constant, rather than inside a parametrised
+        sweep whose set silently stopped matching the code.
+        """
+        assert set(archive_pin._WRITE_ATTEMPTED_STATUSES) == set(
+            _WRITE_ATTEMPTED_LITERAL
+        ), (
+            "the module's scope-presence constant and this file's spelled set "
+            "have diverged; update the literals deliberately, and check every "
+            "arm that sweeps them"
+        )
+
+    def test_wrote_is_attributed_to_this_run_not_a_concurrent_editor(
+        self, claude_md, monkeypatch
+    ):
+        """`wrote` and a duplicate block are DIFFERENT causes.
+
+        A same-file projection is already caught downstream by
+        `occurrences != 1`, but `_unsafe_reason` then blames "an editor or
+        another process" -- when THIS RUN made the write. Right outcome,
+        wrong cause. The two reason strings must not be confusable.
+        """
+        verdict, _ = self._drive(claude_md, monkeypatch, "wrote")
+        reason = verdict["reason"]
+        assert "THIS RUN" in reason, (
+            "a projection made by this archival must be attributed to it"
+        )
+        assert "check for an editor or another process" not in reason, (
+            "this is the concurrent-editor prose from the DUPLICATION cause; "
+            "using it here misdescribes a write this run performed"
+        )
+
+
+@pytest.mark.requires_embedding_backend
+class TestArchivePin_SyncStatusReachesTheArchive:
+    """The premise the consumer rests on, MEASURED against the real CLI.
+
+    Everything in the stubbed class above assumes `sync_status` is actually
+    present in the envelope the archival path receives ON THE `--no-sync`
+    ROUTE. `cmd_save` emits the field and this path parses that envelope, but
+    those are two separate readings; a stub cannot join them. If the field is
+    absent on this route the consumer has nothing to consume, and the stubs
+    would keep passing while it did.
+    """
+
+    def test_the_archives_own_argv_yields_suppressed(self, tmp_path):
+        """Drives the REAL `_run_memory_cli` with the module's OWN constant."""
+        project = tmp_path / "proj"
+        (project / ".claude").mkdir(parents=True)
+        (project / ".claude" / "CLAUDE.md").write_text(
+            "# P\n\n## Working Memory\n\n", encoding="utf-8"
+        )
+        payload = json.dumps({"context": "real-cli arm", "goal": "observe"})
+
+        _, stdout, _ = archive_pin._run_memory_cli(
+            [archive_pin._ARCHIVE_SUBCOMMAND, "--stdin", "--no-sync"],
+            db_path=str(tmp_path / "m.db"),
+            stdin_data=payload,
+            cwd=str(project),
+        )
+        result = archive_pin._parse_envelope(stdout)
+        assert isinstance(result, dict), f"no success envelope: {stdout!r}"
+        assert "sync_status" in result, (
+            "the archival route's envelope carries NO sync_status -- the "
+            "consumer in archive_pin() has nothing to read, and every stubbed "
+            "arm above is testing a field production never sends"
+        )
+        assert result["sync_status"] == "suppressed"
+
+    def test_dropping_the_flag_changes_the_status_and_writes_the_file(
+        self, tmp_path
+    ):
+        """CONTROL for the arm above, and it earns its place twice.
+
+        Without it, `suppressed` is indistinguishable from a field that never
+        varies -- a constant would satisfy the assertion above forever. It
+        also measures the claim `_suppression_breach_reason` makes about the
+        SAME-FILE case: that a projection lands the block where the occurrence
+        check can see it. `_apply_token_budget` keeps the NEWEST entry in
+        full, so the text arrives verbatim rather than compressed.
+        """
+        project = tmp_path / "proj"
+        (project / ".claude").mkdir(parents=True)
+        target = project / ".claude" / "CLAUDE.md"
+        target.write_text("# P\n\n## Working Memory\n\n", encoding="utf-8")
+        marker = "VERBATIM-PROJECTION-MARKER with spaces and `backticks`"
+        payload = json.dumps({"context": marker, "goal": "observe"})
+
+        _, stdout, _ = archive_pin._run_memory_cli(
+            [archive_pin._ARCHIVE_SUBCOMMAND, "--stdin"],
+            db_path=str(tmp_path / "m.db"),
+            stdin_data=payload,
+            cwd=str(project),
+        )
+        result = archive_pin._parse_envelope(stdout)
+        assert isinstance(result, dict), f"no success envelope: {stdout!r}"
+        assert result["sync_status"] == "wrote", (
+            "without --no-sync the save must report a real projection; if "
+            "this stays 'suppressed' the field is a constant and the arm "
+            "above proves nothing"
+        )
+        assert marker in target.read_text(encoding="utf-8"), (
+            "the projection must land the context VERBATIM -- that is what "
+            "lets the occurrence check catch a same-file write-back"
+        )
