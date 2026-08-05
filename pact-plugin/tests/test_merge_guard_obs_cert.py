@@ -781,10 +781,40 @@ class TestObsGPushSetMintability:
 _G_ALLOW, _G_DENY = 0, 2
 
 
+def _g_live_token_ids(tok):
+    """Inode identity of the LIVE (non-retired) token files in `tok`.
+
+    Keyed on INODE and not on filename, because here the two are not
+    interchangeable. `cleanup_unused_tokens` retires the previous token with
+    `os.rename`, which PRESERVES its inode, while a mint is an `O_EXCL` create
+    that allocates a NEW one. So a name-keyed diff counts a retirement as a
+    mint, AND is blind to a mint that reuses the name the retirement just
+    vacated — which second-granularity token names make the ordinary case
+    rather than a rare one. Those two errors cancel often enough to look
+    correct: a same-second pair reads 1 by counting the retirement while the
+    real token is invisible. Neither error is reachable by narrowing the glob,
+    because the defect is the identity, not the filter.
+
+    Non-tokens are dropped by EXCLUSION, never by matching an expected token
+    shape. An inclusion pattern such as `merge-authorized-<digits>` silently
+    drops the millisecond-disambiguated fallback name that `write_token` falls
+    back to on collision — a real token — and would go on dropping every later
+    shape nobody thought to add. Exclusion can only ever over-count, which
+    fails loudly; inclusion under-counts, which does not.
+    """
+    ids = set()
+    for path in tok.glob(mgc.TOKEN_PREFIX + "*"):
+        if path.name.endswith(".consumed") or mgc.USE_MARKER_SUFFIX in path.name:
+            continue
+        ids.add(path.stat().st_ino)
+    return ids
+
+
 def _g_mint(cmd, tok):
     """Drive the REAL post hook with an approval embedding `cmd`; return the count of
-    tokens minted by this call."""
-    before = set(tok.glob("merge-authorized-*"))
+    tokens minted by this call. See `_g_live_token_ids` for why the count is
+    keyed on inode rather than on filename."""
+    before = _g_live_token_ids(tok)
     env = json.dumps({
         "tool_name": "AskUserQuestion",
         "tool_input": {"questions": [{
@@ -804,7 +834,7 @@ def _g_mint(cmd, tok):
             post_main()
         except SystemExit as e:
             assert e.code == 0, "post hook exited nonzero: %r" % (e.code,)
-    return len(set(tok.glob("merge-authorized-*")) - before)
+    return len(_g_live_token_ids(tok) - before)
 
 
 def _g_execute(cmd, tok):
