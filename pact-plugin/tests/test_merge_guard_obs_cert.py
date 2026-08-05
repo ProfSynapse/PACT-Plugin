@@ -838,7 +838,19 @@ def _g_mint(cmd, tok):
 
 
 def _g_execute(cmd, tok):
-    """Run `cmd` through the REAL pre hook; return exit code (0=ALLOW, 2=DENY)."""
+    """Run `cmd` through the REAL pre hook; return exit code (0=ALLOW, 2=DENY).
+
+    AMBIGUOUS ON PURPOSE, AND THE CALLER RESOLVES IT. A return of 0 means only
+    that the hook did not DENY. It cannot distinguish "a token authorized this
+    command" from "this command was never gated at all", because an ungated
+    command reaches no decision and so exits 0 too.
+
+    The discriminator is the calling convention, not this function: every row
+    asserts `minted == 1` BEFORE `rc == _G_ALLOW`, and since only a gated
+    command mints, that mint assertion IS the proof that the command was gated.
+    Read `rc` alone and a never-gated command reads exactly like an authorized
+    one. Keep the mint assertion first.
+    """
     env = json.dumps({
         "tool_name": "Bash",
         "tool_input": {"command": cmd},
