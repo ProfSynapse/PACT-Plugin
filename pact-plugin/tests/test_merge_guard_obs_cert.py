@@ -871,14 +871,19 @@ def _g_roundtrip(mint_cmd, exec_cmd, tok):
     return _g_mint(mint_cmd, tok), _g_execute(exec_cmd, tok)
 
 
-def _g_write_token_that_creates_nothing(fired):
-    """Build a `write_token` stand-in that creates no token but still retires.
+def _g_write_token_that_retires_then_fails_to_create(fired):
+    """Build a `write_token` stand-in that retires, then creates nothing.
 
     `write_token` runs its retirement BEFORE the `O_EXCL` create, so a create
     that fails leaves a retirement on disk and no new token. This reproduces
     that SHAPE. It does not reproduce any particular CAUSE of the failure, and
     it stops being faithful if that order changes —
     `TestObsGStubTracksTheRealFailurePath` is what notices if it does.
+
+    The name states the POST-STATE rather than the outcome. "Creates nothing"
+    is true of all four ways `write_token` returns None; leaving a retirement
+    behind belongs to exactly one of them, and naming the shared outcome
+    claimed three modes this stand-in does not model.
 
     Defined once and shared by the pin and by its guard on purpose: a guard
     comparing against its own private copy of the stub would certify the copy,
@@ -904,10 +909,9 @@ def _g_token_shape(name):
 class TestObsGStubTracksTheRealFailurePath:
     """The zero-mint stub must still leave what the real failure path leaves.
 
-    `_g_write_token_that_creates_nothing` claims to reproduce the shape of
-    `write_token`'s failure: retire the previous token, create nothing, return
-    None. That claim used to live only in a comment, which states a property
-    rather than enforcing it. This drives the REAL function into failure at its
+    `_g_write_token_that_retires_then_fails_to_create` names the post-state it produces:
+    retire the previous token, create nothing, return None. That claim used to
+    live only in a comment, which states a property rather than enforcing it. This drives the REAL function into failure at its
     `os.open` and compares what each leaves on disk.
 
     It compares the POST-STATE rather than the signature, because a signature
@@ -915,14 +919,21 @@ class TestObsGStubTracksTheRealFailurePath:
     the entire claim. It does not read the source, because a text check is a
     proxy for the behaviour and reddens on comment-only edits.
 
-    WHAT THIS CANNOT SEE, AND THE GAP IS NOT SMALL. `write_token` returns None
-    from three refusal guards that run BEFORE the retirement — a non-dict
-    context, a context carrying no anchor key, and a context with no
-    `operation_type`. In those modes the real function leaves the previous
-    token UNTOUCHED while the stub retires it, so the stub is not faithful to
-    them and this test does not notice, because it never drives them. It
-    certifies exactly one failure mode: the create failing after the
-    retirement. Widening it means forcing each refusal and comparing again.
+    WHAT THIS STAND-IN IS FOR, AND WHAT IT IS NOT FOR. It models one of the
+    four ways `write_token` returns None: the create failing after the
+    retirement has already run. The other three are refusal guards that return
+    BEFORE any disk operation — a non-dict context (578), a context carrying
+    no anchor key (590), and a context with no `operation_type` (605). Those
+    leave the directory exactly as they found it, so this stand-in is not a
+    model of them, and a test that needs one must build its own.
+
+    That is a statement of scope rather than a gap, and the reason is worth
+    keeping. With the directory untouched there is no retirement, and a
+    retirement is the only artifact a name-keyed count and an inode-keyed
+    count disagree about — both read zero in those three modes. Only the
+    create failure leaves something that tells the two forms apart, which is
+    why it is the mode worth modelling and why widening to the other three
+    would add no discrimination.
 
     The three non-vacuity witnesses below are NOT redundant with the final
     comparison. Witness (c) is what actually reddens when the retirement
@@ -965,7 +976,7 @@ class TestObsGStubTracksTheRealFailurePath:
             mgpost.os.open = real_open
 
         fired = []
-        _g_write_token_that_creates_nothing(fired)(ctx, stub_dir)
+        _g_write_token_that_retires_then_fails_to_create(fired)(ctx, stub_dir)
 
         # NON-VACUITY. Two empty directories compare equal, so the match below
         # means nothing until the scenario is shown to have actually run.
@@ -1018,7 +1029,7 @@ class TestObsGMintCountIsIdentityKeyed:
 
         fired = []
         real_write_token = mgpost.write_token
-        mgpost.write_token = _g_write_token_that_creates_nothing(fired)
+        mgpost.write_token = _g_write_token_that_retires_then_fails_to_create(fired)
         try:
             minted = _g_mint(_PG + "origin main", tmp_path)
         finally:
