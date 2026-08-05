@@ -21,6 +21,7 @@ Summary: GOOD-FAITH over-block sweep certification (PR #1195 OBS). Certifies aga
 
          Destructive verbs assembled at runtime so this file stays inert to the live guard.
 """
+import ast
 import io
 import json
 import sys
@@ -1000,6 +1001,99 @@ class TestObsGStubTracksTheRealFailurePath:
             f"real={shapes(real_dir)} stub={shapes(stub_dir)}. The stub's "
             "claim to reproduce the retire-then-fail shape has drifted, and "
             "the zero-mint pin built on it is testing a path that changed."
+        )
+
+
+class TestObsGWriteTokenPreCleanupRefusalCount:
+    """Pin the refusal count the class above states as a fact about production.
+
+    `TestObsGStubTracksTheRealFailurePath` says `write_token` has three refusal
+    guards returning before the retirement, and rests a ruling on it: those
+    three leave the directory untouched, so they cannot tell a name-keyed count
+    from an inode-keyed one, which is why widening the stand-in to cover them
+    would add no discrimination. A fourth pre-cleanup refusal that DOES touch
+    disk makes that reasoning false. Nothing else would notice. This does.
+
+    It reads the parse tree of `write_token` and counts the `Return` nodes
+    above the retirement whose value is None — counting a bare `return` as well
+    as `return None`, since a predicate matching only the second would miss a
+    bare one added later.
+
+    WHAT THIS CANNOT SEE. It is a PARTIAL guard, and the boundary belongs here
+    rather than in a report, because a partial guard read as a total one leaves
+    a reader more confident than no guard would:
+
+      - A fourth refusal placed inside a HELPER called before the retirement.
+        The walk sees a `Call`, not a `Return`, and following calls into
+        arbitrary callees is unbounded. This is the ceiling.
+      - A guard whose CONDITION changes while its position holds. The count
+        pins how many, never which.
+      - A pre-cleanup `raise`, or a return of something that is not None —
+        both are exits this does not count.
+      - Reachability. A refusal made dead by an earlier unconditional return is
+        still counted; this reads structure, never execution.
+
+    What it does catch is the common edit: a fourth guard written inline. A
+    refactor of the existing three into a helper drops the count and also
+    reddens — a false positive, but a loud one.
+    """
+
+    def test_write_token_has_three_pre_cleanup_return_none_paths(self):
+        # Resolved through the imported module rather than a path literal, so
+        # the check follows the same import the suite itself uses.
+        tree = ast.parse(Path(mgpost.__file__).read_text(encoding="utf-8"))
+
+        found = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.FunctionDef) and n.name == "write_token"]
+        assert len(found) == 1, (
+            f"expected exactly one `write_token` definition, found {len(found)}"
+        )
+        fn = found[0]
+
+        nested = [n for n in ast.walk(fn)
+                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  and n is not fn]
+        assert not nested, (
+            "a nested function definition appeared inside `write_token`, and "
+            "ast.walk would absorb its returns into the count below"
+        )
+
+        cleanups = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                    and getattr(n.func, "id", None) == "_cleanup_unused_tokens"]
+        assert len(cleanups) == 1, (
+            f"expected exactly one `_cleanup_unused_tokens` call, found "
+            f"{len(cleanups)}. With any other number, `before the retirement` "
+            "is not a well-defined partition and the count below is a number "
+            "computed over nothing."
+        )
+        retirement = cleanups[0].lineno
+
+        returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return)]
+
+        def _returns_none(node):
+            return node.value is None or (
+                isinstance(node.value, ast.Constant) and node.value.value is None
+            )
+
+        # NON-VACUITY. Three `Return` nodes sit above the retirement whatever
+        # their shape, so a predicate that accepted everything would score 3
+        # and pass having read nothing. Require it to reject something.
+        assert any(not _returns_none(r) for r in returns), (
+            "the None-return predicate accepted every return in the function, "
+            "so the count below would hold for a predicate that discriminates "
+            "nothing"
+        )
+
+        pre_cleanup = [r for r in returns
+                       if r.lineno < retirement and _returns_none(r)]
+        assert len(pre_cleanup) == 3, (
+            f"`write_token` has {len(pre_cleanup)} paths returning None before "
+            f"the retirement, not 3 (lines {[r.lineno for r in pre_cleanup]}). "
+            "The class docstring above states three and rests a ruling on it: "
+            "a fourth that touches disk would falsify the reasoning that those "
+            "modes cannot discriminate the two count forms. Update the prose "
+            "AND re-check that reasoning — the count is not the only thing "
+            "that moved."
         )
 
 
