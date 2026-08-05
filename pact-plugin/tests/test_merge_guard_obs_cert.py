@@ -871,6 +871,127 @@ def _g_roundtrip(mint_cmd, exec_cmd, tok):
     return _g_mint(mint_cmd, tok), _g_execute(exec_cmd, tok)
 
 
+def _g_write_token_that_creates_nothing(fired):
+    """Build a `write_token` stand-in that creates no token but still retires.
+
+    `write_token` runs its retirement BEFORE the `O_EXCL` create, so a create
+    that fails leaves a retirement on disk and no new token. This reproduces
+    that SHAPE. It does not reproduce any particular CAUSE of the failure, and
+    it stops being faithful if that order changes —
+    `TestObsGStubTracksTheRealFailurePath` is what notices if it does.
+
+    Defined once and shared by the pin and by its guard on purpose: a guard
+    comparing against its own private copy of the stub would certify the copy,
+    not the stub, which is the defect this arrangement exists to close.
+    """
+    def _stub(context, token_dir=None):
+        mgc.cleanup_unused_tokens(token_dir or mgpost.TOKEN_DIR)
+        fired.append(True)
+        return None
+    return _stub
+
+
+def _g_token_shape(name):
+    """`merge-authorized-1785902062.consumed` -> `.consumed`.
+
+    Strips the prefix and the epoch stamp so two directories seeded moments
+    apart compare on WHICH ARTIFACTS EXIST rather than on when they were made.
+    A live token yields `''`, a retirement `'.consumed'`, a use marker `'.use-1'`.
+    """
+    return name[len(mgc.TOKEN_PREFIX):].lstrip("0123456789")
+
+
+class TestObsGStubTracksTheRealFailurePath:
+    """The zero-mint stub must still leave what the real failure path leaves.
+
+    `_g_write_token_that_creates_nothing` claims to reproduce the shape of
+    `write_token`'s failure: retire the previous token, create nothing, return
+    None. That claim used to live only in a comment, which states a property
+    rather than enforcing it. This drives the REAL function into failure at its
+    `os.open` and compares what each leaves on disk.
+
+    It compares the POST-STATE rather than the signature, because a signature
+    match holds while the retire-versus-create ORDER changes and the order is
+    the entire claim. It does not read the source, because a text check is a
+    proxy for the behaviour and reddens on comment-only edits.
+
+    WHAT THIS CANNOT SEE, AND THE GAP IS NOT SMALL. `write_token` returns None
+    from three refusal guards that run BEFORE the retirement — a non-dict
+    context, a context carrying no anchor key, and a context with no
+    `operation_type`. In those modes the real function leaves the previous
+    token UNTOUCHED while the stub retires it, so the stub is not faithful to
+    them and this test does not notice, because it never drives them. It
+    certifies exactly one failure mode: the create failing after the
+    retirement. Widening it means forcing each refusal and comparing again.
+
+    The three non-vacuity witnesses below are NOT redundant with the final
+    comparison. Witness (c) is what actually reddens when the retirement
+    disappears — it reaches that drift first, by ordering, and names it —
+    so removing any of them as "already covered by the comparison" would
+    trade a diagnostic failure for a bare inequality, and would reopen the
+    empty-directory pass that (c) exists to close.
+    """
+
+    def test_stub_leaves_what_the_real_failure_path_leaves(self, tmp_path):
+        # An operation_type is required, or the refusal guard returns before
+        # the retirement and this drives the wrong path entirely.
+        ctx = {"operation_type": "merge", "pr_number": "42"}
+
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        stub_dir = tmp_path / "stub"
+        stub_dir.mkdir()
+
+        def shapes(d):
+            return sorted(_g_token_shape(p.name)
+                          for p in d.glob(mgc.TOKEN_PREFIX + "*"))
+
+        # Both arms start from a real prior token. Without one there is no
+        # retirement to observe and both sides would land on empty.
+        assert _g_mint(_PG + "origin main", real_dir) == 1
+        assert _g_mint(_PG + "origin main", stub_dir) == 1
+
+        opened = []
+        real_open = mgpost.os.open
+
+        def _failing_open(*args, **kwargs):
+            opened.append(args[0] if args else None)
+            raise OSError(28, "forced failure for this test")
+
+        mgpost.os.open = _failing_open
+        try:
+            returned = mgpost.write_token(ctx, real_dir)
+        finally:
+            mgpost.os.open = real_open
+
+        fired = []
+        _g_write_token_that_creates_nothing(fired)(ctx, stub_dir)
+
+        # NON-VACUITY. Two empty directories compare equal, so the match below
+        # means nothing until the scenario is shown to have actually run.
+        assert opened, (
+            "os.open was never reached, so the real create never failed and "
+            "the comparison is not about the path this stub stands in for"
+        )
+        assert returned is None, (
+            "the real write_token did not fail — this would compare a success "
+            "against a stubbed failure"
+        )
+        assert fired, "the stub never ran"
+        assert shapes(real_dir), "the compared state is empty; nothing was compared"
+        assert ".consumed" in shapes(real_dir), (
+            "no retirement on the real side, so the shape being compared is "
+            "not the retire-then-fail shape the stub claims to reproduce"
+        )
+
+        assert shapes(stub_dir) == shapes(real_dir), (
+            "the stub no longer leaves what the real failure path leaves: "
+            f"real={shapes(real_dir)} stub={shapes(stub_dir)}. The stub's "
+            "claim to reproduce the retire-then-fail shape has drifted, and "
+            "the zero-mint pin built on it is testing a path that changed."
+        )
+
+
 class TestObsGMintCountIsIdentityKeyed:
     """The mint count must tell a real mint apart from a retirement.
 
@@ -897,17 +1018,7 @@ class TestObsGMintCountIsIdentityKeyed:
 
         fired = []
         real_write_token = mgpost.write_token
-
-        def _write_token_that_creates_nothing(context, token_dir=None):
-            # `write_token` retires BEFORE its O_EXCL create, so its real
-            # failure path leaves a retirement behind and no new token. This
-            # reproduces that SHAPE; it does not reproduce any particular cause
-            # of the failure, and it stops being faithful if that order changes.
-            mgc.cleanup_unused_tokens(token_dir or mgpost.TOKEN_DIR)
-            fired.append(True)
-            return None
-
-        mgpost.write_token = _write_token_that_creates_nothing
+        mgpost.write_token = _g_write_token_that_creates_nothing(fired)
         try:
             minted = _g_mint(_PG + "origin main", tmp_path)
         finally:
