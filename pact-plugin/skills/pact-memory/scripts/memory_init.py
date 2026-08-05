@@ -42,6 +42,14 @@ logger = logging.getLogger(__name__)
 _init_lock = threading.Lock()
 _initialized = False
 
+# Outcome of this session's embedding catch-up, kept so a STATUS READER can see
+# it. `_ensure_ready()` discards `ensure_memory_ready()`'s return value, and an
+# ignored return is syntactically indistinguishable from a call made for its
+# side effects -- which is why the sweep's reason reached no consumer despite
+# being carried correctly at every hop below this one. Session-scoped, mirroring
+# `_initialized`, because the catch-up itself runs at most once per session.
+_last_catchup_result: "dict | None" = None
+
 
 # Values of `CI` that mean "NOT running under CI" even though the variable is
 # SET. A bare `os.environ.get('CI')` treats every one of these as CI, because a
@@ -383,6 +391,34 @@ def maybe_embed_pending() -> dict:
             result["message"] = embed_result.get("error", "Unknown error")
             return result
 
+        # READ THE REASON BEFORE READING THE ABSENCE OF WORK. `processed == 0`
+        # with no failure has two causes that mean opposite things: the sweep
+        # LOOKED and found nothing, or it COULD NOT LOOK. Reporting `ok` for the
+        # second announces that the catch-up succeeded in exactly the degraded
+        # state the catch-up exists to repair, which is the defect the sweep's
+        # reason channel was added to expose and which nothing yet read.
+        unknown = embed_result.get("unembedded_unknown")
+        if unknown:
+            # `query_failed` is a FAULT and the other two are CONFIGURATION.
+            # Both dependencies were present and the query raised anyway, so it
+            # is an incident rather than a capability limit; filing it under
+            # `degraded` would bury the one reason that warrants attention.
+            #
+            # The other two are ordinary degraded states, NOT anomalies:
+            # `SQLITE_EXTENSIONS_ENABLED` tracks pysqlite3 only, so a process
+            # with pysqlite3 and WITHOUT sqlite-vec passes the extensions check,
+            # fails to create the vector table (`database._init_vector_table`
+            # returns False on that ImportError), and reaches the sweep with the
+            # table genuinely absent. That is a configuration, not a defect.
+            result["status"] = "error" if unknown == "query_failed" else "degraded"
+            result["unembedded_unknown"] = unknown
+            result["message"] = (
+                f"Outstanding embedding work is UNKNOWN ({unknown}) -- the sweep "
+                f"could not query the vector table, so this is not a report of "
+                f"zero work."
+            )
+            return result
+
         # No pending memories to process
         result["status"] = "ok"
         result["message"] = None
@@ -450,6 +486,11 @@ def ensure_memory_ready() -> dict:
         # 3. Process any unembedded memories
         embedding_result = maybe_embed_pending()
         result["embedding"] = embedding_result
+        # Record it for `get_embedding_catchup_status()`. Assigned here rather
+        # than inside `maybe_embed_pending` so there is ONE write site instead
+        # of one per early return.
+        global _last_catchup_result
+        _last_catchup_result = embedding_result
 
         if embedding_result.get("message") and embedding_result.get("status") == "ok":
             logger.info(f"Embedding catch-up: {embedding_result['message']}")
@@ -459,6 +500,22 @@ def ensure_memory_ready() -> dict:
         logger.debug("Memory system initialized")
 
         return result
+
+
+def get_embedding_catchup_status() -> "dict | None":
+    """This session's embedding catch-up outcome, for a status reader.
+
+    None means the catch-up has not run in this process yet. Otherwise the dict
+    `maybe_embed_pending()` returned, whose `status` distinguishes a sweep that
+    LOOKED and found nothing (`ok`) from one that COULD NOT LOOK (`degraded`, or
+    `error` when the query raised despite both dependencies being present).
+
+    READ `status` RATHER THAN INFERRING FROM A COUNT. There is no processed
+    count here that means "no outstanding work": zero processed is produced both
+    by an empty backlog and by a sweep that could not see the backlog at all,
+    and telling those apart is the entire reason this accessor exists.
+    """
+    return _last_catchup_result
 
 
 def reset_initialization() -> None:

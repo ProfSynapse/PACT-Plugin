@@ -67,7 +67,7 @@ from .working_memory import (
     sync_to_claude_md,
     sync_retrieved_to_claude_md,
 )
-from .memory_init import ensure_memory_ready
+from .memory_init import ensure_memory_ready, get_embedding_catchup_status
 # Dual import: relative (when loaded as package) vs absolute (when tests add scripts/ to sys.path)
 try:
     from .pact_session import get_session_id_from_context_file
@@ -986,6 +986,17 @@ class PACTMemory:
             "tracked_files_count": len(self._session_files),
             "graph_stats": graph_stats,
             "capabilities": capabilities,
+            # THE SWEEP'S REASON, SURFACED WHERE SOMEBODY READS IT. The catch-up
+            # reports whether outstanding embedding work is KNOWABLE, and until
+            # this key existed that answer reached no consumer: `_ensure_ready`
+            # discards `ensure_memory_ready()`'s return, so every hop below
+            # carried the reason correctly into a value nothing looked at.
+            #
+            # None means the catch-up has not run in this process. Otherwise
+            # read its `status`: `ok` is "looked, found nothing", while
+            # `degraded` and `error` both mean OUTSTANDING WORK IS UNKNOWN.
+            # Do NOT read an absent backlog as an empty one.
+            "embedding_catchup": get_embedding_catchup_status(),
             "db_path": str(get_db_path())
         }
 
