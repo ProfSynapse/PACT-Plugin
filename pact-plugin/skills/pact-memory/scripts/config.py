@@ -7,7 +7,7 @@ Centralized configuration for the PACT Memory skill.
 All path resolution is defined here to ensure consistency across all modules.
 
 Used by:
-- database.py: Database path resolution (get_db_path, get_memory_dir)
+- database.py: Database path resolution (get_memory_dir)
 - setup_memory.py: Directory creation (get_memory_dir)
 
 EVERY PATH HERE RESOLVES AT USE TIME, NEVER AT IMPORT TIME. This module used to
@@ -101,6 +101,14 @@ def get_memory_dir() -> Path:
     return Path.home() / ".claude" / "pact-memory"
 
 
-def get_db_path() -> Path:
-    """Return the memory database file path. Creates no directory."""
+def compute_db_path() -> Path:
+    """Return the memory database file path. Creates no directory.
+
+    NAMED `compute_` TO SEPARATE IT FROM `database.get_db_path`, which resolves
+    the same location and then creates the directory with mode 0o700. The two
+    differ only in that side effect, and they used to differ only in which
+    module you imported from -- so `from .config import get_db_path` in
+    production would have silently stopped creating the directory, with nothing
+    failing loudly. There is no longer a `get_db_path` here to reach for.
+    """
     return get_memory_dir() / "memory.db"
