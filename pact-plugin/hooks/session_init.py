@@ -1344,10 +1344,32 @@ def main():
                         "Re-engage secretary: SendMessage(to='secretary', "
                         "message='Post-compaction: deliver session briefing with current state.')."
                     )
+                # The compact-summary path is single-use: the secretary ARCHIVES
+                # it into the session directory after processing, so a lead that
+                # reads even slightly later finds nothing there. Naming only the
+                # canonical path sends the lead to a location it is expected to
+                # vacate. Name the archive too, so the read survives the move
+                # without waiting for the briefing to arrive.
+                #
+                # session_dir is "" when session_id was missing (the ternary at
+                # the top of this function). Interpolating it blind would emit an
+                # instruction naming an empty directory — no error, just a
+                # confidently wrong sentence — so fall back to the briefing.
+                if session_dir:
+                    _archive_clause = (
+                        f'(if it is gone, the secretary archived it into '
+                        f'{session_dir} as compact-summary-<timestamp>.txt)'
+                    )
+                else:
+                    _archive_clause = (
+                        '(if it is gone, the secretary archived it into the '
+                        'session directory and names the path in its briefing)'
+                    )
                 context_parts.insert(0, (
                     f'{_team_directive} '
                     f'After bootstrap, recover session state: '
-                    f'(1) Read {get_compact_summary_path()} for prior context, '
+                    f'(1) Read {get_compact_summary_path()} for prior context '
+                    f'{_archive_clause}, '
                     f'(2) Run TaskList to find in-progress work, '
                     f'(3) TaskGet on in-progress tasks for details. '
                     f'{_secretary_clause}'

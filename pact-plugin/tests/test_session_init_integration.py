@@ -1,7 +1,12 @@
 """
 Location: pact-plugin/tests/test_session_init_integration.py
-Summary: NON-MOCKED L2 integration coverage for session_init's caller-3 seam —
-the post-compaction checkpoint built from get_task_list() (session_init.py
+Summary: NON-MOCKED L2 integration coverage for TWO session_init seams. Seam A
+is the caller-3 seam — the post-compaction checkpoint built from
+get_task_list(). Seam B is the session-dir resolution behind the post-compaction
+lead-read instruction; its own anti-mock invariant and non-vacuity gate are
+documented on TestCompactReadInstructionRealSeam below.
+
+Seam A — the post-compaction checkpoint built from get_task_list() (session_init.py
 ~:1211). Under Agent Teams this was PARTIAL pre-#923 (the broken get_task_list
 session_id key degraded the checkpoint to the bootstrap safety-net). The #923
 GLOBAL team-first fix in task_utils.get_task_list repaired it; this L2 is the
@@ -111,3 +116,108 @@ class TestSessionInitCheckpointRealSeam:
         cp = _build_checkpoint()
         # get_task_list() -> None -> finders get [] -> safety-net feature line.
         assert "Unable to identify feature task" in cp
+
+
+# ── Seam B: session-dir resolution behind the lead-read instruction ──────────
+
+
+def _run_compact_main(tmp_path, monkeypatch, session_id):
+    """Drive session_init.main() at source='compact' and return the emitted
+    additionalContext.
+
+    session_init is imported INSIDE the function, not at module scope, for the
+    same reason the module header gives: a collection-time import of the 73KB
+    module pulls staleness/pin_caps/claude_md_manager into every test in this
+    file. The helper in tests/test_session_init.py imports it the same way.
+    """
+    import io
+    from unittest.mock import patch
+
+    import session_init
+
+    payload: dict = {"source": "compact"}
+    if session_id is not None:
+        payload["session_id"] = session_id
+
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/test/project")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    with patch("session_init.setup_plugin_symlinks", return_value=None), \
+         patch("session_init.ensure_project_memory_md", return_value=None), \
+         patch("session_init.check_pinned_staleness", return_value=None), \
+         patch("session_init.update_session_info", return_value=None), \
+         patch("session_init.restore_last_session", return_value=None), \
+         patch("session_init.check_resume_state", return_value=None), \
+         patch("sys.stdin", io.StringIO(json.dumps(payload))), \
+         patch("sys.stdout", new_callable=io.StringIO) as out:
+        with pytest.raises(SystemExit) as exc:
+            session_init.main()
+
+    assert exc.value.code == 0
+    return json.loads(out.getvalue())["hookSpecificOutput"]["additionalContext"]
+
+
+class TestCompactReadInstructionRealSeam:
+    """The lead-read instruction must name where the compact summary WENT.
+
+    The secretary archives the single-use compact-summary file into the session
+    directory after processing it, so a lead following the instruction even
+    slightly later finds the canonical path empty. The instruction therefore
+    names the archive directory as a fallback, which puts session-dir resolution
+    into the emitted text.
+
+    ============================ ANTI-MOCK INVARIANT ========================
+    MUST NOT patch get_session_dir, get_compact_summary_path, or
+    build_context_cache. The real session-dir resolution IS this seam. The only
+    doubles are Path.home redirection plus suppressors for start-up side effects
+    (symlinks, project memory, staleness, session-info write, resume state) —
+    none of them participates in building this instruction. get_task_list is
+    NOT among them and must not be added: it is a RESOLVER_SYMBOL, and the real
+    resolver already returns None under an empty redirected home, so a double
+    would buy nothing and would forfeit the anti-mock invariant.
+
+    ========================= NON-VACUITY (source-revert) ===================
+    session_dir is "" when session_id is missing. Replace the guarded
+    _archive_clause in hooks/session_init.py with a blind interpolation of
+    session_dir, then run:
+        python3 -m pytest tests/test_session_init_integration.py -k missing_session_id
+    EXPECTED cardinality: {1 failed} — the blind form emits "archived it into
+     as compact-summary-<timestamp>.txt", naming an empty directory, so the
+    fallback-wording assertion fails. Restore -> green. The real-session_id case
+    is the positive control: it fails in the opposite direction if resolution
+    ever returns "" for a well-formed session.
+    ==========================================================================
+    """
+
+    def test_real_session_id_names_the_resolved_archive_directory(
+        self, tmp_path, monkeypatch
+    ):
+        sid = "aabb1122-0000-0000-0000-000000000000"
+        ctx = _run_compact_main(tmp_path, monkeypatch, sid)
+
+        # Canonical path stays PRIMARY — a lead resuming before any secretary
+        # has run must still be sent to the real file.
+        assert "compact-summary.txt" in ctx
+        # The archive directory is the REAL resolved one. Asserted from the
+        # inputs (home + session id), never by re-deriving the resolver, so a
+        # resolver returning "" or the wrong dir fails here.
+        assert f"archived it into {tmp_path}" in ctx
+        assert sid in ctx
+        assert "names the path in its briefing" not in ctx, (
+            "the guarded fallback fired for a well-formed session — "
+            "session-dir resolution returned empty when it should not"
+        )
+
+    def test_missing_session_id_falls_back_instead_of_naming_an_empty_dir(
+        self, tmp_path, monkeypatch
+    ):
+        ctx = _run_compact_main(tmp_path, monkeypatch, None)
+
+        assert "compact-summary.txt" in ctx
+        assert "names the path in its briefing" in ctx
+        # The two failure shapes a blind interpolation would produce.
+        assert "archived it into  as" not in ctx
+        assert "unknown-" not in ctx, (
+            "the unknown-* fallback session id must never reach an instruction "
+            "the lead may act on"
+        )
