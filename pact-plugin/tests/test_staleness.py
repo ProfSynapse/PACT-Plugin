@@ -6,8 +6,8 @@ Tests cover:
 2. Pinned context with recent PR -- not flagged
 3. Pinned context with old PR -- flagged stale
 4. Pinned context without PR dates -- skipped
-5. Over budget -- warning comment added
-6. Under budget -- no warning
+5. Over budget -- warning comment added, and refreshed to match later edits
+6. Under budget -- no warning, and an earlier warning removed
 7. Already-marked stale entries -- not double-marked
 8. Multiple entries with mixed staleness
 9. _estimate_tokens twin copy equivalence (staleness.py vs working_memory.py)
@@ -16,6 +16,7 @@ Tests cover:
 import ast
 import inspect
 import os
+import re
 import sys
 import tempfile
 import textwrap
@@ -29,6 +30,37 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 # Add working_memory scripts directory to path for twin-copy equivalence test
 sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts"))
+
+# Pulls the token figure out of a warning comment, so a test can compare the
+# number in the file against the number in the returned status string.
+_WARNING_NUMBER_RE = re.compile(r"<!-- WARNING: Pinned context ~(\d+) tokens")
+
+
+def over_budget_body(margin_words=200):
+    """Build a pin body whose estimated tokens exceed the pinned-context budget.
+
+    THE MAGNITUDE IS DERIVED FROM THE CONSTANT, NEVER WRITTEN AS A LITERAL.
+    `estimate_tokens` is `int(words * 1.3)`, so a word count above the budget
+    always estimates above the budget, whatever value the budget takes next.
+
+    The assertion makes that structural. A hard-coded fixture went silently
+    under a raised threshold once already -- it still passed, while no longer
+    testing the thing its comment claimed -- and only a check against the live
+    constant can refuse to repeat that.
+    """
+    from staleness import PINNED_CONTEXT_TOKEN_BUDGET, estimate_tokens
+
+    body = "word " * (PINNED_CONTEXT_TOKEN_BUDGET + margin_words)
+    assert estimate_tokens(body) > PINNED_CONTEXT_TOKEN_BUDGET, (
+        "fixture no longer exceeds the budget it is derived from"
+    )
+    return body
+
+
+def warning_number(text):
+    """Return the token figure carried by the warning comment, or None."""
+    match = _WARNING_NUMBER_RE.search(text)
+    return int(match.group(1)) if match else None
 
 
 class TestCheckPinnedStaleness:
@@ -178,8 +210,9 @@ class TestCheckPinnedStaleness:
         """Should add token budget warning when pinned content exceeds budget."""
         from session_init import check_pinned_staleness
 
-        # Create a lot of pinned content that exceeds the budget
-        big_content = "word " * 1500  # Should exceed 1200 token budget
+        # Pinned content sized from PINNED_CONTEXT_TOKEN_BUDGET, so it stays
+        # over budget after any future change to that constant.
+        big_content = over_budget_body()
 
         claude_md = self._create_project_claude_md(tmp_path, (
             "# Project Memory\n\n"
@@ -418,7 +451,9 @@ class TestBudgetWarningIdempotency:
         produce exactly one <!-- WARNING: comment, not two."""
         from session_init import check_pinned_staleness
 
-        big_content = "word " * 1500  # Exceeds 1200 token budget
+        # Sized from PINNED_CONTEXT_TOKEN_BUDGET, so a raised budget cannot
+        # leave this fixture under the threshold it claims to exceed.
+        big_content = over_budget_body()
 
         claude_md = self._create_project_claude_md(tmp_path, (
             "# Project Memory\n\n"
@@ -440,6 +475,210 @@ class TestBudgetWarningIdempotency:
         assert warning_count == 1, (
             f"Expected exactly 1 budget warning comment, found {warning_count}"
         )
+
+
+class TestBudgetWarningRefresh:
+    """The warning must describe the CURRENT pinned content.
+
+    WHICH ARMS FALSIFY THE OLD BEHAVIOUR, measured against the pre-repair code
+    rather than predicted: five of these seven FAIL there. Two PASS both before
+    and after -- `test_repeated_runs_do_not_compound` and
+    `test_entryless_section_never_gains_a_warning` -- because they guard
+    properties of the repair itself, not the defect. Each says so in its own
+    docstring. An arm that passes either way proves nothing about a fix unless
+    it declares that.
+    """
+
+    def _create_project_claude_md(self, tmp_path, content):
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text(content, encoding="utf-8")
+        return claude_md
+
+    def _pinned_doc(self, body, warning=None):
+        head = "# Project Memory\n\n## Pinned Context\n\n"
+        if warning is not None:
+            head += warning
+        return f"{head}### Big Feature\n{body}\n\n"
+
+    def test_stale_number_is_refreshed(self, tmp_path):
+        """A warning carrying an outdated number must be rewritten. FAILS before.
+
+        The pre-repair guard skipped insertion whenever any warning was
+        present, so the first number written stayed forever. A real document
+        reported roughly a third of its true size this way.
+        """
+        from staleness import check_pinned_staleness, estimate_tokens
+
+        body = over_budget_body()
+        stale_warning = (
+            "<!-- WARNING: Pinned context ~7 tokens (budget: 5). "
+            "Consider archiving stale pins. -->\n"
+        )
+        claude_md = self._create_project_claude_md(
+            tmp_path, self._pinned_doc(body, warning=stale_warning)
+        )
+        # Precondition: the wrong number really is in the parsed region.
+        assert warning_number(claude_md.read_text(encoding="utf-8")) == 7
+
+        check_pinned_staleness(claude_md_path=claude_md)
+
+        content = claude_md.read_text(encoding="utf-8")
+        assert content.count("<!-- WARNING: Pinned context") == 1
+        assert warning_number(content) == estimate_tokens(f"### Big Feature\n{body}\n\n")
+
+    def test_status_string_agrees_with_file_comment(self, tmp_path):
+        """The returned figure and the written figure must match. FAILS before.
+
+        Before the repair the two came from different measurements: the file
+        kept its original number while the status string re-measured a body
+        that now contained the warning, so the two disagreed from the second
+        run onward by the warning's own word count.
+        """
+        from staleness import check_pinned_staleness
+
+        claude_md = self._create_project_claude_md(
+            tmp_path, self._pinned_doc(over_budget_body())
+        )
+
+        check_pinned_staleness(claude_md_path=claude_md)
+        status = check_pinned_staleness(claude_md_path=claude_md)
+
+        assert status is not None
+        in_status = int(re.search(r"~(\d+) tokens", status).group(1))
+        in_file = warning_number(claude_md.read_text(encoding="utf-8"))
+        assert in_status == in_file, (
+            f"status string reports {in_status} while the file says {in_file}"
+        )
+
+    def test_warning_removed_when_back_under_budget(self, tmp_path):
+        """A breach that has ended must take its warning with it. FAILS before."""
+        from staleness import check_pinned_staleness
+
+        body = over_budget_body()
+        claude_md = self._create_project_claude_md(
+            tmp_path, self._pinned_doc(body)
+        )
+        check_pinned_staleness(claude_md_path=claude_md)
+        assert "<!-- WARNING: Pinned context" in claude_md.read_text(encoding="utf-8")
+
+        # The user archives the bulk of the pin.
+        shrunk = claude_md.read_text(encoding="utf-8").replace(body, "a short pin")
+        claude_md.write_text(shrunk, encoding="utf-8")
+
+        result = check_pinned_staleness(claude_md_path=claude_md)
+
+        content = claude_md.read_text(encoding="utf-8")
+        assert "<!-- WARNING: Pinned context" not in content
+        assert result is None or "budget" not in result.lower()
+
+    def test_warning_removed_when_last_pin_deleted(self, tmp_path):
+        """Deleting every pin must not strand the warning. FAILS before.
+
+        The entry scan returned early when no `### ` heading remained, so the
+        warning sat in a section that nothing could reach.
+        """
+        from staleness import check_pinned_staleness
+
+        body = over_budget_body()
+        claude_md = self._create_project_claude_md(
+            tmp_path, self._pinned_doc(body)
+        )
+        check_pinned_staleness(claude_md_path=claude_md)
+        assert "<!-- WARNING: Pinned context" in claude_md.read_text(encoding="utf-8")
+
+        emptied = claude_md.read_text(encoding="utf-8").replace(
+            f"### Big Feature\n{body}\n", ""
+        )
+        claude_md.write_text(emptied, encoding="utf-8")
+        assert "### " not in claude_md.read_text(encoding="utf-8")
+
+        check_pinned_staleness(claude_md_path=claude_md)
+
+        assert "<!-- WARNING: Pinned context" not in claude_md.read_text(
+            encoding="utf-8"
+        )
+
+    def test_repeated_runs_do_not_compound(self, tmp_path):
+        """Three runs give one warning and one unchanging number.
+
+        PASSES BEFORE AND AFTER. This arm guards the repair, not the defect:
+        rebuilding the warning on every pass could have let each pass measure
+        the previous one and creep upward. It cannot, because the measured body
+        never holds a warning.
+        """
+        from staleness import check_pinned_staleness
+
+        claude_md = self._create_project_claude_md(
+            tmp_path, self._pinned_doc(over_budget_body())
+        )
+
+        check_pinned_staleness(claude_md_path=claude_md)
+        after_first = claude_md.read_text(encoding="utf-8")
+        check_pinned_staleness(claude_md_path=claude_md)
+        check_pinned_staleness(claude_md_path=claude_md)
+        after_third = claude_md.read_text(encoding="utf-8")
+
+        assert after_third.count("<!-- WARNING: Pinned context") == 1
+        assert after_third == after_first, "a later pass rewrote a settled document"
+
+    def test_entryless_section_never_gains_a_warning(self, tmp_path):
+        """Prose with no `### ` entry stays untouched, over budget or not.
+
+        PASSES BEFORE AND AFTER, and that is the point. Widening the entry
+        guard so a stranded warning can be REMOVED must not also start ADDING
+        warnings to documents this code has always left alone. Removal repairs
+        a line the hook wrote; insertion here would be new behaviour.
+        """
+        from staleness import check_pinned_staleness
+
+        claude_md = self._create_project_claude_md(
+            tmp_path,
+            f"# Project Memory\n\n## Pinned Context\n\n{over_budget_body()}\n\n",
+        )
+        before = claude_md.read_text(encoding="utf-8")
+
+        result = check_pinned_staleness(claude_md_path=claude_md)
+
+        assert result is None
+        assert claude_md.read_text(encoding="utf-8") == before
+
+    def test_user_line_quoting_the_warning_is_preserved(self, tmp_path):
+        """A pin body that quotes the warning must survive, and must not silence
+        the real one. FAILS before, for a reason worth naming.
+
+        Two properties are asserted here, and only the second was expected to
+        need a test. The removal is anchored at the head of the pinned body,
+        which is the only place the hook writes a warning, so it cannot reach a
+        look-alike line inside a pin. CLAUDE.md is frequently gitignored, so an
+        over-broad strip would delete user text no commit could restore.
+
+        The pre-repair presence check searched the WHOLE region for the marker
+        as a plain substring, so a pin that merely QUOTED the warning text
+        satisfied it and the hook never wrote its own warning at all -- the
+        advisory failed open for the entire document on the strength of one
+        line of user prose. Anchoring the probe closes that as a side effect,
+        which is why this arm asserts a count of two rather than one.
+        """
+        from staleness import check_pinned_staleness
+
+        quoted = (
+            "<!-- WARNING: Pinned context ~99 tokens (budget: 1). "
+            "Consider archiving stale pins. -->"
+        )
+        claude_md = self._create_project_claude_md(
+            tmp_path,
+            "# Project Memory\n\n## Pinned Context\n\n"
+            f"### Doc Pin\nThe hook writes this line:\n{quoted}\n"
+            f"{over_budget_body()}\n\n",
+        )
+
+        check_pinned_staleness(claude_md_path=claude_md)
+        check_pinned_staleness(claude_md_path=claude_md)
+
+        content = claude_md.read_text(encoding="utf-8")
+        assert quoted in content, "the strip deleted a line a user wrote"
+        # One line the hook owns, plus the one the user quoted.
+        assert content.count("<!-- WARNING: Pinned context") == 2
 
 
 class TestStalenessErrorPaths:

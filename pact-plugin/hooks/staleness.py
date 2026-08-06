@@ -57,9 +57,43 @@ _BOUNDARY_ALT = "|".join(PACT_BOUNDARY_PREFIXES)
 PINNED_STALENESS_DAYS = 30
 
 # Approximate token budget for the entire Pinned Context section. When
-# exceeded, a warning comment is added (no auto-deletion).
+# exceeded, a warning comment is added. No pin is ever deleted.
 # This is the sole definition of this constant; session_init.py imports it.
-PINNED_CONTEXT_TOKEN_BUDGET = 1200
+#
+# SIZED FROM CAPACITY, NOT FROM A MEASUREMENT OF THE CURRENT DOCUMENT. A bound
+# derived from the region it bounds cannot see that region's next edit, and it
+# lands so close to the present size that an ordinary pin edit re-trips the
+# warning -- which reports "you touched a pin", not "your pins have bloated".
+# This value leaves headroom above a full set of well-written pins and still
+# sits far below what PIN_COUNT_CAP pins at PIN_SIZE_CAP would cost, so the
+# warning stays actionable in both directions.
+#
+# The budget is DELIBERATELY NOT derived from the caps in pin_caps.py. A
+# derived budget is large enough that no legal document ever reaches it, and an
+# advisory that never advises is of no use.
+PINNED_CONTEXT_TOKEN_BUDGET = 3200
+
+# The exact text this module writes at the head of an over-budget pinned
+# section. It is BOTH the text of the warning and the probe that finds an
+# earlier one, so the writer and the reader cannot describe different things.
+_BUDGET_WARNING_PREFIX = "<!-- WARNING: Pinned context"
+
+# Matches ONE complete warning comment line at the very head of a pinned body.
+#
+# THE PATTERN CARRIES ITS OWN ANCHOR AND ITS OWN BOUND, so no call site can
+# widen it. `\A` pins the match to offset 0, which is the only offset this
+# module ever writes such a line to, and `[^\n]*` cannot cross a newline, so
+# the match always ends inside the line it starts on.
+#
+# STRICT ON PURPOSE. This predicate DELETES bytes from a user's CLAUDE.md, a
+# file that is frequently gitignored, so an over-match has no commit to recover
+# from. A loose variant that matched anywhere in the region would also reach
+# text a user wrote inside a pin body. Compare `_find_declared_end_offset`:
+# a predicate's tolerance follows its failure direction, never its resemblance
+# to a predicate that looks like it.
+_LEADING_BUDGET_WARNING_RE = re.compile(
+    rf"\A{re.escape(_BUDGET_WARNING_PREFIX)}[^\n]*-->\n?"
+)
 
 
 def _find_existing_claude_md(base: Path) -> Optional[Path]:
@@ -205,6 +239,50 @@ def estimate_tokens(text: str) -> int:
 
 # Backward-compatible alias (tests and session_init import the underscore name)
 _estimate_tokens = estimate_tokens
+
+
+def _strip_budget_warnings(pinned_content: str) -> str:
+    """
+    Remove the run of budget-warning comment lines at the head of a pinned body.
+
+    Returns the body a user would have written, with this module's own earlier
+    reports taken back out. Callers measure the RESULT, never the input, so the
+    reported token count is a pure function of the user's pinned content and
+    can never include a previous report of itself.
+
+    A run, not a single line, because taking back N lines is the exact inverse
+    of writing one -- so the function stays correct if a document somehow
+    carries more than one, and it can never leave a partial residue behind.
+
+    Args:
+        pinned_content: The pinned section body.
+
+    Returns:
+        The body with any leading budget-warning lines removed.
+    """
+    while True:
+        match = _LEADING_BUDGET_WARNING_RE.match(pinned_content)
+        if match is None:
+            return pinned_content
+        pinned_content = pinned_content[match.end():]
+
+
+def _has_budget_warning(pinned_content: str) -> bool:
+    """
+    Report whether this module has already written a warning to `pinned_content`.
+
+    Shares `_LEADING_BUDGET_WARNING_RE` with `_strip_budget_warnings` on
+    purpose: the check for "is one present" and the code that removes it must
+    agree on every input, and one pattern is the only way to guarantee that.
+    Two patterns would be two alphabets, and the narrower one decides.
+
+    Args:
+        pinned_content: The pinned section body.
+
+    Returns:
+        True when a budget warning heads the body.
+    """
+    return _LEADING_BUDGET_WARNING_RE.match(pinned_content) is not None
 
 
 def _find_terminator_offset(
@@ -556,9 +634,30 @@ def apply_staleness_markings(
     """
     Apply stale markers and budget warnings to pinned content.
 
-    Detects stale entries, inserts STALE markers, and adds a budget
-    warning comment if the content exceeds the token budget. Returns the
-    modified full file content.
+    Detects stale entries, inserts STALE markers, and rewrites the budget
+    warning comment to match the CURRENT content. Returns the modified full
+    file content.
+
+    THE WARNING IS REBUILT FROM THE BODY ON EVERY PASS, NEVER PATCHED IN PLACE.
+    An earlier warning is removed first, the warning-free body is measured, and
+    a fresh line goes back only when the measurement still exceeds the budget.
+
+    Three properties follow from that order, and they are the whole reason for
+    it:
+
+      - THE NUMBER CANNOT GO STALE. It is recomputed against whatever the body
+        holds now, so it tracks a growing or shrinking pinned section.
+      - THE WARNING CANNOT INFLATE ITS OWN COUNT. The measured body never
+        contains a warning, on pass 1 or pass 500, so the number does not creep
+        upward as the report of it is re-read.
+      - THE PASS IS IDEMPOTENT BY CONSTRUCTION, not by a guard. The emitted line
+        is a pure function of the user's pinned body, so a second pass over
+        unchanged pins produces identical bytes and writes nothing.
+
+    A BODY THAT DROPS BACK UNDER BUDGET LOSES ITS WARNING. A warning that
+    reports a breach which has ended is the same defect as a frozen number,
+    facing the other way. Removing it is a REPAIR of a line this module wrote,
+    which is why it is safe; this function never deletes anything a user wrote.
 
     Args:
         content: Full CLAUDE.md file content.
@@ -569,6 +668,18 @@ def apply_staleness_markings(
     Returns:
         Tuple of (new_full_content, stale_count, was_modified, budget_warning_str).
     """
+    # The bytes to compare against at the end. `was_modified` is DERIVED from
+    # this comparison rather than accumulated in a flag, so it cannot disagree
+    # with what actually changed -- and a pass that rewrites a warning to the
+    # same value reports no modification and skips the write.
+    original_pinned_content = pinned_content
+
+    # STEP 1, BEFORE ANY OFFSET IS TAKEN OR ANY TOKEN IS COUNTED: take back the
+    # warning written by an earlier pass. Every step below then sees the user's
+    # own pinned body. Order is load-bearing -- `entry_starts` holds offsets
+    # into this string, so a later strip would invalidate them.
+    pinned_content = _strip_budget_warnings(pinned_content)
+
     entry_pattern = re.compile(r'^### ', re.MULTILINE)
     entry_starts = [m.start() for m in entry_pattern.finditer(pinned_content)]
     stale_marker_pattern = re.compile(r'<!-- STALE: Last relevant \d{4}-\d{2}-\d{2} -->')
@@ -583,7 +694,6 @@ def apply_staleness_markings(
 
     # Detect new stale entries
     stale_entries = detect_stale_entries(pinned_content)
-    modified = False
 
     # Apply stale markers in reverse order so string offsets remain valid
     for idx, date_str, _heading in reversed(stale_entries):
@@ -599,26 +709,30 @@ def apply_staleness_markings(
         heading_end = nl_pos + 1
         new_entry = entry_text[:heading_end] + stale_marker + entry_text[heading_end:]
         pinned_content = pinned_content[:start] + new_entry + pinned_content[end:]
-        modified = True
 
     total_stale = already_stale + len(stale_entries)
 
-    # Check token budget BEFORE inserting the warning (so warning text
-    # does not inflate its own count)
+    # Measure the WARNING-FREE body. Step 1 removed any earlier warning, so
+    # this holds on every pass and not only on the first one -- which is the
+    # hazard the old presence guard was reaching for, and missed.
     pinned_tokens = estimate_tokens(pinned_content)
     budget_warning = ""
     if pinned_tokens > PINNED_CONTEXT_TOKEN_BUDGET:
-        budget_warning_comment = (
-            f"<!-- WARNING: Pinned context ~{pinned_tokens} tokens "
+        pinned_content = (
+            f"{_BUDGET_WARNING_PREFIX} ~{pinned_tokens} tokens "
             f"(budget: {PINNED_CONTEXT_TOKEN_BUDGET}). "
             f"Consider archiving stale pins. -->\n"
-        )
-        # Add budget warning at the top of pinned section if not present
-        if "<!-- WARNING: Pinned context" not in pinned_content:
-            pinned_content = budget_warning_comment + pinned_content
-            modified = True
+        ) + pinned_content
+        # ONE number, used by both consumers. The comment in the file and the
+        # status string returned to the caller are built from the same
+        # measurement, so a reader can never be shown two different figures for
+        # one document.
         budget_warning = f", ~{pinned_tokens} tokens (budget: {PINNED_CONTEXT_TOKEN_BUDGET})"
 
+    # Under budget, the body simply keeps no warning: the strip in step 1 has
+    # already taken the outdated one away, and nothing puts it back.
+
+    modified = pinned_content != original_pinned_content
     new_content = content[:pinned_start] + pinned_content + content[pinned_end:]
     return new_content, total_stale, modified, budget_warning
 
@@ -676,7 +790,19 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
 
     entry_pattern = re.compile(r'^### ', re.MULTILINE)
     entry_starts = [m.start() for m in entry_pattern.finditer(pinned_content)]
-    if not entry_starts:
+
+    # A section with no entries still needs a pass when a warning is sitting in
+    # it. Delete the last pin and the old guard returned here, which stranded
+    # that warning where nothing could ever reach it.
+    #
+    # THE TWO DIRECTIONS ARE NOT SYMMETRIC AND MUST NOT BE MADE SO. Removing a
+    # warning from an entry-less section REPAIRS a line this module wrote.
+    # Adding one to a section that never had entries would be NEW behaviour in a
+    # document this code otherwise leaves untouched. Only the first belongs
+    # here, and the arithmetic delivers exactly that: an entry-less body reaches
+    # `apply_staleness_markings` only when a warning is already present, and
+    # keeps that warning only while the body still exceeds the budget.
+    if not entry_starts and not _has_budget_warning(pinned_content):
         return None
 
     new_content, stale_count, modified, budget_warning = apply_staleness_markings(
