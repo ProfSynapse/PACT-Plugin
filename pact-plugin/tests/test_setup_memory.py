@@ -2,7 +2,7 @@
 Tests for pact-memory/scripts/setup_memory.py — memory system initialization.
 
 Tests cover:
-1. ensure_directories: creates PACT_MEMORY_DIR with correct permissions
+1. ensure_directories: creates the memory directory with correct permissions
 2. check_dependencies: sqlite_vec and model2vec detection
 3. ensure_initialized: directory + database init, failure handling
 4. get_setup_status: full status report
@@ -24,14 +24,14 @@ class TestEnsureDirectories:
     def test_creates_directory(self, tmp_path):
         from scripts.setup_memory import ensure_directories
         target = tmp_path / "pact-memory"
-        with patch.dict(os.environ, {"PACT_MEMORY_DIR": str(target)}):
+        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(target)}):
             ensure_directories()
         assert target.is_dir()
 
     def test_idempotent(self, tmp_path):
         from scripts.setup_memory import ensure_directories
         target = tmp_path / "pact-memory"
-        with patch.dict(os.environ, {"PACT_MEMORY_DIR": str(target)}):
+        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(target)}):
             ensure_directories()
             ensure_directories()  # Should not raise
         assert target.is_dir()
@@ -68,7 +68,7 @@ class TestEnsureInitialized:
         from scripts.setup_memory import ensure_initialized
         target = tmp_path / "pact-memory"
         with (
-            patch.dict(os.environ, {"PACT_MEMORY_DIR": str(target)}),
+            patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(target)}),
             patch("scripts.setup_memory.ensure_directories"),
         ):
             result = ensure_initialized()
@@ -78,7 +78,7 @@ class TestEnsureInitialized:
         from scripts.setup_memory import ensure_initialized
         target = tmp_path / "pact-memory"
         with (
-            patch.dict(os.environ, {"PACT_MEMORY_DIR": str(target)}),
+            patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(target)}),
             patch("scripts.setup_memory.ensure_directories"),
         ):
             # Make the relative import fail
@@ -123,7 +123,7 @@ class TestGetRecommendations:
 class TestGetSetupStatus:
     def test_returns_expected_keys(self, tmp_path):
         from scripts.setup_memory import get_setup_status
-        with patch.dict(os.environ, {"PACT_MEMORY_DIR": str(tmp_path)}):
+        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(tmp_path)}):
             status = get_setup_status()
         assert "initialized" in status
         assert "dependencies" in status
@@ -133,21 +133,21 @@ class TestGetSetupStatus:
 
     def test_initialized_when_dir_exists(self, tmp_path):
         from scripts.setup_memory import get_setup_status
-        with patch.dict(os.environ, {"PACT_MEMORY_DIR": str(tmp_path)}):
+        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(tmp_path)}):
             status = get_setup_status()
         assert status["initialized"] is True
 
     def test_not_initialized_when_dir_missing(self, tmp_path):
         from scripts.setup_memory import get_setup_status
         missing = tmp_path / "nonexistent"
-        with patch.dict(os.environ, {"PACT_MEMORY_DIR": str(missing)}):
+        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(missing)}):
             status = get_setup_status()
         assert status["initialized"] is False
 
     def test_semantic_search_requires_both_deps(self, tmp_path):
         from scripts.setup_memory import get_setup_status
         with (
-            patch.dict(os.environ, {"PACT_MEMORY_DIR": str(tmp_path)}),
+            patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(tmp_path)}),
             patch("scripts.setup_memory.check_dependencies", return_value={"sqlite_vec": True, "model2vec": False}),
         ):
             status = get_setup_status()

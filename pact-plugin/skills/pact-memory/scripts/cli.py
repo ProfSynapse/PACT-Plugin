@@ -170,7 +170,7 @@ def _refuse_live_db_under_pytest(db_path) -> None:
         "is set in this process's environment and no --db-path was given. "
         "Those two facts are the whole of what this guard observed. It does "
         "NOT resolve the default location, so it cannot say WHICH database a "
-        "write would reach: with PACT_MEMORY_DIR set the default is already "
+        "write would reach: with PACT_TEST_MEMORY_DIR set the default is already "
         "redirected, and without it the default is the real store. If this "
         "IS a test, pass "
         "--db-path pointing at a temporary database. If you are ARCHIVING A "

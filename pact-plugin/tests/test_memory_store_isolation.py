@@ -157,7 +157,7 @@ class TestTheSessionDefaultIsUnconditional:
 
     ADDED BECAUSE A MUTATION FOUND THE GAP, not because it was designed in.
     Changing `pytest_configure`'s assignment to `setdefault` and pre-setting
-    `PACT_MEMORY_DIR` to the real store left every other test in this file
+    `PACT_TEST_MEMORY_DIR` to the real store left every other test in this file
     GREEN, because the per-test autouse fixture overrides the variable anyway.
     The exposure that survives is narrower and still real: anything resolving
     OUTSIDE a fixture's reach — collection-time imports, session-scoped setup —
@@ -181,7 +181,7 @@ class TestTheSessionDefaultIsUnconditional:
             "unconditional assignment"
         )
         assert "setdefault(_MEMORY_DIR_ENV" not in source, (
-            "`setdefault` honours an inherited PACT_MEMORY_DIR, so a contributor "
+            "`setdefault` honours an inherited PACT_TEST_MEMORY_DIR, so a contributor "
             "who has relocated their own store would have collection-time "
             "resolution point at it. The fail direction is ALLOW and it is silent."
         )
@@ -252,7 +252,7 @@ class TestProductionStillResolvesTheRealStore:
         out = _run_child(
             "import sys; sys.path.insert(0, %r)\n"
             "import os\n"
-            "os.environ.pop('PACT_MEMORY_DIR', None)\n"
+            "os.environ.pop('PACT_TEST_MEMORY_DIR', None)\n"
             "from scripts.config import get_db_path\n"
             "print(get_db_path())\n" % str(SCRIPTS_PARENT),
             {},
@@ -342,7 +342,7 @@ class TestEachIsolationLayerHasAWitness:
         Asserts the override in force AT COLLECTION was the one the floor
         installs. Equality against the floor's own value is deliberate: a weaker
         'is set and is not the real store' check stays GREEN for a contributor
-        who exports `PACT_MEMORY_DIR` to some harmless directory of their own,
+        who exports `PACT_TEST_MEMORY_DIR` to some harmless directory of their own,
         which is precisely the inherited-value fail-open the floor exists to
         prevent.
         """

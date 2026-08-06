@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'skills', 'pact
 # collection failure. The literal is pinned against its source by
 # test_memory_store_isolation.py, so a rename fails loudly instead of silently
 # un-isolating every test.
-_MEMORY_DIR_ENV = "PACT_MEMORY_DIR"
+_MEMORY_DIR_ENV = "PACT_TEST_MEMORY_DIR"
 
 # Session-wide fallback store, created once and reused. See pytest_configure.
 _SESSION_MEMORY_DIR = os.path.join(

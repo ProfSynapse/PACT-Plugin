@@ -949,7 +949,7 @@ class TestLiveDbGuard:
         already been redirected.
 
         IT IS FALSE HERE, WHICH IS WHY THIS TEST BELONGS IN THIS CLASS. conftest
-        sets PACT_MEMORY_DIR for the whole suite, and the child inherits the
+        sets PACT_TEST_MEMORY_DIR for the whole suite, and the child inherits the
         environment, so the write this refusal prevents would have reached a tmp
         store and not the operator's. The message asserted the real store in the
         one place it was reliably wrong.

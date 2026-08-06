@@ -76,17 +76,17 @@ from pathlib import Path
 #
 # Keep this a REDIRECT, never a refusal: production is pathless by design, so a
 # resolver that refuses the real store breaks every production caller.
-MEMORY_DIR_ENV = "PACT_MEMORY_DIR"
+MEMORY_DIR_ENV = "PACT_TEST_MEMORY_DIR"
 
 
 def get_memory_dir() -> Path:
     """Return the base directory for all PACT memory data.
 
     Resolution order:
-      1. The `PACT_MEMORY_DIR` environment variable, when set and non-empty.
+      1. The `PACT_TEST_MEMORY_DIR` environment variable, when set and non-empty.
       2. `~/.claude/pact-memory`.
 
-    An empty value counts as unset, so `PACT_MEMORY_DIR=""` cannot silently
+    An empty value counts as unset, so `PACT_TEST_MEMORY_DIR=""` cannot silently
     relocate the store to the current directory.
     """
     override = os.environ.get(MEMORY_DIR_ENV)

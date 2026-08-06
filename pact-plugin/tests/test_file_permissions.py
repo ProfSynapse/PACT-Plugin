@@ -34,7 +34,7 @@ class TestDatabasePermissions:
         memory_dir = tmp_path / "pact-memory"
         db_path = memory_dir / "memory.db"
 
-        with patch.dict(os.environ, {"PACT_MEMORY_DIR": str(memory_dir)}):
+        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(memory_dir)}):
             from scripts.database import get_db_path
             result = get_db_path()
 
@@ -86,7 +86,7 @@ class TestSetupMemoryPermissions:
         """ensure_directories() should create directory with mode 0o700."""
         memory_dir = tmp_path / "pact-memory"
 
-        with patch.dict(os.environ, {"PACT_MEMORY_DIR": str(memory_dir)}):
+        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(memory_dir)}):
             from scripts.setup_memory import ensure_directories
             ensure_directories()
 
@@ -100,7 +100,7 @@ class TestSetupMemoryPermissions:
         """Calling ensure_directories() twice should not fail or change permissions."""
         memory_dir = tmp_path / "pact-memory"
 
-        with patch.dict(os.environ, {"PACT_MEMORY_DIR": str(memory_dir)}):
+        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(memory_dir)}):
             from scripts.setup_memory import ensure_directories
             ensure_directories()
             ensure_directories()
