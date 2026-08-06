@@ -35,7 +35,7 @@ except ImportError:
     import sqlite3
     SQLITE_EXTENSIONS_ENABLED = False
 
-from .config import DB_PATH, PACT_MEMORY_DIR
+from .config import get_memory_dir
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -99,9 +99,15 @@ class AmbiguousPrefixError(LookupError):
 
 
 def get_db_path() -> Path:
-    """Get the database file path, creating parent directories if needed."""
-    PACT_MEMORY_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return DB_PATH
+    """Get the database file path, creating parent directories if needed.
+
+    Resolves through `config.get_memory_dir()` on EVERY call. Holding the value
+    in a module constant is what let an import-time binding outlive a later
+    redirect, so the directory and the file are recomputed together here.
+    """
+    memory_dir = get_memory_dir()
+    memory_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return memory_dir / "memory.db"
 
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:

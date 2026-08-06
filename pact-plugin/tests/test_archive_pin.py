@@ -42,6 +42,7 @@ choice reviewable.
 import ast
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -937,6 +938,42 @@ class TestLiveDbGuard:
             f"variable was exported or inherited: {stderr[:400]}"
         )
 
+    def test_refusal_does_not_claim_the_write_would_reach_the_real_store(
+        self, tmp_path
+    ):
+        """The guard never resolves the default, so it cannot name the store.
+
+        SIBLING TO THE TEST ABOVE, AND THE SAME DEFECT ONE INFERENCE OVER. That
+        one pins the absence of "spawned from a pytest run". This pins the
+        absence of the OTHER inference the message used to draw -- that a write
+        would land in the real store -- which is false whenever the default has
+        already been redirected.
+
+        IT IS FALSE HERE, WHICH IS WHY THIS TEST BELONGS IN THIS CLASS. conftest
+        sets PACT_TEST_MEMORY_DIR for the whole suite, and the child inherits the
+        environment, so the write this refusal prevents would have reached a tmp
+        store and not the operator's. The message asserted the real store in the
+        one place it was reliably wrong.
+
+        The uncovered inference outlived the covered one because the test named
+        for this property pinned only the spelling that had already been caught.
+        """
+        proc = self._spawn_cli(tmp_path, with_pytest_var=True)
+        stderr = proc.stderr
+        # NON-VACUITY ARM, and it is not optional. The assertion below is an
+        # ABSENCE check, which an empty stderr satisfies for free -- a failed
+        # spawn would pass it while measuring nothing. This proves the refusal
+        # text is actually present before anything asserts on what it omits.
+        assert "UNSCOPED_TEST_DB" in stderr, (
+            "the guard did not fire, so the absence assertion below would "
+            f"measure an empty stderr rather than the refusal: {stderr[:400]}"
+        )
+        assert "would land in the real store" not in stderr, (
+            "the refusal asserts the write would reach the real store -- an "
+            "inference the guard cannot make, because it never resolves the "
+            f"default location: {stderr[:400]}"
+        )
+
     def test_refusal_does_not_advise_a_curator_to_scope_the_archive(
         self, tmp_path
     ):
@@ -961,6 +998,47 @@ class TestLiveDbGuard:
         )
         assert "unset PYTEST_CURRENT_TEST" in stderr, (
             f"the refusal never states the fix that preserves the pin: {stderr[:400]}"
+        )
+
+    def test_no_clause_sits_between_the_remedy_and_the_observed_value(
+        self, tmp_path
+    ):
+        """The remedy is followed by the observed value and nothing else.
+
+        WHY THIS IS STRUCTURAL RATHER THAN A BANNED PHRASE, and the reasoning
+        is the point. The clause removed here claimed two things the guard
+        never observed: that no test was in progress, and where the variable
+        came from. A pin on either wording is a pin on a SPELLING -- reword it
+        to say the same thing differently and the pin passes, which is the
+        exact defect the sibling above exists to catch. So this keys on
+        POSITION: the remedy sentence must be followed immediately by the
+        observed value, with only whitespace between. Any explanatory clause
+        inserted there fails, however it is worded.
+
+        ITS BOUND, STATED BECAUSE IT IS NOT THE FULL PROPERTY. This closes the
+        POSITION, not the CLASS. An unobservable claim placed elsewhere in the
+        message still passes. Making the class unrepresentable takes assembling
+        the message from the guard's observation set, so an unobserved claim
+        has no source to come from; that is a change to the guard rather than
+        to its message, and it is not what this test is.
+        """
+        proc = self._spawn_cli(tmp_path, with_pytest_var=True)
+        stderr = proc.stderr
+        # NON-VACUITY ARM. The assertion below is satisfied for free by an
+        # empty stderr from a failed spawn, so prove the refusal is present
+        # before asserting on the shape of its tail.
+        assert "UNSCOPED_TEST_DB" in stderr, (
+            "the guard did not fire, so the structural assertion below would "
+            f"measure an empty stderr rather than the refusal: {stderr[:400]}"
+        )
+        assert re.search(
+            r"unset PYTEST_CURRENT_TEST and run again\.\s*PYTEST_CURRENT_TEST=",
+            stderr,
+        ), (
+            "something sits between the remedy and the observed value. That "
+            "position held two claims the guard cannot make -- whether a test "
+            "is in progress, and where the variable came from -- and it is "
+            f"reserved so neither can return in any wording: {stderr[:400]}"
         )
 
     def test_the_curator_production_path_is_not_blocked(self, tmp_path):

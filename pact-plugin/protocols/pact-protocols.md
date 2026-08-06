@@ -951,6 +951,13 @@ The feature-level CalibrationRecord above coexists with per-dispatch variety sta
 
 **Why per-dimension rationales (not a single rationale)**: A single rationale field tolerates cargo-cult ("matches feature complexity" satisfies it). Four distinct rationale fields, one per dimension, force the orchestrator to articulate four independent judgments — cargo-culting all four with one phrase is mechanically incoherent (cannot coherently explain why novelty AND scope AND uncertainty AND risk are simultaneously "the same as feature" without exposing the copy-paste).
 
+**Write-time check on each rationale**: ask what the sentence is ABOUT. If it describes the thing being changed, reviewed, or built — its behaviour, its blast radius, the class its bug belongs to — it describes the topic, and it is not a rationale. A rationale describes the WORK: what THIS dispatch must do, must know, or must not get wrong.
+
+- FAILS, on a code review: "a wrong path resolution in production writes the store somewhere unintended" — that is the reviewed change's risk, not the review's.
+- PASSES: "the review's own risks are a probe that writes to the live store, and a finding that is missed."
+
+Portability is not the fault. A rationale that names a coupled file pair or a permanent context cost transfers to other dispatches on the same artifacts because that structure is stable, and it is still a rationale. The cost of a topic-rationale is not the score, which is typically correct either way — it is where attention goes: a rationale about production blast radius argues for scrutiny of the code, while a rationale about the review argues also for discipline about the reviewer's own commands.
+
 #### Q5 Dispatch Variety Calibration (Wrap-Up Aggregation)
 
 The wrap-up retrospective's Q5 reports the CALIBRATION DELTA — the feature-level variety estimate against the distribution of per-dispatch variety the arc actually produced. It does NOT report a stamping-compliance ratio: stamping is refused at the dispatch-wiring write per the Enforcement split above, so compliance has no variance left to measure. Whether the estimate was well-calibrated is the question enforcement cannot answer, and it is the one this question keeps.
