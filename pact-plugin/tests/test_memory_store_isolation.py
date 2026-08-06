@@ -82,12 +82,21 @@ def _session_floor_at_collection():
        test ever used, so an equality check against it can never pass -- and it
        would fail for a reason that has nothing to do with the layer under test.
        It also leaks an empty directory on every call.
-    2. AT COLLECTION RATHER THAN IN A TEST BODY. `TestTheConftestLiteralMatches
-       ItsSource` runs `import conftest`, which leaves TWO modules in
-       `sys.modules` sharing one `__file__`. A path-matching lookup performed
-       after that test has run finds both and cannot tell which one pytest
-       loaded. At collection only the loaded plugin exists, so the answer is
-       unambiguous. The lookup is order-dependent; the moment it runs is not.
+    2. AT COLLECTION, FOR TWO STRUCTURAL REASONS. The per-test fixture overwrites
+       this variable before any test body runs, so collection is the last moment
+       the session layer's value is readable at all (see `_STORE_AT_COLLECTION`).
+       And this helper cannot use `_loaded_conftest` below even if it wanted to:
+       `request` is a fixture, so it does not exist at module import, which is
+       why the path scan survives beside the deterministic lookup.
+
+       An earlier version of this note justified collection time by the absence
+       of a duplicate module, which a re-import in
+       `TestTheConftestLiteralMatchesItsSource` used to create. That re-import is
+       gone and the justification went with it: collection excludes a duplicate
+       made by a test BODY, but not one made at another module's IMPORT time by a
+       module collected earlier. No module does that today, which is contingent
+       rather than structural. The `len(found) != 1` check below is the detector
+       either way.
 
     Match on the resolved file path rather than on a module name, so this stays
     correct however pytest keys the module.
@@ -131,10 +140,34 @@ _RESOLVE_IN_CHILD = (
 )
 
 
+def _loaded_conftest(request):
+    """Return the conftest module pytest LOADED, never a fresh import.
+
+    A bare `import conftest` does NOT return that module. It builds a SECOND
+    object from the same file and re-executes the body, leaving two entries in
+    `sys.modules` for one `__file__`. That duplication has already cost twice:
+    it contaminated another test's module lookup order-dependently, and it made
+    a live detector look dead under mutation, because patching one object left
+    the other untouched.
+
+    THE LOOKUP FAILS LOUDLY ON PURPOSE. Every caller compares against the module
+    this returns, so a silent `None` would turn those assertions vacuous while
+    every arm stayed green -- strictly worse than the fresh import it replaces.
+    """
+    path = Path(__file__).parent / "conftest.py"
+    plugin = request.config.pluginmanager.get_plugin(str(path))
+    assert plugin is not None, (
+        f"pytest has no conftest plugin registered for {path}, so this helper "
+        "cannot reach the harness. Failing here is deliberate: the assertions "
+        "that call it would otherwise pass while comparing nothing."
+    )
+    return plugin
+
+
 class TestTheConftestLiteralMatchesItsSource:
     """conftest duplicates the variable name; a rename must not un-isolate."""
 
-    def test_conftest_env_name_equals_config_env_name(self):
+    def test_conftest_env_name_equals_config_env_name(self, request):
         """The duplicated literal is pinned to its source.
 
         `conftest.py` cannot import `scripts.config` at load time without making
@@ -142,8 +175,15 @@ class TestTheConftestLiteralMatchesItsSource:
         its own copy of the name. This test is what makes that copy safe: rename
         `MEMORY_DIR_ENV` without updating conftest and this fails loudly, rather
         than every test silently resolving the operator's real store again.
+
+        IT INSPECTS THE LOADED MODULE, AND THE MESSAGE BELOW IS WHY. That message
+        asserts a property of THIS RUN -- that every test is resolving the real
+        store. Only the object whose `pytest_configure` set the variable, and
+        whose autouse fixture sets it per test, can support that claim. A fresh
+        `import conftest` proves a fact about the FILE instead, from a copy with
+        no causal role in the isolation it is reporting on.
         """
-        import conftest
+        conftest = _loaded_conftest(request)
 
         assert conftest._MEMORY_DIR_ENV == MEMORY_DIR_ENV, (
             f"conftest isolates on {conftest._MEMORY_DIR_ENV!r} but the resolver "
@@ -170,10 +210,16 @@ class TestTheSessionDefaultIsUnconditional:
     against reintroducing a known fail-open, not a proof of the runtime property.
     """
 
-    def test_pytest_configure_assigns_rather_than_setdefaults(self):
+    def test_pytest_configure_assigns_rather_than_setdefaults(self, request):
         import inspect
 
-        import conftest
+        # THIS ASSERTION IS INDIFFERENT TO WHICH OBJECT IT GETS, because
+        # `inspect.getsource` resolves through `__file__` and both objects share
+        # one. The helper is used anyway: the duplication comes from the IMPORT
+        # STATEMENT, not from the assertion, so leaving a bare import here would
+        # keep building the second module and removing it from the other test
+        # would remove none of the duplication.
+        conftest = _loaded_conftest(request)
 
         source = inspect.getsource(conftest.pytest_configure)
         assert "os.environ[_MEMORY_DIR_ENV] = " in source, (
