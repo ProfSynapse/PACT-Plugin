@@ -42,6 +42,22 @@ from pathlib import Path
 # precedence over `Path.home()` in `get_claude_config_dir`, so honouring that
 # variable would shadow the home-redirect convention the rest of the suite is
 # built on. Narrow scope is what makes this variable safe to add.
+#
+# AN EXPLICIT DISCRIMINATOR BEATS AN INFERRED ONE, and that is the load-bearing
+# reason for this design rather than the relocation feature it also provides.
+# Isolating a test process from the real store looks like it needs the code to
+# work out whether it is under test, and every mechanism for working that out
+# can be WRONG ABOUT THE WORLD: `_refuse_live_db_under_pytest` in cli.py keys on
+# an inherited `PYTEST_CURRENT_TEST`, and its own docstring records that the
+# variable is absent during collection and around session-scoped setup, and that
+# its fail direction is ALLOW.
+#
+# This variable removes the inference entirely. A test harness SETS it and a
+# production process does not, so there is nothing to detect and nothing to get
+# wrong: the resolver cannot be mistaken about whether a variable was set. That
+# also dissolves what looks like a conflict between isolating tests and keeping
+# production working. They are not in tension, because they are distinguished by
+# an explicit signal rather than by a guess about the caller.
 MEMORY_DIR_ENV = "PACT_MEMORY_DIR"
 
 
