@@ -121,6 +121,26 @@ _BUDGET_WARNING_SHAPE = (
 # text a user wrote inside a pin body. Compare `_find_declared_end_offset`:
 # a predicate's tolerance follows its failure direction, never its resemblance
 # to a predicate that looks like it.
+#
+# THE SYMPTOM THAT WILL MAKE SOMEBODY WANT TO LOOSEN THIS, AND WHY TO REFUSE.
+# A user who moves a warning line below the head keeps it, because this
+# predicate is anchored and cannot reach it. The report arrives as "the hook
+# shows two warnings", or as "the hook reports a breach my own pins did not
+# cause", because that line is measured with the rest of the body. Both are
+# real, and both are accepted. The law is CONDITIONAL, not a constant:
+#     count = N + (1 if estimate_tokens(user_text + stranded) > BUDGET else 0)
+# where N is the number of lines the user moved below the head. No pass raises
+# the count.
+#
+# DO NOT WIDEN THIS PATTERN TO REACH THEM. It DELETES, so a wider anchor reaches
+# text a user wrote inside a pin body, and this file is frequently gitignored.
+# The correct repair separates the two questions: EXCLUDE lines of this shape
+# from the COUNT wherever they sit, and keep the DELETE on the contiguous head
+# run. Apply that exclusion to a THROWAWAY COPY at the measurement site. Never
+# modify `pinned_content` itself -- `entry_starts` holds offsets into that
+# string and the stale-marker loop writes at those offsets, so an in-place
+# exclusion puts markers in wrong positions. The exclusion looks like a pure
+# read, which is what makes that easy to miss.
 _LEADING_BUDGET_WARNING_RE = re.compile(rf"\A{_BUDGET_WARNING_SHAPE}")
 
 # RECOGNITION ONLY. NEVER GIVE THIS PATTERN TO CODE THAT DELETES. `(?m)^`
@@ -281,8 +301,11 @@ def _strip_budget_warnings(pinned_content: str) -> str:
 
     Returns the body a user would have written, with this module's own earlier
     reports taken back out. Callers measure the RESULT, never the input, so the
-    reported token count is a pure function of the user's pinned content and
-    can never include a previous report of itself.
+    reported count never includes the warning this module wrote at the HEAD. It
+    is NOT a pure function of the user's own text: a warning a user has moved
+    below the head survives this strip and is measured with the body. The note
+    at `_LEADING_BUDGET_WARNING_RE` says why the repair for that is not a wider
+    strip.
 
     A run, not a single line, because taking back N lines is the exact inverse
     of writing one -- so the function stays correct if a document somehow
@@ -712,8 +735,11 @@ def apply_staleness_markings(
       - THE NUMBER CANNOT GO STALE. It is recomputed against whatever the body
         holds now, so it tracks a growing or shrinking pinned section.
       - THE WARNING CANNOT INFLATE ITS OWN COUNT. The measured body never
-        contains a warning, on pass 1 or pass 500, so the number does not creep
-        upward as the report of it is re-read.
+        contains the warning at the HEAD, on pass 1 or pass 500, so the number
+        does not creep upward as the report of it is re-read. A warning a user
+        has moved below the head IS measured, and it is a FIXED contribution:
+        this module writes only at the head, and the head is taken back before
+        each measurement, so no pass can add a second one.
       - THE PASS IS IDEMPOTENT BY CONSTRUCTION, not by a guard. The emitted line
         is a pure function of the user's pinned body, so a second pass over
         unchanged pins produces identical bytes and writes nothing.
@@ -776,9 +802,11 @@ def apply_staleness_markings(
 
     total_stale = already_stale + len(stale_entries)
 
-    # Measure the WARNING-FREE body. Step 1 removed any earlier warning, so
-    # this holds on every pass and not only on the first one -- which is the
-    # hazard the old presence guard was reaching for, and missed.
+    # Measure the body with the HEAD warning taken back. Step 1 removes the
+    # leading run on every pass and not only on the first one, which is the
+    # hazard the old presence guard reached for and missed. A warning a user has
+    # moved below the head is NOT removed and IS measured. That is the accepted
+    # residual.
     pinned_tokens = estimate_tokens(pinned_content)
     budget_warning = ""
     if pinned_tokens > PINNED_CONTEXT_TOKEN_BUDGET:
