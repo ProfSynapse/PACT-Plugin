@@ -167,8 +167,10 @@ def _refuse_live_db_under_pytest(db_path) -> None:
     _error(
         "UNSCOPED_TEST_DB",
         "refusing to open the default memory database: PYTEST_CURRENT_TEST "
-        "is set in this process's environment and no --db-path was given. "
-        "Those two facts are the whole of what this guard observed. It does "
+        "is set in this process's environment, no --db-path was given, and "
+        "`pytest` is absent from this interpreter, which is what scopes this "
+        "guard to spawned children. Those three facts are the whole of what "
+        "it observed. It does "
         "NOT resolve the default location, so it cannot say WHICH database a "
         "write would reach: with PACT_TEST_MEMORY_DIR set the default is already "
         "redirected, and without it the default is the real store. If this "
@@ -176,9 +178,8 @@ def _refuse_live_db_under_pytest(db_path) -> None:
         "--db-path pointing at a temporary database. If you are ARCHIVING A "
         "PIN and meant to use the real store, do NOT pass --db-path -- that "
         "would archive into a throwaway database and make the pin eligible "
-        "for deletion; instead unset PYTEST_CURRENT_TEST and run again (it is "
-        "set here without a test in progress, most likely exported or "
-        f"inherited from a parent shell). PYTEST_CURRENT_TEST={current_test}",
+        "for deletion; instead unset PYTEST_CURRENT_TEST and run again. "
+        f"PYTEST_CURRENT_TEST={current_test}",
         exit_code=2,
     )
 
