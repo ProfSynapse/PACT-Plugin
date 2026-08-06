@@ -48,21 +48,42 @@ from staleness import _BUDGET_WARNING_PREFIX
 _WARNING_NUMBER_RE = re.compile(re.escape(_BUDGET_WARNING_PREFIX) + r" ~(\d+) tokens")
 
 
-def over_budget_body(margin_words=200):
+# Words added above the budget so the fixture clears it comfortably rather than
+# at the boundary. The limit in the docstring below is stated in terms of it.
+_OVER_BUDGET_MARGIN_WORDS = 200
+
+
+def over_budget_body():
     """Build a pin body whose estimated tokens exceed the pinned-context budget.
 
     THE MAGNITUDE IS DERIVED FROM THE CONSTANT, NEVER WRITTEN AS A LITERAL.
     `estimate_tokens` is `int(words * 1.3)`, so a word count above the budget
     always estimates above the budget, whatever value the budget takes next.
 
-    The assertion makes that structural. A hard-coded fixture went silently
-    under a raised threshold once already -- it still passed, while no longer
-    testing the thing its comment claimed -- and only a check against the live
-    constant can refuse to repeat that.
+    THE DERIVATION IS WHAT TRACKS A RAISED BUDGET. A hard-coded fixture went
+    silently under a raised threshold once already -- it still passed, while no
+    longer testing the thing its comment claimed -- and a body built from the
+    live constant is what refuses to repeat that.
+
+    WHAT THE ASSERT BELOW GUARDS, WHICH IS NOT THE BUDGET. It fires when
+    `int((B + m) * c) <= B`, where B is the budget, m is
+    `_OVER_BUDGET_MARGIN_WORDS` and c is the estimator coefficient. At a fixed
+    margin that makes it a tripwire on c, not on B. Because `int` truncates,
+    that condition is the same as `(B + m) * c < B + 1`, so the closed-form
+    boundary is `c < (B + 1) / (B + m)` -- exactly 3201/3400 at the shipped
+    values, or approximately 0.9415. Derive that from the fire condition rather
+    than trusting the fraction; note in particular that the boundary is NOT
+    `B / (B + m)`, and that a decimal is never what the predicate compares
+    against. It cannot fire for ANY budget value at the shipped coefficient of
+    1.3. It is live and not dead -- drop the coefficient below the boundary and
+    this goes red, which a companion test in this file measures rather than
+    asserts. Keep it for that reason. Do not read it as a check that the fixture
+    still exceeds a raised budget: the derivation above supplies that, and the
+    assert adds nothing to it.
     """
     from staleness import PINNED_CONTEXT_TOKEN_BUDGET, estimate_tokens
 
-    body = "word " * (PINNED_CONTEXT_TOKEN_BUDGET + margin_words)
+    body = "word " * (PINNED_CONTEXT_TOKEN_BUDGET + _OVER_BUDGET_MARGIN_WORDS)
     assert estimate_tokens(body) > PINNED_CONTEXT_TOKEN_BUDGET, (
         "fixture no longer exceeds the budget it is derived from"
     )
@@ -73,6 +94,71 @@ def warning_number(text):
     """Return the token figure carried by the warning comment, or None."""
     match = _WARNING_NUMBER_RE.search(text)
     return int(match.group(1)) if match else None
+
+
+class TestOverBudgetBodyAssertIsLive:
+    """Non-vacuity for the assert inside `over_budget_body`.
+
+    THE ASSERT CANNOT FIRE AT SHIPPED VALUES, so nothing else in this suite
+    shows that it still works. A check that cannot fail on any input the system
+    produces is not a check, and this is what makes it a guard again. The same
+    discipline is applied to the caps band elsewhere in this file, so this is a
+    local convention rather than a new one.
+
+    ONE COUPLING MAKES THE PATCH REACH THE FIXTURE. `over_budget_body` imports
+    `estimate_tokens` INSIDE its own body, so the name is looked up on the
+    `staleness` module at CALL time and the patch below reaches it. Hoisting
+    that import to module scope, or inlining the arithmetic, stops the patch
+    reaching it. Both of those were measured, and both make this test go RED
+    rather than quiet, because an arm that expects a raise fails when the raise
+    stops happening. The coupling cannot be broken silently.
+
+    THE RESIDUAL RISK RUNS THE OTHER WAY: an arm that expects a raise can pass
+    on the WRONG raise. The negative arm was checked to fire at the fixture's
+    own assert and to carry its message, not some unrelated failure.
+    """
+
+    def test_the_assert_fires_when_the_coefficient_drops_below_the_boundary(self):
+        """Below `(B + 1) / (B + m)` the fixture must refuse to build."""
+        from staleness import PINNED_CONTEXT_TOKEN_BUDGET
+
+        boundary = (PINNED_CONTEXT_TOKEN_BUDGET + 1) / (
+            PINNED_CONTEXT_TOKEN_BUDGET + _OVER_BUDGET_MARGIN_WORDS
+        )
+        below = boundary - 0.01
+        with patch(
+            "staleness.estimate_tokens",
+            lambda text: int(len(text.split()) * below),
+        ):
+            with pytest.raises(AssertionError):
+                over_budget_body()
+
+    def test_the_assert_stays_silent_just_above_the_boundary(self):
+        """The positive arm. Without it, a fixture broken for any OTHER reason
+        would satisfy the negative arm above and read as a working guard."""
+        from staleness import PINNED_CONTEXT_TOKEN_BUDGET
+
+        boundary = (PINNED_CONTEXT_TOKEN_BUDGET + 1) / (
+            PINNED_CONTEXT_TOKEN_BUDGET + _OVER_BUDGET_MARGIN_WORDS
+        )
+        above = boundary + 0.01
+        with patch(
+            "staleness.estimate_tokens",
+            lambda text: int(len(text.split()) * above),
+        ):
+            assert over_budget_body()
+
+    def test_the_shipped_coefficient_sits_above_the_boundary(self):
+        """Pins the docstring's claim that the assert cannot fire as shipped."""
+        from staleness import PINNED_CONTEXT_TOKEN_BUDGET, estimate_tokens
+
+        words = PINNED_CONTEXT_TOKEN_BUDGET + _OVER_BUDGET_MARGIN_WORDS
+        shipped_coefficient = estimate_tokens("word " * words) / words
+        boundary = (PINNED_CONTEXT_TOKEN_BUDGET + 1) / words
+        assert shipped_coefficient > boundary, (
+            "the estimator coefficient has dropped to the boundary; the "
+            "fixture assert is now one edit from firing on shipped values"
+        )
 
 
 class TestCheckPinnedStaleness:
