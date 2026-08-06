@@ -31,9 +31,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 # Add working_memory scripts directory to path for twin-copy equivalence test
 sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts"))
 
+# THE ONE SPELLING OF THE WARNING MARKER, imported rather than repeated. Every
+# assertion and fixture below is built from this, so a rename in the source
+# cannot leave this file describing text the module no longer writes.
+#
+# THE FAILURE IT PREVENTS IS ASYMMETRIC, and that asymmetry is the whole reason
+# to import rather than copy. A POSITIVE assertion against a stale literal fails
+# loudly and tells you what happened. A NEGATIVE one passes VACUOUSLY: the old
+# text is absent because nothing writes it any more, which is exactly what the
+# assertion was written to celebrate. A suite that goes green on a renamed
+# constant is worse than one that goes red.
+from staleness import _BUDGET_WARNING_PREFIX
+
 # Pulls the token figure out of a warning comment, so a test can compare the
 # number in the file against the number in the returned status string.
-_WARNING_NUMBER_RE = re.compile(r"<!-- WARNING: Pinned context ~(\d+) tokens")
+_WARNING_NUMBER_RE = re.compile(re.escape(_BUDGET_WARNING_PREFIX) + r" ~(\d+) tokens")
 
 
 def over_budget_body(margin_words=200):
@@ -229,10 +241,25 @@ class TestCheckPinnedStaleness:
 
         # File should have budget warning comment
         content = claude_md.read_text(encoding="utf-8")
-        assert "<!-- WARNING: Pinned context" in content
+        assert _BUDGET_WARNING_PREFIX in content
 
     def test_under_budget_no_warning(self, tmp_path):
-        """Should not add warning when pinned content is within budget."""
+        """Should not add warning when pinned content is within budget.
+
+        A PURE NEGATIVE. This arm asserts only that the warning is ABSENT, and
+        absence has many causes: a renamed constant, a broken region parse, or
+        the hook never running at all. Measured, with the write path neutered so
+        that no warning is ever emitted, this test still PASSED. It cannot fail
+        when its instrument is dead, so on its own it is not evidence.
+
+        ITS NON-VACUITY IS ESTABLISHED ELSEWHERE, by
+        `TestBudgetWarningInteractions.test_under_budget_absence_is_caused_by_the_budget`,
+        which drives the same shape OVER the budget in the same test and
+        requires the warning to appear. Read the two together: that arm shows
+        the instrument fires, and this one pins the under-budget case. Kept as
+        a labelled regression pin rather than repaired in place, so that a
+        reviewed assertion is not altered mid-remediation.
+        """
         from session_init import check_pinned_staleness
 
         claude_md = self._create_project_claude_md(tmp_path, (
@@ -246,7 +273,7 @@ class TestCheckPinnedStaleness:
             result = check_pinned_staleness()
 
         content = claude_md.read_text(encoding="utf-8")
-        assert "<!-- WARNING: Pinned context" not in content
+        assert _BUDGET_WARNING_PREFIX not in content
 
     def test_mixed_entries_only_old_flagged(self, tmp_path):
         """With mixed recent and old entries, only old ones should be flagged."""
@@ -471,7 +498,7 @@ class TestBudgetWarningIdempotency:
             result2 = check_pinned_staleness()
 
         content_after = claude_md.read_text(encoding="utf-8")
-        warning_count = content_after.count("<!-- WARNING: Pinned context")
+        warning_count = content_after.count(_BUDGET_WARNING_PREFIX)
         assert warning_count == 1, (
             f"Expected exactly 1 budget warning comment, found {warning_count}"
         )
@@ -511,7 +538,7 @@ class TestBudgetWarningRefresh:
 
         body = over_budget_body()
         stale_warning = (
-            "<!-- WARNING: Pinned context ~7 tokens (budget: 5). "
+            f"{_BUDGET_WARNING_PREFIX} ~7 tokens (budget: 5). "
             "Consider archiving stale pins. -->\n"
         )
         claude_md = self._create_project_claude_md(
@@ -523,7 +550,7 @@ class TestBudgetWarningRefresh:
         check_pinned_staleness(claude_md_path=claude_md)
 
         content = claude_md.read_text(encoding="utf-8")
-        assert content.count("<!-- WARNING: Pinned context") == 1
+        assert content.count(_BUDGET_WARNING_PREFIX) == 1
         assert warning_number(content) == estimate_tokens(f"### Big Feature\n{body}\n\n")
 
     def test_status_string_agrees_with_file_comment(self, tmp_path):
@@ -559,7 +586,7 @@ class TestBudgetWarningRefresh:
             tmp_path, self._pinned_doc(body)
         )
         check_pinned_staleness(claude_md_path=claude_md)
-        assert "<!-- WARNING: Pinned context" in claude_md.read_text(encoding="utf-8")
+        assert _BUDGET_WARNING_PREFIX in claude_md.read_text(encoding="utf-8")
 
         # The user archives the bulk of the pin.
         shrunk = claude_md.read_text(encoding="utf-8").replace(body, "a short pin")
@@ -568,7 +595,7 @@ class TestBudgetWarningRefresh:
         result = check_pinned_staleness(claude_md_path=claude_md)
 
         content = claude_md.read_text(encoding="utf-8")
-        assert "<!-- WARNING: Pinned context" not in content
+        assert _BUDGET_WARNING_PREFIX not in content
         assert result is None or "budget" not in result.lower()
 
     def test_warning_removed_when_last_pin_deleted(self, tmp_path):
@@ -584,7 +611,7 @@ class TestBudgetWarningRefresh:
             tmp_path, self._pinned_doc(body)
         )
         check_pinned_staleness(claude_md_path=claude_md)
-        assert "<!-- WARNING: Pinned context" in claude_md.read_text(encoding="utf-8")
+        assert _BUDGET_WARNING_PREFIX in claude_md.read_text(encoding="utf-8")
 
         emptied = claude_md.read_text(encoding="utf-8").replace(
             f"### Big Feature\n{body}\n", ""
@@ -594,7 +621,7 @@ class TestBudgetWarningRefresh:
 
         check_pinned_staleness(claude_md_path=claude_md)
 
-        assert "<!-- WARNING: Pinned context" not in claude_md.read_text(
+        assert _BUDGET_WARNING_PREFIX not in claude_md.read_text(
             encoding="utf-8"
         )
 
@@ -618,7 +645,7 @@ class TestBudgetWarningRefresh:
         check_pinned_staleness(claude_md_path=claude_md)
         after_third = claude_md.read_text(encoding="utf-8")
 
-        assert after_third.count("<!-- WARNING: Pinned context") == 1
+        assert after_third.count(_BUDGET_WARNING_PREFIX) == 1
         assert after_third == after_first, "a later pass rewrote a settled document"
 
     def test_entryless_section_never_gains_a_warning(self, tmp_path):
@@ -662,7 +689,7 @@ class TestBudgetWarningRefresh:
         from staleness import check_pinned_staleness
 
         quoted = (
-            "<!-- WARNING: Pinned context ~99 tokens (budget: 1). "
+            f"{_BUDGET_WARNING_PREFIX} ~99 tokens (budget: 1). "
             "Consider archiving stale pins. -->"
         )
         claude_md = self._create_project_claude_md(
@@ -678,7 +705,7 @@ class TestBudgetWarningRefresh:
         content = claude_md.read_text(encoding="utf-8")
         assert quoted in content, "the strip deleted a line a user wrote"
         # One line the hook owns, plus the one the user quoted.
-        assert content.count("<!-- WARNING: Pinned context") == 2
+        assert content.count(_BUDGET_WARNING_PREFIX) == 2
 
 
 class TestStalenessErrorPaths:
@@ -1862,6 +1889,169 @@ class TestPinCapsTwinCopyDrift:
         )
 
 
+# Chars per word in real pinned prose. FROZEN, not measured at test time: the
+# corpus it describes is a user's CLAUDE.md, which is gitignored and absent from
+# a fresh clone, so measuring it here would make this file pass locally and
+# error in CI -- a test that fails for a reason unrelated to its invariant
+# teaches people to ignore it.
+#
+# HOW IT WAS OBTAINED, so it can be re-derived rather than trusted: measured
+# over the STRIPPED body text, which is what pin_caps._extract_body_chars
+# returns after removing the per-line date comment and the STALE marker, across
+# a real twelve-pin document. 12,306 chars over 1,757 words.
+#
+# The value is not the fragile part; the POPULATION is. Re-derive it the same
+# way. test_measurement_method_matches_the_enforced_population below pins the
+# method, so a later re-derivation cannot quietly use a different set of bytes.
+_PINNED_PROSE_CHARS_PER_WORD = 7.004
+
+# Heading line plus date-comment line, in words, for ONE pin. Expressed per-pin
+# because that is what it is: a flat total would be correct only at the pin
+# count it happened to be authored against, and would drift silently from every
+# other count while the test stayed green.
+_PIN_CHROME_WORDS = 32
+
+# Where the advisory must sit inside the space the caps allow.
+_ADVISORY_FLOOR_FRACTION = 0.5
+
+
+class TestPinnedBudgetAgainstCapsCoherence:
+    """The advisory budget and the enforcement caps must not contradict.
+
+    PINNED_CONTEXT_TOKEN_BUDGET advises a user to archive. PIN_COUNT_CAP and
+    PIN_SIZE_CAP refuse an edit. Nothing in the repo related the two, and they
+    did contradict: a budget of 1200 against a twelve-by-1500 cap meant a
+    document FULLY LEGAL under the caps exceeded the advisory by more than
+    twice, so the advisory fired on documents it had no business flagging and
+    could not be satisfied without deleting legal content.
+
+    THE RELATION IS PINNED HERE, NOT THE VALUE. Deriving the budget from the
+    caps was considered and declined: a budget at or above the derived cost can
+    only fire once a document is at full legal capacity, which is the point
+    where the caps are already refusing edits and the advice arrives at the
+    wall. Advising earlier requires a FRACTION of the derived cost, so a free
+    coefficient is not removed by deriving -- it only moves.
+
+    WHAT THIS DESIGN ACHIEVES, which is less than eliminating the free number
+    and is the most that was available: the coefficient sits over a quantity
+    computed from the caps rather than over a measured document, so it cannot
+    go stale as prose changes; and the band is wide enough that being wrong
+    about the coefficient by a tenth changes no verdict.
+    """
+
+    def _derived_ceiling(self):
+        """Estimated tokens of a document sitting at full legal capacity.
+
+        Routed through the shipped `estimate_tokens` rather than repeating its
+        coefficient, so the ceiling follows the estimator if the estimator
+        changes.
+        """
+        import pin_caps
+        from staleness import estimate_tokens
+
+        body_words = (
+            pin_caps.PIN_COUNT_CAP
+            * pin_caps.PIN_SIZE_CAP
+            / _PINNED_PROSE_CHARS_PER_WORD
+        )
+        chrome_words = pin_caps.PIN_COUNT_CAP * _PIN_CHROME_WORDS
+        # round, not int: truncating the word count before the estimator
+        # truncates a second time and lands two tokens below the figure every
+        # written record of this decision carries.
+        return estimate_tokens("w " * round(body_words + chrome_words))
+
+    def test_budget_is_below_the_cost_of_a_maximally_legal_document(self):
+        """Above this, the advisory can never fire before the caps bind."""
+        from staleness import PINNED_CONTEXT_TOKEN_BUDGET
+
+        ceiling = self._derived_ceiling()
+        assert PINNED_CONTEXT_TOKEN_BUDGET < ceiling, (
+            f"PINNED_CONTEXT_TOKEN_BUDGET ({PINNED_CONTEXT_TOKEN_BUDGET}) is at "
+            f"or above the cost of a document at full legal capacity "
+            f"({ceiling}). The advisory could then only fire once PIN_COUNT_CAP "
+            f"and PIN_SIZE_CAP are already refusing edits. Lower the budget, or "
+            f"revisit the caps."
+        )
+
+    def test_budget_is_above_the_advisory_floor(self):
+        """Below this, the advisory fires on documents that are merely healthy."""
+        from staleness import PINNED_CONTEXT_TOKEN_BUDGET
+
+        floor = _ADVISORY_FLOOR_FRACTION * self._derived_ceiling()
+        assert PINNED_CONTEXT_TOKEN_BUDGET > floor, (
+            f"PINNED_CONTEXT_TOKEN_BUDGET ({PINNED_CONTEXT_TOKEN_BUDGET}) is at "
+            f"or below {floor:.0f}, so it flags documents well inside what the "
+            f"caps permit. If PIN_COUNT_CAP or PIN_SIZE_CAP moved, the budget "
+            f"needs revisiting in the same commit."
+        )
+
+    def test_the_band_rejects_the_value_it_was_written_to_catch(self):
+        """Non-vacuity, carried in the suite rather than run once by hand.
+
+        The historical budget of 1200 is the incoherence this guard exists to
+        refuse. If a future edit widens the band until 1200 sits inside it, the
+        guard still passes its other two arms while having stopped guarding.
+        """
+        historical_budget = 1200
+        ceiling = self._derived_ceiling()
+        floor = _ADVISORY_FLOOR_FRACTION * ceiling
+        assert not (floor < historical_budget < ceiling), (
+            f"the band ({floor:.0f}, {ceiling}) now ACCEPTS the historical 1200, "
+            f"so it no longer detects the contradiction it was written for"
+        )
+
+    def test_measurement_method_matches_the_enforced_population(self):
+        """The conversion figure must describe the bytes the cap counts.
+
+        `_PINNED_PROSE_CHARS_PER_WORD` converts a CHAR cap into the WORD unit
+        the budget is expressed in. That conversion means something only if the
+        text it was measured over is the same text PIN_SIZE_CAP is enforced
+        against. This asserts the reconstruction used to obtain it against the
+        value the shipped parser reports, for every pin of a synthetic
+        document.
+
+        Stated without a named failure mode on purpose: measure over the
+        population the constant is defined on, and assert the reconstruction
+        against the shipped value.
+        """
+        import pin_caps
+
+        pins_text = ""
+        for i in range(pin_caps.PIN_COUNT_CAP):
+            # Exercise both strip paths the enforced value applies: the longer
+            # reconfirmed date-comment spelling, and a STALE marker.
+            if i % 3 == 0:
+                comment = (
+                    f"<!-- pinned: 2026-01-0{i % 9 + 1}, reconfirmed: 2026-02-01 "
+                    f"because it still answers a live question -->"
+                )
+            else:
+                comment = f"<!-- pinned: 2026-01-0{i % 9 + 1} -->"
+            stale = "<!-- STALE: Last relevant 2026-01-01 -->" if i % 4 == 0 else ""
+            pins_text += (
+                f"{comment}\n### Pin {i}\n{stale}\nbody words for pin {i} here\n\n"
+            )
+
+        pins = pin_caps.parse_pins(pins_text)
+        assert len(pins) == pin_caps.PIN_COUNT_CAP, (
+            "fixture did not parse into the expected number of pins; the "
+            "control cannot certify a population it did not build"
+        )
+
+        for pin in pins:
+            rebuilt = "\n".join(
+                pin_caps._DATE_COMMENT_RE.sub("", line)
+                for line in pin.body.splitlines()
+            )
+            rebuilt = pin_caps._STALE_MARKER_RE.sub("", rebuilt).strip()
+            assert len(rebuilt) == pin.body_chars, (
+                f"the reconstruction used to measure "
+                f"_PINNED_PROSE_CHARS_PER_WORD counts a different set of bytes "
+                f"than pin_caps reports for {pin.heading!r}: rebuilt "
+                f"{len(rebuilt)} vs body_chars {pin.body_chars}"
+            )
+
+
 class TestFileLockTwinCopyDrift:
     """Drift detection for the file_lock twin vendored into working_memory.
 
@@ -2145,3 +2335,300 @@ class TestProjectRootLayoutKnowledgeDrift:
                 f"({_DOT_CLAUDE_RELATIVE!r}) — a third supported location or a "
                 f"rename of that constant diverges here silently"
             )
+
+
+def at_budget_body(prefix=""):
+    """Build the LARGEST pin body that still sits within the budget.
+
+    DERIVED BY SEARCH FROM THE LIVE CONSTANT, so it follows the budget to
+    whatever value it takes next, and it assumes nothing about the shape of
+    `estimate_tokens`. The two assertions below are real boundary checks and
+    CAN fire: the first if the search overshot, the second if one more word
+    does not cross. Together they pin this fixture to the exact edge rather
+    than merely somewhere below it.
+    """
+    from staleness import PINNED_CONTEXT_TOKEN_BUDGET, estimate_tokens
+
+    # A body of BUDGET words always estimates above BUDGET, so it bounds the
+    # search from above without naming a number.
+    low, high = 1, PINNED_CONTEXT_TOKEN_BUDGET
+    while low < high:
+        mid = (low + high + 1) // 2
+        if estimate_tokens(prefix + "word " * mid) <= PINNED_CONTEXT_TOKEN_BUDGET:
+            low = mid
+        else:
+            high = mid - 1
+
+    body = prefix + "word " * low
+    assert estimate_tokens(body) <= PINNED_CONTEXT_TOKEN_BUDGET, (
+        "at-budget fixture is already over the budget"
+    )
+    assert estimate_tokens(body + "word ") > PINNED_CONTEXT_TOKEN_BUDGET, (
+        "at-budget fixture is not at the edge -- one more word must cross it"
+    )
+    return body
+
+
+class TestBudgetWarningInteractions:
+    """The cells where the warning path MEETS the rest of this module.
+
+    Every arm here exists because a mutation of a property the source calls
+    load-bearing survived the whole suite. A comment is a claim; these are the
+    witnesses. Each docstring names the mutation it kills, so a later reader can
+    re-run the counter-test instead of re-deriving it.
+    """
+
+    def _create_project_claude_md(self, tmp_path, content):
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text(content, encoding="utf-8")
+        return claude_md
+
+    def _warning_line(self, tokens=9, budget=5):
+        """A warning line built from the SOURCE constant, never from a copy.
+
+        Uses the module-level `_BUDGET_WARNING_PREFIX` import. The body shape
+        matters as well as the prefix: the strip predicate requires a
+        well-formed `~N tokens (budget: N)` payload, so a line assembled by hand
+        would exercise a different branch from the one the hook writes.
+        """
+        return (
+            f"{_BUDGET_WARNING_PREFIX} ~{tokens} tokens (budget: {budget}). "
+            "Consider archiving stale pins. -->\n"
+        )
+
+    def _count_warnings(self, text):
+        return text.count(_BUDGET_WARNING_PREFIX)
+
+    def _doc(self, body):
+        """A document whose pinned region is bounded by a following section."""
+        return f"# Project Memory\n\n## Pinned Context\n\n{body}\n## Working Memory\nwm\n"
+
+    # ------------------------------------------------------------------
+    # The warning path meeting the stale-marker path.
+    # ------------------------------------------------------------------
+
+    def test_stale_marker_survives_a_leading_warning(self, tmp_path):
+        """A document with BOTH a warning and a stale entry must still be marked.
+
+        KILLS THE ORDER MUTATION. `apply_staleness_markings` strips the warning
+        BEFORE it takes entry offsets, because `entry_starts` holds offsets into
+        that string. Move the strip after the scan and the stale marker is
+        silently dropped -- one becomes zero, which is this module's primary
+        function failing quietly.
+
+        Measured before this arm existed: that inversion was killed by NO test
+        in the suite. Both arms were run over the full suite in one environment
+        and the failed sets came back byte-identical, so the test set did not
+        distinguish the two programs.
+        """
+        from staleness import check_pinned_staleness
+
+        claude_md = self._create_project_claude_md(
+            tmp_path,
+            self._doc(
+                self._warning_line()
+                + "### Old Decision\nPR #123, merged 2020-01-01\n"
+                + f"### Big Feature\n{over_budget_body()}\n"
+            ),
+        )
+
+        check_pinned_staleness(claude_md_path=claude_md)
+
+        content = claude_md.read_text(encoding="utf-8")
+        assert content.count("<!-- STALE: Last relevant 2020-01-01 -->") == 1, (
+            "the stale marker was dropped -- entry offsets and the stripped "
+            "body have gone out of step"
+        )
+        assert "PR #123, merged 2020-01-01" in content
+        assert self._count_warnings(content) == 1
+
+    # ------------------------------------------------------------------
+    # The strip removes a RUN, not a line.
+    # ------------------------------------------------------------------
+
+    def test_stacked_warnings_collapse_to_one(self, tmp_path):
+        """Two warnings at the head must BOTH be taken back.
+
+        KILLS THE SINGLE-SHOT STRIP. `_strip_budget_warnings` loops on purpose,
+        so that removing N lines is the exact inverse of writing one and no
+        partial residue survives. Replace the loop with a single match and this
+        document keeps a stale line forever; nothing else in the suite notices.
+        """
+        from staleness import check_pinned_staleness
+
+        claude_md = self._create_project_claude_md(
+            tmp_path,
+            self._doc(
+                self._warning_line(tokens=9)
+                + self._warning_line(tokens=11)
+                + f"### Big Feature\n{over_budget_body()}\n"
+            ),
+        )
+
+        check_pinned_staleness(claude_md_path=claude_md)
+
+        content = claude_md.read_text(encoding="utf-8")
+        assert self._count_warnings(content) == 1
+        # Neither stale figure survives: the run went, not merely its head.
+        assert "~9 tokens" not in content
+        assert "~11 tokens" not in content
+
+    # ------------------------------------------------------------------
+    # The accepted residual. The count is CONDITIONAL, not a constant.
+    # ------------------------------------------------------------------
+    #
+    #   count = N + (1 if estimate_tokens(user_text + stranded) > BUDGET else 0)
+    #
+    # N is the number of warnings a user has MOVED below the head, where the
+    # anchored strip cannot reach them. The arms below pin both halves of that
+    # conditional and the fact that a pass never raises the count. A single arm
+    # would state a ceiling instead of a law: two correct measurements of this
+    # behaviour, taken at N=1 and N=3, once read as a contradiction for exactly
+    # that reason.
+
+    def test_no_warning_when_the_body_sits_exactly_at_budget(self, tmp_path):
+        """At the budget with nothing stranded, the count is ZERO.
+
+        THE CELL A CONSTANT FORM GETS WRONG. The comparison is strict
+        (`tokens > BUDGET`), so a body landing exactly ON the budget is not a
+        breach. A `1 + N` reading of the residual predicts one warning here,
+        and there must be none.
+        """
+        from staleness import check_pinned_staleness
+
+        claude_md = self._create_project_claude_md(
+            tmp_path, self._doc(at_budget_body(prefix="### Big\n"))
+        )
+
+        result = check_pinned_staleness(claude_md_path=claude_md)
+
+        assert self._count_warnings(claude_md.read_text(encoding="utf-8")) == 0
+        assert result is None
+
+    def test_stranded_copies_can_cause_the_breach_they_report(self, tmp_path):
+        """A stranded warning is measured, so the module's own residue can trip it.
+
+        THE PRECONDITION THAT MAKES THE LAW CONDITIONAL. The strip is anchored
+        at the head, so a warning a user has moved below it stays in the body --
+        and the body is what gets measured. With the user's own pins sitting
+        exactly at the budget, ONE stranded line is enough to push the
+        measurement over, and the hook then reports a breach the user's own text
+        did not cause.
+
+        This is not a defect to repair here. It is the accepted residual seen
+        from its sharp end, pinned so that a later change to the strip's anchor,
+        or to the length of the warning text itself, cannot move it unnoticed.
+        """
+        from staleness import PINNED_CONTEXT_TOKEN_BUDGET, check_pinned_staleness
+        from staleness import estimate_tokens
+
+        user_text = at_budget_body(prefix="### Big\n")
+        words_only = user_text.split("\n", 1)[1]
+        claude_md = self._create_project_claude_md(
+            tmp_path,
+            self._doc("### Big\n" + self._warning_line(tokens=9999) + words_only),
+        )
+
+        result = check_pinned_staleness(claude_md_path=claude_md)
+
+        content = claude_md.read_text(encoding="utf-8")
+        # One line the hook wrote at the head, plus the one it could not reach.
+        assert self._count_warnings(content) == 2
+        # The user's own text was never over budget. The residue crossed it.
+        assert estimate_tokens(user_text) <= PINNED_CONTEXT_TOKEN_BUDGET
+        assert result is not None and "budget" in result.lower()
+
+    @pytest.mark.parametrize("stranded", [0, 1, 3])
+    def test_stranded_warnings_never_compound(self, tmp_path, stranded):
+        """Over budget, the module adds exactly ONE line however many are stranded.
+
+        The other half of the conditional: once the measured body exceeds the
+        budget the count settles at `stranded + 1`, and NO PASS EVER RAISES IT.
+        That second property is the one that matters -- the head cannot
+        accumulate, because the run at offset 0 is removed before one line goes
+        back. Neutering the strip makes every cell here fail.
+        """
+        from staleness import check_pinned_staleness
+
+        stranded_lines = "".join(
+            self._warning_line(tokens=100 + i) for i in range(stranded)
+        )
+        claude_md = self._create_project_claude_md(
+            tmp_path,
+            self._doc(f"### Big Feature\n{stranded_lines}{over_budget_body()}\n"),
+        )
+
+        check_pinned_staleness(claude_md_path=claude_md)
+        settled = claude_md.read_text(encoding="utf-8")
+        assert self._count_warnings(settled) == stranded + 1
+
+        # Three further passes must not add a fourth, a fifth, or a sixth.
+        for _ in range(3):
+            check_pinned_staleness(claude_md_path=claude_md)
+        after = claude_md.read_text(encoding="utf-8")
+        assert self._count_warnings(after) == stranded + 1, (
+            "a pass raised the count -- the head is accumulating"
+        )
+        assert after == settled, "a later pass rewrote a settled document"
+
+    # ------------------------------------------------------------------
+    # The entry-less asymmetry, over-budget half.
+    # ------------------------------------------------------------------
+
+    def test_entryless_section_refreshes_a_warning_it_already_has(self, tmp_path):
+        """An entry-less section that is STILL over budget keeps a CURRENT warning.
+
+        The half of the asymmetry the suite did not cover. `check_pinned_staleness`
+        proceeds on an entry-less section only when a warning is already there,
+        and the existing arms cover only the case where the body has since
+        dropped under budget. Here it has not, so the line must be REWRITTEN
+        with a true figure rather than left carrying its old one.
+        """
+        from staleness import check_pinned_staleness
+
+        claude_md = self._create_project_claude_md(
+            tmp_path,
+            self._doc(self._warning_line(tokens=9) + f"{over_budget_body()}\n"),
+        )
+
+        check_pinned_staleness(claude_md_path=claude_md)
+
+        content = claude_md.read_text(encoding="utf-8")
+        assert self._count_warnings(content) == 1
+        assert "~9 tokens" not in content, "the outdated figure was left in place"
+        assert warning_number(content) > 0
+
+    # ------------------------------------------------------------------
+    # Absence must be caused by the budget, not by a dead instrument.
+    # ------------------------------------------------------------------
+
+    def test_under_budget_absence_is_caused_by_the_budget(self, tmp_path):
+        """A small document gets no warning, and this arm proves WHY it got none.
+
+        A POSITIVE LEG IN THE SAME FIXTURE. `test_under_budget_no_warning`
+        asserts only that the literal is absent, so it passes for any reason at
+        all -- a renamed constant, a broken region parse, or the hook never
+        running. Measured: with the write path neutered so that no warning is
+        ever emitted, that test still PASSED. Absence is not evidence until
+        something in the same test shows the instrument fires, and a
+        renamed-constant tripwire does not supply that.
+        """
+        from staleness import check_pinned_staleness
+
+        claude_md = self._create_project_claude_md(
+            tmp_path, self._doc("### Small\n- a few words\n")
+        )
+        check_pinned_staleness(claude_md_path=claude_md)
+        assert self._count_warnings(claude_md.read_text(encoding="utf-8")) == 0
+
+        # POSITIVE CONTROL: the same shape, over budget, in the same test.
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        big = self._create_project_claude_md(
+            sub, self._doc(f"### Small\n{over_budget_body()}\n")
+        )
+        check_pinned_staleness(claude_md_path=big)
+        assert self._count_warnings(big.read_text(encoding="utf-8")) == 1, (
+            "the positive control did not fire, so the negative arm above "
+            "proves nothing"
+        )
