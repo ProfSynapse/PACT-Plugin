@@ -35,7 +35,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# Environment variable that relocates the whole memory store.
+# Environment variable that relocates the store THIS MODULE resolves.
+#
+# ITS EXTENT IS NARROWER THAN THE STORE ROOT, and the gap is not obvious from
+# here. It governs `get_memory_dir()` and everything derived from it, which is
+# the database. It does NOT govern `hooks/track_files.py`: that writes
+# `session-tracking/` INSIDE the same root, but resolves it through
+# `get_claude_config_dir()`, so that subtree follows `CLAUDE_CONFIG_DIR` and is
+# unaffected by this variable. Setting only this one relocates the database and
+# leaves the tracking data where it was.
 #
 # DELIBERATELY MEMORY-SPECIFIC. It names this store and nothing else. A general
 # home or config override is the wrong shape here: `CLAUDE_CONFIG_DIR` takes
@@ -52,12 +60,22 @@ from pathlib import Path
 # variable is absent during collection and around session-scoped setup, and that
 # its fail direction is ALLOW.
 #
+# The two are complements, not alternatives: this harness sets the variable in
+# `pytest_configure`, which runs BEFORE collection -- the window that guard's
+# own docstring declares it does not cover.
+#
 # This variable removes the inference entirely. A test harness SETS it and a
-# production process does not, so there is nothing to detect and nothing to get
-# wrong: the resolver cannot be mistaken about whether a variable was set. That
-# also dissolves what looks like a conflict between isolating tests and keeping
-# production working. They are not in tension, because they are distinguished by
-# an explicit signal rather than by a guess about the caller.
+# production process does not, so there is nothing to detect: the resolver
+# cannot be mistaken about whether a variable was set.
+#
+# The guarantee is narrower than it looks, and the narrow one is what to rely
+# on. The resolver cannot be mistaken about whether the variable was SET, but
+# nothing here detects a SET value that points at the real store. The safety
+# comes from the harness, which assigns unconditionally and never with
+# `setdefault`.
+#
+# Keep this a REDIRECT, never a refusal: production is pathless by design, so a
+# resolver that refuses the real store breaks every production caller.
 MEMORY_DIR_ENV = "PACT_MEMORY_DIR"
 
 
@@ -80,8 +98,3 @@ def get_memory_dir() -> Path:
 def get_db_path() -> Path:
     """Return the memory database file path. Creates no directory."""
     return get_memory_dir() / "memory.db"
-
-
-def get_session_tracking_dir() -> Path:
-    """Return the session tracking directory."""
-    return get_memory_dir() / "session-tracking"
