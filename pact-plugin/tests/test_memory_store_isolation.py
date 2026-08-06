@@ -54,6 +54,57 @@ REAL_STORE_SUFFIX = os.path.join(".claude", "pact-memory")
 # because it is not the attribute the fixture replaces.
 _REAL_HOME = Path(os.path.expanduser("~"))
 
+# THE STORE OVERRIDE AS IT STOOD AT COLLECTION, captured at MODULE IMPORT.
+#
+# Bound early for the same reason as `_REAL_HOME` above, against a different
+# axis. Two isolation layers set this variable: `pytest_configure` assigns a
+# session-wide store BEFORE collection, and the autouse fixture
+# `_isolate_memory_store_to_tmp` then overrides it per test. The fixture runs
+# after collection, so BY THE TIME ANY TEST BODY EXECUTES THE SESSION VALUE IS
+# GONE -- overwritten, not merely shadowed.
+#
+# That is why removing the session layer changes NOTHING a test body can see:
+# the in-test state is identical either way, and no assertion over identical
+# state can distinguish them. Module import is the only moment inside the
+# session at which the session layer's own value is still readable, so this
+# capture is what makes `TestEachIsolationLayerHasAWitness` possible at all.
+_STORE_AT_COLLECTION = os.environ.get(MEMORY_DIR_ENV)
+
+
+def _session_floor_at_collection():
+    """The session store installed by `conftest.pytest_configure`, read now.
+
+    RESOLVED AT COLLECTION FOR TWO SEPARATE REASONS, both measured.
+
+    1. NOT VIA `import conftest`. That statement builds a SECOND module object
+       under its own `sys.modules` key and RE-EXECUTES the module body, which
+       calls `tempfile.mkdtemp` again. The value it reports is a directory no
+       test ever used, so an equality check against it can never pass -- and it
+       would fail for a reason that has nothing to do with the layer under test.
+       It also leaks an empty directory on every call.
+    2. AT COLLECTION RATHER THAN IN A TEST BODY. `TestTheConftestLiteralMatches
+       ItsSource` runs `import conftest`, which leaves TWO modules in
+       `sys.modules` sharing one `__file__`. A path-matching lookup performed
+       after that test has run finds both and cannot tell which one pytest
+       loaded. At collection only the loaded plugin exists, so the answer is
+       unambiguous. The lookup is order-dependent; the moment it runs is not.
+
+    Match on the resolved file path rather than on a module name, so this stays
+    correct however pytest keys the module.
+    """
+    target = str((Path(__file__).parent / "conftest.py").resolve())
+    found = [
+        m for m in list(sys.modules.values())
+        if getattr(m, "__file__", None)
+        and str(Path(m.__file__).resolve()) == target
+    ]
+    if len(found) != 1:
+        return None
+    return getattr(found[0], "_SESSION_MEMORY_DIR", None)
+
+
+_SESSION_FLOOR_AT_COLLECTION = _session_floor_at_collection()
+
 
 def _run_child(code: str, env: dict) -> str:
     """Run `code` in a FRESH interpreter and return its stdout, stripped.
@@ -243,4 +294,70 @@ class TestTheSuiteIsActuallyIsolatedRightNow:
         assert os.environ.get(MEMORY_DIR_ENV), (
             "no memory-store override is set, so resolution falls back to the "
             "real home for every test in this run"
+        )
+
+
+class TestEachIsolationLayerHasAWitness:
+    """One test per isolation layer, because ONE TEST CANNOT COVER BOTH.
+
+    The store is isolated twice over: `pytest_configure` assigns a session-wide
+    store before collection (the FLOOR), and an autouse fixture overrides it per
+    test (the PER-TEST redirect). The two are genuinely redundant for real-store
+    protection, so REMOVING EITHER ONE LEAVES THE SUITE GREEN -- each layer
+    covers for the other's absence. Both mutations were run and every other test
+    in this file survived both. That is the gap these two close.
+
+    WHY NOT ONE TEST. The per-test fixture OVERWRITES the session value, and it
+    runs after collection. So with the floor removed, the state visible to a test
+    body is IDENTICAL to the unmutated state, and no predicate over identical
+    state can differ. This is a structural limit, not a missing assertion: the
+    floor must be witnessed from collection time (see `_STORE_AT_COLLECTION`),
+    and the per-test redirect from inside a test body. Two vantages, two tests.
+
+    These are BEHAVIOURAL. They read the values the run actually used. The
+    sibling `TestTheSessionDefaultIsUnconditional` inspects source text instead,
+    and remains necessary: it catches a `setdefault` that is present and
+    fail-open, where these catch a layer that is absent or ineffective for ANY
+    reason. Neither subsumes the other.
+    """
+
+    def test_the_per_test_redirect_is_in_force_for_this_very_test(self, tmp_path):
+        """FAILS when the autouse per-test fixture is removed.
+
+        With that fixture gone the resolver returns the session floor, which is a
+        session-wide temp directory and NOT under this test's `tmp_path`. Nothing
+        else in this file notices that change.
+        """
+        resolved = get_memory_dir()
+        assert resolved.is_relative_to(tmp_path), (
+            f"the memory store resolves to {resolved}, which is NOT under this "
+            f"test's own tmp_path ({tmp_path}). The per-test isolation fixture "
+            f"is not in force, so tests share one store and can see each "
+            f"other's writes."
+        )
+
+    def test_the_session_floor_was_applied_before_collection(self):
+        """FAILS when the `pytest_configure` assignment is removed.
+
+        Asserts the override in force AT COLLECTION was the one the floor
+        installs. Equality against the floor's own value is deliberate: a weaker
+        'is set and is not the real store' check stays GREEN for a contributor
+        who exports `PACT_MEMORY_DIR` to some harmless directory of their own,
+        which is precisely the inherited-value fail-open the floor exists to
+        prevent.
+        """
+        expected = _SESSION_FLOOR_AT_COLLECTION
+        assert expected is not None, (
+            "could not identify the loaded conftest at collection, so this "
+            "test has no reference value to compare against. It would pass or "
+            "fail for reasons unrelated to the isolation layer -- fix the "
+            "lookup rather than the assertion it feeds."
+        )
+        assert _STORE_AT_COLLECTION == expected, (
+            f"at collection the memory store resolved to "
+            f"{_STORE_AT_COLLECTION!r}, but the session floor installs "
+            f"{expected!r}. Anything resolving outside a fixture's reach -- a "
+            f"collection-time import, session-scoped setup -- used the wrong "
+            f"store. If the value is None the floor never ran; if it is some "
+            f"other path it was inherited from the environment."
         )
