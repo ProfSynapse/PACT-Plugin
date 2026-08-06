@@ -651,10 +651,17 @@ class TestBudgetWarningRefresh:
     def test_entryless_section_never_gains_a_warning(self, tmp_path):
         """Prose with no `### ` entry stays untouched, over budget or not.
 
-        PASSES BEFORE AND AFTER, and that is the point. Widening the entry
-        guard so a stranded warning can be REMOVED must not also start ADDING
-        warnings to documents this code has always left alone. Removal repairs
-        a line the hook wrote; insertion here would be new behaviour.
+        PASSES BEFORE AND AFTER, and that is the point. The forbidden direction
+        is a section carrying NO line of the hook's own shape: whatever its
+        size, this code must never start a report in a document it has not
+        written to before. This body is ordinary prose, so it stays untouched.
+
+        THE DISCRIMINATION IS THE SHAPE, NOT THE POSITION. The probe now reads
+        any line start, so a body whose only warning sits below the head DOES
+        enter the pass and gains a current warning above it. That is a ruled-on
+        cost, not a violation of the law this test pins. What this test asserts
+        is the other case, and the one that must never move: no line of the
+        `~N tokens (budget: M)` shape anywhere means no pass and no insertion.
         """
         from staleness import check_pinned_staleness
 

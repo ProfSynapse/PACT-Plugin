@@ -85,24 +85,35 @@ PINNED_CONTEXT_TOKEN_BUDGET = 3200
 # earlier one, so the writer and the reader cannot describe different things.
 _BUDGET_WARNING_PREFIX = "<!-- WARNING: Pinned context"
 
-# Matches ONE complete warning comment line at the very head of a pinned body.
+# THE SHAPE OF A WARNING LINE, WITHOUT AN ANCHOR. This is a regex SOURCE
+# STRING and not a compiled pattern, on purpose: an un-anchored shape is not
+# callable, so no call site can obtain a position-blind predicate by accident.
+# The two compositions below are the only predicates that exist.
 #
-# THE PATTERN CARRIES ITS OWN ANCHOR AND ITS OWN BOUNDS, so no call site can
-# widen it. `\A` pins the match to offset 0, the only offset this module ever
-# writes such a line to. `[^\n]*?` cannot cross a newline, so the match always
-# ends inside the line it starts on, and it is LAZY so it stops at the FIRST
-# `-->`. An HTML comment ends at its first `-->`; a greedy run to the LAST one
-# on the line would swallow whatever a user appended after the comment had
-# already closed.
+# THE SHAPE CARRIES ITS OWN BOUNDS. `[^\n]*?` cannot cross a newline, so the
+# match always ends inside the line it starts on, and it is LAZY so it stops at
+# the FIRST `-->`. An HTML comment ends at its first `-->`; a greedy run to the
+# LAST one on the line would swallow whatever a user appended after the comment
+# had already closed.
 #
 # THE `~N tokens (budget: M)` SHAPE IS LOAD-BEARING, NOT DECORATION. It is what
 # separates a line this module emitted from a line that merely opens with the
 # same words, and requiring it is what keeps the strip off a user's own prose.
 #
-# THIS PATTERN AND THE EMITTED FORMAT IN `apply_staleness_markings` ARE A
-# MATCHED PAIR. Change one and change the other in the SAME commit: a format
-# this pattern cannot match is a warning that can never be refreshed or
-# removed, and every later pass stacks another warning above it.
+# THIS SHAPE AND THE EMITTED FORMAT IN `apply_staleness_markings` ARE A MATCHED
+# PAIR. Change one and change the other in the SAME commit: a format this shape
+# cannot match is a warning that can never be refreshed or removed, and every
+# later pass stacks another warning above it.
+_BUDGET_WARNING_SHAPE = (
+    rf"{re.escape(_BUDGET_WARNING_PREFIX)} ~\d+ tokens \(budget: \d+\)[^\n]*?-->\n?"
+)
+
+# Matches ONE complete warning comment line at the very head of a pinned body.
+#
+# EACH PATTERN CARRIES ITS OWN ANCHOR, so no call site can widen it. `\A` pins
+# the match to offset 0, the only offset this module ever writes such a line to.
+# The shape above is deliberately left uncompiled, so it is not callable as a
+# predicate and the anchor cannot be chosen by a caller.
 #
 # STRICT ON PURPOSE. This predicate DELETES bytes from a user's CLAUDE.md, a
 # file that is frequently gitignored, so an over-match has no commit to recover
@@ -110,9 +121,13 @@ _BUDGET_WARNING_PREFIX = "<!-- WARNING: Pinned context"
 # text a user wrote inside a pin body. Compare `_find_declared_end_offset`:
 # a predicate's tolerance follows its failure direction, never its resemblance
 # to a predicate that looks like it.
-_LEADING_BUDGET_WARNING_RE = re.compile(
-    rf"\A{re.escape(_BUDGET_WARNING_PREFIX)} ~\d+ tokens \(budget: \d+\)[^\n]*?-->\n?"
-)
+_LEADING_BUDGET_WARNING_RE = re.compile(rf"\A{_BUDGET_WARNING_SHAPE}")
+
+# RECOGNITION ONLY. NEVER GIVE THIS PATTERN TO CODE THAT DELETES. `(?m)^`
+# reports a match at ANY line start, which is what lets `_has_budget_warning`
+# see a warning a user has moved below the head. The deleting anchor stays
+# inside the compiled object above, so this wider reach cannot travel to it.
+_ANY_BUDGET_WARNING_RE = re.compile(rf"(?m)^{_BUDGET_WARNING_SHAPE}")
 
 
 def _find_existing_claude_md(base: Path) -> Optional[Path]:
@@ -287,21 +302,51 @@ def _strip_budget_warnings(pinned_content: str) -> str:
 
 
 def _has_budget_warning(pinned_content: str) -> bool:
-    """
-    Report whether this module has already written a warning to `pinned_content`.
+    r"""
+    Report whether this module has already written a warning anywhere in
+    `pinned_content`.
 
-    Shares `_LEADING_BUDGET_WARNING_RE` with `_strip_budget_warnings` on
-    purpose: the check for "is one present" and the code that removes it must
-    agree on every input, and one pattern is the only way to guarantee that.
-    Two patterns would be two alphabets, and the narrower one decides.
+    RECOGNITION, NOT DELETION, AND THAT IS WHY THE ANCHOR DIFFERS. This
+    predicate and `_strip_budget_warnings` share ONE shape,
+    `_BUDGET_WARNING_SHAPE`, and differ only in position: the strip takes back
+    the run at offset 0, this reports a match at ANY line start. The shape is
+    what identifies a line as this module's own, so the wider anchor does not
+    widen what counts as a warning. The narrower anchor stays INSIDE the
+    pattern the strip uses, so no call site can widen what gets deleted.
+
+    DO NOT MERGE THE TWO INTO ONE PATTERN CHOSEN BY THE CALL SITE. That works
+    -- `.match` on a line-anchored pattern is identical to `\A` -- and it puts
+    the deleting anchor where a later edit can move it. The cardinal failure
+    here is deletion of a user's own text from a file that is frequently
+    gitignored.
+
+    THE ACCEPTED CONSEQUENCE, RULED ON AND NOT OVERLOOKED. A user can write a
+    complete warning line into their own pinned prose: a maintainer who pastes
+    the emitted format into a note is the realistic case. In a section with NO
+    entries, that body now enters the pass. If it ALSO exceeds the budget, this
+    module adds ONE current warning above it. BOTH conditions are required. A
+    quoted line in a body below the budget changes nothing at all.
+
+    THIS COST IS NOT NEW, AND THAT IS THE REASON TO ACCEPT IT. A section WITH
+    entries has always behaved this way, and the suite pins it: see
+    `test_user_line_quoting_the_warning_is_preserved`, which asserts a count of
+    two for a pin body that quotes the warning. The two documents differ only
+    in whether they hold an entry, so they must not differ here. The corner was
+    the inconsistency, and this is the repair.
+
+    The cost is also the smaller of the two failures, which is a second and
+    subordinate reason. One extra advisory line is visible, it stays at one on
+    every later pass, and the user can delete it. The alternative was to leave
+    the corner alone, which keeps a stale number in the document without limit
+    and announces nothing.
 
     Args:
         pinned_content: The pinned section body.
 
     Returns:
-        True when a budget warning heads the body.
+        True when a budget warning this module wrote sits at any line start.
     """
-    return _LEADING_BUDGET_WARNING_RE.match(pinned_content) is not None
+    return _ANY_BUDGET_WARNING_RE.search(pinned_content) is not None
 
 
 def _find_terminator_offset(
@@ -814,13 +859,19 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
     # it. Delete the last pin and the old guard returned here, which stranded
     # that warning where nothing could ever reach it.
     #
-    # THE TWO DIRECTIONS ARE NOT SYMMETRIC AND MUST NOT BE MADE SO. Removing a
-    # warning from an entry-less section REPAIRS a line this module wrote.
-    # Adding one to a section that never had entries would be NEW behaviour in a
-    # document this code otherwise leaves untouched. Only the first belongs
-    # here, and the arithmetic delivers exactly that: an entry-less body reaches
-    # `apply_staleness_markings` only when a warning is already present, and
-    # keeps that warning only while the body still exceeds the budget.
+    # THE PROBE READS ANY LINE START, THE STRIP READS OFFSET 0. That gap is
+    # deliberate. A warning a user has moved below the head is still this
+    # module's own report, so the section HAS been reported on and the pass may
+    # run. The strip cannot reach that line, so this pass does not repair it: it
+    # adds one current warning above it and the old line stays. That is the
+    # ratified cost of the residual, one extra line, and it is what a section
+    # WITH entries already does in the same state.
+    #
+    # THE FORBIDDEN DIRECTION IS UNCHANGED AND MUST STAY SO. A section carrying
+    # NO line of this module's own shape never reaches the pass, whatever its
+    # size, so this code never starts a report in a document it has not written
+    # to before. The strict `~N tokens (budget: M)` shape carries that
+    # discrimination, not the anchor.
     if not entry_starts and not _has_budget_warning(pinned_content):
         return None
 
