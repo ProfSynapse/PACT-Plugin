@@ -80,7 +80,13 @@ MEMORY_DIR_ENV = "PACT_TEST_MEMORY_DIR"
 
 
 def get_memory_dir() -> Path:
-    """Return the base directory for all PACT memory data.
+    """Return the base directory for the PACT memory DATABASE.
+
+    NOT for all memory data. `hooks/track_files.py` writes `session-tracking/`
+    under the same root but resolves it through `get_claude_config_dir()`, so
+    that subtree follows `CLAUDE_CONFIG_DIR` and is unaffected by the variable
+    below. Setting only this one relocates the database and leaves the tracking
+    data where it was.
 
     Resolution order:
       1. The `PACT_TEST_MEMORY_DIR` environment variable, when set and non-empty.

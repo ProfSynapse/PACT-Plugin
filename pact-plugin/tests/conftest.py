@@ -424,12 +424,19 @@ def _isolate_config_root_to_tmp(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolate_memory_store_to_tmp(tmp_path, monkeypatch):
-    """Redirect the PACT memory store to a per-test tmp tree for EVERY test.
+    """Redirect the PACT memory DATABASE to a per-test tmp tree for EVERY test.
 
     DELIBERATELY A SEPARATE FIXTURE from `_isolate_config_root_to_tmp`, matching
-    the one-module-per-reset convention its siblings follow. That fixture owns
-    the Claude config root; this one owns the memory store, and they redirect
-    through DIFFERENT mechanisms because they have to.
+    the one-module-per-reset convention its siblings follow.
+
+    WHICH SUBTREE EACH ONE REACHES, because neither owns the store root alone.
+    This fixture sets `PACT_TEST_MEMORY_DIR`, which governs
+    `config.get_memory_dir()` and therefore the DATABASE. The sibling patches
+    `Path.home()` and clears `CLAUDE_CONFIG_DIR`, and that is what moves
+    `session-tracking/` -- written by `hooks/track_files.py` through
+    `get_claude_config_dir()` -- even though that subtree lives INSIDE the same
+    root. Covering the whole tree takes BOTH, and they redirect through
+    DIFFERENT mechanisms because they have to.
 
     WHY AN ENVIRONMENT VARIABLE AND NOT A `Path.home()` PATCH. The sibling's
     `monkeypatch.setattr(Path, "home", ...)` is in-process only, and it was
