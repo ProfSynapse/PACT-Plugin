@@ -78,6 +78,14 @@ PINNED_STALENESS_DAYS = 30
 # The two also bound DIFFERENT things, which is why one cannot be read off the
 # other: PIN_SIZE_CAP counts body characters of a single pin, while this counts
 # estimated tokens of the whole section, headings and markers included.
+#
+# AND A THIRD REASON, ABOUT WHO DECIDES. A derived budget would MOVE whenever
+# the caps move. A raise of PIN_SIZE_CAP is an enforcement decision about a
+# single pin, and it would then relocate an ADVISORY threshold over the whole
+# section, with nobody deciding that. The relation between the two is guarded in
+# the test suite instead, by a band that REFUSES a budget outside it. A guard
+# makes a cap change LOUD and asks for a decision. A derivation makes the same
+# change SILENT.
 PINNED_CONTEXT_TOKEN_BUDGET = 3200
 
 # The exact text this module writes at the head of an over-budget pinned
