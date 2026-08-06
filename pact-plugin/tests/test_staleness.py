@@ -2725,3 +2725,123 @@ class TestBudgetWarningInteractions:
             "the positive control did not fire, so the negative arm above "
             "proves nothing"
         )
+
+
+# ===========================================================================
+# Citations from staleness.py into this file must still resolve
+# ===========================================================================
+
+_STALENESS_SOURCE = Path(__file__).parent.parent / "hooks" / "staleness.py"
+
+# THE ALPHABET IS TAKEN FROM WHAT PYTEST COLLECTS, NOT FROM WHAT WE REMEMBER
+# CITING. pytest collects `Test`-prefixed CLASSES as well as `test_`-prefixed
+# FUNCTIONS, so a pattern covering only the second is blind to half the thing it
+# measures. `Test` must be followed by an uppercase letter or an underscore, so
+# the ordinary English word "Tests" is not mistaken for a class name.
+_CITED_TEST_NAME_RE = re.compile(r"\b(?:test_[A-Za-z0-9_]+|Test[A-Z_][A-Za-z0-9_]*)\b")
+
+
+def _cited_test_names(source):
+    """Return every test symbol `source` names in its own prose.
+
+    A name immediately followed by `.py` is a FILE PATH, not a symbol, and is
+    excluded: demanding a definition called `test_staleness` would be a false
+    failure. The exclusion is applied after the match rather than inside the
+    pattern, because a lookahead lets the regex backtrack to a shorter name and
+    invent a citation that was never written.
+    """
+    found = set()
+    for match in _CITED_TEST_NAME_RE.finditer(source):
+        if source[match.end():match.end() + 3] == ".py":
+            continue
+        found.add(match.group(0))
+    return found
+
+
+def _defined_test_names(source):
+    """Return every class and function `source` DEFINES, at any nesting depth."""
+    return {
+        node.name
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+
+
+class TestStalenessCitationsResolve:
+    """A test name in source prose is a pointer with nothing holding it.
+
+    `staleness.py` cites tests from this file to justify its own behaviour, and
+    the most load-bearing of those citations is the one a reader is told to
+    check INSTEAD of trusting the author. A rename on this side turns that into
+    a dangling pointer, silently, and no existing gate covers it: the twin-parity
+    gate protects three named twin-copy tests and nothing else.
+
+    THE CITED SET IS DERIVED, NEVER HAND-LISTED. A hand list protects the names
+    somebody remembered to add to it, and its failure mode is silence, which is
+    the same defect one level up.
+
+    FAILURE DIRECTION IS DELIBERATE. Over-detection REFUSES and says which name,
+    which is loud and cheap to fix. Under-detection is silent and reinstates the
+    dangling pointer, so the alphabet is bounded rather than narrowed.
+    """
+
+    def test_the_extractor_covers_both_things_pytest_collects(self):
+        """Instrument check on a synthetic input, not on the current file.
+
+        Asserting that the LIVE citation set contains both kinds would couple
+        this to today's prose and redden when a citation is legitimately
+        removed. The alphabet is the thing under test, so the input is fixed.
+        """
+        found = _cited_test_names("see TestFooBar and test_foo_bar for why")
+        assert found == {"TestFooBar", "test_foo_bar"}
+
+    def test_the_extractor_ignores_a_file_path(self):
+        """`test_staleness.py` is a path. A bare `test_real_thing` is a symbol."""
+        assert _cited_test_names("see test_staleness.py for details") == set()
+        assert _cited_test_names("test_staleness.py defines test_real_thing") == {
+            "test_real_thing"
+        }
+        assert _cited_test_names("Tests cover the module") == set()
+
+    def test_staleness_cites_at_least_one_test(self):
+        """NON-VACUITY. An extractor returning nothing satisfies the guard below
+        perfectly and for ever, so the population is asserted before the
+        property that quantifies over it."""
+        cited = _cited_test_names(
+            _STALENESS_SOURCE.read_text(encoding="utf-8")
+        )
+        assert cited, (
+            "no test citations were extracted from staleness.py, so the "
+            "resolution check below is quantifying over an empty set"
+        )
+
+    def test_every_test_cited_by_staleness_still_exists(self):
+        """The property itself."""
+        cited = _cited_test_names(
+            _STALENESS_SOURCE.read_text(encoding="utf-8")
+        )
+        defined = _defined_test_names(
+            Path(__file__).read_text(encoding="utf-8")
+        )
+        missing = sorted(cited - defined)
+        assert not missing, (
+            f"staleness.py cites {missing} but this file no longer defines "
+            f"them; the citation is a dangling pointer and the prose that "
+            f"leans on it can no longer be checked"
+        )
+
+    def test_the_guard_detects_a_deleted_citation(self):
+        """MUTATION ARM. Proves the check reddens on the failure it exists for,
+        by removing a cited name from the defined set rather than by trusting
+        that a set difference must work."""
+        cited = _cited_test_names(
+            _STALENESS_SOURCE.read_text(encoding="utf-8")
+        )
+        defined = _defined_test_names(
+            Path(__file__).read_text(encoding="utf-8")
+        )
+        victim = sorted(cited)[0]
+        assert not (cited - defined), "fixture invalid: the real check is red"
+        assert (cited - (defined - {victim})) == {victim}, (
+            "deleting a cited definition did not surface it as missing"
+        )
