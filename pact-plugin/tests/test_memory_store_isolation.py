@@ -36,7 +36,7 @@ sys.path.insert(0, str(SCRIPTS_PARENT))
 
 from scripts.config import (  # noqa: E402
     MEMORY_DIR_ENV,
-    get_db_path,
+    compute_db_path,
     get_memory_dir,
 )
 
@@ -135,8 +135,8 @@ def _run_child(code: str, env: dict) -> str:
 
 _RESOLVE_IN_CHILD = (
     "import sys; sys.path.insert(0, %r)\n"
-    "from scripts.config import get_db_path\n"
-    "print(get_db_path())\n" % str(SCRIPTS_PARENT)
+    "from scripts.config import compute_db_path\n"
+    "print(compute_db_path())\n" % str(SCRIPTS_PARENT)
 )
 
 
@@ -239,11 +239,11 @@ class TestResolutionIsLateNotImportTime:
     def test_env_change_after_import_still_moves_the_store(self, tmp_path):
         """FAILS PRE-FIX. `config.DB_PATH` was a constant, so a change made
         after import moved nothing."""
-        first = get_db_path()
+        first = compute_db_path()
         moved = tmp_path / "relocated"
         with pytest.MonkeyPatch.context() as mp:
             mp.setenv(MEMORY_DIR_ENV, str(moved))
-            second = get_db_path()
+            second = compute_db_path()
         assert second == moved / "memory.db"
         assert second != first
 
@@ -299,8 +299,8 @@ class TestProductionStillResolvesTheRealStore:
             "import sys; sys.path.insert(0, %r)\n"
             "import os\n"
             "os.environ.pop('PACT_TEST_MEMORY_DIR', None)\n"
-            "from scripts.config import get_db_path\n"
-            "print(get_db_path())\n" % str(SCRIPTS_PARENT),
+            "from scripts.config import compute_db_path\n"
+            "print(compute_db_path())\n" % str(SCRIPTS_PARENT),
             {},
         )
         expected = _REAL_HOME / ".claude" / "pact-memory" / "memory.db"
@@ -313,14 +313,14 @@ class TestProductionStillResolvesTheRealStore:
     def test_resolution_creates_nothing_by_itself(self, tmp_path):
         """Resolving a path must not have side effects.
 
-        `get_db_path` in `config` only computes. Directory creation belongs to
+        `compute_db_path` in `config` only computes. Directory creation belongs to
         the callers that intend it, so merely asking where the store is can
         never create a stray tree in someone's home.
         """
         target = tmp_path / "never-created"
         with pytest.MonkeyPatch.context() as mp:
             mp.setenv(MEMORY_DIR_ENV, str(target))
-            get_db_path()
+            compute_db_path()
         assert not target.exists()
 
 
@@ -329,7 +329,7 @@ class TestTheSuiteIsActuallyIsolatedRightNow:
 
     def test_this_very_test_resolves_away_from_the_real_store(self):
         """If the autouse fixture ever stops working, this fails immediately."""
-        resolved = str(get_db_path())
+        resolved = str(compute_db_path())
         real = str(_REAL_HOME / ".claude" / "pact-memory")
         assert not resolved.startswith(real), (
             f"this test resolves the memory store to {resolved}, which is the "
@@ -340,6 +340,75 @@ class TestTheSuiteIsActuallyIsolatedRightNow:
         assert os.environ.get(MEMORY_DIR_ENV), (
             "no memory-store override is set, so resolution falls back to the "
             "real home for every test in this run"
+        )
+
+
+_LEFT_THE_FLAG_SET = False
+
+
+class TestInitStateDoesNotLeakBetweenStores:
+    """The process-global lazy-init flag must not carry across tests.
+
+    `memory_init.ensure_memory_ready()` returns early on a MODULE-LEVEL flag,
+    before resolving any path, and two of the three things it guards are
+    per-database. With the store now per-test, a test that runs after one which
+    initialised a DIFFERENT store would be told the work was already done for a
+    store nothing had touched.
+
+    AN ORDERED PAIR, WHICH IS A LIABILITY AND IS GUARDED. The first test leaves
+    the flag set; the second asserts it was cleared. If the two ever stop
+    running in this order, the second would pass for the wrong reason -- it
+    would find a clean flag because nothing had dirtied it. `_LEFT_THE_FLAG_SET`
+    exists to turn that false green into a loud failure. No ordering plugin is
+    installed in this suite today, so definition order holds; the guard is for
+    the day that stops being true.
+    """
+
+    def test_a_leaves_the_process_flag_set_for_its_own_store(self, monkeypatch):
+        """Dirty the global deliberately. This is the precondition, not a check.
+
+        The guarded work is replaced with no-ops: this pair is about the FLAG,
+        and running the real dependency check and migration here would make the
+        test slow and dependent on the environment for no added signal.
+        """
+        global _LEFT_THE_FLAG_SET
+        from scripts import memory_init
+
+        for name in (
+            "check_and_install_dependencies",
+            "maybe_migrate_embeddings",
+            "maybe_embed_pending",
+        ):
+            monkeypatch.setattr(
+                memory_init, name,
+                lambda *a, **k: {"status": "ok", "installed": [], "failed": []},
+            )
+
+        memory_init.ensure_memory_ready()
+        assert memory_init.is_initialized(), (
+            "this test could not establish its own precondition: the flag did "
+            "not become set, so the next test would prove nothing"
+        )
+        _LEFT_THE_FLAG_SET = True
+
+    def test_b_starts_from_a_clean_flag(self):
+        """FAILS without the reset fixture. Its own store would be skipped.
+
+        The failure this prevents is silent: the second store is simply told the
+        work is done, and nothing raises.
+        """
+        from scripts import memory_init
+
+        assert _LEFT_THE_FLAG_SET, (
+            "the sibling that dirties the flag did not run before this one, so "
+            "a clean flag here means nothing. The order this pair depends on "
+            "has changed -- fix the pair rather than trusting this pass."
+        )
+        assert not memory_init.is_initialized(), (
+            "the lazy-init flag arrived already set, left by a test whose store "
+            "was a DIFFERENT directory. ensure_memory_ready() would return "
+            "early for this test's store and skip the per-database work it "
+            "guards. The reset fixture in conftest is not running."
         )
 
 

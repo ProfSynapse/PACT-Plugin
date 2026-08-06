@@ -478,3 +478,51 @@ def _scrub_session_id_from_test_env(monkeypatch):
     upgrade rather than a safety guarantee.
     """
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _reset_memory_init_state():
+    """Clear the process-global lazy-init flag before EVERY test.
+
+    `memory_init._initialized` is a MODULE-LEVEL global, and
+    `ensure_memory_ready()` returns early on it BEFORE resolving any path. Two
+    of the three things it guards are PER-DATABASE. That was coherent while the
+    store path was constant per process; it stopped being coherent once the
+    store became per-test, so a test that runs after one which initialised a
+    DIFFERENT store is told the work is already done for a store that has never
+    been touched. Measured, not inferred: with the flag left set, a second test
+    under its own `tmp_path` store received none of the work.
+
+    WHAT THIS DOES NOT CLOSE, stated here so the reset is not read as more than
+    it is. `maybe_embed_pending()` has a SECOND, INDEPENDENT guard: a marker
+    file at `/tmp/pact_embedding_attempted_<session>`, which is session-scoped
+    and shared, not per-database, and which this fixture deliberately does not
+    remove -- the marker belongs to any real session on the same machine, and
+    `memory_init` separates `clear_embedding_marker()` from
+    `reset_initialization()` for exactly that reason. So a second store still
+    gets "Already attempted this session" for the catch-up. This fixture
+    restores the migration step, not the catch-up.
+
+    NOT the API singleton. `memory_api._instance` is also process-global and
+    also unreset, but it does NOT bind a store: it holds `_db_path = None` and
+    every operation resolves through `get_db_path()` at call time. Resetting it
+    would change no store-related outcome, so it is left alone.
+
+    Imported inside the fixture on purpose. A module-level import would make
+    the whole suite's collection depend on `scripts` importing cleanly, turning
+    a missing optional dependency into a total collection failure -- the same
+    reason `_MEMORY_DIR_ENV` is duplicated as a literal above.
+    """
+    import sys
+
+    scripts_parent = Path(__file__).parent.parent / "skills" / "pact-memory"
+    if str(scripts_parent) not in sys.path:
+        sys.path.insert(0, str(scripts_parent))
+    try:
+        from scripts.memory_init import reset_initialization
+    except Exception:
+        # The suite must not fail to COLLECT because an optional dependency of
+        # the memory package is absent. A test that needs the reset will fail
+        # on its own assertion, which is a better signal than a collection error.
+        return
+    reset_initialization()
