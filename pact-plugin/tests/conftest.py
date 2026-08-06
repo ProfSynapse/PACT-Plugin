@@ -14,6 +14,7 @@ re-export to be discoverable, but none are currently defined there.
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
 # Add pact-memory scripts to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'skills', 'pact-memory'))
+
+
+# Name of the environment variable that relocates the PACT memory store.
+#
+# DUPLICATED FROM `scripts.config.MEMORY_DIR_ENV` ON PURPOSE. Importing it here
+# would make the whole suite depend on the `scripts` package importing cleanly
+# during conftest load, which turns a missing optional dependency into a total
+# collection failure. The literal is pinned against its source by
+# test_memory_store_isolation.py, so a rename fails loudly instead of silently
+# un-isolating every test.
+_MEMORY_DIR_ENV = "PACT_TEST_MEMORY_DIR"
+
+# Session-wide fallback store, created once and reused. See pytest_configure.
+_SESSION_MEMORY_DIR = os.path.join(
+    tempfile.mkdtemp(prefix="pact-memory-suite-"), "pact-memory"
+)
 
 
 def pytest_configure(config):
@@ -51,6 +68,30 @@ def pytest_configure(config):
         "from a local cache. On a COLD cache that read is a network "
         "download — deselect in a sandboxed or offline environment.",
     )
+
+    # RELOCATE THE MEMORY STORE BEFORE COLLECTION BEGINS.
+    #
+    # This runs before any test module is imported, which is the property that
+    # matters and the one no fixture can offer. A fixture runs per test, so a
+    # module-level `from scripts.memory_api import ...` executed at COLLECTION
+    # time would resolve the store before any fixture had a chance to redirect
+    # it. Setting the variable here means every import, every fixture and every
+    # spawned child sees the redirected store from the first instruction.
+    #
+    # It is also the only mechanism that CROSSES A PROCESS BOUNDARY. The suite's
+    # `Path.home()` redirect cannot: a spawned CLI child is a fresh interpreter
+    # in which that patch never happened, and the subprocess tests are the
+    # larger half of the exposure this closes.
+    #
+    # DEFENCE IN DEPTH, NOT THE ONLY LAYER. `_isolate_memory_store_to_tmp`
+    # overrides this per test with a `tmp_path` store. This one is the floor:
+    # it catches anything that runs outside a fixture's reach.
+    #
+    # UNCONDITIONAL, NEVER `setdefault`. A contributor who has relocated their
+    # own store already exports this variable, and honouring an inherited value
+    # would point the whole suite at the very store this exists to protect. The
+    # fail direction of `setdefault` here is ALLOW, and it is silent.
+    os.environ[_MEMORY_DIR_ENV] = _SESSION_MEMORY_DIR
 
 
 @pytest.fixture
@@ -382,6 +423,47 @@ def _isolate_config_root_to_tmp(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_memory_store_to_tmp(tmp_path, monkeypatch):
+    """Redirect the PACT memory DATABASE to a per-test tmp tree for EVERY test.
+
+    DELIBERATELY A SEPARATE FIXTURE from `_isolate_config_root_to_tmp`, matching
+    the one-module-per-reset convention its siblings follow.
+
+    WHICH SUBTREE EACH ONE REACHES, because neither owns the store root alone.
+    This fixture sets `PACT_TEST_MEMORY_DIR`, which governs
+    `config.get_memory_dir()` and therefore the DATABASE. The sibling patches
+    `Path.home()` and clears `CLAUDE_CONFIG_DIR`, and that is what moves
+    `session-tracking/` -- written by `hooks/track_files.py` through
+    `get_claude_config_dir()` -- even though that subtree lives INSIDE the same
+    root. Covering the whole tree takes BOTH, and they redirect through
+    DIFFERENT mechanisms because they have to.
+
+    WHY AN ENVIRONMENT VARIABLE AND NOT A `Path.home()` PATCH. The sibling's
+    `monkeypatch.setattr(Path, "home", ...)` is in-process only, and it was
+    measured insufficient for this store on BOTH axes:
+
+      1. It does not cross a process boundary. A spawned CLI child is a fresh
+         interpreter in which the patch never happened, so it resolved the real
+         home. The subprocess tests were the larger half of the exposure.
+      2. `scripts.config` used to bind its paths AT IMPORT, so the patch reached
+         them only when that module first imported INSIDE a test. Any
+         module-level `from scripts.memory_api import ...` imports it at
+         COLLECTION time instead, and the redirect then reached nothing. The
+         protection was real, accidental, and decided by import order.
+
+    `scripts.config` now resolves at use time, which fixes (2) on its own. The
+    variable is what fixes (1), because a child inherits the environment and
+    nothing else survives the boundary.
+
+    SCOPE: this is a redirect, not a refusal. Production is unaffected, since
+    nothing sets the variable there and the resolver falls back to the real
+    home exactly as before. Any production entry point that legitimately wants
+    the real store keeps getting it.
+    """
+    monkeypatch.setenv(_MEMORY_DIR_ENV, str(tmp_path / ".claude" / "pact-memory"))
+
+
+@pytest.fixture(autouse=True)
 def _scrub_session_id_from_test_env(monkeypatch):
     """Remove the developer's live session id from the test environment.
 
@@ -396,3 +478,51 @@ def _scrub_session_id_from_test_env(monkeypatch):
     upgrade rather than a safety guarantee.
     """
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _reset_memory_init_state():
+    """Clear the process-global lazy-init flag before EVERY test.
+
+    `memory_init._initialized` is a MODULE-LEVEL global, and
+    `ensure_memory_ready()` returns early on it BEFORE resolving any path. Two
+    of the three things it guards are PER-DATABASE. That was coherent while the
+    store path was constant per process; it stopped being coherent once the
+    store became per-test, so a test that runs after one which initialised a
+    DIFFERENT store is told the work is already done for a store that has never
+    been touched. Measured, not inferred: with the flag left set, a second test
+    under its own `tmp_path` store received none of the work.
+
+    WHAT THIS DOES NOT CLOSE, stated here so the reset is not read as more than
+    it is. `maybe_embed_pending()` has a SECOND, INDEPENDENT guard: a marker
+    file at `/tmp/pact_embedding_attempted_<session>`, which is session-scoped
+    and shared, not per-database, and which this fixture deliberately does not
+    remove -- the marker belongs to any real session on the same machine, and
+    `memory_init` separates `clear_embedding_marker()` from
+    `reset_initialization()` for exactly that reason. So a second store still
+    gets "Already attempted this session" for the catch-up. This fixture
+    restores the migration step, not the catch-up.
+
+    NOT the API singleton. `memory_api._instance` is also process-global and
+    also unreset, but it does NOT bind a store: it holds `_db_path = None` and
+    every operation resolves through `get_db_path()` at call time. Resetting it
+    would change no store-related outcome, so it is left alone.
+
+    Imported inside the fixture on purpose. A module-level import would make
+    the whole suite's collection depend on `scripts` importing cleanly, turning
+    a missing optional dependency into a total collection failure -- the same
+    reason `_MEMORY_DIR_ENV` is duplicated as a literal above.
+    """
+    import sys
+
+    scripts_parent = Path(__file__).parent.parent / "skills" / "pact-memory"
+    if str(scripts_parent) not in sys.path:
+        sys.path.insert(0, str(scripts_parent))
+    try:
+        from scripts.memory_init import reset_initialization
+    except Exception:
+        # The suite must not fail to COLLECT because an optional dependency of
+        # the memory package is absent. A test that needs the reset will fail
+        # on its own assertion, which is a better signal than a collection error.
+        return
+    reset_initialization()

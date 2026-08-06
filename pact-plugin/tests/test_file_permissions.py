@@ -9,6 +9,7 @@ Verifies that:
 3. Permission hardening is applied consistently across creation points
 """
 
+import os
 import stat
 import sys
 from pathlib import Path
@@ -33,9 +34,7 @@ class TestDatabasePermissions:
         memory_dir = tmp_path / "pact-memory"
         db_path = memory_dir / "memory.db"
 
-        with patch("scripts.config.PACT_MEMORY_DIR", memory_dir), \
-             patch("scripts.database.PACT_MEMORY_DIR", memory_dir), \
-             patch("scripts.database.DB_PATH", db_path):
+        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(memory_dir)}):
             from scripts.database import get_db_path
             result = get_db_path()
 
@@ -87,8 +86,7 @@ class TestSetupMemoryPermissions:
         """ensure_directories() should create directory with mode 0o700."""
         memory_dir = tmp_path / "pact-memory"
 
-        with patch("scripts.config.PACT_MEMORY_DIR", memory_dir), \
-             patch("scripts.setup_memory.PACT_MEMORY_DIR", memory_dir):
+        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(memory_dir)}):
             from scripts.setup_memory import ensure_directories
             ensure_directories()
 
@@ -102,8 +100,7 @@ class TestSetupMemoryPermissions:
         """Calling ensure_directories() twice should not fail or change permissions."""
         memory_dir = tmp_path / "pact-memory"
 
-        with patch("scripts.config.PACT_MEMORY_DIR", memory_dir), \
-             patch("scripts.setup_memory.PACT_MEMORY_DIR", memory_dir):
+        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(memory_dir)}):
             from scripts.setup_memory import ensure_directories
             ensure_directories()
             ensure_directories()

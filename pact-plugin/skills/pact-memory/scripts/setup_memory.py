@@ -19,15 +19,20 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .config import PACT_MEMORY_DIR
+from .config import get_memory_dir
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 
 def ensure_directories() -> None:
-    """Create required directories if they don't exist."""
-    PACT_MEMORY_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    """Create required directories if they don't exist.
+
+    Resolves the location on every call. This creates a DIRECTORY rather than
+    opening a connection, so a connection-level guard cannot see it -- an
+    import-bound path here would leak past any such instrument silently.
+    """
+    get_memory_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
 def check_dependencies() -> Dict[str, Any]:
@@ -99,12 +104,14 @@ def get_setup_status() -> Dict[str, Any]:
     """
     deps = check_dependencies()
 
+    memory_dir = get_memory_dir()
+
     return {
-        "initialized": PACT_MEMORY_DIR.exists(),
+        "initialized": memory_dir.exists(),
         "dependencies": deps,
         "can_use_semantic_search": deps["model2vec"] and deps["sqlite_vec"],
         "paths": {
-            "memory_dir": str(PACT_MEMORY_DIR),
+            "memory_dir": str(memory_dir),
         },
         "recommendations": _get_recommendations(deps)
     }

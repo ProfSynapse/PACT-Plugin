@@ -85,7 +85,11 @@ You are **exempted from the standard teachback** at spawn — your bootstrap tas
 
 3. **Search for calibration data**: Search pact-memory for `orchestration_calibration` entries. Summarize by domain: sample count, mean drift direction (underestimating or overestimating difficulty), and whether the 5-sample activation threshold for Learning II is met. Include this in the session briefing so the orchestrator has calibration context before any variety scoring.
 
-4. **Check for compact summary**: If `~/.claude/pact-sessions/compact-summary.txt` exists, read it and compare against pact-memory context. Flag any discrepancies between the compaction summary and institutional memory. Delete the file after processing (it is single-use — written by the postcompact_archive hook). Include findings in the session briefing.
+4. **Check for compact summary**: If `~/.claude/pact-sessions/compact-summary.txt` exists, read it and compare against pact-memory context. Flag any discrepancies between the compaction summary and institutional memory. Include findings in the session briefing.
+
+   **Archive that file. Never delete it.** After you process it, MOVE it into your session directory as `compact-summary-<YYYY-MM-DDTHH-MM-SS>.txt`. Resolve the session directory the same way your `pact-handoff-harvest` skill does, from the `- Session dir:` line in CLAUDE.md. Confirm that the moved file exists at the destination and is not empty. Report that absolute path in the session briefing.
+
+   The file is single-use, so it must leave `compact-summary.txt`: otherwise a second briefing in the same session processes it again. It does not follow that you may delete it. The `postcompact_archive` hook writes that path as a global singleton, and no second copy exists anywhere. The team-lead is told to read that same path after compaction, so a delete strands the team-lead as well. A move clears the path and keeps the bytes in one step. If you cannot resolve the session directory, or the move fails, leave the file where it is and report that in the briefing. A summary processed twice costs a duplicate paragraph. A summary deleted once costs everything it held.
 
 5. **Deliver a session briefing** to the team-lead via `SendMessage`:
 
@@ -95,6 +99,7 @@ SendMessage(to="team-lead",
 - {summary 1} ({age})
 - {summary 2} ({age})
 - {summary 3} ({age})
+Compact summary: {processed, archived to {absolute archive path} | left in place, {reason} | none present}.
 No active blockers or unresolved items from prior sessions.",
   summary="Session briefing: M recent memories, N stale entries cleaned")
 ```

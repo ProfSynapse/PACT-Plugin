@@ -74,8 +74,9 @@ def _refuse_live_db_under_pytest(db_path) -> None:
     """Refuse the live store when a TEST PROCESS spawned us.
 
     THE DEFECT THIS CLOSES. `--db-path` is how a test scopes its writes, and
-    omitting it silently selects the developer's real `memory.db`. A test that
-    forgets it does not fail -- it succeeds, against the live store. Requiring
+    omitting it selects whatever the default resolves to -- the developer's
+    real `memory.db` unless something has redirected it. A test that forgets it
+    does not fail -- it succeeds, against whichever store that is. Requiring
     the parameter upstream makes the choice visible but not safe: the value may
     still be None, and an empty string is falsy, so it takes the same branch.
     This is the mechanical half.
@@ -165,15 +166,20 @@ def _refuse_live_db_under_pytest(db_path) -> None:
     # branch says do NOT pass --db-path.
     _error(
         "UNSCOPED_TEST_DB",
-        "refusing to open the live memory database: PYTEST_CURRENT_TEST "
-        "is set in this process's environment and no --db-path was given, so "
-        "a write would land in the real store. If this IS a test, pass "
+        "refusing to open the default memory database: PYTEST_CURRENT_TEST "
+        "is set in this process's environment, no --db-path was given, and "
+        "`pytest` is absent from this interpreter, which is what scopes this "
+        "guard to spawned children. Those three facts are the whole of what "
+        "it observed. It does "
+        "NOT resolve the default location, so it cannot say WHICH database a "
+        "write would reach: with PACT_TEST_MEMORY_DIR set the default is already "
+        "redirected, and without it the default is the real store. If this "
+        "IS a test, pass "
         "--db-path pointing at a temporary database. If you are ARCHIVING A "
         "PIN and meant to use the real store, do NOT pass --db-path -- that "
         "would archive into a throwaway database and make the pin eligible "
-        "for deletion; instead unset PYTEST_CURRENT_TEST and run again (it is "
-        "set here without a test in progress, most likely exported or "
-        f"inherited from a parent shell). PYTEST_CURRENT_TEST={current_test}",
+        "for deletion; instead unset PYTEST_CURRENT_TEST and run again. "
+        f"PYTEST_CURRENT_TEST={current_test}",
         exit_code=2,
     )
 
