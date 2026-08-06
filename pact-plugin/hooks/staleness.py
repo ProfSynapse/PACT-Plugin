@@ -64,13 +64,20 @@ PINNED_STALENESS_DAYS = 30
 # derived from the region it bounds cannot see that region's next edit, and it
 # lands so close to the present size that an ordinary pin edit re-trips the
 # warning -- which reports "you touched a pin", not "your pins have bloated".
-# This value leaves headroom above a full set of well-written pins and still
-# sits far below what PIN_COUNT_CAP pins at PIN_SIZE_CAP would cost, so the
-# warning stays actionable in both directions.
+# This value leaves headroom above a full set of well-written pins.
 #
-# The budget is DELIBERATELY NOT derived from the caps in pin_caps.py. A
-# derived budget is large enough that no legal document ever reaches it, and an
-# advisory that never advises is of no use.
+# WHY THIS IS A FREE NUMBER RATHER THAN A VALUE DERIVED FROM THE CAPS IN
+# pin_caps.py. A derived advisory cannot fire before enforcement binds. If the
+# budget were f(caps) with f >= 1, then reaching it would require roughly full
+# legal capacity -- and at that point PIN_SIZE_CAP and PIN_COUNT_CAP are
+# already refusing edits, so the advice arrives at the wall, too late to act
+# on. Advising EARLIER requires a coefficient below 1. Derivation therefore
+# does not eliminate the free number; it relocates it into a coefficient. This
+# constant IS that coefficient, stated directly instead of hidden in a formula.
+#
+# The two also bound DIFFERENT things, which is why one cannot be read off the
+# other: PIN_SIZE_CAP counts body characters of a single pin, while this counts
+# estimated tokens of the whole section, headings and markers included.
 PINNED_CONTEXT_TOKEN_BUDGET = 3200
 
 # The exact text this module writes at the head of an over-budget pinned
@@ -80,10 +87,22 @@ _BUDGET_WARNING_PREFIX = "<!-- WARNING: Pinned context"
 
 # Matches ONE complete warning comment line at the very head of a pinned body.
 #
-# THE PATTERN CARRIES ITS OWN ANCHOR AND ITS OWN BOUND, so no call site can
-# widen it. `\A` pins the match to offset 0, which is the only offset this
-# module ever writes such a line to, and `[^\n]*` cannot cross a newline, so
-# the match always ends inside the line it starts on.
+# THE PATTERN CARRIES ITS OWN ANCHOR AND ITS OWN BOUNDS, so no call site can
+# widen it. `\A` pins the match to offset 0, the only offset this module ever
+# writes such a line to. `[^\n]*?` cannot cross a newline, so the match always
+# ends inside the line it starts on, and it is LAZY so it stops at the FIRST
+# `-->`. An HTML comment ends at its first `-->`; a greedy run to the LAST one
+# on the line would swallow whatever a user appended after the comment had
+# already closed.
+#
+# THE `~N tokens (budget: M)` SHAPE IS LOAD-BEARING, NOT DECORATION. It is what
+# separates a line this module emitted from a line that merely opens with the
+# same words, and requiring it is what keeps the strip off a user's own prose.
+#
+# THIS PATTERN AND THE EMITTED FORMAT IN `apply_staleness_markings` ARE A
+# MATCHED PAIR. Change one and change the other in the SAME commit: a format
+# this pattern cannot match is a warning that can never be refreshed or
+# removed, and every later pass stacks another warning above it.
 #
 # STRICT ON PURPOSE. This predicate DELETES bytes from a user's CLAUDE.md, a
 # file that is frequently gitignored, so an over-match has no commit to recover
@@ -92,7 +111,7 @@ _BUDGET_WARNING_PREFIX = "<!-- WARNING: Pinned context"
 # a predicate's tolerance follows its failure direction, never its resemblance
 # to a predicate that looks like it.
 _LEADING_BUDGET_WARNING_RE = re.compile(
-    rf"\A{re.escape(_BUDGET_WARNING_PREFIX)}[^\n]*-->\n?"
+    rf"\A{re.escape(_BUDGET_WARNING_PREFIX)} ~\d+ tokens \(budget: \d+\)[^\n]*?-->\n?"
 )
 
 
