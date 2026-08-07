@@ -1283,10 +1283,10 @@ class TestParsePinnedSectionMarkerBoundary:
     r"""Direct unit tests for `staleness._parse_pinned_section`'s marker-aware
     section-end detection.
 
-    Round-4 Item 4: the integration test `TestCheckPinnedStaleness.test_pinned_content_before_memory_end_marker`
-    passes even if the next_section regex is relaxed back to `^#{1,2}\s`
-    because the fixture content has no stale entries, so no write-back occurs
-    and the marker is never touched. A unit-level test on `_parse_pinned_section`
+    An INTEGRATION test in `TestCheckPinnedStaleness` passes even if the
+    next_section regex is relaxed back to `^#{1,2}\s`, whenever its fixture
+    content has no stale entries, because no write-back occurs and the marker
+    is never touched. A unit-level test on `_parse_pinned_section`
     directly asserts that the returned `pinned_end` index stops BEFORE the
     marker — this is the differentiated behavior the round-3 fix protects.
 
@@ -3504,13 +3504,36 @@ def _cited_test_names(source):
     failure. The exclusion is applied after the match rather than inside the
     pattern, because a lookahead lets the regex backtrack to a shorter name and
     invent a citation that was never written.
+
+    A name immediately followed by `*` is a GLOB over a FAMILY of arms, and it
+    keeps its star. It is not dropped, because a glob is still a pointer and
+    can still dangle. `_unresolved` resolves it by prefix, so a family that
+    goes away is reported rather than excused.
     """
     found = set()
     for match in _CITED_TEST_NAME_RE.finditer(source):
         if source[match.end():match.end() + 3] == ".py":
             continue
-        found.add(match.group(0))
+        star = "*" if source[match.end():match.end() + 1] == "*" else ""
+        found.add(match.group(0) + star)
     return found
+
+
+def _unresolved(cited, defined):
+    """Return the cited names that nothing in `defined` satisfies.
+
+    A plain name must be present. A name that ends in `*` is a glob, and it is
+    satisfied when SOME defined name carries that prefix, so the family is
+    checked rather than waved through.
+    """
+    missing = set()
+    for name in cited:
+        if name.endswith("*"):
+            if not any(d.startswith(name[:-1]) for d in defined):
+                missing.add(name)
+        elif name not in defined:
+            missing.add(name)
+    return sorted(missing)
 
 
 def _defined_test_names(source):
@@ -3520,6 +3543,64 @@ def _defined_test_names(source):
         for node in ast.walk(ast.parse(source))
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     }
+
+
+def _prose_of(source):
+    """Return the DOCSTRINGS and COMMENTS of `source`, and nothing else.
+
+    THIS FILE CANNOT BE READ WHOLE THE WAY A SOURCE MODULE CAN. A test module
+    holds test names in three places that are not citations at all: a local
+    variable that collects probe strings, synthetic names handed to an
+    extractor as INPUT DATA, and the definitions themselves. Prose is where a
+    citation lives, so prose is the population.
+
+    A GENERAL HAZARD, AND IT IS WHY THE POPULATION IS NARROWED RATHER THAN THE
+    EXCEPTIONS LISTED. When a checker grows to read the file that holds it, the
+    OWN FIXTURES of that checker become part of its input. Synthetic data built
+    to exercise the checker then reads as live content, and the checker reports
+    on itself. That self-reference is one the widening CREATES, not one it
+    finds, so expect it whenever a population grows to cover the checker.
+    """
+    chunks = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(
+            node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            docstring = ast.get_docstring(node, clean=False)
+            if docstring:
+                chunks.append(docstring)
+    for line in source.split("\n"):
+        hash_at = line.find("#")
+        if hash_at != -1:
+            chunks.append(line[hash_at:])
+    return "\n".join(chunks)
+
+
+def _defined_across_the_tests_tree():
+    """Every test symbol in this directory, plus every test FILE STEM.
+
+    THE RESOLUTION SET IS WIDENED WITH THE POPULATION, rather than the
+    population being narrowed by a list of exceptions. A citation to a test in
+    a sibling file is legitimate, and so is a reference to a test file by its
+    stem, so each must RESOLVE rather than be excluded by a rule somebody has
+    to keep current.
+
+    THE COST, STATED. This set is large, so a citation can resolve against an
+    unrelated test that happens to carry the name. The names in question are
+    long and specific, so the risk is small, and the alternative refuses every
+    legitimate cross-file citation. That trade is deliberate.
+
+    THE FAILURE DIRECTION IS WHY THE TRADE GOES THIS WAY. An accidental resolve
+    is a false GREEN, so this guard UNDER-DETECTS a cited name that collides
+    with an unrelated test. SILENCE HERE IS NOT PROOF. The alternative is a
+    false RED on correct prose, in a merge gate, and under-detection that needs
+    a name collision beats over-detection that fires on correct writing.
+    """
+    names = set()
+    for path in sorted(Path(__file__).parent.glob("test_*.py")):
+        names.add(path.stem)
+        names |= _defined_test_names(path.read_text(encoding="utf-8"))
+    return names
 
 
 class TestStalenessCitationsResolve:
@@ -3551,7 +3632,7 @@ class TestStalenessCitationsResolve:
         assert found == {"TestFooBar", "test_foo_bar"}
 
     def test_the_extractor_ignores_a_file_path(self):
-        """`test_staleness.py` is a path. A bare `test_real_thing` is a symbol."""
+        """A name with a `.py` suffix is a path. A bare name is a symbol."""
         assert _cited_test_names("see test_staleness.py for details") == set()
         assert _cited_test_names("test_staleness.py defines test_real_thing") == {
             "test_real_thing"
@@ -3570,6 +3651,64 @@ class TestStalenessCitationsResolve:
             "resolution check below is quantifying over an empty set"
         )
 
+    def test_each_file_supplies_its_own_citations(self):
+        """NON-VACUITY FOR THE WIDENED POPULATION, RE-DERIVED RATHER THAN CARRIED.
+
+        The arm above asserts that SOME citation was extracted, and it was
+        calibrated when one file supplied them all. Over two files that same
+        claim is much weaker: a broken extractor on the TEST file leaves the
+        source module's citations in place, the assertion holds, and half the
+        population goes silent with nothing to report it.
+
+        So the floor is PER FILE, and each figure is measured rather than
+        chosen. If a legitimate edit takes a file below its floor, lower the
+        figure and say what went, rather than delete the arm.
+
+        THAT RULE HAS BEEN APPLIED ONCE, WHEN THIS ARM WAS NEW. The committed
+        file carried 19 prose citations. Two left for good reasons: a name that
+        no test ever defined, and a synthetic name that this file's own
+        instrument tests use as INPUT rather than as a pointer. The floor is
+        the measured 17 that remains.
+        """
+        from_source = _cited_test_names(
+            _STALENESS_SOURCE.read_text(encoding="utf-8")
+        )
+        from_this_file = _cited_test_names(
+            _prose_of(Path(__file__).read_text(encoding="utf-8"))
+        )
+        assert len(from_source) >= 3, (
+            f"staleness.py supplied {len(from_source)} citations against a "
+            f"measured floor of 3, so the source half of this guard has lost "
+            f"population it used to carry"
+        )
+        assert len(from_this_file) >= 17, (
+            f"this file's prose supplied {len(from_this_file)} citations "
+            f"against a measured floor of 17, so the half of this guard that "
+            f"reads its OWN file is quantifying over less than it used to"
+        )
+
+    def test_every_test_cited_by_this_file_still_exists(self):
+        """The same property, turned on the file that holds the guard.
+
+        WHY THIS ARM EXISTS. The guard above reads the SOURCE module only. The
+        file carrying it held a dangling citation about fifteen hundred lines
+        below the guard, and the guard could not see it. A checker blind to its
+        own file is the shape it was written to refuse.
+
+        THE POPULATION IS PROSE, and the resolution set is the whole tests
+        directory. See `_prose_of` and `_defined_across_the_tests_tree` for why
+        each is drawn that way.
+        """
+        cited = _cited_test_names(
+            _prose_of(Path(__file__).read_text(encoding="utf-8"))
+        )
+        missing = _unresolved(cited, _defined_across_the_tests_tree())
+        assert not missing, (
+            f"this file's prose cites {missing}, and no test in this directory "
+            f"defines them. The prose that leans on those names can no longer "
+            f"be checked by a reader who follows the pointer"
+        )
+
     def test_every_test_cited_by_staleness_still_exists(self):
         """The property itself."""
         cited = _cited_test_names(
@@ -3578,7 +3717,7 @@ class TestStalenessCitationsResolve:
         defined = _defined_test_names(
             Path(__file__).read_text(encoding="utf-8")
         )
-        missing = sorted(cited - defined)
+        missing = _unresolved(cited, defined)
         assert not missing, (
             f"staleness.py cites {missing} but this file no longer defines "
             f"them; the citation is a dangling pointer and the prose that "
