@@ -2692,6 +2692,161 @@ class TestBudgetWarningInteractions:
         assert warning_number(content) > 0
 
     # ------------------------------------------------------------------
+    # The entry-less asymmetry, widened-probe half.
+    # ------------------------------------------------------------------
+    #
+    # The probe reads ANY line start; the strip reads offset 0. The three arms
+    # below pin the whole of that gap: what the wider probe buys, what it
+    # costs, and the second condition that keeps the cost from firing.
+
+    def test_entryless_section_with_a_stranded_warning_is_refreshed(self, tmp_path):
+        """A warning MOVED below the head still admits the section to the pass.
+
+        THE DEFECT THIS REMOVES. The probe used to be anchored at offset 0, so
+        a user who moved the warning down took the whole section out of the
+        pass: the figure froze at whatever it said that day, and no later pass
+        could correct it. A wider probe admits the section again.
+
+        THE STRIP DOES NOT FOLLOW THE PROBE. It still reaches offset 0 only, so
+        the moved line survives and this pass adds ONE current warning ABOVE
+        it. Two lines, not one. That is the ratified residual, not a repair.
+
+        KILLS THE ANCHOR REVERT. Put `_LEADING_BUDGET_WARNING_RE.match` back
+        into `_has_budget_warning` and this document is left untouched with its
+        frozen figure, which is the defect itself.
+        """
+        from staleness import check_pinned_staleness
+
+        stranded = self._warning_line(tokens=9999)
+        claude_md = self._create_project_claude_md(
+            tmp_path,
+            self._doc(
+                "Some prose the user keeps here.\n"
+                + stranded
+                + f"{over_budget_body()}\n"
+            ),
+        )
+
+        result = check_pinned_staleness(claude_md_path=claude_md)
+
+        content = claude_md.read_text(encoding="utf-8")
+        # One line the hook wrote at the head, plus the one it cannot reach.
+        assert self._count_warnings(content) == 2
+        assert stranded in content, "the strip reached a line below the head"
+        head_figure = warning_number(content)
+        assert head_figure is not None, "the pass wrote no warning at the head"
+        assert head_figure != 9999, (
+            "the head still carries the stranded figure -- the number froze, "
+            "which is the defect this widening removes"
+        )
+        assert result is not None and "budget" in result.lower()
+
+        # The pass settles. Later passes must change no byte and add no line.
+        settled = content
+        for _ in range(3):
+            check_pinned_staleness(claude_md_path=claude_md)
+        assert claude_md.read_text(encoding="utf-8") == settled, (
+            "a later pass rewrote a settled document"
+        )
+
+    def test_a_pasted_warning_over_budget_costs_exactly_one_extra_line(self, tmp_path):
+        """THE RULING ITSELF, pinned so the accepted cost can be falsified.
+
+        A maintainer who pastes the emitted format into a note of their own
+        writes a document this module CANNOT tell apart from the stranded case
+        above. The shape is what identifies a line as this module's own, and
+        both documents carry that shape at a line start below the head. So this
+        section enters the pass too, and gains one current warning above the
+        paste. This arm states the price rather than asserting that the price
+        is acceptable.
+
+        THE PRICE IS BOUNDED AT ONE EXTRA LINE, which is the half that matters.
+        Six passes hold the count at two and change no byte after the first, so
+        a maintainer's note cannot make the document grow without limit.
+
+        THE USER'S OWN LINE MUST SURVIVE, and that is the cardinal assertion
+        here. This module deletes from a file that is frequently gitignored, so
+        an over-broad strip removes text no commit can restore.
+        """
+        from staleness import check_pinned_staleness
+
+        pasted = self._warning_line(tokens=99, budget=1)
+        claude_md = self._create_project_claude_md(
+            tmp_path,
+            self._doc(
+                "The hook writes this line:\n"
+                + pasted
+                + f"{over_budget_body()}\n"
+            ),
+        )
+
+        result = check_pinned_staleness(claude_md_path=claude_md)
+
+        settled = claude_md.read_text(encoding="utf-8")
+        assert self._count_warnings(settled) == 2
+        assert pasted in settled, "the strip deleted a line a user wrote"
+        assert result is not None and "budget" in result.lower()
+
+        # Five further passes. The accepted cost is ONE extra line for ever,
+        # not one extra line per pass.
+        for _ in range(5):
+            check_pinned_staleness(claude_md_path=claude_md)
+        after = claude_md.read_text(encoding="utf-8")
+        assert self._count_warnings(after) == 2, (
+            "a later pass raised the count -- the accepted cost is not bounded"
+        )
+        assert after == settled, "a later pass rewrote a settled document"
+
+    def test_a_pasted_warning_under_budget_changes_nothing(self, tmp_path):
+        """BOTH CONDITIONS ARE REQUIRED, so the paste alone is inert.
+
+        The wider probe only ADMITS a section to the pass. The write decision
+        is still `pinned_tokens > PINNED_CONTEXT_TOKEN_BUDGET`, and the probe
+        is not an input to it. The same paste in a body UNDER the budget
+        therefore leaves the document byte-identical and returns None.
+
+        A POSITIVE LEG SITS IN THIS FIXTURE, and it is what makes the untouched
+        assertion mean anything. "Nothing happened" also passes for a hook that
+        never ran, a region that never parsed, and a renamed constant. The
+        second half of this test is the SAME document over the budget, which
+        must gain exactly one line.
+        """
+        from staleness import check_pinned_staleness
+
+        pasted = self._warning_line(tokens=99, budget=1)
+        quiet = self._create_project_claude_md(
+            tmp_path,
+            self._doc("The hook writes this line:\n" + pasted + "a short pin\n"),
+        )
+        before = quiet.read_text(encoding="utf-8")
+
+        result = check_pinned_staleness(claude_md_path=quiet)
+
+        assert result is None
+        assert quiet.read_text(encoding="utf-8") == before, (
+            "an under-budget body was modified -- the paste alone must be inert"
+        )
+        assert self._count_warnings(before) == 1
+
+        # POSITIVE CONTROL: the same document over the budget, in the same
+        # test. Without it the assertions above hold for a dead instrument.
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        loud = self._create_project_claude_md(
+            sub,
+            self._doc(
+                "The hook writes this line:\n"
+                + pasted
+                + f"{over_budget_body()}\n"
+            ),
+        )
+        assert check_pinned_staleness(claude_md_path=loud) is not None
+        assert self._count_warnings(loud.read_text(encoding="utf-8")) == 2, (
+            "the positive control did not fire, so the untouched assertion "
+            "above proves nothing about the budget condition"
+        )
+
+    # ------------------------------------------------------------------
     # Absence must be caused by the budget, not by a dead instrument.
     # ------------------------------------------------------------------
 
@@ -2725,6 +2880,159 @@ class TestBudgetWarningInteractions:
             "the positive control did not fire, so the negative arm above "
             "proves nothing"
         )
+
+
+# ===========================================================================
+# The two budget-warning predicates are one shape under two anchors
+# ===========================================================================
+
+
+def _line_starts(text):
+    """Every offset a `(?m)^` pattern can match at: 0, and after each newline.
+
+    A text that ends with a newline has a line start at its very end, where
+    there is nothing left to match. That position is included on purpose, so
+    this list is the multiline anchor's own position set rather than an
+    approximation of it. Measured against `re.finditer(r"(?m)^", ...)`.
+    """
+    return [0] + [match.end() for match in re.finditer(r"\n", text)]
+
+
+_ONE_WARNING_LINE = (
+    f"{_BUDGET_WARNING_PREFIX} ~42 tokens (budget: 5). "
+    "Consider archiving stale pins. -->\n"
+)
+
+# THE CORPUS IS KEYED BY NAME so a failure reports WHICH member broke the
+# property instead of an index. Every member is built from the imported
+# prefix, never from a copied literal.
+#
+# THE THREE CLASSES BELOW ARE COUNTED BY THE SECOND ARM, and each class earns
+# its place. The SEPARATING members are the only reason the equality property
+# says anything at all. The BOTH-TRUE members keep it from being a proof that
+# nothing ever matches. The BOTH-FALSE members are the shapes a user's own
+# prose can take, and they are what shows the wider anchor did not widen the
+# ALPHABET: a bare prefix, a payload with no digits, a line with no terminator,
+# and a warning that starts mid-line all stay outside both predicates.
+#
+# LINE ENDINGS ARE OUT OF SCOPE HERE and no member carries a carriage return.
+# The two predicates share one shape, so they cannot disagree about a line
+# ending, and the arc that produced them changed nothing about that behaviour.
+_ANCHOR_CORPUS = {
+    "empty": "",
+    "prose only": "an ordinary pinned note\n",
+    "leading warning": _ONE_WARNING_LINE + "the rest of the body\n",
+    "two leading warnings": _ONE_WARNING_LINE * 2 + "the rest of the body\n",
+    "stranded below the head": (
+        "an ordinary pinned note\n" + _ONE_WARNING_LINE + "more prose\n"
+    ),
+    "warning on the last line, no newline": (
+        "an ordinary pinned note\n" + _ONE_WARNING_LINE.rstrip("\n")
+    ),
+    "warning starts mid line": "quoted: " + _ONE_WARNING_LINE,
+    "bare prefix, no payload": (
+        f"{_BUDGET_WARNING_PREFIX} is what the hook writes -->\n"
+    ),
+    "payload without digits": f"{_BUDGET_WARNING_PREFIX} ~ tokens (budget: ). -->\n",
+    "payload without a terminator": (
+        f"{_BUDGET_WARNING_PREFIX} ~42 tokens (budget: 5). Consider archiving\n"
+    ),
+    "terminator on the following line": (
+        f"{_BUDGET_WARNING_PREFIX} ~42 tokens (budget: 5).\n-->\n"
+    ),
+}
+
+
+class TestBudgetWarningAnchorComposition:
+    """One shape, two anchors, and the wider one must not widen the alphabet.
+
+    `_LEADING_BUDGET_WARNING_RE` DELETES and `_ANY_BUDGET_WARNING_RE` only
+    RECOGNISES. They are composed from the same `_BUDGET_WARNING_SHAPE` so that
+    the difference between them is a position and nothing else. These arms are
+    what hold that claim up.
+
+    WHAT THIS DELIBERATELY DOES NOT DO. It compares no pattern STRINGS. An
+    assertion that one pattern ends with the shared shape certifies nothing
+    about behaviour: two patterns can share a fragment and still match
+    different sets, and two IDENTICAL patterns satisfy such an assertion
+    perfectly. Both arms below CALL the compiled objects instead, because only
+    the shipped objects can testify about their own composition.
+
+    THE TWO ARMS HAVE DIFFERENT SUBJECTS, WHICH IS WHY THERE ARE TWO. The first
+    is about the PATTERNS. The second is about the CORPUS, and only a change to
+    the corpus separates them. Measured rather than predicted: TRIM the two
+    separating members out of the corpus below and the equality arm still
+    PASSES, while the second arm goes red and says why. That is the vacuity
+    this pair exists to refuse. Re-anchor the wide pattern to the start of the
+    string, so that the two become identical patterns, and BOTH arms go red --
+    the first because the corpus separates them, the second because nothing
+    separates them any longer.
+    """
+
+    def test_the_wide_anchor_matches_at_exactly_the_narrow_one_s_positions(self):
+        """The wide predicate equals the narrow one tried at every line start.
+
+        This is the composition property stated as behaviour. If the wide
+        pattern ever gains a token the narrow one lacks, or loses one it has,
+        the two sides part company on some member of the corpus.
+        """
+        from staleness import _ANY_BUDGET_WARNING_RE, _LEADING_BUDGET_WARNING_RE
+
+        for name, text in _ANCHOR_CORPUS.items():
+            wide = _ANY_BUDGET_WARNING_RE.search(text) is not None
+            # THIS CALL SHAPE IS LEGITIMATE HERE AND FORBIDDEN IN THE MODULE.
+            # `_LEADING_BUDGET_WARNING_RE` is the pattern that DELETES, and
+            # giving it a caller-chosen offset is the construction the module
+            # refuses: it moves the anchor out of the compiled object and into
+            # a convention, where a later caller can widen what gets deleted.
+            # Nothing here deletes a byte, so that hazard cannot arise, and
+            # only the shipped object can testify about its own composition.
+            # DO NOT COPY THIS LINE INTO A CALLER.
+            narrow_anywhere = any(
+                _LEADING_BUDGET_WARNING_RE.match(text[k:])
+                for k in _line_starts(text)
+            )
+            assert wide == narrow_anywhere, (
+                f"the two anchors disagree on {name!r}: the wide pattern says "
+                f"{wide}, the narrow one tried at every line start says "
+                f"{narrow_anywhere}. They no longer share one shape."
+            )
+
+    def test_the_corpus_separates_the_two_anchors(self):
+        """NON-VACUITY, and it guards the CORPUS rather than the predicates.
+
+        The equality above holds trivially on a corpus where both sides always
+        agree -- a corpus of empty strings satisfies it, and so would two
+        identical patterns. It is evidence only while some member tells a
+        line-start anchor apart from a start-of-string one, which means a
+        member whose ONLY warning sits below the head.
+
+        THE COUNTS ARE PINNED, NOT MERELY NON-ZERO. "At least one" survives a
+        trim down to one lucky member. An exact figure per class refuses any
+        trim, and names the class that went missing. Add a member and this arm
+        asks you to say which class it joined.
+        """
+        from staleness import _ANY_BUDGET_WARNING_RE, _LEADING_BUDGET_WARNING_RE
+
+        separating, both_true, both_false = [], [], []
+        for name, text in _ANCHOR_CORPUS.items():
+            wide = _ANY_BUDGET_WARNING_RE.search(text) is not None
+            at_head = _LEADING_BUDGET_WARNING_RE.match(text) is not None
+            if wide and not at_head:
+                separating.append(name)
+            elif wide:
+                both_true.append(name)
+            else:
+                both_false.append(name)
+
+        assert separating, (
+            "no corpus member carries a warning below the head, so the "
+            "equality arm cannot tell the wide anchor from the narrow one and "
+            "would pass unchanged if the two were the same pattern"
+        )
+        assert len(separating) == 2, f"separating members: {sorted(separating)}"
+        assert len(both_true) == 2, f"both-true members: {sorted(both_true)}"
+        assert len(both_false) == 7, f"both-false members: {sorted(both_false)}"
 
 
 # ===========================================================================
