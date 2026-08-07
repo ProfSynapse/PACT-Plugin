@@ -992,17 +992,25 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
     # same hardening as the other 5 (claude_md_manager + session_resume).
     # See `fcntl_sidecar_lock_pattern` for the canonical pattern.
     if modified:
+        # Function-level import to avoid circular dependency:
+        # session_init.py imports staleness at module level, and also
+        # imports from shared.claude_md_manager — a module-level
+        # import here would create a staleness → claude_md_manager →
+        # (indirectly) staleness cycle on some Python versions. That reason
+        # constrains function-versus-module level only, so the statement is
+        # free to sit here rather than lower down.
+        #
+        # KEEP IT ABOVE THE `try:` BELOW. That block handles ContainmentError,
+        # which this import binds. An import failure inside the block leaves
+        # the name unbound, so Python reports the handler and hides the cause.
+        # Do not move it back in. Do not wrap it in its own handler, because
+        # an ImportError must reach the caller.
+        from shared.claude_md_manager import (
+            ContainmentError,
+            _atomic_write_text,
+            file_lock,
+        )
         try:
-            # Function-level import to avoid circular dependency:
-            # session_init.py imports staleness at module level, and also
-            # imports from shared.claude_md_manager — a module-level
-            # import here would create a staleness → claude_md_manager →
-            # (indirectly) staleness cycle on some Python versions.
-            from shared.claude_md_manager import (
-                ContainmentError,
-                _atomic_write_text,
-                file_lock,
-            )
             with file_lock(claude_md_path):
                 # #1247: containment (in _atomic_write_text) REPLACES the
                 # former leaf is_symlink guard -- inside the lock (TOCTOU-safe).
