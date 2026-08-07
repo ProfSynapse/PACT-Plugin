@@ -3,15 +3,25 @@ The compact-summary archive naming convention is stated in TWO files and
 nothing links them.
 
   * ``agents/pact-secretary.md`` tells the secretary what to name the file it
-    archives. That is the WRITER, so it is the reference.
-  * ``hooks/session_init.py`` tells a resuming lead what to look for when the
-    canonical path is empty. That is the READER; it only describes what the
-    writer does.
+    archives.
+  * ``hooks/session_init.py`` archives a summary the secretary left behind, and
+    tells a resuming lead what to look for when the canonical path is empty.
+
+BOTH FILES DESCRIBE A CONVENTION THEY BOTH ACT ON, and neither is the reference
+for the other. An earlier version of this docstring named the agent body the
+WRITER and the hook the READER, on the ground that the hook "only describes what
+the writer does". That stopped being true when the hook gained its own archive
+step: it now writes an archive name as well as describing one. This pin never
+adjudicated that role and does not need it — it compares the two PROSE
+STATEMENTS of the convention against each other, and EITHER file may be the one
+that drifted.
 
 Neither can import from the other — one is Markdown loaded into an LLM's
 context, the other is a hook module — so a single source of truth is not
 available across that boundary and a pin is the only instrument that can see a
-divergence.
+divergence. The hook's archive step takes its prefix from a constant in
+``hooks/shared/constants.py``, so the CODE cannot drift from itself; what stays
+unlinked, and what this pin watches, is the PROSE.
 
 WHAT THIS PIN DOES AND DOES NOT DO, stated so no reader infers more:
 
@@ -51,8 +61,11 @@ from pathlib import Path
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
-WRITER = _PLUGIN_ROOT / "agents" / "pact-secretary.md"
-READER = _PLUGIN_ROOT / "hooks" / "session_init.py"
+# Named for WHICH FILE, not for the role it plays. A role-shaped name is a
+# claim, and this one went stale the moment the hook started archiving; a name
+# that identifies the surface cannot.
+SECRETARY_SURFACE = _PLUGIN_ROOT / "agents" / "pact-secretary.md"
+HOOK_SURFACE = _PLUGIN_ROOT / "hooks" / "session_init.py"
 
 # A literal filename prefix followed by an angle-bracket placeholder and the
 # extension: `compact-summary-<timestamp>.txt` -> `compact-summary-`. The
@@ -74,7 +87,7 @@ class TestCompactSummaryArchiveNaming:
         equal. More than one would make "the" prefix ambiguous and let a
         second, divergent spelling sit in the same file unnoticed.
         """
-        for path in (WRITER, READER):
+        for path in (SECRETARY_SURFACE, HOOK_SURFACE):
             found = _stated_prefixes(path)
             assert len(found) == 1, (
                 f"{path.relative_to(_PLUGIN_ROOT)} states the archive filename "
@@ -85,18 +98,19 @@ class TestCompactSummaryArchiveNaming:
             )
             assert found[0], "captured an empty prefix — the pattern matched nothing useful"
 
-    def test_the_reader_and_the_writer_agree_on_the_prefix(self):
+    def test_the_two_surfaces_agree_on_the_prefix(self):
         """The whole point: two files, one convention, no mechanical link."""
-        (writer,) = _stated_prefixes(WRITER)
-        (reader,) = _stated_prefixes(READER)
-        assert reader == writer, (
+        (secretary,) = _stated_prefixes(SECRETARY_SURFACE)
+        (hook,) = _stated_prefixes(HOOK_SURFACE)
+        assert hook == secretary, (
             f"the archive filename prefix has diverged.\n"
-            f"  writer {WRITER.relative_to(_PLUGIN_ROOT)}: {writer!r}\n"
-            f"  reader {READER.relative_to(_PLUGIN_ROOT)}: {reader!r}\n"
-            f"The secretary names the archived file; session_init tells a "
-            f"resuming lead what to look for. When they disagree the lead is "
-            f"sent after a filename that is never written, and nothing else "
-            f"fails — the instruction is only read when the canonical path is "
-            f"already empty. Update whichever side is wrong; the writer is the "
-            f"reference."
+            f"  {SECRETARY_SURFACE.relative_to(_PLUGIN_ROOT)}: {secretary!r}\n"
+            f"  {HOOK_SURFACE.relative_to(_PLUGIN_ROOT)}: {hook!r}\n"
+            f"Both files archive under this convention and both state it in "
+            f"prose. When they disagree a resuming lead is sent after a "
+            f"filename that is never written, and nothing else fails — the "
+            f"instruction is only read when the canonical path is already "
+            f"empty. NEITHER side is automatically the reference: decide which "
+            f"spelling is correct, fix the other, and check that the hook's "
+            f"COMPACT_SUMMARY_ARCHIVE_PREFIX still matches what they say."
         )

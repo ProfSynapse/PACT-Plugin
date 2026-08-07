@@ -91,6 +91,8 @@ You are **exempted from the standard teachback** at spawn — your bootstrap tas
 
    The file is single-use, so it must leave `compact-summary.txt`: otherwise a second briefing in the same session processes it again. It does not follow that you may delete it. The `postcompact_archive` hook writes that path as a global singleton, and no second copy exists anywhere. The team-lead is told to read that same path after compaction, so a delete strands the team-lead as well. A move clears the path and keeps the bytes in one step. If you cannot resolve the session directory, or the move fails, leave the file where it is and report that in the briefing. A summary processed twice costs a duplicate paragraph. A summary deleted once costs everything it held.
 
+   Leaving it is safe to do and not safe to rely on. The next session start archives whatever it finds at that path, so the bytes survive your fallback — but they are then filed under THAT session rather than this one, and if it cannot identify a session they go to a single shared slot that the following orphan overwrites. So report the fallback prominently: it is the one branch where nobody has yet put the summary where its own session can find it.
+
 5. **Deliver a session briefing** to the team-lead via `SendMessage`:
 
 ```

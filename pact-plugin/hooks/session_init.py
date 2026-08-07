@@ -38,6 +38,7 @@ import os
 import re
 import secrets
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -78,7 +79,11 @@ from pin_caps import (  # noqa: F401
 )
 
 from shared import BOOTSTRAP_MARKER_NAME, SESSION_ID_CONTROL_CHARS_RE, build_session_path
-from shared.constants import get_compact_summary_path
+from shared.constants import (
+    COMPACT_SUMMARY_ARCHIVE_PREFIX,
+    COMPACT_SUMMARY_ORPHAN_NAME,
+    get_compact_summary_path,
+)
 from shared.pact_context import (
     _is_unknown_or_missing_session,
     _resolve_aligned_team_name,
@@ -630,6 +635,54 @@ def _clear_bootstrap_marker(session_path: Path) -> None:
         pass  # Fail-open: don't block session init for marker cleanup
 
 
+def _stale_summary_destination(session_id: str, project_dir: str) -> Path:
+    """Where a stale compact summary goes when this hook clears the path.
+
+    Session-scoped when the session can be identified, which is the normal
+    case and matches where the secretary archives. Falls back to a single
+    fixed-name slot in the sessions root, NEVER a timestamped one — see
+    COMPACT_SUMMARY_ORPHAN_NAME for the bound and the trade it accepts.
+
+    build_session_path is used rather than get_session_dir() because the
+    context cache is not built until later in main(); the bootstrap-marker
+    block below resolves a session path the same way, in the same window.
+    """
+    if session_id and project_dir:
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+        return build_session_path(Path(project_dir).name, str(session_id)) / (
+            f"{COMPACT_SUMMARY_ARCHIVE_PREFIX}{stamp}.txt"
+        )
+    return get_compact_summary_path().parent / COMPACT_SUMMARY_ORPHAN_NAME
+
+
+def _archive_stale_compact_summary(session_id: str, project_dir: str) -> None:
+    """Clear the compact-summary singleton BY MOVING IT, never by deleting.
+
+    The path must end up clear: the summary is single-use, and a copy left
+    there is processed a second time by the next briefing in the same session.
+    The bytes must survive: postcompact_archive writes that path as a global
+    singleton with no second copy anywhere, so an unlink destroys the only copy
+    of anything the secretary did not archive — which is precisely the
+    secretary's documented fallback branch, the one case where no archive was
+    ever made. A move satisfies both in ONE operation, so it cannot half-fail
+    into the state this repairs.
+
+    Fail-open, and the direction is deliberate: on any OSError the bytes stay
+    where they are. That risks a summary processed twice, which costs a
+    duplicate paragraph. Clearing the path on a failed move would risk losing
+    it, which is unrecoverable.
+    """
+    try:
+        summary = get_compact_summary_path()
+        if not summary.exists():
+            return
+        destination = _stale_summary_destination(session_id, project_dir)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        summary.replace(destination)
+    except OSError:
+        pass  # Fail-open: keep the bytes; never block session init for cleanup
+
+
 # ─── PACT Runtime Config injection (SessionStart LLM bridge) ────────────────
 
 # Fixed label table for the injected "PACT Runtime Config" block. This is the
@@ -795,13 +848,17 @@ def main():
         # behavior, a KNOWN no-regression default, not a misroute.
         frame_role = classify_session_role(input_data)
 
-        # Clean up stale compact-summary from previous sessions.
-        # Only "compact" source needs it (just written by postcompact_archive).
+        # Clear a stale compact-summary left by a previous session — BY MOVING
+        # IT. Only "compact" source keeps it in place (postcompact_archive just
+        # wrote it, and this session is about to read it).
+        #
+        # This used to unlink. The path still has to be cleared, for the same
+        # reason as before, but the previous code cleared it BY DESTROYING the
+        # bytes, and those are the only copy. See _archive_stale_compact_summary.
         if source != "compact":
-            try:
-                get_compact_summary_path().unlink(missing_ok=True)
-            except OSError:
-                pass  # Fail-open: don't block session init for cleanup
+            _archive_stale_compact_summary(
+                input_data.get("session_id", ""), project_dir
+            )
 
         # Clear bootstrap-complete marker on user-initiated clear only (#414).
         #
