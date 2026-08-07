@@ -149,6 +149,13 @@ _BUDGET_WARNING_SHAPE = (
 # string and the stale-marker loop writes at those offsets, so an in-place
 # exclusion puts markers in wrong positions. The exclusion looks like a pure
 # read, which is what makes that easy to miss.
+#
+# THIS REFUSAL IS ENFORCED AND NOT ONLY STATED. A test drives this compiled
+# object over a body whose only warning sits below the head and requires it to
+# find nothing: see `test_the_deleting_pattern_cannot_reach_below_the_head`. A
+# wider anchor turns that red. No arm that drives DOCUMENTS can catch the
+# widening, because the strip reads this pattern at offset 0 only, so every
+# anchor gives byte-identical output today.
 _LEADING_BUDGET_WARNING_RE = re.compile(rf"\A{_BUDGET_WARNING_SHAPE}")
 
 # RECOGNITION ONLY. NEVER GIVE THIS PATTERN TO CODE THAT DELETES. `(?m)^`

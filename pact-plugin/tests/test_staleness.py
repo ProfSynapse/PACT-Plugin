@@ -2970,6 +2970,13 @@ class TestBudgetWarningAnchorComposition:
         red.
     The first arm alone therefore certifies nothing. That is the whole reason
     the second one exists, and it is why neither may be deleted as a duplicate.
+
+    WHAT THIS PAIR DOES NOT COVER, AND IT IS THE MODULE'S CARDINAL HAZARD.
+    MEASURED: widen the DELETING pattern's anchor and the two arms stay GREEN.
+    The equality arm slices the text, and each anchor matches at a slice start,
+    so the two sides agree on every member. The arms are not weak here. They
+    measure a property that the widening does not disturb. That widening has
+    its own gate below, in `TestDeletingAnchorStaysAtTheHead`.
     """
 
     def test_the_wide_anchor_matches_at_exactly_the_narrow_one_s_positions(self):
@@ -3062,13 +3069,82 @@ class TestBudgetWarningAnchorComposition:
             "False agree for free"
         )
         assert separating, (
-            "no corpus member carries a warning below the head, so the "
-            "equality arm cannot tell the wide anchor from the narrow one and "
-            "would pass unchanged if the two were the same pattern"
+            "no corpus member is SEPARATING: for each member the wide "
+            "predicate agrees with the narrow one at offset 0. Either the "
+            "corpus lost its below-head member, or the wide predicate no "
+            "longer sees that member because its anchor is narrower. The "
+            "equality arm above names which. The property here would pass "
+            "unchanged if the two patterns were the same"
         )
         assert len(separating) == 2, f"separating members: {sorted(separating)}"
         assert len(both_true) == 2, f"both-true members: {sorted(both_true)}"
         assert len(both_false) == 7, f"both-false members: {sorted(both_false)}"
+
+
+class TestDeletingAnchorStaysAtTheHead:
+    """The pattern that DELETES must not reach past offset 0, by any call.
+
+    THE HAZARD HERE IS THE CARDINAL ONE OF THIS MODULE. Widen this anchor and
+    a strip reaches text a user wrote inside a pin body, in a file that is
+    frequently gitignored, with no commit to recover from. The module refuses
+    that widening in its own prose. Until this arm, nothing enforced it.
+
+    WHY NO DOCUMENT-LEVEL ARM CATCHES IT, which is the reason this gate reads
+    the OBJECT. `_strip_budget_warnings` reaches the pattern by `.match()` at
+    offset 0 alone, and each anchor matches at offset 0. MEASURED: with the
+    anchor widened to a line-anchored form, the strip returns BYTE-IDENTICAL
+    output and the whole file passes. The widening changes no behaviour today.
+    It removes a GUARANTEE, and a guarantee is invisible to an arm that drives
+    documents. The composition arms above miss it for a different reason, which
+    their own docstring records.
+
+    WHY `.search` IS THE PROBE. A start-of-string anchor makes `.search` and
+    `.match` agree on every input, so `.search` is harmless as a call site.
+    THAT AGREEMENT IS THE PROPERTY. If `.search` reaches further than `.match`
+    can, the pattern no longer pins itself to offset 0.
+
+    THIS GATE HOLDS NO LITERAL. It reads neither the pattern string nor the
+    module source, so a legitimate re-spelling passes. MEASURED: a caret with
+    no MULTILINE flag is equivalent to the shipped anchor, carries no hazard,
+    and this arm passes it. A gate on the pattern string REFUSES that spelling,
+    which is why this one does not read the string.
+
+    WHAT A LATER EDIT MUST DO TO SATISFY IT. Keep the compiled object unable to
+    match anywhere except offset 0. The sanctioned repair for the residual this
+    module accepts does NOT widen the delete: it excludes lines of this shape
+    from the COUNT at the measurement site, on a throwaway copy, and leaves the
+    delete on the contiguous run at the head.
+    """
+
+    def test_the_deleting_pattern_cannot_reach_below_the_head(self):
+        """A warning below the head must be invisible to the deleting pattern.
+
+        THE NEGATIVE LEG IS THE GATE. `.search` scans every position, so it
+        reports a match wherever the pattern is able to match at all. On a body
+        whose only warning sits below the head, this pattern must find nothing.
+
+        THE POSITIVE LEG SITS IN THE SAME TEST, because "found nothing" is also
+        what a shape that matches nothing produces. Without it this gate would
+        report the cardinal hazard as covered while it checked nothing.
+        """
+        from staleness import _LEADING_BUDGET_WARNING_RE
+
+        below_head = "a note the user wrote\n" + _ONE_WARNING_LINE + "more prose\n"
+        assert _LEADING_BUDGET_WARNING_RE.search(below_head) is None, (
+            "the deleting pattern reached a warning BELOW the head, so a strip "
+            "built on it now removes text a user wrote inside a pin body, from "
+            "a file that is frequently gitignored. Do not widen this anchor. "
+            "Exclude the line from the COUNT on a throwaway copy at the "
+            "measurement site instead, and leave the delete at the head"
+        )
+
+        # POSITIVE CONTROL, in the same fixture. The absence above must be
+        # caused by the ANCHOR, and not by a shape that matches nothing at all.
+        at_head = _ONE_WARNING_LINE + "a note the user wrote\n"
+        assert _LEADING_BUDGET_WARNING_RE.search(at_head) is not None, (
+            "the deleting pattern did not find a warning AT the head, so the "
+            "negative leg above proves nothing about the anchor"
+        )
 
 
 # ===========================================================================
