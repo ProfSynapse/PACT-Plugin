@@ -453,6 +453,69 @@ def _directories_holding_shipped_text(root=PLUGIN_ROOT):
     return out
 
 
+def _untracked_only_directories(root=PLUGIN_ROOT):
+    """Top-level dirs holding shipped-shaped text files of which git tracks NONE.
+
+    The narrow half of the partial-coverage residual, made detectable. A whole
+    instruction directory that git does not track is invisible to every count
+    arm in this module while the counts stay at one, so a duplicate placed
+    there would never be seen.
+
+    RESTRICTED TO THE GIT-STATUS-VISIBLE CLASS, and the restriction is the
+    whole design. MEASURED on four constructed repositories:
+
+      case                        unrestricted        this helper   git status
+      untracked FILE (legitimate) []                  []            `?? file`
+      dir PLAIN UNTRACKED         ['commands']        ['commands']  `?? commands/`
+      dir IGNORED                 ['ignored_surface'] []            CLEAN
+      NESTED WORKTREE             ['.worktrees']      []            CLEAN
+
+    The unrestricted form fires in exactly the two cases where `git status` is
+    CLEAN. That is a red test, a tree that looks clean in the reader's normal
+    view, and nothing to explain it — THE ORIGINAL DEFECT THIS MODULE'S
+    SUBTRACTION EXISTS TO REMOVE, reproduced by its own fix. A stale worktree
+    under the plugin root is that case exactly, and it has happened here once.
+
+    Restricting to `--others --exclude-standard` keeps the separation on the
+    case that matters and makes an unexplainable red UNREPRESENTABLE: every
+    directory this can name is one `git status` already prints.
+
+    IT TAKES A WHOLE DIRECTORY, not a file, so ordinary scratch work inside a
+    tracked directory cannot trip it. Firing requires a top-level directory
+    with ZERO tracked files, which is a deliberate state rather than a routine
+    one.
+    """
+    tracked = _tracked_relpaths(root)
+    if tracked is None:
+        return set()
+
+    listing = _git(root, "ls-files", "-z", "--others", "--exclude-standard")
+    if listing.returncode != 0:
+        raise RuntimeError(
+            f"{root} is inside a git work tree, but listing untracked files "
+            f"failed with status {listing.returncode}: "
+            f"{listing.stderr.strip()!r}. Not treated as 'nothing visible', "
+            f"because that would silently disarm this guard."
+        )
+    visible = {entry for entry in listing.stdout.split("\0") if entry}
+
+    hits = set()
+    for entry in root.iterdir():
+        if not entry.is_dir() or entry.name in SKIP_DIR_PARTS or entry.name == "tests":
+            continue
+        rels = [
+            str(f.relative_to(root))
+            for f in entry.rglob("*")
+            if f.is_file()
+            and f.suffix in TEXT_SUFFIXES
+            and not (SKIP_DIR_PARTS & set(f.relative_to(root).parts))
+            and not _is_test_module(f.relative_to(root))
+        ]
+        if rels and not any(r in tracked for r in rels) and any(r in visible for r in rels):
+            hits.add(entry.name)
+    return hits
+
+
 def _sites(token):
     """Every `relpath:lineno` at which `token` occurs, case-insensitively."""
     needle = token.lower()
@@ -1026,32 +1089,122 @@ def test_no_repository_means_the_subtraction_is_empty(tmp_path):
     )
 
 
+def test_no_instruction_directory_is_invisible_to_the_population():
+    """A whole top-level directory git tracks NONE of would be unguarded.
+
+    Every count arm above would stay at one while a duplicate sat there.
+    """
+    invisible = sorted(_untracked_only_directories())
+    assert not invisible, (
+        f"these top-level directories hold shipped-shaped text files that git "
+        f"tracks NONE of: {invisible}. Every cap arm in this file would stay "
+        f"GREEN while a duplicate ceiling statement sat inside one of them, "
+        f"because the population is the tracked set.\n"
+        f"TWO READINGS, and `git status` tells you which — it is already "
+        f"printing these as untracked, or this test could not name them.\n"
+        f"  1. YOU ARE MID-WORK on a new instruction surface. Commit it. Until "
+        f"you do, this guard cannot see it, and neither can the single-source "
+        f"rule it enforces.\n"
+        f"  2. THE CHECKOUT IS PARTIALLY COVERED — a vendored or sparse tree "
+        f"where a whole instruction directory is untracked. Then the "
+        f"population is narrower than the shipped plugin and the counts above "
+        f"are unreliable.\n"
+        f"This guard is deliberately blind to IGNORED directories and NESTED "
+        f"WORKTREES, so a red here can never be a stale worktree you cannot "
+        f"see. Do not widen it to cover those; that reintroduces an "
+        f"unexplainable failure."
+    )
+
+
+def test_the_invisible_directory_guard_fires_only_on_the_visible_class(tmp_path):
+    """The restriction, asserted across all four classes.
+
+    Delete the `--exclude-standard` restriction in `_untracked_only_directories`
+    and the last two cases start firing — a red whose cause is invisible in
+    `git status`, which is the defect this module exists to remove.
+    """
+    root = tmp_path / "plugin"
+    _repo_carrying_every_class(root)
+
+    # A tracked directory with an untracked FILE in it must NOT fire: the
+    # trigger is a whole directory, not scratch work beside shipped files.
+    assert "skills" not in _untracked_only_directories(root), (
+        "a directory holding tracked files fired. The guard must require ZERO "
+        "tracked files, or ordinary scratch work reddens the suite."
+    )
+
+    # B: plain untracked directory — the residual case. MUST fire.
+    (root / "commands").mkdir()
+    (root / "commands" / "cmd.md").write_text("a surface\n", encoding="utf-8")
+    assert "commands" in _untracked_only_directories(root), (
+        "a wholly untracked instruction directory did NOT fire. This is the "
+        "narrow half of the partial-coverage residual and the only reason "
+        "this guard exists; without it the guard is inert."
+    )
+
+    # B': ignored directory — MUST stay silent, `git status` shows nothing.
+    (root / "ignored").mkdir(exist_ok=True)
+    (root / "ignored" / "surface.md").write_text("a surface\n", encoding="utf-8")
+    assert "ignored" not in _untracked_only_directories(root), (
+        "an IGNORED directory fired. `git status` is clean for it, so the red "
+        "it produces has no visible cause — the original defect reproduced by "
+        "its own fix. Restore the `--exclude-standard` restriction."
+    )
+
+    # B'': nested worktree — MUST stay silent. This is the original defect.
+    assert ".worktrees" not in _untracked_only_directories(root), (
+        "a NESTED WORKTREE fired. That is the exact shape that reddened this "
+        "module while `git status` reported clean. Restore the restriction."
+    )
+
+
 def test_a_partially_tracked_tree_narrows_the_population_silently(tmp_path):
     """A RECORDED BOUND ON THE SUBTRACTION. RED here means it got better.
 
-    A work tree where git answers successfully but tracks only SOME of the
-    plugin means the population narrows with NO signal: the set is non-empty,
-    so nothing raises, and every count arm still sees the single source.
+    THE BOUND, AT ITS OWN SCOPE. The population narrows silently when a tree is
+    partially covered: the tracked set is non-empty so nothing raises, and every
+    count arm still sees the single source. THE RESIDUAL IS A FILE-SCOPED ONE.
+    An earlier version of this docstring stated it that way while the argument
+    beneath it was about files, and a reader could inherit the wide claim, think
+    of the directory-scoped predicate, and conclude nobody had. The two scopes
+    are now separated here, which is the point of this paragraph.
 
-    WHY THIS IS RECORDED RATHER THAN CLOSED, and it is a judgement rather than
-    a shrug. The obvious control is an anchor — assert some known file is in
-    the tracked set. That is a heuristic wearing a control's clothes here,
-    because it witnesses only the files it names, and the failure it must
-    catch is that some UNNAMED subset went untracked. Worse, the two cases are
-    the SAME OBSERVATION: `walk minus tracked` is non-empty both when a file
-    is legitimately untracked, which is the normal state this whole change
-    exists to handle, and when the tree is partially covered. No predicate
-    reads from here separates them.
+    WHY THE FILE SCOPE IS NOT CLOSED, and it is a judgement rather than a shrug.
+    The obvious control is an anchor — assert some known file is in the tracked
+    set. That is a heuristic wearing a control's clothes, because it witnesses
+    only the files it NAMES while the failure is that some UNNAMED subset went
+    untracked. Measured: an anchor predicate is TRUE in both the legitimate case
+    and the broken one, so it separates nothing. The deeper reason is that the
+    two cases are THE SAME OBSERVATION — `walk minus tracked` is non-empty when
+    a file is legitimately untracked, which is the normal state this whole
+    change exists to handle, and also when the tree is partially covered. No
+    predicate reading from here separates them at FILE scope.
 
-    WHAT IS ALREADY COVERED, so the residual is not overstated. A tree that
-    tracks NOTHING under the root raises, by the arm above. A tree that loses
-    the single source drives every count arm to zero, which fails loudly. A
-    tree that loses `agents/` or `skills/` entirely trips the named-pair floor
-    in the reach arm. What is left uncovered is a partially-tracked tree that
-    drops some OTHER instruction directory whole.
+    THE DIRECTORY SCOPE IS A DIFFERENT QUESTION AND IT IS NOW CLOSED. A whole
+    top-level directory of which git tracks NOTHING is distinguishable, because
+    the legitimate case has no such directory. That is asserted by
+    `test_no_instruction_directory_is_invisible_to_the_population`, restricted
+    to the git-status-visible class so it can never emit a red whose cause the
+    reader cannot see. So the sentence an earlier version of this docstring
+    ended on — "what is left uncovered is a partially-tracked tree that drops
+    some OTHER instruction directory whole" — IS NO LONGER TRUE, and that
+    narrow case is exactly what got closed.
 
-    IF THIS GOES RED, the subtraction learned to tell the two apart. Move the
-    finding into an asserted control and delete this arm. Do not weaken it.
+    WHAT REMAINS UNCOVERED, stated at the scope the argument supports: a
+    partially-covered tree that drops INDIVIDUAL FILES from directories which
+    still hold tracked files, or that drops a directory whose files are IGNORED
+    rather than merely untracked. The second is a deliberate trade, not an
+    oversight: covering it means firing on stale worktrees, whose red has no
+    visible cause.
+
+    ALSO ALREADY COVERED, so the residual is not overstated: a tree tracking
+    NOTHING under the root raises; a tree losing the single source drives every
+    count arm to zero; a tree losing `agents/` or `skills/` trips the named-pair
+    floor in the reach arm.
+
+    IF THIS GOES RED, the subtraction learned to tell the two apart at FILE
+    scope. Move the finding into an asserted control and delete this arm. Do
+    not weaken it.
     """
     root = tmp_path / "plugin"
     _repo_carrying_every_class(root)
