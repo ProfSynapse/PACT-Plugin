@@ -3556,10 +3556,13 @@ def _prose_of(source):
 
     A GENERAL HAZARD, AND IT IS WHY THE POPULATION IS NARROWED RATHER THAN THE
     EXCEPTIONS LISTED. When a checker grows to read the file that holds it, the
-    OWN FIXTURES of that checker become part of its input. Synthetic data built
-    to exercise the checker then reads as live content, and the checker reports
-    on itself. That self-reference is one the widening CREATES, not one it
-    finds, so expect it whenever a population grows to cover the checker.
+    OWN FIXTURES of that checker become part of its input, because fixtures are
+    shaped to look like the thing the checker hunts. Synthetic data built to
+    exercise the checker then reads as live content, and the checker reports on
+    itself. That self-reference is one the widening CREATES, not one it finds,
+    and it arrives as false positives indistinguishable from real findings
+    until each one is read. Expect it whenever a population grows to cover the
+    checker.
     """
     chunks = []
     for node in ast.walk(ast.parse(source)):
@@ -3590,11 +3593,14 @@ def _defined_across_the_tests_tree():
     long and specific, so the risk is small, and the alternative refuses every
     legitimate cross-file citation. That trade is deliberate.
 
-    THE FAILURE DIRECTION IS WHY THE TRADE GOES THIS WAY. An accidental resolve
-    is a false GREEN, so this guard UNDER-DETECTS a cited name that collides
-    with an unrelated test. SILENCE HERE IS NOT PROOF. The alternative is a
-    false RED on correct prose, in a merge gate, and under-detection that needs
-    a name collision beats over-detection that fires on correct writing.
+    THIS GUARD UNDER-DETECTS. A cited name that collides with an unrelated test
+    anywhere in the tests tree resolves and passes, so a dangling pointer can
+    read as live. Silence from this guard is not proof that each citation
+    resolves to what its author meant.
+
+    THE TRADE GOES THIS WAY ON FAILURE DIRECTION. The alternative is a false
+    RED on correct prose, in a merge gate. Under-detection that requires a name
+    collision beats over-detection that fires on correct writing.
     """
     names = set()
     for path in sorted(Path(__file__).parent.glob("test_*.py")):
