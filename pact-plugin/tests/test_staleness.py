@@ -41,7 +41,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "pact-memory" /
 # text is absent because nothing writes it any more, which is exactly what the
 # assertion was written to celebrate. A suite that goes green on a renamed
 # constant is worse than one that goes red.
-from staleness import _BUDGET_WARNING_PREFIX
+#
+# THE SHAPE COMES ACROSS UNCOMPILED, AND THAT IS DELIBERATE. It is the source
+# string the two anchored predicates are built from. A test that needs to
+# recognise a line this module writes composes its own predicate from the
+# SHAPE, so that a change to either compiled anchor cannot move the test and
+# the subject together. See `_WARNING_LINE_RE` for the arm that depends on it.
+from staleness import _BUDGET_WARNING_PREFIX, _BUDGET_WARNING_SHAPE
 
 # Pulls the token figure out of a warning comment, so a test can compare the
 # number in the file against the number in the returned status string.
@@ -83,6 +89,15 @@ def over_budget_body():
     """
     from staleness import PINNED_CONTEXT_TOKEN_BUDGET, estimate_tokens
 
+    # THE EXACT BYTES OF THIS BODY ARE LOAD-BEARING FOR TWO OTHER ARMS, so read
+    # this before you change the shape. `test_warning_removed_when_back_under_budget`
+    # and `test_warning_removed_when_last_pin_deleted` each call
+    # `.replace(over_budget_body(), ...)` in their SETUP. The value below is
+    # "word " repeated, so it ENDS WITH A SPACE, and a change that drops that
+    # space turns each `.replace` into a no-op. Those arms then fail on their
+    # own property assertion, for a cause that has nothing to do with their
+    # subject. MEASURED: a whitespace tidy inside the module reddens the two of
+    # them by exactly that route, and the red reads as coverage that is absent.
     body = "word " * (PINNED_CONTEXT_TOKEN_BUDGET + _OVER_BUDGET_MARGIN_WORDS)
     assert estimate_tokens(body) > PINNED_CONTEXT_TOKEN_BUDGET, (
         "fixture no longer exceeds the budget it is derived from"
@@ -3144,6 +3159,243 @@ class TestDeletingAnchorStaysAtTheHead:
         assert _LEADING_BUDGET_WARNING_RE.search(at_head) is not None, (
             "the deleting pattern did not find a warning AT the head, so the "
             "negative leg above proves nothing about the anchor"
+        )
+
+
+# ===========================================================================
+# User lines survive a pass, and a file keeps its line endings
+# ===========================================================================
+
+# THE ORACLE IS COMPOSED HERE FROM THE UNCOMPILED SHAPE, AND IT IS NOT TAKEN
+# FROM EITHER COMPILED ANCHOR. The arm below subtracts warning lines from the
+# two sides of ONE comparison. An oracle read off a compiled anchor would widen
+# that subtraction on BOTH sides together, the extra erasure would cancel, and
+# the arm would go GREEN on the mutation it exists to catch. Composed from the
+# shape, a change to either anchor cannot move this instrument.
+#
+# THE RESIDUAL, STATED RATHER THAN LEFT FOR A READER TO FIND. A widening of
+# `_BUDGET_WARNING_SHAPE` ITSELF does widen this subtraction, and it does
+# cancel. MEASURED: such a widening reddens
+# `test_the_corpus_separates_the_two_anchors` instead, so the property is
+# guarded by a different arm rather than unguarded. A literal copied into this
+# file would close the residual and open a worse one: a renamed constant leaves
+# a negative assertion passing for the reason it was written to celebrate.
+_WARNING_LINE_RE = re.compile(rf"(?m)^{_BUDGET_WARNING_SHAPE}")
+
+_STALE_MARKER_LINE_RE = re.compile(r"^<!-- STALE: Last relevant \d{4}-\d{2}-\d{2} -->$")
+
+
+def _survival_fixture():
+    """Five documents, each carrying a different way to lose a user line.
+
+    Built fresh on each call, because the bodies derive from the live budget.
+    """
+
+    def doc(body):
+        return f"# Project Memory\n\n## Pinned Context\n\n{body}\n## Working Memory\nwm\n"
+
+    return {
+        # A first pinned line behind whitespace. A `.lstrip()` at the call site
+        # eats it, and the compiled objects are untouched, so no anchor gate
+        # can see it.
+        "indented first pinned line, above budget": doc(
+            f"   indented user prose\n### Big\n{over_budget_body()}\n"
+        ),
+        # Ordinary prose ABOVE a stranded warning. A caller that clears the
+        # line before a below-head warning erases this one and leaves the
+        # warning count unmoved, so no count assertion reports it.
+        "user prose above a stranded warning, above budget": doc(
+            f"### Big\nuser prose above the stranded line\n"
+            f"{_ONE_WARNING_LINE}{over_budget_body()}\n"
+        ),
+        # A stale entry, so a STALE marker is inserted and the subtraction of
+        # permitted insertions is exercised rather than assumed.
+        "an entry with a stale date, above budget": doc(
+            f"### Old\nPR #123, merged 2020-01-01\n### Big\n{over_budget_body()}\n"
+        ),
+        # Whitespace a tidy-up edit would take. An erasure here SETTLES, so the
+        # arms that catch a runaway erasure through instability cannot see it.
+        "trailing spaces and repeated blank lines": doc(
+            f"### Big\nline with trailing spaces   \n\n\n\nlast line\n"
+            f"{over_budget_body()}\n"
+        ),
+        # The quiet member. The pass runs and writes nothing.
+        "below budget, with a stranded warning": doc(
+            f"### Small\nuser prose\n{_ONE_WARNING_LINE}a few words\n"
+        ),
+    }
+
+
+class TestUserLinesSurviveAPass:
+    """A pass may add its own lines. It may not take a line the user wrote.
+
+    THE CLOSED LIST OF PERMITTED CHANGES. Over the lines of the file, this
+    module may do THREE things and nothing else:
+      1. ADD one warning line at the head of the pinned body.
+      2. REMOVE the contiguous run of warning lines at that same head.
+      3. ADD one STALE marker line after the heading line of a stale entry.
+    Every other change to a line is a defect. The arm encodes that list as its
+    subtraction, so a later reader can tell an allowance from an oversight.
+
+    WHY THE OTHER ARMS IN THIS FILE CANNOT STAND IN FOR THIS ONE. They are
+    keyed on lines that carry the shape THIS MODULE writes. A caller that
+    erases bytes of any OTHER shape sits outside their reach, whatever kind of
+    assertion they use. That is a bound on their fixtures and their subject,
+    and not a weakness in their assertions.
+
+    IT DRIVES DOCUMENTS, AND THAT IS THE WHOLE VALUE. A property over
+    `_strip_budget_warnings` alone cannot see a call site, so it passes a
+    caller that hands the function a pre-trimmed string. That narrower form was
+    built by accident during review and it passed such a caller with nothing
+    red to report it.
+
+    IT COMPARES ONE PASS, AND THAT IS THE SECOND HALF OF THE VALUE. It reads no
+    second pass and it tests no settling. An erasure that repeats and an
+    erasure that settles look the same to it, so it does not inherit the gap
+    that an instability check leaves open.
+
+    A CHANGE TO A WARNING LINE IS INVISIBLE HERE, BY CONSTRUCTION AND NOT BY
+    OVERSIGHT. The subtraction removes warning lines from the TWO sides, so
+    this arm says nothing about a warning added, taken back, or refreshed, at
+    the head or anywhere else. Read the closed list above as a description of
+    the module, and read the SUBTRACTION as the rule of the arm. The two differ
+    on purpose, and the subtraction is wider. A reader who takes the list as
+    the rule will predict a red that cannot happen, and file a gap that is not
+    there.
+    """
+
+    def test_no_user_line_is_lost_or_moved_by_a_pass(self, tmp_path):
+        """Each non-warning line survives byte for byte and in order.
+
+        MEASURED BEHAVIOUR, on scratch copies of the committed tree:
+          baseline                                 PASS, 4 of 5 documents modified
+          call site given a pre-trimmed string     FAIL, on the indented member
+          strip widened to reach any warning line  PASS, that is another arm
+          trailing whitespace tidied on short lines FAIL, on the whitespace member
+          write path neutralised                   FAIL, on the floor below
+
+        The third row is deliberate. A mutation that erases only WARNING lines
+        belongs to the arms that are keyed on them, and this arm subtracts
+        those lines from the two sides, so it correctly says nothing.
+
+        THE FOURTH ROW IS THE ONE THIS ARM EXISTS FOR, and it needs its bound
+        stated with it. That tidy erases user bytes BELOW the head and it
+        SETTLES, so the arms that catch a runaway erasure through instability
+        cannot see it. Measured: it leaves all 100 shipped arms green. So the
+        instrument gap is PROVEN, by a SYNTHETIC mutant. Separately, and it
+        does not qualify the first half: NO PLAUSIBLE ORDINARY EDIT has been
+        found that reaches it. Nothing in this module motivates a whitespace
+        tidy. Both statements are the record, and neither cancels the other.
+
+        WHICH FIXTURE MEMBER SERVES WHICH SHAPE:
+          indented first pinned line      a call site that trims the head
+          trailing spaces, short line     a tidy that erases below the head
+          prose above a stranded warning  a caller that clears the line above
+          entry with a stale date         the STALE-marker subtraction
+          below budget, stranded warning  the quiet member, no write
+        No shipped fixture carries either whitespace shape, which is why this
+        one builds its own.
+        """
+        from staleness import check_pinned_staleness
+
+        modified = 0
+        for index, (name, before) in enumerate(_survival_fixture().items()):
+            home = tmp_path / f"doc{index}"
+            home.mkdir()
+            claude_md = home / "CLAUDE.md"
+            claude_md.write_text(before, encoding="utf-8")
+
+            check_pinned_staleness(claude_md_path=claude_md)
+
+            after = claude_md.read_text(encoding="utf-8")
+            if after != before:
+                modified += 1
+
+            kept_before = [
+                line
+                for line in before.split("\n")
+                if not _WARNING_LINE_RE.match(line + "\n")
+            ]
+            kept_after = [
+                line
+                for line in after.split("\n")
+                if not _WARNING_LINE_RE.match(line + "\n")
+                and not _STALE_MARKER_LINE_RE.match(line)
+            ]
+            if kept_after != kept_before:
+                at = next(
+                    (
+                        i
+                        for i, (b, a) in enumerate(zip(kept_before, kept_after))
+                        if b != a
+                    ),
+                    min(len(kept_before), len(kept_after)),
+                )
+                was = kept_before[at] if at < len(kept_before) else "<end>"
+                now = kept_after[at] if at < len(kept_after) else "<end>"
+                raise AssertionError(
+                    f"a pass changed a user line in {name!r}, first at line "
+                    f"{at}: {was[:60]!r} became {now[:60]!r}. This module may "
+                    f"only add a warning at the head, take back the run of "
+                    f"warnings at the head, and add a STALE marker after a "
+                    f"stale heading. Any other line change takes text a user "
+                    f"wrote, from a file that is frequently gitignored"
+                )
+
+        # NON-VACUITY, AND IT IS A MEASURED FLOOR RATHER THAN AN EQUALITY.
+        # Survival holds for a hook that never runs, so this count is what
+        # makes the assertions above evidence. The floor is 4, measured on the
+        # committed tree.
+        #
+        # WHY A FLOOR AND NOT `== 4`, because the equality was tried first and
+        # it was wrong. A mutation that modifies MORE documents does not weaken
+        # the evidence for survival, it strengthens it, so an equality reddens
+        # on a change that this arm has no business reporting. MEASURED: a
+        # strip widened to reach any warning line takes 5 of 5, and the
+        # survival property PASSES there, correctly, because that mutation
+        # erases only warning lines. The direction that threatens the evidence
+        # is FEWER, and the floor catches it.
+        assert modified >= 4, (
+            f"only {modified} of 5 fixture documents were modified by the "
+            f"pass, against a measured floor of 4. The survival assertions "
+            f"above hold for a hook that never runs, so a drop here means they "
+            f"have stopped being evidence"
+        )
+
+
+class TestLineEndingsSurviveAPass:
+    """A file written with CRLF must keep CRLF across a modifying pass.
+
+    `read_text` applies universal-newline translation, so a CRLF file arrives
+    as LF and the write puts LF back. The user sees a whole-file rewrite in
+    their diff, and the change is silent.
+    """
+
+    def test_crlf_endings_survive_a_modifying_pass(self, tmp_path):
+        """The bytes the user chose for line endings are theirs, not ours."""
+        from staleness import check_pinned_staleness
+
+        before = (
+            "# Project Memory\r\n\r\n## Pinned Context\r\n\r\n"
+            f"### Big\r\n{over_budget_body()}\r\n"
+            "## Working Memory\r\nwm\r\n"
+        ).encode("utf-8")
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_bytes(before)
+
+        check_pinned_staleness(claude_md_path=claude_md)
+
+        after = claude_md.read_bytes()
+        # NON-VACUITY FIRST. An unmodified document keeps its line endings for
+        # a reason that says nothing about a modifying pass.
+        assert after != before, (
+            "the pass wrote nothing, so this arm says nothing about what a "
+            "MODIFYING pass does to line endings"
+        )
+        assert after.count(b"\r\n") > 0, (
+            "a modifying pass converted a CRLF file to LF. Every line of the "
+            "user's file changed, which their diff reports as a whole-file "
+            "rewrite of a file they did not edit"
         )
 
 
