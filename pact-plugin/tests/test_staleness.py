@@ -3405,6 +3405,89 @@ class TestLineEndingsSurviveAPass:
 
 _STALENESS_SOURCE = Path(__file__).parent.parent / "hooks" / "staleness.py"
 
+
+class TestContainmentImportSitsAboveItsHandler:
+    """The import that binds `ContainmentError` must sit OUTSIDE the try that
+    handles it.
+
+    THE DEFECT, IF THE IMPORT GOES BACK INSIDE. Python must evaluate the
+    handler when the import raises. The name is unbound at that moment, so the
+    ImportError is replaced by `UnboundLocalError: cannot access local variable
+    ContainmentError`, and the cause survives only as `__context__`. Nothing is
+    written and the hook exits 0, so the whole cost is the ability to read what
+    went wrong.
+
+    IT LOOKS LIKE TIDINESS TO MOVE IT BACK. The import serves the try body and
+    nothing else, so a future editor pulls it in. That is why a comment alone
+    is not enough here, and why this guard reads structure rather than prose.
+
+    IT READS THE AST AND NOT THE TEXT. Line numbers and the spelling of the
+    import are both free to move. MEASURED, on scratch copies: a re-ordering of
+    the imported names, a split into three separate statements, and a move
+    further up the function each leave this GREEN. The pre-fix source, which
+    holds the import inside the try, turns it RED.
+
+    THE TRY IS FOUND BY ITS HANDLER, never by position. Measured on the
+    committed source: exactly one try in the whole module has a handler naming
+    `ContainmentError`. The count is NOT pinned, because a second such try
+    would be legitimate and the property holds over all of them.
+    """
+
+    @staticmethod
+    def _guarded_tries(tree):
+        """Every try whose handler names `ContainmentError`."""
+
+        def handles_containment(handler):
+            return any(
+                isinstance(node, ast.Name) and node.id == "ContainmentError"
+                for node in ast.walk(handler)
+            )
+
+        return [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Try)
+            and any(handles_containment(h) for h in node.handlers)
+        ]
+
+    def test_the_containment_import_is_not_inside_the_try_that_handles_it(self):
+        """The property, stated over structure rather than over text."""
+        tree = ast.parse(_STALENESS_SOURCE.read_text(encoding="utf-8"))
+        guarded = self._guarded_tries(tree)
+
+        # NON-VACUITY, AND IT IS THE WHOLE REASON THIS GUARD CAN FAIL AT ALL.
+        # The property is "no such import is inside any such try". With NO such
+        # try, that holds for free and this arm goes silent for ever. The
+        # precedent this technique comes from carries the same control facing
+        # the other way, where a missing try would make its own assertion
+        # vacuous. MEASURED: rename that handler and this line fires.
+        assert guarded, (
+            "no try in staleness.py has a handler naming ContainmentError, so "
+            "the property below quantifies over an empty set and this guard "
+            "reports nothing for ever. Either the handler was renamed, in "
+            "which case retarget this guard, or the try was removed, in which "
+            "case the hazard is gone and so is the reason for this arm"
+        )
+
+        offenders = []
+        for node in guarded:
+            for statement in node.body:
+                for sub in ast.walk(statement):
+                    if isinstance(sub, (ast.Import, ast.ImportFrom)):
+                        bound = [alias.asname or alias.name for alias in sub.names]
+                        if "ContainmentError" in bound:
+                            offenders.append(sub.lineno)
+
+        assert not offenders, (
+            f"an import binding ContainmentError sits INSIDE the try that "
+            f"handles it, at line(s) {offenders}. When that import raises, "
+            f"Python evaluates the handler against an unbound name, so the "
+            f"real ImportError is replaced by an UnboundLocalError and "
+            f"survives only as __context__. Move the import ABOVE the try. Do "
+            f"not wrap it in a handler of its own, because an ImportError must "
+            f"reach the caller"
+        )
+
 # THE ALPHABET IS TAKEN FROM WHAT PYTEST COLLECTS, NOT FROM WHAT WE REMEMBER
 # CITING. pytest collects `Test`-prefixed CLASSES as well as `test_`-prefixed
 # FUNCTIONS, so a pattern covering only the second is blind to half the thing it
