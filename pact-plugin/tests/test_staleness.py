@@ -2959,14 +2959,17 @@ class TestBudgetWarningAnchorComposition:
     the shipped objects can testify about their own composition.
 
     THE TWO ARMS HAVE DIFFERENT SUBJECTS, WHICH IS WHY THERE ARE TWO. The first
-    is about the PATTERNS. The second is about the CORPUS, and only a change to
-    the corpus separates them. Measured rather than predicted: TRIM the two
-    separating members out of the corpus below and the equality arm still
-    PASSES, while the second arm goes red and says why. That is the vacuity
-    this pair exists to refuse. Re-anchor the wide pattern to the start of the
-    string, so that the two become identical patterns, and BOTH arms go red --
-    the first because the corpus separates them, the second because nothing
-    separates them any longer.
+    is about the PATTERNS; the second is about what the corpus can still tell
+    apart. THREE STATES WERE RUN, and two of them separate the arms.
+      - TRIM the separating members out of the corpus: the equality arm still
+        PASSES, the second goes red.
+      - BREAK the shared shape to a literal that never matches: the equality
+        arm PASSES AGAIN, because both sides then say False to everything, and
+        the second still goes red.
+      - RE-ANCHOR the wide pattern, so the two are identical patterns: BOTH go
+        red.
+    The first arm alone therefore certifies nothing. That is the whole reason
+    the second one exists, and it is why neither may be deleted as a duplicate.
     """
 
     def test_the_wide_anchor_matches_at_exactly_the_narrow_one_s_positions(self):
@@ -2980,6 +2983,19 @@ class TestBudgetWarningAnchorComposition:
 
         for name, text in _ANCHOR_CORPUS.items():
             wide = _ANY_BUDGET_WARNING_RE.search(text) is not None
+            # SLICE THE TEXT. DO NOT PASS AN OFFSET AS `pos`. The two look
+            # interchangeable and are not. `\A` matches only at the TRUE start
+            # of the string, and `pos` DOES NOT MOVE IT, so
+            # `.match(text, k)` with k > 0 returns None for every input --
+            # whatever the shape is, and whether the shape is right or broken.
+            # MEASURED, with a control: against a deliberately broken pattern
+            # the `pos` form gives None for both, which is INDISTINGUISHABLE,
+            # while the slice form matches for the real one and not for the
+            # broken one, which SEPARATES. So the natural-looking `pos`
+            # spelling turns this whole arm vacuous, and it would still pass.
+            # Slicing re-anchors to the slice start, which is what actually
+            # exercises the shipped object.
+            #
             # THIS CALL SHAPE IS LEGITIMATE HERE AND FORBIDDEN IN THE MODULE.
             # `_LEADING_BUDGET_WARNING_RE` is the pattern that DELETES, and
             # giving it a caller-chosen offset is the construction the module
@@ -3001,11 +3017,21 @@ class TestBudgetWarningAnchorComposition:
     def test_the_corpus_separates_the_two_anchors(self):
         """NON-VACUITY, and it guards the CORPUS rather than the predicates.
 
-        The equality above holds trivially on a corpus where both sides always
-        agree -- a corpus of empty strings satisfies it, and so would two
-        identical patterns. It is evidence only while some member tells a
-        line-start anchor apart from a start-of-string one, which means a
-        member whose ONLY warning sits below the head.
+        TWO PREDICATES AGREE FOR FREE WHEN BOTH SAY FALSE TO EVERYTHING. That
+        is the trap under the equality arm, and it has two entrances. A corpus
+        of only negative members passes it. So does a corpus of positives, if
+        the shared shape stops matching anything at all. The arm above cannot
+        see either one, because in both states its two sides agree perfectly.
+
+        SO THE CORPUS MUST CARRY BOTH KINDS AT ONCE: members that BOTH sides
+        match, and among them a member that only the LINE-START side can reach.
+        The first refuses a shape that matches nothing; the second refuses two
+        patterns that are secretly one.
+
+        MEASURED, NOT ASSERTED. Replace `_BUDGET_WARNING_SHAPE` with a literal
+        that can never match, and the equality arm above PASSES while this one
+        goes red. Re-anchor the wide pattern to the start of the string, and
+        this one goes red as well. Both states were run.
 
         THE COUNTS ARE PINNED, NOT MERELY NON-ZERO. "At least one" survives a
         trim down to one lucky member. An exact figure per class refuses any
@@ -3025,6 +3051,16 @@ class TestBudgetWarningAnchorComposition:
             else:
                 both_false.append(name)
 
+        # THE TWO ENTRANCES TO THE TRAP GET SEPARATE MESSAGES, because they
+        # have different repairs and a reader who reaches this line is trying
+        # to work out which one they broke.
+        assert separating or both_true, (
+            "the wide predicate matched NOTHING anywhere in the corpus. Either "
+            "the shared shape no longer matches the text this module writes, "
+            "or every positive member has left the corpus. The equality arm "
+            "above PASSES in that state, because two predicates that both say "
+            "False agree for free"
+        )
         assert separating, (
             "no corpus member carries a warning below the head, so the "
             "equality arm cannot tell the wide anchor from the narrow one and "
