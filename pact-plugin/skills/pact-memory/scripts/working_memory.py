@@ -473,7 +473,12 @@ def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
             # raw fd would leak (the cleanup below unlinks the temp FILE but
             # cannot close a descriptor it never received a handle for).
             try:
-                handle = os.fdopen(fd, "w", encoding="utf-8")
+                # newline="" so this handle performs NO line-ending translation.
+                # With newline=None, Python rewrites each "\n" to os.linesep,
+                # which is "\n" here and "\r\n" on Windows, so a caller that
+                # restored CRLF emits "\r\r\n" there. The caller chooses the
+                # line ending. This primitive writes the bytes it is given.
+                handle = os.fdopen(fd, "w", encoding="utf-8", newline="")
             except BaseException:
                 os.close(fd)
                 raise

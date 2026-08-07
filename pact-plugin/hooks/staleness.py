@@ -57,9 +57,112 @@ _BOUNDARY_ALT = "|".join(PACT_BOUNDARY_PREFIXES)
 PINNED_STALENESS_DAYS = 30
 
 # Approximate token budget for the entire Pinned Context section. When
-# exceeded, a warning comment is added (no auto-deletion).
+# exceeded, a warning comment is added. No pin is ever deleted.
 # This is the sole definition of this constant; session_init.py imports it.
-PINNED_CONTEXT_TOKEN_BUDGET = 1200
+#
+# SIZED FROM CAPACITY, NOT FROM A MEASUREMENT OF THE CURRENT DOCUMENT. A bound
+# derived from the region it bounds cannot see that region's next edit, and it
+# lands so close to the present size that an ordinary pin edit re-trips the
+# warning -- which reports "you touched a pin", not "your pins have bloated".
+# This value leaves headroom above a full set of well-written pins.
+#
+# WHY THIS IS A FREE NUMBER RATHER THAN A VALUE DERIVED FROM THE CAPS IN
+# pin_caps.py. A derived advisory cannot fire before enforcement binds. If the
+# budget were f(caps) with f >= 1, then reaching it would require roughly full
+# legal capacity -- and at that point PIN_SIZE_CAP and PIN_COUNT_CAP are
+# already refusing edits, so the advice arrives at the wall, too late to act
+# on. Advising EARLIER requires a coefficient below 1. Derivation therefore
+# does not eliminate the free number; it relocates it into a coefficient. This
+# constant IS that coefficient, stated directly instead of hidden in a formula.
+#
+# The two also bound DIFFERENT things, which is why one cannot be read off the
+# other: PIN_SIZE_CAP counts body characters of a single pin, while this counts
+# estimated tokens of the whole section, headings and markers included.
+#
+# AND A THIRD REASON, ABOUT WHO DECIDES. A derived budget would MOVE whenever
+# the caps move. A raise of PIN_SIZE_CAP is an enforcement decision about a
+# single pin, and it would then relocate an ADVISORY threshold over the whole
+# section, with nobody deciding that. The relation between the two is guarded in
+# the test suite instead, by a band that REFUSES a budget outside it. A guard
+# makes a cap change LOUD and asks for a decision. A derivation makes the same
+# change SILENT.
+PINNED_CONTEXT_TOKEN_BUDGET = 3200
+
+# The exact text this module writes at the head of an over-budget pinned
+# section. It is BOTH the text of the warning and the probe that finds an
+# earlier one, so the writer and the reader cannot describe different things.
+_BUDGET_WARNING_PREFIX = "<!-- WARNING: Pinned context"
+
+# THE SHAPE OF A WARNING LINE, WITHOUT AN ANCHOR. This is a regex SOURCE
+# STRING and not a compiled pattern, on purpose: an un-anchored shape is not
+# callable, so no call site can obtain a position-blind predicate by accident.
+# The two compositions below are the only predicates that exist.
+#
+# THE SHAPE CARRIES ITS OWN BOUNDS. `[^\n]*?` cannot cross a newline, so the
+# match always ends inside the line it starts on, and it is LAZY so it stops at
+# the FIRST `-->`. An HTML comment ends at its first `-->`; a greedy run to the
+# LAST one on the line would swallow whatever a user appended after the comment
+# had already closed.
+#
+# THE `~N tokens (budget: M)` SHAPE IS LOAD-BEARING, NOT DECORATION. It is what
+# separates a line this module emitted from a line that merely opens with the
+# same words, and requiring it is what keeps the strip off a user's own prose.
+#
+# THIS SHAPE AND THE EMITTED FORMAT IN `apply_staleness_markings` ARE A MATCHED
+# PAIR. Change one and change the other in the SAME commit: a format this shape
+# cannot match is a warning that can never be refreshed or removed, and every
+# later pass stacks another warning above it.
+_BUDGET_WARNING_SHAPE = (
+    rf"{re.escape(_BUDGET_WARNING_PREFIX)} ~\d+ tokens \(budget: \d+\)[^\n]*?-->\n?"
+)
+
+# Matches ONE complete warning comment line at the very head of a pinned body.
+#
+# EACH PATTERN CARRIES ITS OWN ANCHOR, so no call site can widen it. `\A` pins
+# the match to offset 0, the only offset this module ever writes such a line to.
+# The shape above is deliberately left uncompiled, so it is not callable as a
+# predicate and the anchor cannot be chosen by a caller.
+#
+# STRICT ON PURPOSE. This predicate DELETES bytes from a user's CLAUDE.md, a
+# file that is frequently gitignored, so an over-match has no commit to recover
+# from. A loose variant that matched anywhere in the region would also reach
+# text a user wrote inside a pin body. Compare `_find_declared_end_offset`:
+# a predicate's tolerance follows its failure direction, never its resemblance
+# to a predicate that looks like it.
+#
+# THE SYMPTOM THAT WILL MAKE SOMEBODY WANT TO LOOSEN THIS, AND WHY TO REFUSE.
+# A user who moves a warning line below the head keeps it, because this
+# predicate is anchored and cannot reach it. The report arrives as "the hook
+# shows two warnings", or as "the hook reports a breach my own pins did not
+# cause", because that line is measured with the rest of the body. Both are
+# real, and both are accepted. The law is CONDITIONAL, not a constant:
+#     count = N + (1 if estimate_tokens(user_text + stranded) > BUDGET else 0)
+# where N is the number of lines the user moved below the head. No pass raises
+# the count.
+#
+# DO NOT WIDEN THIS PATTERN TO REACH THEM. It DELETES, so a wider anchor reaches
+# text a user wrote inside a pin body, and this file is frequently gitignored.
+# The correct repair separates the two questions: EXCLUDE lines of this shape
+# from the COUNT wherever they sit, and keep the DELETE on the contiguous head
+# run. Apply that exclusion to a THROWAWAY COPY at the measurement site. Never
+# modify `pinned_content` itself -- `entry_starts` holds offsets into that
+# string and the stale-marker loop writes at those offsets, so an in-place
+# exclusion puts markers in wrong positions. The exclusion looks like a pure
+# read, which is what makes that easy to miss.
+#
+# THIS REFUSAL IS ENFORCED AND NOT ONLY STATED. A test drives this compiled
+# object over a body whose only warning sits below the head and requires it to
+# find nothing: see `test_the_deleting_pattern_cannot_reach_below_the_head`. A
+# wider anchor turns that red. No arm that drives DOCUMENTS can catch the
+# widening, because the strip reads this pattern at offset 0 only, so every
+# anchor gives byte-identical output today.
+_LEADING_BUDGET_WARNING_RE = re.compile(rf"\A{_BUDGET_WARNING_SHAPE}")
+
+# RECOGNITION ONLY. NEVER GIVE THIS PATTERN TO CODE THAT DELETES. `(?m)^`
+# reports a match at ANY line start, which is what lets `_has_budget_warning`
+# see a warning a user has moved below the head. The deleting anchor stays
+# inside the compiled object above, so this wider reach cannot travel to it.
+_ANY_BUDGET_WARNING_RE = re.compile(rf"(?m)^{_BUDGET_WARNING_SHAPE}")
 
 
 def _find_existing_claude_md(base: Path) -> Optional[Path]:
@@ -205,6 +308,142 @@ def estimate_tokens(text: str) -> int:
 
 # Backward-compatible alias (tests and session_init import the underscore name)
 _estimate_tokens = estimate_tokens
+
+
+def _detect_line_ending(claude_md_path: Path) -> str:
+    """
+    Report the line ending this file predominantly uses, as raw bytes see it.
+
+    READ THE BYTES, BECAUSE EVERY TEXT READ IN THIS MODULE HAS ALREADY LOST THE
+    ANSWER. `Path.read_text` applies universal-newline translation, so a CRLF
+    file arrives as LF and the original ending is unrecoverable from the string
+    every other function here holds. This is the only place that looks.
+
+    DOMINANT WINS, AND A TIE GOES TO LF. The write this feeds is unrecoverable,
+    because CLAUDE.md is gitignored, so the correct rule is the one that changes
+    the fewest lines. Dominant-wins minimises that count by construction. A file
+    with no CRLF at all has a dominant of LF, so no file can gain an ending it
+    did not have.
+
+    A file written only with bare carriage returns reports LF. That matches what
+    this module does with such a file today, so the rule adds no new conversion.
+
+    Args:
+        claude_md_path: The file about to be read and possibly rewritten.
+
+    Returns:
+        Either the two-character CRLF sequence or a single newline.
+    """
+    try:
+        raw = claude_md_path.read_bytes()
+    except OSError:
+        return "\n"
+    crlf_count = raw.count(b"\r\n")
+    lf_count = raw.count(b"\n") - crlf_count
+    return "\r\n" if crlf_count > lf_count else "\n"
+
+
+def _restore_line_ending(content: str, line_ending: str) -> str:
+    """
+    Re-apply `line_ending` to a string that carries LF endings.
+
+    THIS IS THE LAST STEP BEFORE THE WRITE AND IT MUST STAY THERE. Everything
+    upstream measures an LF-normalised string: `estimate_tokens` counts it, the
+    offsets in `entry_starts` index it, and the strip consumes a span of it. Move
+    this earlier and every one of those measurements changes meaning.
+
+    `content` reaches here with no carriage return in it, because it descends
+    from a `read_text` that removed them and this module writes only newlines.
+    That is what makes the substitution safe and repeatable: a second pass over
+    an unchanged file produces the same bytes.
+
+    Args:
+        content: Full file content, with LF endings.
+        line_ending: The ending to write, from `_detect_line_ending`.
+
+    Returns:
+        `content` with its endings replaced, or unchanged when the target is LF.
+    """
+    if line_ending == "\n":
+        return content
+    return content.replace("\n", line_ending)
+
+
+def _strip_budget_warnings(pinned_content: str) -> str:
+    """
+    Remove the run of budget-warning comment lines at the head of a pinned body.
+
+    Returns the body a user would have written, with this module's own earlier
+    reports taken back out. Callers measure the RESULT, never the input, so the
+    reported count never includes the warning this module wrote at the HEAD. It
+    is NOT a pure function of the user's own text: a warning a user has moved
+    below the head survives this strip and is measured with the body. The note
+    at `_LEADING_BUDGET_WARNING_RE` says why the repair for that is not a wider
+    strip.
+
+    A run, not a single line, because taking back N lines is the exact inverse
+    of writing one -- so the function stays correct if a document somehow
+    carries more than one, and it can never leave a partial residue behind.
+
+    Args:
+        pinned_content: The pinned section body.
+
+    Returns:
+        The body with any leading budget-warning lines removed.
+    """
+    while True:
+        match = _LEADING_BUDGET_WARNING_RE.match(pinned_content)
+        if match is None:
+            return pinned_content
+        pinned_content = pinned_content[match.end():]
+
+
+def _has_budget_warning(pinned_content: str) -> bool:
+    r"""
+    Report whether this module has already written a warning anywhere in
+    `pinned_content`.
+
+    RECOGNITION, NOT DELETION, AND THAT IS WHY THE ANCHOR DIFFERS. This
+    predicate and `_strip_budget_warnings` share ONE shape,
+    `_BUDGET_WARNING_SHAPE`, and differ only in position: the strip takes back
+    the run at offset 0, this reports a match at ANY line start. The shape is
+    what identifies a line as this module's own, so the wider anchor does not
+    widen what counts as a warning. The narrower anchor stays INSIDE the
+    pattern the strip uses, so no call site can widen what gets deleted.
+
+    DO NOT MERGE THE TWO INTO ONE PATTERN CHOSEN BY THE CALL SITE. That works
+    -- `.match` on a line-anchored pattern is identical to `\A` -- and it puts
+    the deleting anchor where a later edit can move it. The cardinal failure
+    here is deletion of a user's own text from a file that is frequently
+    gitignored.
+
+    THE ACCEPTED CONSEQUENCE, RULED ON AND NOT OVERLOOKED. A user can write a
+    complete warning line into their own pinned prose: a maintainer who pastes
+    the emitted format into a note is the realistic case. In a section with NO
+    entries, that body now enters the pass. If it ALSO exceeds the budget, this
+    module adds ONE current warning above it. BOTH conditions are required. A
+    quoted line in a body below the budget changes nothing at all.
+
+    THIS COST IS NOT NEW, AND THAT IS THE REASON TO ACCEPT IT. A section WITH
+    entries has always behaved this way, and the suite pins it: see
+    `test_user_line_quoting_the_warning_is_preserved`, which asserts a count of
+    two for a pin body that quotes the warning. The two documents differ only
+    in whether they hold an entry, so they must not differ here. The corner was
+    the inconsistency, and this is the repair.
+
+    The cost is also the smaller of the two failures, which is a second and
+    subordinate reason. One extra advisory line is visible, it stays at one on
+    every later pass, and the user can delete it. The alternative was to leave
+    the corner alone, which keeps a stale number in the document without limit
+    and announces nothing.
+
+    Args:
+        pinned_content: The pinned section body.
+
+    Returns:
+        True when a budget warning this module wrote sits at any line start.
+    """
+    return _ANY_BUDGET_WARNING_RE.search(pinned_content) is not None
 
 
 def _find_terminator_offset(
@@ -556,9 +795,33 @@ def apply_staleness_markings(
     """
     Apply stale markers and budget warnings to pinned content.
 
-    Detects stale entries, inserts STALE markers, and adds a budget
-    warning comment if the content exceeds the token budget. Returns the
-    modified full file content.
+    Detects stale entries, inserts STALE markers, and rewrites the budget
+    warning comment to match the CURRENT content. Returns the modified full
+    file content.
+
+    THE WARNING IS REBUILT FROM THE BODY ON EVERY PASS, NEVER PATCHED IN PLACE.
+    An earlier warning is removed first, the warning-free body is measured, and
+    a fresh line goes back only when the measurement still exceeds the budget.
+
+    Three properties follow from that order, and they are the whole reason for
+    it:
+
+      - THE NUMBER CANNOT GO STALE. It is recomputed against whatever the body
+        holds now, so it tracks a growing or shrinking pinned section.
+      - THE WARNING CANNOT INFLATE ITS OWN COUNT. The measured body never
+        contains the warning at the HEAD, on pass 1 or pass 500, so the number
+        does not creep upward as the report of it is re-read. A warning a user
+        has moved below the head IS measured, and it is a FIXED contribution:
+        this module writes only at the head, and the head is taken back before
+        each measurement, so no pass can add a second one.
+      - THE PASS IS IDEMPOTENT BY CONSTRUCTION, not by a guard. The emitted line
+        is a pure function of the user's pinned body, so a second pass over
+        unchanged pins produces identical bytes and writes nothing.
+
+    A BODY THAT DROPS BACK UNDER BUDGET LOSES ITS WARNING. A warning that
+    reports a breach which has ended is the same defect as a frozen number,
+    facing the other way. Removing it is a REPAIR of a line this module wrote,
+    which is why it is safe; this function never deletes anything a user wrote.
 
     Args:
         content: Full CLAUDE.md file content.
@@ -569,6 +832,18 @@ def apply_staleness_markings(
     Returns:
         Tuple of (new_full_content, stale_count, was_modified, budget_warning_str).
     """
+    # The bytes to compare against at the end. `was_modified` is DERIVED from
+    # this comparison rather than accumulated in a flag, so it cannot disagree
+    # with what actually changed -- and a pass that rewrites a warning to the
+    # same value reports no modification and skips the write.
+    original_pinned_content = pinned_content
+
+    # STEP 1, BEFORE ANY OFFSET IS TAKEN OR ANY TOKEN IS COUNTED: take back the
+    # warning written by an earlier pass. Every step below then sees the user's
+    # own pinned body. Order is load-bearing -- `entry_starts` holds offsets
+    # into this string, so a later strip would invalidate them.
+    pinned_content = _strip_budget_warnings(pinned_content)
+
     entry_pattern = re.compile(r'^### ', re.MULTILINE)
     entry_starts = [m.start() for m in entry_pattern.finditer(pinned_content)]
     stale_marker_pattern = re.compile(r'<!-- STALE: Last relevant \d{4}-\d{2}-\d{2} -->')
@@ -583,7 +858,6 @@ def apply_staleness_markings(
 
     # Detect new stale entries
     stale_entries = detect_stale_entries(pinned_content)
-    modified = False
 
     # Apply stale markers in reverse order so string offsets remain valid
     for idx, date_str, _heading in reversed(stale_entries):
@@ -599,26 +873,32 @@ def apply_staleness_markings(
         heading_end = nl_pos + 1
         new_entry = entry_text[:heading_end] + stale_marker + entry_text[heading_end:]
         pinned_content = pinned_content[:start] + new_entry + pinned_content[end:]
-        modified = True
 
     total_stale = already_stale + len(stale_entries)
 
-    # Check token budget BEFORE inserting the warning (so warning text
-    # does not inflate its own count)
+    # Measure the body with the HEAD warning taken back. Step 1 removes the
+    # leading run on every pass and not only on the first one, which is the
+    # hazard the old presence guard reached for and missed. A warning a user has
+    # moved below the head is NOT removed and IS measured. That is the accepted
+    # residual.
     pinned_tokens = estimate_tokens(pinned_content)
     budget_warning = ""
     if pinned_tokens > PINNED_CONTEXT_TOKEN_BUDGET:
-        budget_warning_comment = (
-            f"<!-- WARNING: Pinned context ~{pinned_tokens} tokens "
+        pinned_content = (
+            f"{_BUDGET_WARNING_PREFIX} ~{pinned_tokens} tokens "
             f"(budget: {PINNED_CONTEXT_TOKEN_BUDGET}). "
             f"Consider archiving stale pins. -->\n"
-        )
-        # Add budget warning at the top of pinned section if not present
-        if "<!-- WARNING: Pinned context" not in pinned_content:
-            pinned_content = budget_warning_comment + pinned_content
-            modified = True
+        ) + pinned_content
+        # ONE number, used by both consumers. The comment in the file and the
+        # status string returned to the caller are built from the same
+        # measurement, so a reader can never be shown two different figures for
+        # one document.
         budget_warning = f", ~{pinned_tokens} tokens (budget: {PINNED_CONTEXT_TOKEN_BUDGET})"
 
+    # Under budget, the body simply keeps no warning: the strip in step 1 has
+    # already taken the outdated one away, and nothing puts it back.
+
+    modified = pinned_content != original_pinned_content
     new_content = content[:pinned_start] + pinned_content + content[pinned_end:]
     return new_content, total_stale, modified, budget_warning
 
@@ -668,6 +948,12 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
     except (OSError, UnicodeDecodeError):
         return None
 
+    # CAPTURE THE ENDING BEFORE ANYTHING MEASURES THE TEXT. The read above has
+    # already normalised it away, so this asks the bytes instead. Nothing
+    # between here and the write sees the answer: every step below operates on
+    # the LF-normalised `content`, exactly as it did before this was added.
+    line_ending = _detect_line_ending(claude_md_path)
+
     parsed = _parse_pinned_section(content)
     if parsed is None:
         return None
@@ -676,7 +962,25 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
 
     entry_pattern = re.compile(r'^### ', re.MULTILINE)
     entry_starts = [m.start() for m in entry_pattern.finditer(pinned_content)]
-    if not entry_starts:
+
+    # A section with no entries still needs a pass when a warning is sitting in
+    # it. Delete the last pin and the old guard returned here, which stranded
+    # that warning where nothing could ever reach it.
+    #
+    # THE PROBE READS ANY LINE START, THE STRIP READS OFFSET 0. That gap is
+    # deliberate. A warning a user has moved below the head is still this
+    # module's own report, so the section HAS been reported on and the pass may
+    # run. The strip cannot reach that line, so this pass does not repair it: it
+    # adds one current warning above it and the old line stays. That is the
+    # ratified cost of the residual, one extra line, and it is what a section
+    # WITH entries already does in the same state.
+    #
+    # THE FORBIDDEN DIRECTION IS UNCHANGED AND MUST STAY SO. A section carrying
+    # NO line of this module's own shape never reaches the pass, whatever its
+    # size, so this code never starts a report in a document it has not written
+    # to before. The strict `~N tokens (budget: M)` shape carries that
+    # discrimination, not the anchor.
+    if not entry_starts and not _has_budget_warning(pinned_content):
         return None
 
     new_content, stale_count, modified, budget_warning = apply_staleness_markings(
@@ -688,17 +992,25 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
     # same hardening as the other 5 (claude_md_manager + session_resume).
     # See `fcntl_sidecar_lock_pattern` for the canonical pattern.
     if modified:
+        # Function-level import to avoid circular dependency:
+        # session_init.py imports staleness at module level, and also
+        # imports from shared.claude_md_manager — a module-level
+        # import here would create a staleness → claude_md_manager →
+        # (indirectly) staleness cycle on some Python versions. That reason
+        # constrains function-versus-module level only, so the statement is
+        # free to sit here rather than lower down.
+        #
+        # KEEP IT ABOVE THE `try:` BELOW. That block handles ContainmentError,
+        # which this import binds. An import failure inside the block leaves
+        # the name unbound, so Python reports the handler and hides the cause.
+        # Do not move it back in. Do not wrap it in its own handler, because
+        # an ImportError must reach the caller.
+        from shared.claude_md_manager import (
+            ContainmentError,
+            _atomic_write_text,
+            file_lock,
+        )
         try:
-            # Function-level import to avoid circular dependency:
-            # session_init.py imports staleness at module level, and also
-            # imports from shared.claude_md_manager — a module-level
-            # import here would create a staleness → claude_md_manager →
-            # (indirectly) staleness cycle on some Python versions.
-            from shared.claude_md_manager import (
-                ContainmentError,
-                _atomic_write_text,
-                file_lock,
-            )
             with file_lock(claude_md_path):
                 # #1247: containment (in _atomic_write_text) REPLACES the
                 # former leaf is_symlink guard -- inside the lock (TOCTOU-safe).
@@ -720,7 +1032,16 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
                 # write sites this one never set a mode, so `write_text` left
                 # the file's existing permissions alone; the helper normalises
                 # it to 0o600, matching every other writer in the plugin.
-                _atomic_write_text(claude_md_path, new_content, project_root)
+                #
+                # RESTORE THE ENDING HERE AND NOWHERE EARLIER. This is the last
+                # point before the bytes leave, so every measurement above ran
+                # on the same LF text it always ran on. `_atomic_write_text`
+                # translates nothing, so what this passes is what lands.
+                _atomic_write_text(
+                    claude_md_path,
+                    _restore_line_ending(new_content, line_ending),
+                    project_root,
+                )
         except ContainmentError:
             return "Pinned staleness skipped: path precondition not met."
         except TimeoutError:
