@@ -568,10 +568,15 @@ class TestPACTMemoryDeleteVecTableHandling:
             # A double bound to the call site breaks on a call-shape change and
             # reports a TypeError rather than the behaviour under test.
             #
-            # The parameter shadows the enclosing `db_path` on purpose. This
-            # body uses the parameter alone, and a pathless call INHERITS the
-            # store the decorated method bound, which is the resolution this
-            # arm now travels through.
+            # ⚠️ DO NOT RENAME THIS PARAMETER TO REMOVE THE SHADOW. It shadows
+            # the enclosing `db_path` and that is the correct cost. The name
+            # must align with the real function, because a caller may pass the
+            # argument BY KEYWORD, and a double with a different parameter name
+            # then raises TypeError instead of running the behaviour under
+            # test. A rename looks like tidying and reintroduces the exact
+            # coupling the paragraph above records. The shadow is inert here:
+            # this body uses the parameter alone, and the enclosing name is
+            # read only outside this closure.
             with real_db_connection(db_path) as real_conn:
                 yield _ConnProxy(real_conn)
 
