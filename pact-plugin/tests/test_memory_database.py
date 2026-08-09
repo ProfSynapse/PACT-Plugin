@@ -561,8 +561,18 @@ class TestPACTMemoryDeleteVecTableHandling:
                 return getattr(self._real, name)
 
         @contextmanager
-        def db_connection_locking_vec(path):
-            with real_db_connection(path) as real_conn:
+        def db_connection_locking_vec(db_path=None):
+            # MIRRORS THE REAL SIGNATURE, `db_connection(db_path=None)`, and
+            # not one call site. An earlier spelling took a REQUIRED positional
+            # named `path`, which held only while every caller passed a path.
+            # A double bound to the call site breaks on a call-shape change and
+            # reports a TypeError rather than the behaviour under test.
+            #
+            # The parameter shadows the enclosing `db_path` on purpose. This
+            # body uses the parameter alone, and a pathless call INHERITS the
+            # store the decorated method bound, which is the resolution this
+            # arm now travels through.
+            with real_db_connection(db_path) as real_conn:
                 yield _ConnProxy(real_conn)
 
         with patch("scripts.memory_api._ensure_ready"), \

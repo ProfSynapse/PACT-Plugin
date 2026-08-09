@@ -35,7 +35,7 @@ except ImportError:
     import sqlite3
     SQLITE_EXTENSIONS_ENABLED = False
 
-from .config import get_memory_dir
+from .config import resolve_db_path, store_scope
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -101,13 +101,19 @@ class AmbiguousPrefixError(LookupError):
 def get_db_path() -> Path:
     """Get the database file path, creating parent directories if needed.
 
-    Resolves through `config.get_memory_dir()` on EVERY call. Holding the value
+    Resolves through `config.resolve_db_path()` on EVERY call. Holding the value
     in a module constant is what let an import-time binding outlive a later
     redirect, so the directory and the file are recomputed together here.
+
+    COMPOSES NOTHING. This function used to build the file name itself, which
+    made it a second derivation that could name a different file than the
+    resolver did. It now adds the side effect and nothing else: resolve, then
+    create the parent. The parent comes from the resolved FILE, so a scoped
+    caller gets the directory of its own store rather than the default one.
     """
-    memory_dir = get_memory_dir()
-    memory_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return memory_dir / "memory.db"
+    path = resolve_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return path
 
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -119,8 +125,16 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
 
     Returns:
         SQLite connection configured with WAL mode and foreign keys.
+
+    `db_path` IS AN INPUT TO THE RESOLVER, NOT A RIVAL OF IT. This used to read
+    `db_path or get_db_path()`, which was a second rule for the same question:
+    the connection opened the caller file while every layer that asked the
+    resolver got the default one, and the two named different files inside a
+    single invocation. Binding the scope instead sends the caller value THROUGH
+    the resolver, so the layers below agree with the connection above.
     """
-    path = db_path or get_db_path()
+    with store_scope(db_path):
+        path = get_db_path()
 
     # Track whether the DB file is newly created for permission hardening
     is_new = not path.exists()
@@ -170,16 +184,22 @@ def db_connection(db_path: Optional[Path] = None):
     Usage:
         with db_connection() as conn:
             cursor = conn.execute("SELECT * FROM memories")
+
+    THE SCOPE COVERS THE WHOLE BODY, not only the connect call, so anything the
+    caller does inside the block resolves to the same file. A pathless call
+    INHERITS an enclosing scope, which is how the search and catch-up layers
+    reach a caller store without one of them accepting a path parameter.
     """
-    conn = get_connection(db_path)
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    with store_scope(db_path):
+        conn = get_connection()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def init_schema(conn: sqlite3.Connection) -> None:

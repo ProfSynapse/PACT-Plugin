@@ -43,6 +43,7 @@ _SKILL_ROOT = str(Path(__file__).resolve().parent.parent)
 if _SKILL_ROOT not in sys.path:
     sys.path.insert(0, _SKILL_ROOT)
 
+from scripts.config import store_scope
 from scripts.database import (
     CALLER_FACING_CREATE_FIELDS,
     CALLER_FACING_UPDATE_FIELDS,
@@ -691,8 +692,20 @@ def main(argv=None):
     # second predicate for it.
     _refuse_live_db_under_pytest(db_path)
 
+    # THE SCOPE ENTERS AFTER THE REFUSAL GUARD, AND THE ORDER IS LOAD-BEARING.
+    # The guard keys on `db_path is None` and must read the caller's own
+    # argument. Bind the store first and a later reader of the resolver sees a
+    # path where the caller supplied none, which is how a guard gets disarmed by
+    # a change that looks unrelated to it. An assertion in the test suite pins
+    # this order.
+    #
+    # ONE SCOPE COVERS ALL EIGHT HANDLERS. That is what repairs the three legs
+    # of `setup` together: the leg that CREATES the directory and the leg that
+    # REPORTS it both reach `get_memory_dir()` with no argument, so neither one
+    # could honour `--db-path` while only the schema leg took a parameter.
     try:
-        handler(args, db_path=db_path)
+        with store_scope(db_path):
+            handler(args, db_path=db_path)
     except SystemExit:
         raise  # Let _success/_error exits propagate
     except Exception as exc:

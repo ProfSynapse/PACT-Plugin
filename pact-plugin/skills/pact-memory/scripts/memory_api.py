@@ -19,6 +19,7 @@ eliminating startup cost for non-memory users.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -34,6 +35,7 @@ try:
 except ImportError:
     import sqlite3
 
+from .config import resolve_db_path, store_scope
 from .database import (
     db_connection,
     create_memory,
@@ -42,7 +44,6 @@ from .database import (
     delete_memory,
     list_memories,
     ensure_initialized,
-    get_db_path,
     resolve_memory_id_prefix,
     MEMORY_ID_LENGTH,
     SQLITE_EXTENSIONS_ENABLED
@@ -121,6 +122,34 @@ def _ensure_ready() -> None:
     The initialization only runs once per session.
     """
     ensure_memory_ready()
+
+
+def _with_store_scope(method):
+    """Bind this instance's store for the WHOLE call.
+
+    A DECORATOR RATHER THAN A `with` BLOCK INSIDE EACH METHOD, because an
+    omission is then visible. Eight repeated blocks hide a missing one, and a
+    method that quietly resolves the default store returns plausible results
+    from the wrong file rather than failing.
+
+    IT COVERS MORE THAN THE CONNECTION, AND THAT IS THE POINT. Passing the path
+    to `db_connection` reached the connection only. The side paths accept no
+    path and cannot be given one: `_ensure_ready` takes no parameter, and not
+    one function in the search, graph, catch-up or init layers accepts a
+    `db_path`. Those layers open their own connection with no argument, so
+    before this scope a caller store was read for the main query and the DEFAULT
+    store was read for the search, with nothing raised. Binding the store for
+    the whole call is what reaches them, and it needs no signature change in
+    any of them.
+
+    A `_db_path` of None INHERITS an enclosing scope. So the module singleton,
+    which holds no path, stays scopable by its caller.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with store_scope(self._db_path):
+            return method(self, *args, **kwargs)
+    return wrapper
 
 
 class PACTMemory:
@@ -389,6 +418,7 @@ class PACTMemory:
         """Clear the list of tracked files."""
         self._session_files.clear()
 
+    @_with_store_scope
     def save(
         self,
         memory: Dict[str, Any],
@@ -440,7 +470,7 @@ class PACTMemory:
         if "session_id" not in memory or memory["session_id"] is None:
             memory["session_id"] = self._session_id
 
-        with db_connection(self._db_path) as conn:
+        with db_connection() as conn:
             ensure_initialized(conn)
 
             # Create the memory record
@@ -653,6 +683,7 @@ class PACTMemory:
             logger.debug(f"Could not drop existing vector for {memory_id}: {e}")
             return False
 
+    @_with_store_scope
     def search(
         self,
         query: str,
@@ -701,6 +732,7 @@ class PACTMemory:
 
         return results
 
+    @_with_store_scope
     def search_by_file(
         self,
         file_path: str,
@@ -758,6 +790,7 @@ class PACTMemory:
             return memory_id
         return resolve_memory_id_prefix(conn, memory_id)
 
+    @_with_store_scope
     def get(self, memory_id: str) -> Optional[MemoryObject]:
         """
         Get a specific memory by ID or unique prefix.
@@ -780,7 +813,7 @@ class PACTMemory:
         # Ensure memory system is ready (lazy initialization)
         _ensure_ready()
 
-        with db_connection(self._db_path) as conn:
+        with db_connection() as conn:
             ensure_initialized(conn)
 
             resolved = self._resolve_id_or_full(conn, memory_id)
@@ -798,6 +831,7 @@ class PACTMemory:
 
             return memory_from_db_row(memory_dict, file_paths)
 
+    @_with_store_scope
     def update(
         self,
         memory_id: str,
@@ -835,7 +869,7 @@ class PACTMemory:
         # Ensure memory system is ready (lazy initialization)
         _ensure_ready()
 
-        with db_connection(self._db_path) as conn:
+        with db_connection() as conn:
             ensure_initialized(conn)
 
             resolved = self._resolve_id_or_full(conn, memory_id)
@@ -869,6 +903,7 @@ class PACTMemory:
 
             return memory_id if success else None
 
+    @_with_store_scope
     def delete(self, memory_id: str) -> Optional[str]:
         """
         Delete a memory by ID or unique prefix.
@@ -894,7 +929,7 @@ class PACTMemory:
         # Ensure memory system is ready (lazy initialization)
         _ensure_ready()
 
-        with db_connection(self._db_path) as conn:
+        with db_connection() as conn:
             ensure_initialized(conn)
 
             resolved = self._resolve_id_or_full(conn, memory_id)
@@ -920,6 +955,7 @@ class PACTMemory:
 
             return memory_id if delete_memory(conn, memory_id) else None
 
+    @_with_store_scope
     def list(
         self,
         limit: int = 20,
@@ -938,7 +974,7 @@ class PACTMemory:
         # Ensure memory system is ready (lazy initialization)
         _ensure_ready()
 
-        with db_connection(self._db_path) as conn:
+        with db_connection() as conn:
             ensure_initialized(conn)
 
             session_id = self._session_id if session_only else None
@@ -958,6 +994,7 @@ class PACTMemory:
 
             return memories
 
+    @_with_store_scope
     def get_status(self) -> Dict[str, Any]:
         """
         Get status information about the memory system.
@@ -971,7 +1008,7 @@ class PACTMemory:
         from .database import get_memory_count
         from .graph import get_graph_stats
 
-        with db_connection(self._db_path) as conn:
+        with db_connection() as conn:
             ensure_initialized(conn)
 
             memory_count = get_memory_count(conn, self._project_id)
@@ -997,7 +1034,14 @@ class PACTMemory:
             # `degraded` and `error` both mean OUTSTANDING WORK IS UNKNOWN.
             # Do NOT read an absent backlog as an empty one.
             "embedding_catchup": get_embedding_catchup_status(),
-            "db_path": str(get_db_path())
+            # THE NON-CREATING RESOLVER, BECAUSE THIS IS A REPORT. `get_db_path`
+            # creates the parent directory as a side result, so asking a
+            # read-shaped method where the store is used to LEAVE A DIRECTORY
+            # BEHIND. It also reported the default location while the counts
+            # above came from the caller store, so the envelope disagreed with
+            # itself. The scope makes this the caller store, and the resolver
+            # creates nothing.
+            "db_path": str(resolve_db_path())
         }
 
 

@@ -2091,12 +2091,21 @@ class TestCliSubprocess:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         output = json.loads(result.stdout)
         assert output["ok"] is True
-        # Note: graph_enhanced_search opens its own DB connection to the global
-        # database, bypassing --db-path. The subprocess search returns results
-        # from the global DB, not cli_db. We verify the envelope is correct and
-        # the result is a list — content assertion requires the search backend
-        # to honor --db-path, which is tracked as a known limitation.
+        # THE CONTENT ASSERTION, and it is the point of this arm now.
+        #
+        # This used to assert the SHAPE only, because `graph_enhanced_search`
+        # opened its own connection with no argument and read the default store
+        # rather than `--db-path`. The comment here recorded that as a known
+        # limitation. The store scope closed it: the search layer accepts no
+        # path and needs none, because it inherits the scope the CLI binds.
+        #
+        # A SHAPE ASSERTION CANNOT GO RED HERE. An empty list is a list, so the
+        # old arm passed while the search read another store entirely.
         assert isinstance(output["result"], list)
+        contexts = [m["context"] for m in output["result"]]
+        assert "searchable authentication test" in contexts, (
+            f"the search did not read --db-path; got {contexts}"
+        )
 
     def test_get_not_found_exits_1(self, cli_script_path, cli_db):
         result = subprocess.run(
