@@ -28,7 +28,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -113,8 +113,21 @@ class TestFaultExit:
         assert result == "fault"
 
     def test_fault_does_not_drop_the_vector(self, mem, conn):
-        """The handler wraps the insert AND the commit, so it can be reached
-        after a successful write. Dropping here could destroy a good vector."""
+        """THE FAULT HANDLER ADDS NO DROP OF ITS OWN.
+
+        WHY THE ASSERTION IS NOT `assert_not_called`, WHICH IS WHAT IT WAS.
+        The replace path now drops before it inserts, so a drop DOES happen
+        inside this method. The old spelling bound to "no drop anywhere in
+        this method" when the property it protects is "no drop in the
+        HANDLER". The two agreed while the write path performed no drop, and
+        they stopped agreeing the moment a replace was possible.
+
+        So the assertion below pins the EXACT call list: one drop, the
+        deferred one that belongs to the replace. A drop added in the handler
+        appends a second entry and this arm goes red. A drop that stops
+        deferring its commit changes the recorded kwargs and this arm goes red
+        too, which is the stronger property the old spelling could not state.
+        """
         conn.commit.side_effect = RuntimeError("commit failed after write")
         with patch("scripts.memory_api.SQLITE_EXTENSIONS_ENABLED", True), \
              patch("scripts.memory_api.generate_embedding_text", return_value="text"), \
@@ -122,7 +135,7 @@ class TestFaultExit:
              patch.object(PACTMemory, "_drop_existing_vector") as drop:
             mem._store_embedding(conn, "mem-1", _memory())
 
-        drop.assert_not_called()
+        assert drop.call_args_list == [call(conn, "mem-1", commit=False)]
 
 
 class TestSuccess:
