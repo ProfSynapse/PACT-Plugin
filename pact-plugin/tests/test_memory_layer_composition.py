@@ -408,8 +408,12 @@ class TestTheTwoGuardsUnwindWithoutLeaking:
         with patch.object(cli, "_COMMANDS", commands):
             cli.main(argv)
 
-    def test_the_scope_is_released_after_a_successful_command(self, tmp_path):
-        target = tmp_path / "unwind.db"
+    def test_the_scope_is_released_after_a_successful_command(self, memory_store):
+        # THE STORE MUST BE PRESENT OR THIS ARM STOPS AT THE BOUNDARY. `main`
+        # refuses a `--db-path` naming a store that is absent, BEFORE it reaches
+        # a handler, so an absent path would end the call before the probe below
+        # ever runs and this arm would measure the refusal rather than the scope.
+        target = memory_store("unwind.db")
         seen = {}
 
         def probe(args, db_path=None):
@@ -431,16 +435,28 @@ class TestTheTwoGuardsUnwindWithoutLeaking:
             "the store scope outlived the command"
         )
 
-    def test_the_scope_is_released_when_the_handler_raises(self, tmp_path):
-        target = tmp_path / "unwind-raise.db"
+    def test_the_scope_is_released_when_the_handler_raises(self, memory_store):
+        # THE STORE MUST BE PRESENT, AND HERE THAT IS A VACUITY GUARD RATHER
+        # THAN A PRECONDITION. This arm asserts a SystemExit, and the boundary
+        # refusal raises SystemExit too. With an absent path the arm passes
+        # GREEN while the exploding handler below never runs, so it would prove
+        # nothing about unwinding. The `raised` flag makes that visible.
+        target = memory_store("unwind-raise.db")
+        raised = {}
 
         def exploding(args, db_path=None):
+            raised["yes"] = True
             raise RuntimeError("the handler failed inside both guards")
 
         assert _STORE_DB_PATH.get() is None, "a previous test leaked a scope"
         # `main` converts the exception into the error envelope and exits 2.
         with pytest.raises(SystemExit):
             self._run_main(["status", "--db-path", str(target)], exploding)
+
+        assert raised.get("yes"), (
+            "the handler never ran, so the SystemExit above came from somewhere "
+            "else and this arm did not measure the unwind it claims to"
+        )
 
         assert _STORE_DB_PATH.get() is None, (
             "the store scope outlived a failing command, so a later call in "

@@ -218,24 +218,29 @@ class TestAnchorIsEnforceableThroughTheCliWiring:
         spec.loader.exec_module(mod)
         return mod
 
-    def _save_through_wiring(self, ap, cwd, tmp_path, tag):
+    def _save_through_wiring(self, ap, cwd, db_path, tag):
+        """`db_path` IS A STORE THAT IS PRESENT. `cli.main` refuses a
+        `--db-path` naming a store that is absent, for each command other
+        than `setup`, so callers pass the `memory_store` fixture result."""
         rc, stdout, stderr = ap._run_memory_cli(
             ["save", "--stdin"],
-            db_path=str(tmp_path / "probe.db"),
+            db_path=str(db_path),
             stdin_data=json.dumps({"context": tag}),
             cwd=str(cwd),
         )
         assert rc == 0, f"CLI failed: {stderr[:300]}"
         return json.loads(stdout)["result"]
 
-    def test_target_outside_the_declared_root_is_refused(self, nested, tmp_path):
+    def test_target_outside_the_declared_root_is_refused(
+        self, nested, memory_store
+    ):
         """The declared root is the sandbox; the target resolves to the repo."""
         ap = self._archive_pin()
         repo_md = nested / "CLAUDE.md"
         before = repo_md.read_bytes()
 
         result = self._save_through_wiring(
-            ap, nested / "sandbox", tmp_path, "must be refused"
+            ap, nested / "sandbox", memory_store("probe.db"), "must be refused"
         )
 
         assert result["sync_status"] == "failed", (
@@ -244,7 +249,7 @@ class TestAnchorIsEnforceableThroughTheCliWiring:
         assert repo_md.read_bytes() == before, "the repo CLAUDE.md was written"
 
     def test_positive_control_an_anchor_containing_the_target_permits(
-        self, nested, tmp_path
+        self, nested, memory_store
     ):
         """POSITIVE CONTROL, AND IT IS LOAD-BEARING RATHER THAN TIDY.
 
@@ -260,7 +265,9 @@ class TestAnchorIsEnforceableThroughTheCliWiring:
         repo_md = nested / "CLAUDE.md"
         before = repo_md.read_bytes()
 
-        result = self._save_through_wiring(ap, nested, tmp_path, "must be written")
+        result = self._save_through_wiring(
+            ap, nested, memory_store("probe.db"), "must be written"
+        )
 
         assert result["sync_status"] == "wrote", (
             f"the control did not write, so the refusal arm proves nothing: {result}"

@@ -138,6 +138,21 @@ def get_db_path() -> Path:
     # open a store that should be there, so an absent path is a typo, and the
     # correct answer to a typo is to fail. That leg runs through
     # `setup_memory.ensure_directories` and does not reach this line.
+    #
+    # ⚠️ THIS LINE COVERS THE DIRECTORY HALF ONLY, AND SAYING SO IS THE POINT.
+    # A typo in the FILE NAME reaches a directory that is present, so this test
+    # has nothing to refuse. THE FILE HALF LIVES AT THE CLI BOUNDARY, in
+    # `cli.main`, which refuses a caller `--db-path` that names a store that is
+    # absent.
+    #
+    # IT DOES NOT LIVE IN `get_connection`, and that location was tried and
+    # rejected rather than passed over. A refusal there reaches each caller of
+    # the connection factory, so it breaks the custom-store contract that
+    # production and the test suite depend on. `get_connection` also cannot
+    # tell a person from a library caller, so a refusal there answers a
+    # question it cannot see. Read the two halves together. A comment that
+    # claims the whole hazard from here would retire a question that another
+    # file answers.
     # ⚠️ TWO READS OF THE RESOLVER STATE, AND WHAT MAKES THAT SAFE IS A
     # PROPERTY OF THE PACKAGE RATHER THAN OF THESE TWO LINES. The path arrives
     # from one call and the origin from a second, so a change to the store

@@ -1055,14 +1055,36 @@ class TestLiveDbGuard:
             f"`archive_pin --index N` would stop working. stderr={proc.stderr[:400]}"
         )
 
-    def test_an_explicit_db_path_is_accepted_under_pytest(self, tmp_path):
-        """The guard must block only the UNSCOPED case, not every spawn."""
+    def test_an_explicit_db_path_is_accepted_under_pytest(
+        self, tmp_path, memory_store
+    ):
+        """The guard must block only the UNSCOPED case, not every spawn.
+
+        THE STORE IS PRESENT SO THE SPAWN IS GENUINELY ACCEPTED. `main` refuses
+        a `--db-path` naming a store that is absent. An absent path here would
+        leave the arm green while the command was refused at the boundary,
+        because the refusal carries a different error name and the assertion
+        below only looks for `UNSCOPED_TEST_DB`. The exit-code assertion is what
+        makes acceptance observable rather than merely un-refuted.
+        """
         proc = self._spawn_cli(
             tmp_path, with_pytest_var=True,
-            extra_argv=("--db-path", str(tmp_path / "scoped.db")),
+            extra_argv=("--db-path", str(memory_store("scoped.db"))),
         )
         assert "UNSCOPED_TEST_DB" not in proc.stderr, (
             f"guard fired despite an explicit --db-path; stderr={proc.stderr[:400]}"
+        )
+        # NON-VACUITY: prove the command REACHED the store rather than merely
+        # avoided one named error. `NOT_FOUND` is a store-level answer, so it
+        # can only come from a lookup that ran. The exit code is 1 on that
+        # answer, which is correct and is why this arm reads the error name.
+        assert "DB_PATH_NOT_FOUND" not in proc.stderr, (
+            f"an explicit --db-path at a store that is present was refused at "
+            f"the boundary; stderr={proc.stderr[:400]}"
+        )
+        assert json.loads(proc.stderr)["error"] == "NOT_FOUND", (
+            f"the spawn did not reach a store lookup, so this arm did not show "
+            f"that an explicit --db-path is accepted; stderr={proc.stderr[:400]}"
         )
 
     @pytest.mark.parametrize("pass_cwd", [True, False])
@@ -1362,10 +1384,10 @@ class TestArchivePin_RealCLI:
     deselected marker or a legible failure, not as unexplained flakiness.
     """
 
-    def test_archives_and_verifies_containment(self, claude_md, tmp_path):
+    def test_archives_and_verifies_containment(self, claude_md, tmp_path, memory_store):
         claude_md(_two_pin_file())
         verdict = archive_pin.build_verdict(
-            0, db_path=str(tmp_path / "mem.db")
+            0, db_path=str(memory_store("mem.db"))
         )
         assert verdict["outcome"] == "ARCHIVED"
         assert verdict["heading"] == "First Pin"
@@ -1374,7 +1396,7 @@ class TestArchivePin_RealCLI:
         assert verdict["chars"] > 0
 
     def test_archived_record_carries_the_block_in_context_not_a_list_field(
-        self, claude_md, tmp_path
+        self, claude_md, tmp_path, memory_store
     ):
         """D3, verified at the destination rather than asserted in a comment.
 
@@ -1387,7 +1409,7 @@ class TestArchivePin_RealCLI:
         """
         content = _two_pin_file()
         claude_md(content)
-        db = str(tmp_path / "mem.db")
+        db = str(memory_store("mem.db"))
         verdict = archive_pin.build_verdict(0, db_path=db)
         assert verdict["outcome"] == "ARCHIVED"
 
@@ -1405,7 +1427,7 @@ class TestArchivePin_RealCLI:
             )
 
     def test_adversarial_body_round_trips_byte_exact(
-        self, claude_md, tmp_path
+        self, claude_md, tmp_path, memory_store
     ):
         """Apostrophes, backticks, tabs, CRLF and trailing whitespace all
         survive. These are the classes that break shell-quoted or
@@ -1420,7 +1442,7 @@ class TestArchivePin_RealCLI:
             "<!-- PACT_MANAGED_END -->\n"
         )
         claude_md(content)
-        db = str(tmp_path / "mem.db")
+        db = str(memory_store("mem.db"))
         verdict = archive_pin.build_verdict(0, db_path=db)
         assert verdict["outcome"] == "ARCHIVED"
 
@@ -1434,7 +1456,7 @@ class TestArchivePin_RealCLI:
         assert "`backticks`" in fetched["context"]
         assert "\t" in fetched["context"]
 
-    def test_save_stdout_is_a_clean_json_envelope(self, claude_md, tmp_path):
+    def test_save_stdout_is_a_clean_json_envelope(self, claude_md, tmp_path, memory_store):
         """The real CLI's stdout parses, on any interpreter.
 
         WHAT THIS COVERS. `save` succeeds and its stdout is a well-formed
@@ -1471,7 +1493,7 @@ class TestArchivePin_RealCLI:
 
         rc, stdout, stderr = archive_pin._run_memory_cli(
             ["save", "--stdin"],
-            db_path=str(tmp_path / "mem.db"),
+            db_path=str(memory_store("mem.db")),
             stdin_data=payload,
             cwd=tmp_path,
         )
@@ -1835,12 +1857,12 @@ class TestArchivePin_CliContract:
         }
 
     def test_every_verdict_carries_outcome_and_heading_keys(
-        self, claude_md, capsys, monkeypatch, tmp_path
+        self, claude_md, capsys, monkeypatch, tmp_path, memory_store
     ):
         """`heading` is present in ALL THREE verdicts so a consumer never
         has to distinguish an absent key from a null value."""
         claude_md(_two_pin_file())
-        db = str(tmp_path / "m.db")
+        db = str(memory_store("m.db"))
 
         seen = {}
         # ARCHIVED (real CLI)
@@ -2257,7 +2279,7 @@ class TestArchivePin_SyncStatusReachesTheArchive:
     would keep passing while it did.
     """
 
-    def test_the_archives_own_argv_yields_suppressed(self, tmp_path):
+    def test_the_archives_own_argv_yields_suppressed(self, tmp_path, memory_store):
         """Drives the REAL `_run_memory_cli` with the module's OWN constant."""
         project = tmp_path / "proj"
         (project / ".claude").mkdir(parents=True)
@@ -2268,7 +2290,7 @@ class TestArchivePin_SyncStatusReachesTheArchive:
 
         _, stdout, _ = archive_pin._run_memory_cli(
             [archive_pin._ARCHIVE_SUBCOMMAND, "--stdin", "--no-sync"],
-            db_path=str(tmp_path / "m.db"),
+            db_path=str(memory_store("m.db")),
             stdin_data=payload,
             cwd=str(project),
         )
@@ -2282,7 +2304,7 @@ class TestArchivePin_SyncStatusReachesTheArchive:
         assert result["sync_status"] == "suppressed"
 
     def test_dropping_the_flag_changes_the_status_and_writes_the_file(
-        self, tmp_path
+        self, tmp_path, memory_store
     ):
         """CONTROL for the arm above, and it earns its place twice.
 
@@ -2302,7 +2324,7 @@ class TestArchivePin_SyncStatusReachesTheArchive:
 
         _, stdout, _ = archive_pin._run_memory_cli(
             [archive_pin._ARCHIVE_SUBCOMMAND, "--stdin"],
-            db_path=str(tmp_path / "m.db"),
+            db_path=str(memory_store("m.db")),
             stdin_data=payload,
             cwd=str(project),
         )

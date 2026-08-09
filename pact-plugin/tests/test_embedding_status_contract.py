@@ -275,9 +275,12 @@ class TestCliStderrStaysCleanOnTheFaultPath:
     and requires it to be `fault` -- proving the branch under test executed.
     """
 
-    def _run_cli_save_with_a_forced_fault(self, tmp_path):
+    def _run_cli_save_with_a_forced_fault(self, db_path):
+        """`db_path` IS A STORE THAT IS PRESENT. `cli.main` refuses a
+        `--db-path` naming a store that is absent, for each command other
+        than `setup`, so callers pass the `memory_store` fixture result."""
         pkg_root = str(Path(__file__).parent.parent / "skills" / "pact-memory")
-        db = str(tmp_path / "probe.db")
+        db = str(db_path)
         child = (
             "import sys, json\n"
             # memory_api uses relative imports, so it must load as part of the
@@ -315,8 +318,8 @@ class TestCliStderrStaysCleanOnTheFaultPath:
             timeout=120, env=env,
         )
 
-    def test_fault_is_reported_on_stdout_and_stderr_stays_empty(self, tmp_path):
-        proc = self._run_cli_save_with_a_forced_fault(tmp_path)
+    def test_fault_is_reported_on_stdout_and_stderr_stays_empty(self, memory_store):
+        proc = self._run_cli_save_with_a_forced_fault(memory_store("probe.db"))
 
         payload = json.loads(proc.stdout)
         assert payload["ok"] is True
@@ -382,7 +385,7 @@ class TestAmbientWorkingMemorySyncIsRefusedUnderPytest:
     redirected into tmp for the duration.
     """
 
-    def test_save_succeeds_while_the_ambient_sync_is_refused(self, tmp_path):
+    def test_save_succeeds_while_the_ambient_sync_is_refused(self, tmp_path, memory_store):
         project = tmp_path / "proj"
         project.mkdir()
         claude_md = project / "CLAUDE.md"
@@ -392,7 +395,7 @@ class TestAmbientWorkingMemorySyncIsRefusedUnderPytest:
         before = claude_md.read_text(encoding="utf-8")
 
         pkg_root = str(Path(__file__).parent.parent / "skills" / "pact-memory")
-        db = str(tmp_path / "probe.db")
+        db = str(memory_store("probe.db"))
         child = (
             "import sys, json\n"
             f"sys.path.insert(0, {pkg_root!r})\n"

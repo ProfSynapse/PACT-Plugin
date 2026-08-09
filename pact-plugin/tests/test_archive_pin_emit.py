@@ -572,14 +572,14 @@ class TestSyncSuppressionEffect:
     """
 
     def test_suppressed_save_leaves_the_file_byte_identical(
-        self, claude_md, tmp_path
+        self, claude_md, tmp_path, memory_store
     ):
         content = _two_pin_file()
         path = claude_md(content)
         before = path.read_bytes()
 
         verdict = archive_pin.build_verdict(
-            0, db_path=str(tmp_path / "mem.db")
+            0, db_path=str(memory_store("mem.db"))
         )
 
         # ARM 1 — THE EFFECT. Byte-identity, deliberately not
@@ -595,13 +595,13 @@ class TestSyncSuppressionEffect:
         assert verdict["outcome"] == "ARCHIVED"
         memory_id = verdict["memory_id"]
         assert memory_id and len(memory_id) == 32
-        record = _cli_get(memory_id, str(tmp_path / "mem.db"))
+        record = _cli_get(memory_id, str(memory_store("mem.db")))
         assert verdict["delete_string"] in record["context"], (
             "the record did not persist — ARM 1 is satisfied by failure"
         )
 
     def test_unsuppressed_control_proves_the_harness_can_see_a_write(
-        self, claude_md, tmp_path
+        self, claude_md, tmp_path, memory_store
     ):
         """ARM 3 — the negative control.
 
@@ -623,7 +623,7 @@ class TestSyncSuppressionEffect:
         )
         rc, stdout, stderr = archive_pin._run_memory_cli(
             ["save", "--stdin"],                      # NO --no-sync
-            db_path=str(tmp_path / "mem.db"),
+            db_path=str(memory_store("mem.db")),
             stdin_data=payload,
             cwd=archive_pin.project_dir_for(path),
         )

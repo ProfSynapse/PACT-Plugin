@@ -194,10 +194,12 @@ class TestTheAdverseConditionIsReal:
 class TestCliOutputPurity:
     """The contract: the CLI's streams stay machine-readable under stress."""
 
-    def test_stderr_is_pure_json_when_dependencies_are_missing(self, tmp_path):
+    def test_stderr_is_pure_json_when_dependencies_are_missing(
+        self, tmp_path, memory_store
+    ):
         hook_dir = _make_hook_dir(tmp_path, "block")
         result = _run_cli(
-            ["get", "nonexistent99", "--db-path", str(tmp_path / "m.db")],
+            ["get", "nonexistent99", "--db-path", str(memory_store("m.db"))],
             hook_dir,
         )
 
@@ -206,7 +208,7 @@ class TestCliOutputPurity:
         assert envelope["ok"] is False
         assert envelope["error"] == "NOT_FOUND"
 
-    def test_stderr_is_pure_json_under_forced_warnings(self, tmp_path):
+    def test_stderr_is_pure_json_under_forced_warnings(self, tmp_path, memory_store):
         """
         PYTHONWARNINGS=always defeats the default warning filters, so any
         `warnings.warn` reachable on this path is forced onto stderr. This is
@@ -214,7 +216,7 @@ class TestCliOutputPurity:
         """
         hook_dir = _make_hook_dir(tmp_path, "block")
         result = _run_cli(
-            ["get", "nonexistent99", "--db-path", str(tmp_path / "m.db")],
+            ["get", "nonexistent99", "--db-path", str(memory_store("m.db"))],
             hook_dir,
             extra_env={"PYTHONWARNINGS": "always"},
         )
@@ -223,7 +225,9 @@ class TestCliOutputPurity:
         envelope = _parse_or_fail(result.stderr, "stderr")
         assert envelope["error"] == "NOT_FOUND"
 
-    def test_success_path_keeps_stdout_json_and_stderr_silent(self, tmp_path):
+    def test_success_path_keeps_stdout_json_and_stderr_silent(
+        self, tmp_path, memory_store
+    ):
         """
         The success path carries the same exposure: stdout is the envelope, and
         stderr must stay EMPTY so a caller can treat any stderr content as a
@@ -231,7 +235,7 @@ class TestCliOutputPurity:
         """
         hook_dir = _make_hook_dir(tmp_path, "block")
         result = _run_cli(
-            ["list", "--db-path", str(tmp_path / "m.db")],
+            ["list", "--db-path", str(memory_store("m.db"))],
             hook_dir,
         )
 
@@ -251,10 +255,10 @@ class TestThisGuardCanFire:
     against a CLI that could not be broken, and would prove nothing.
     """
 
-    def test_an_import_time_stderr_write_breaks_the_parse(self, tmp_path):
+    def test_an_import_time_stderr_write_breaks_the_parse(self, tmp_path, memory_store):
         hook_dir = _make_hook_dir(tmp_path, "emit", emit_to_stderr=True)
         result = _run_cli(
-            ["get", "nonexistent99", "--db-path", str(tmp_path / "m.db")],
+            ["get", "nonexistent99", "--db-path", str(memory_store("m.db"))],
             hook_dir,
         )
 
@@ -266,14 +270,14 @@ class TestThisGuardCanFire:
             json.loads(result.stderr)
 
     def test_the_mutation_differs_from_the_guarded_case_only_by_the_emission(
-        self, tmp_path
+        self, tmp_path, memory_store
     ):
         """
         Both arms block the same imports and run the same command; the ONLY
         difference is the added stderr write. That is what licenses attributing
         the broken parse to the emission rather than to the adverse conditions.
         """
-        args = ["get", "nonexistent99", "--db-path", str(tmp_path / "m.db")]
+        args = ["get", "nonexistent99", "--db-path", str(memory_store("m.db"))]
         clean = _run_cli(args, _make_hook_dir(tmp_path, "clean"))
         mutated = _run_cli(args, _make_hook_dir(tmp_path, "dirty", emit_to_stderr=True))
 

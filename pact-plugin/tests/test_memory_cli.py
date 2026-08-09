@@ -1489,11 +1489,23 @@ class TestCliErrorHandling:
         assert exc_info.value.code == 0
         mock_pact_memory.list.assert_called_once()
 
-    def test_main_passes_db_path(self, mock_pact_memory):
+    def test_main_passes_db_path(self, mock_pact_memory, memory_store):
+        """THE STORE MUST BE PRESENT, AND THAT IS THE SUBJECT AND NOT SETUP.
+
+        `main` refuses a `--db-path` naming a store that is absent, BEFORE it
+        reaches a handler. A patched `PACTMemory` does not change that: the
+        refusal precedes the handler, so an absent path would end this arm at
+        the boundary and the forwarding assertion below would never run.
+
+        An arm that names an absent path here does not fail loudly. It reports
+        that `PACTMemory` was called 0 times, which reads as a forwarding
+        defect rather than as its own precondition.
+        """
+        store = memory_store("test.db")
         with patch("scripts.cli.PACTMemory", return_value=mock_pact_memory) as mock_cls:
             with pytest.raises(SystemExit):
-                main(["list", "--db-path", "/tmp/test.db"])
-        mock_cls.assert_called_once_with(db_path=Path("/tmp/test.db"))
+                main(["list", "--db-path", str(store)])
+        mock_cls.assert_called_once_with(db_path=Path(str(store)))
 
     def test_main_db_path_none_when_not_specified(self, mock_pact_memory):
         with patch("scripts.cli.PACTMemory", return_value=mock_pact_memory) as mock_cls:

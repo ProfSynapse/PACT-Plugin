@@ -331,12 +331,12 @@ class TestVerdictCarriesTheResolvedPath:
         )
 
     def test_archived_verdict_names_the_file(self, isolated, monkeypatch,
-                                             tmp_path):
+                                             tmp_path, memory_store):
         a = _make_project(isolated / "project_a", "PIN A")
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
         monkeypatch.chdir(a)
         verdict = archive_pin.build_verdict(
-            0, db_path=str(tmp_path / "mem.db")
+            0, db_path=str(memory_store("mem.db"))
         )
         assert verdict["outcome"] == "ARCHIVED", verdict
         assert verdict["claude_md_path"] == str(
@@ -368,7 +368,7 @@ class TestSyncSuppressionAndDeleteString:
     """
 
     def test_archival_save_leaves_claude_md_byte_identical(
-        self, isolated, monkeypatch, tmp_path
+        self, isolated, monkeypatch, tmp_path, memory_store
     ):
         a = _make_project(isolated / "project_a", "PIN A")
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
@@ -376,7 +376,7 @@ class TestSyncSuppressionAndDeleteString:
         claude_md = a / ".claude" / "CLAUDE.md"
 
         before = claude_md.read_bytes()
-        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+        verdict = archive_pin.build_verdict(0, db_path=str(memory_store("m.db")))
 
         assert verdict["outcome"] == "ARCHIVED", verdict
         assert verdict["memory_id"], (
@@ -389,12 +389,12 @@ class TestSyncSuppressionAndDeleteString:
         )
 
     def test_delete_string_is_the_verbatim_span_and_unique(
-        self, isolated, monkeypatch, tmp_path
+        self, isolated, monkeypatch, tmp_path, memory_store
     ):
         a = _make_project(isolated / "project_a", "PIN A")
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
         monkeypatch.chdir(a)
-        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+        verdict = archive_pin.build_verdict(0, db_path=str(memory_store("m.db")))
 
         content = (a / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
         handle = verdict["delete_string"]
@@ -472,14 +472,14 @@ class TestArchivedDeleteUnsafe:
         return root
 
     def test_duplicate_block_yields_archived_delete_unsafe(
-        self, isolated, monkeypatch, tmp_path
+        self, isolated, monkeypatch, tmp_path, memory_store
     ):
         a = self._duplicated_project(isolated / "dup_project")
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
         monkeypatch.chdir(a)
 
         content = (a / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
-        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+        verdict = archive_pin.build_verdict(0, db_path=str(memory_store("m.db")))
 
         # Precondition: the fixture really does duplicate the span, or this
         # test passes for the wrong reason.
@@ -497,7 +497,7 @@ class TestArchivedDeleteUnsafe:
         assert verdict["delete_string"] is not None
 
     def test_unsafe_is_not_mislabelled_as_a_failed_archive(
-        self, isolated, monkeypatch, tmp_path
+        self, isolated, monkeypatch, tmp_path, memory_store
     ):
         """Reusing NOT_ARCHIVED here would assert the archive failed when it
         succeeded — and downstream that maps to the `archive_refused` journal
@@ -506,7 +506,7 @@ class TestArchivedDeleteUnsafe:
         a = self._duplicated_project(isolated / "dup_project2")
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
         monkeypatch.chdir(a)
-        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+        verdict = archive_pin.build_verdict(0, db_path=str(memory_store("m.db")))
         assert verdict["outcome"] not in ("NOT_ARCHIVED", "UNEVALUABLE")
         assert verdict["contained"] is True
 
@@ -538,13 +538,14 @@ class TestArchivedDeleteUnsafe:
             assert "a" * 32 in reason
 
     def test_both_unsafe_directions_share_the_outcome(self, isolated,
-                                                      monkeypatch, tmp_path):
+                                                      monkeypatch, tmp_path,
+                                                      memory_store):
         """Same outcome name, different explanation — the split is in the
         reason, never in the disposition."""
         a = self._duplicated_project(isolated / "dup_project3")
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a))
         monkeypatch.chdir(a)
-        verdict = archive_pin.build_verdict(0, db_path=str(tmp_path / "m.db"))
+        verdict = archive_pin.build_verdict(0, db_path=str(memory_store("m.db")))
         assert verdict["outcome"] == "ARCHIVED_DELETE_UNSAFE"
         assert "ambiguous" in verdict["reason"]
         assert verdict["occurrences"] == 2

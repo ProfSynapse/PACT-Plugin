@@ -926,6 +926,19 @@ _COMMANDS = {
     "delete": cmd_delete,
 }
 
+# THE COMMANDS THAT MAY BRING A STORE INTO EXISTENCE AT A CALLER PATH.
+#
+# DECLARED AS A SET RATHER THAN TESTED AS A STRING, so the exemption has one
+# name and a future author who adds a second command must justify the addition
+# rather than widen a comparison in passing.
+#
+# ⚠️ EACH OTHER COMMAND CREATES A SCHEMA ON AN ABSENT STORE TODAY, so this set
+# is NOT a description of which commands can create. `database.ensure_initialized`
+# builds the schema for `save`, `get` and the rest. This set states which
+# command is ALLOWED to, at a path a caller typed. Read it as a rule and not as
+# a summary of the code below it.
+_COMMANDS_THAT_MAY_CREATE_A_CALLER_PATH = frozenset({"setup"})
+
 
 def main(argv=None):
     """
@@ -970,6 +983,45 @@ def main(argv=None):
     # the channel the error envelope leaves on.
     try:
         with _own_stderr_for_envelope():
+            # ⚠️ A CALLER PATH IS OPENED, NEVER BROUGHT INTO EXISTENCE. THE FILE
+            # HALF OF THE PATH REFUSAL LIVES HERE.
+            #
+            # A path a caller TYPED is a spelling somebody chose, so an absent
+            # store at that path is a TYPO, and the correct answer to a typo is
+            # to fail. `--db-path` aimed at a directory that is present with a
+            # mistyped FILE NAME used to build a store and report an ordinary
+            # result, which put a throwaway store inside the live store
+            # directory. An archive then landed in a database about to be
+            # discarded, while the pin it came from became eligible for delete.
+            #
+            # WHY THIS BOUNDARY AND NOT `database.get_connection`. That location
+            # was built and rejected. A refusal there reaches EACH caller of the
+            # connection factory, which breaks the custom-store contract that
+            # production and the test suite depend on, and `get_connection`
+            # cannot tell a person from a library caller. Here the command name
+            # is a FACT on `args`, so the decision reads something rather than
+            # infers it.
+            #
+            # THE DERIVED ROUTE IS UNTOUCHED, AND THAT OUTRANKS THE REFUSAL. A
+            # caller that passes no `--db-path` never reaches this branch, so an
+            # environment-derived or home-derived store still creates on its
+            # first run. `config.DERIVED_STORE_ORIGINS` carries that rule.
+            #
+            # RESIDUAL, STATED RATHER THAN IMPLIED: a library caller that passes
+            # a mistyped path stays uncovered here. The accepted reason is that
+            # a library caller is code, and code does not typo.
+            if (
+                db_path is not None
+                and args.command not in _COMMANDS_THAT_MAY_CREATE_A_CALLER_PATH
+                and not db_path.exists()
+            ):
+                _error(
+                    "DB_PATH_NOT_FOUND",
+                    f"No store at --db-path '{db_path}'. This command opens a "
+                    f"store that is present. To bring one into existence at "
+                    f"that path, run: setup --db-path '{db_path}'",
+                )
+
             with store_scope(db_path):
                 handler(args, db_path=db_path)
     except SystemExit:
