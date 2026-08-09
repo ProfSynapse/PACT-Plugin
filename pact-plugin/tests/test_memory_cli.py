@@ -3092,3 +3092,48 @@ class TestAFailedReportDoesNotChangeTheOutcome:
         # are a bounded failure and not a helper that reports False always.
         import io
         assert _best_effort_report(io.StringIO().write, "ok") is True
+
+    def test_the_private_envelope_handle_leaves_no_unflushed_residue(self):
+        """THE RESIDUE IN THE PRIVATE HANDLE, MEASURED IN THIS PROCESS.
+
+        This arm runs IN-PROCESS on purpose. The defect it pins is not the exit
+        status of a spawned command: it is a handle that keeps bytes over a
+        descriptor which has gone, and an in-process caller of `main()`, which
+        the unit tests of this CLI are, meets it directly.
+
+        WHAT THIS ARM COVERS. When the envelope write meets a reader-less
+        stream, the bytes stay pending inside the PRIVATE handle. The window
+        then closes the descriptor beneath that handle. Nothing closes the
+        handle, so its finalizer attempts one more flush against a descriptor
+        that has gone, and the interpreter reports an unraisable exception into
+        the test runner. This arm makes that residue a failure rather than
+        noise.
+        """
+        import gc
+
+        from scripts.cli import _error, _own_stderr_for_envelope
+
+        seen = []
+        previous_hook = sys.unraisablehook
+        sys.unraisablehook = seen.append
+
+        read_end, write_end = os.pipe()
+        saved = os.dup(2)
+        try:
+            os.dup2(write_end, 2)
+            os.close(read_end)   # no reader, so a write to descriptor 2 fails
+            with pytest.raises(SystemExit):
+                with _own_stderr_for_envelope():
+                    _error("SOME_ERROR", "e" * 64, exit_code=2)
+            gc.collect()
+        finally:
+            os.dup2(saved, 2)
+            os.close(saved)
+            os.close(write_end)
+            sys.unraisablehook = previous_hook
+
+        assert not seen, (
+            "the private envelope handle kept unflushed bytes over a descriptor "
+            "that was closed, so its finalizer reported an unraisable exception "
+            f"into the test runner: {[str(x.exc_value) for x in seen]}"
+        )

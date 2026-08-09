@@ -214,6 +214,27 @@ def _own_stderr_for_envelope():
         # worse outcome than a raise a caller can see.
         _ENVELOPE_STREAM = previous_envelope
         os.dup2(saved_fd, 2)
+
+        # ⚠️ CLOSE THE PRIVATE HANDLE BEFORE ITS DESCRIPTOR GOES AWAY, AND CLOSE
+        # IT BEST EFFORT. When the envelope write above met a reader-less
+        # stream, the bytes are STILL PENDING inside this handle: a failed flush
+        # does not discard them. The next line closes the descriptor beneath it.
+        # Left open, the handle keeps that residue over a descriptor that has
+        # gone, and its finalizer attempts one more flush and raises EBADF.
+        #
+        # WHY THAT MATTERS RATHER THAN BEING TIDINESS. In a SPAWNED process the
+        # interpreter turns that into `Exception ignored` text and exit 120,
+        # which discards the exit code the command chose. IN-PROCESS, which the
+        # unit tests of this CLI are, it surfaces as an unraisable exception
+        # inside the test runner. Nothing else reaches that residue: this handle
+        # is private to the window, and it is not one of the two standard
+        # streams, so a guard on those cannot see it.
+        #
+        # BEST EFFORT, because the close itself flushes and so can raise the
+        # same BrokenPipeError. A bare close would replace the outcome of the
+        # operation with a failure of the report, which is the defect this whole
+        # block exists to prevent.
+        _best_effort_report(envelope_stream.close)
         os.close(saved_fd)
 
         if replay:
