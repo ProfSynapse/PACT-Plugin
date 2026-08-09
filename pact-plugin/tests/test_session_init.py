@@ -52,6 +52,8 @@ import pytest
 # Add hooks directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
+from shared.constants import COMPACT_SUMMARY_ORPHAN_NAME  # noqa: E402
+
 
 # #877: session_init's Class-A writes (write_context disk-write, session_start
 # journal anchor, CLAUDE.md Current Session block, paused-state surface) are now
@@ -669,10 +671,28 @@ class TestRefreshSurfacingMatrix:
 class TestCompactSummaryCleanup:
     """Tests for stale compact-summary.txt cleanup in session_init.main()."""
 
-    def _run_main_with_source_and_summary(self, monkeypatch, tmp_path, source):
-        """Helper: run main() with compact-summary.txt present.
+    # The content written to the summary before each run. Recovered by reading
+    # it back, so an assertion can be about the BYTES rather than about a path.
+    SUMMARY_BODY = "Prior compaction context"
 
-        Returns whether compact-summary.txt still exists after main().
+    def _run_main_with_source_and_summary(
+        self, monkeypatch, tmp_path, source, session_id="aabb1122-0000-0000-0000-000000000000"
+    ):
+        """Run main() with compact-summary.txt present; report what survived.
+
+        RETURNS A PAIR, NOT A BOOLEAN, AND THAT IS THE POINT. This helper used
+        to return `summary_file.exists()` alone, which made byte loss
+        UNREPRESENTABLE in the test's own vocabulary: no caller could ask
+        whether the summary survived, only whether the singleton path was
+        empty. Measured on the unfixed hook, a byte-preserving mutation and the
+        destructive original both produced `4 passed` — identical output for
+        opposite behaviours.
+
+        Returns `(still_at_singleton, recovered)` where `recovered` is a
+        {relative-path: text} map of every copy of the summary body found
+        anywhere under the sessions root EXCEPT the singleton itself. An
+        assertion about survival must read that map; one about the single-use
+        property reads the flag.
         """
         from session_init import main
 
@@ -683,15 +703,15 @@ class TestCompactSummaryCleanup:
         sessions_dir = tmp_path / ".claude" / "pact-sessions"
         sessions_dir.mkdir(parents=True)
         summary_file = sessions_dir / "compact-summary.txt"
-        summary_file.write_text("Prior compaction context")
+        summary_file.write_text(self.SUMMARY_BODY)
 
         # Patch get_compact_summary_path() to return our tmp_path version
         patched_path = summary_file
 
-        stdin_data = json.dumps({
-            "session_id": "aabb1122-0000-0000-0000-000000000000",
-            "source": source,
-        })
+        stdin_payload = {"source": source}
+        if session_id is not None:
+            stdin_payload["session_id"] = session_id
+        stdin_data = json.dumps(stdin_payload)
 
         with patch("session_init.get_compact_summary_path", lambda: patched_path), \
              patch("session_init.setup_plugin_symlinks", return_value=None), \
@@ -707,24 +727,69 @@ class TestCompactSummaryCleanup:
                 main()
 
         assert exc_info.value.code == 0
-        return summary_file.exists()
+
+        recovered = {
+            str(p.relative_to(sessions_dir)): p.read_text(encoding="utf-8")
+            for p in sorted(sessions_dir.rglob("*"))
+            if p.is_file() and p != summary_file
+            and p.read_text(encoding="utf-8") == self.SUMMARY_BODY
+        }
+        return summary_file.exists(), recovered
 
     @pytest.mark.parametrize("source", ["startup", "resume", "clear"])
-    def test_non_compact_source_deletes_stale_summary(self, monkeypatch, tmp_path, source):
-        """Non-compact sources (startup, resume, clear) should delete compact-summary.txt."""
-        still_exists = self._run_main_with_source_and_summary(
+    def test_non_compact_source_clears_the_singleton_path(self, monkeypatch, tmp_path, source):
+        """The path must end up clear: a summary left there is processed twice."""
+        still_at_singleton, _ = self._run_main_with_source_and_summary(
             monkeypatch, tmp_path, source
         )
-        assert not still_exists, (
-            f"compact-summary.txt should be deleted for source='{source}'"
+        assert not still_at_singleton, (
+            f"compact-summary.txt should not remain at the singleton path for "
+            f"source='{source}' — a copy left there is processed a second time "
+            f"by the next briefing in the same session."
+        )
+
+    @pytest.mark.parametrize("source", ["startup", "resume", "clear"])
+    def test_non_compact_source_keeps_the_bytes(self, monkeypatch, tmp_path, source):
+        """The BYTES must survive the clear. This is the arm the old helper could not express.
+
+        Clearing the path and preserving the summary are separate properties,
+        and the previous destructive implementation satisfied the first BY
+        violating the second. Asserting the singleton is empty cannot tell the
+        two apart; only reading the content back can.
+        """
+        _, recovered = self._run_main_with_source_and_summary(
+            monkeypatch, tmp_path, source
+        )
+        assert recovered, (
+            f"the summary was DESTROYED for source='{source}': no copy of its "
+            f"content survives anywhere under the sessions root. The hook must "
+            f"MOVE it, not unlink it — postcompact_archive writes that path as "
+            f"a global singleton and no second copy exists."
+        )
+
+    def test_unattributable_summary_lands_in_the_fixed_orphan_slot(self, monkeypatch, tmp_path):
+        """No session_id means no session directory — the bytes still survive.
+
+        This is the branch the secretary's fallback creates: nothing archived
+        it, so the hook is the only thing standing between the summary and
+        deletion. The destination is a FIXED name, never timestamped, so
+        repeated orphans cannot accumulate in the shared sessions root.
+        """
+        still_at_singleton, recovered = self._run_main_with_source_and_summary(
+            monkeypatch, tmp_path, "startup", session_id=None
+        )
+        assert not still_at_singleton, "the singleton path must still end up clear"
+        assert COMPACT_SUMMARY_ORPHAN_NAME in recovered, (
+            f"an unattributable summary must land in the fixed orphan slot "
+            f"{COMPACT_SUMMARY_ORPHAN_NAME!r}; recovered instead: {sorted(recovered)}"
         )
 
     def test_compact_source_preserves_summary(self, monkeypatch, tmp_path):
         """Compact source should preserve compact-summary.txt (it was just written)."""
-        still_exists = self._run_main_with_source_and_summary(
+        still_at_singleton, _ = self._run_main_with_source_and_summary(
             monkeypatch, tmp_path, "compact"
         )
-        assert still_exists, (
+        assert still_at_singleton, (
             "compact-summary.txt should be preserved for source='compact'"
         )
 

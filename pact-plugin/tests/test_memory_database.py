@@ -561,8 +561,23 @@ class TestPACTMemoryDeleteVecTableHandling:
                 return getattr(self._real, name)
 
         @contextmanager
-        def db_connection_locking_vec(path):
-            with real_db_connection(path) as real_conn:
+        def db_connection_locking_vec(db_path=None):
+            # MIRRORS THE REAL SIGNATURE, `db_connection(db_path=None)`, and
+            # not one call site. An earlier spelling took a REQUIRED positional
+            # named `path`, which held only while every caller passed a path.
+            # A double bound to the call site breaks on a call-shape change and
+            # reports a TypeError rather than the behaviour under test.
+            #
+            # ⚠️ DO NOT RENAME THIS PARAMETER TO REMOVE THE SHADOW. It shadows
+            # the enclosing `db_path` and that is the correct cost. The name
+            # must align with the real function, because a caller may pass the
+            # argument BY KEYWORD, and a double with a different parameter name
+            # then raises TypeError instead of running the behaviour under
+            # test. A rename looks like tidying and reintroduces the exact
+            # coupling the paragraph above records. The shadow is inert here:
+            # this body uses the parameter alone, and the enclosing name is
+            # read only outside this closure.
+            with real_db_connection(db_path) as real_conn:
                 yield _ConnProxy(real_conn)
 
         with patch("scripts.memory_api._ensure_ready"), \

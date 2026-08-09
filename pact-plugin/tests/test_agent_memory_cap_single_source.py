@@ -62,8 +62,11 @@ wording.
 And nothing here says whether the stated limits are CORRECT — no test in this
 repository can, because none of them reads the platform bundle.
 """
+import os
 import re
+import subprocess
 from collections import namedtuple
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -229,6 +232,112 @@ TEXT_SUFFIXES = {".md", ".py", ".json", ".sh", ".txt", ".yaml", ".yml"}
 SKIP_DIR_PARTS = {"__pycache__", ".pytest_cache"}
 
 
+# --- the untracked subtraction ---------------------------------------------
+# WHY GIT IS CONSULTED AT ALL, in a walk that stays deliberately
+# filesystem-based. A stale directory left behind by earlier work entered the
+# walk and reddened the count arms, while `git status` reported clean the whole
+# time. Nothing in the normal view of the repository could explain the failure.
+# The population is meant to be the SHIPPED tree, so anything git does not
+# track is subtracted from it. The SOURCE is unchanged; only an exclusion is
+# added, and only where there is a repository to ask.
+#
+# THE SUBTRACTION SET IS THE COMPLEMENT OF TRACKED, NEVER AN ENUMERATION OF
+# UNTRACKED. That distinction is the whole correctness of this module, and the
+# obvious spelling is the wrong one. MEASURED, on a constructed repository
+# carrying one file of each class:
+#
+#   * `git ls-files --others --exclude-standard` returns ONLY the plain
+#     untracked file. It excludes IGNORED files by design, and it does not
+#     descend into a nested repository at all.
+#   * `git ls-files --others` adds the ignored file, and collapses a nested
+#     worktree to a single directory entry with a trailing slash — so a
+#     membership test on file paths still never matches the files inside it.
+#   * the complement of `git ls-files` catches all three.
+#
+# BOTH INVISIBLE CLASSES ARE LIVE IN THIS REPOSITORY. `.gitignore` carries
+# `.worktrees/` with no leading slash, so that pattern matches at ANY depth,
+# and this project does nearly all of its work in worktrees. A stale one is
+# therefore ignored AND a nested repository at the same time — which is exactly
+# why `git status` stayed clean. A subtraction built on `--others` would have
+# shipped green while removing a class of file that was never the problem.
+#
+# THE COMPLEMENT FORM IS ALSO IMMUNE TO THE USER'S GLOBAL EXCLUDES FILE, which
+# `--exclude-standard` reads. Two people with different `core.excludesFile`
+# settings get the same population here. They would not, under the other form.
+def _git(root, *args):
+    """Run a read-only git query under `root`.
+
+    The user's git config is INHERITED rather than neutralised, deliberately.
+    A hermetic config is right when a test BUILDS a repository, and the helper
+    beside the synthetic probes below does exactly that. It is wrong here: the
+    only settings that could matter to `ls-files` are the ownership allowances
+    in `safe.directory`, and discarding those would turn a normal checkout into
+    a hard error for no gain. Nothing this function reads depends on the ignore
+    rules, because it never asks about them.
+    """
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@lru_cache(maxsize=None)
+def _tracked_relpaths(root=PLUGIN_ROOT):
+    """Paths git tracks under `root`, or None when `root` is in no repository.
+
+    THREE OUTCOMES, AND COLLAPSING ANY TWO OF THEM REINSTATES THE DEFECT:
+
+      * NO REPOSITORY -> None, meaning "subtract nothing". The walk then
+        returns exactly what it always did, which is what keeps this module
+        working inside a hermetic export that has no `.git`.
+      * A REPOSITORY, QUERY SUCCEEDS -> the tracked set.
+      * A REPOSITORY, QUERY FAILS -> raise.
+
+    THE THIRD OUTCOME IS WHY THIS IS NOT WRITTEN AS A `try`. "There is no
+    repository here" and "I could not ask git" are different facts with the
+    same convenient answer, and an exception handler gives both of them the
+    empty subtraction set. A transient git failure would then silently restore
+    the original defect, in the one tree where it has already happened once,
+    with nothing in the output to say so. So the no-repository case is reached
+    only by a POSITIVE determination, and every other failure raises.
+
+    CACHED, so that one pytest session sees ONE population. Without the cache
+    a suite that runs while somebody stages a file could answer two calls from
+    two different git states, and the population arms would disagree with each
+    other for a reason no reader could reconstruct.
+    """
+    probe = _git(root, "rev-parse", "--is-inside-work-tree")
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        return None
+
+    listing = _git(root, "ls-files", "-z")
+    if listing.returncode != 0:
+        raise RuntimeError(
+            f"{root} is inside a git work tree, but `git ls-files` failed with "
+            f"status {listing.returncode}: {listing.stderr.strip()!r}. This is "
+            f"NOT treated as an empty subtraction set on purpose — that would "
+            f"silently readmit untracked files to the instruction population, "
+            f"which is the defect this subtraction exists to prevent."
+        )
+
+    tracked = frozenset(entry for entry in listing.stdout.split("\0") if entry)
+    if not tracked:
+        raise RuntimeError(
+            f"{root} is inside a git work tree, but git tracks NOTHING under "
+            f"it. Subtracting the complement of an empty set would empty the "
+            f"instruction population and make every count arm in this module "
+            f"vacuous, so this raises instead. The likely cause is a repository "
+            f"that encloses this directory without covering it — a home "
+            f"directory under version control, with the plugin installed "
+            f"beneath it. If that is your setup, the population cannot be "
+            f"filtered by git here and this subtraction needs a way to say so."
+        )
+    return tracked
+
+
 def _is_test_module(rel):
     """True for a test module, wherever it lives.
 
@@ -240,25 +349,171 @@ def _is_test_module(rel):
     return rel.name.startswith("test_") and rel.suffix == ".py"
 
 
-def _instruction_files():
+def _instruction_files(root=PLUGIN_ROOT):
     """Every shipped instruction file under the plugin, excluding test code.
 
-    Deliberately filesystem-based rather than git-based: these tests must give
-    the same answer inside a hermetic export, which has no `.git`.
+    `root` IS A PARAMETER SO THE PROBES BELOW CAN ASSERT ON THE POPULATION
+    ITSELF rather than on the helper that feeds it. A test that asserted
+    `_tracked_relpaths` returned the right set would be pinned to TODAY'S
+    mechanism: rewrite the subtraction to enumerate untracked files instead,
+    and such a test has to be rewritten too, so it could be made to pass by
+    the same edit that broke the guard. Driving the real population keeps the
+    assertions true of any mechanism that claims to do this job.
+
+
+    THE SOURCE IS DELIBERATELY THE FILESYSTEM RATHER THAN GIT: these tests must
+    give the same answer inside a hermetic export, which has no `.git`. That
+    sentence is unchanged and still governs. What is now QUALIFIED is that git
+    is consulted for EXCLUSION where a repository exists — untracked entrants
+    are subtracted, because the population is meant to be the shipped tree and
+    a stale untracked directory once reddened this module while `git status`
+    reported clean. Where there is no repository the subtraction set is empty
+    and this returns precisely what it always returned. See the block above
+    `_tracked_relpaths` for why the subtraction is a COMPLEMENT of tracked and
+    not an enumeration of untracked.
     """
+    tracked = _tracked_relpaths(root)
     out = []
-    for path in PLUGIN_ROOT.rglob("*"):
+    for path in root.rglob("*"):
         if not path.is_file() or path.suffix not in TEXT_SUFFIXES:
             continue
-        rel = path.relative_to(PLUGIN_ROOT)
+        rel = path.relative_to(root)
         if SKIP_DIR_PARTS & set(rel.parts):
+            continue
+        if tracked is not None and str(rel) not in tracked:
             continue
         if rel.parts and rel.parts[0] == "tests":
             continue
         if _is_test_module(rel):
             continue
         out.append(path)
+    assert out, (
+        "the instruction-file population is EMPTY. Every count arm in this "
+        "module asserts a site count, so an empty population makes the whole "
+        "file assert things about nothing — and a vacuous pass is "
+        "byte-identical to a real one. Either the walk no longer reaches the "
+        "plugin tree, or the untracked subtraction removed everything."
+    )
     return out
+
+
+def _walked_text_files(root=PLUGIN_ROOT):
+    """The SUPERSET the filter self-check measures `kept` against.
+
+    Everything the walk reaches that could be an instruction file, with the
+    untracked subtraction applied and NONE of the exclusion rules. Those rules
+    stay re-derived at the call site, because a self-check that calls the
+    helpers under test proves only that the files exist.
+
+    EXTRACTED SO THE SUBTRACTION HERE CAN BE ASSERTED. While this was a local
+    inside the test, deleting its subtraction left the suite at 40 passed on a
+    clean tree — and a clean tree is the only state CI runs in. A bound that
+    only a comment defends is not defended.
+    """
+    tracked = _tracked_relpaths(root)
+    return [
+        p
+        for p in root.rglob("*")
+        if p.is_file()
+        and p.suffix in TEXT_SUFFIXES
+        and not (SKIP_DIR_PARTS & set(p.relative_to(root).parts))
+        and (tracked is None or str(p.relative_to(root)) in tracked)
+    ]
+
+
+def _directories_holding_shipped_text(root=PLUGIN_ROOT):
+    """Top-level directory names holding at least one shipped text file.
+
+    The independent oracle for the reach of the population: derived from the
+    DIRECTORY LISTING rather than from `_instruction_files`, so a narrowing is
+    visible whichever directory it drops.
+
+    EXTRACTED FOR THE SAME REASON AS THE SUPERSET ABOVE, and this one had the
+    sharper failure. With the subtraction deleted here and one stale untracked
+    directory present, the arm that consumes this went red with
+    `assert not ['stale_leftover']` — the original defect, moved one test down,
+    which is exactly what the comment predicted and nothing asserted.
+    """
+    tracked = _tracked_relpaths(root)
+    out = set()
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        if entry.name == "tests" or entry.name in SKIP_DIR_PARTS:
+            continue
+        if any(
+            f.is_file()
+            and f.suffix in TEXT_SUFFIXES
+            and not (SKIP_DIR_PARTS & set(f.relative_to(root).parts))
+            and not _is_test_module(f.relative_to(root))
+            and (tracked is None or str(f.relative_to(root)) in tracked)
+            for f in entry.rglob("*")
+        ):
+            out.add(entry.name)
+    return out
+
+
+def _untracked_only_directories(root=PLUGIN_ROOT):
+    """Top-level dirs holding shipped-shaped text files of which git tracks NONE.
+
+    The narrow half of the partial-coverage residual, made detectable. A whole
+    instruction directory that git does not track is invisible to every count
+    arm in this module while the counts stay at one, so a duplicate placed
+    there would never be seen.
+
+    RESTRICTED TO THE GIT-STATUS-VISIBLE CLASS, and the restriction is the
+    whole design. MEASURED on four constructed repositories:
+
+      case                        unrestricted        this helper   git status
+      untracked FILE (legitimate) []                  []            `?? file`
+      dir PLAIN UNTRACKED         ['commands']        ['commands']  `?? commands/`
+      dir IGNORED                 ['ignored_surface'] []            CLEAN
+      NESTED WORKTREE             ['.worktrees']      []            CLEAN
+
+    The unrestricted form fires in exactly the two cases where `git status` is
+    CLEAN. That is a red test, a tree that looks clean in the reader's normal
+    view, and nothing to explain it — THE ORIGINAL DEFECT THIS MODULE'S
+    SUBTRACTION EXISTS TO REMOVE, reproduced by its own fix. A stale worktree
+    under the plugin root is that case exactly, and it has happened here once.
+
+    Restricting to `--others --exclude-standard` keeps the separation on the
+    case that matters and makes an unexplainable red UNREPRESENTABLE: every
+    directory this can name is one `git status` already prints.
+
+    IT TAKES A WHOLE DIRECTORY, not a file, so ordinary scratch work inside a
+    tracked directory cannot trip it. Firing requires a top-level directory
+    with ZERO tracked files, which is a deliberate state rather than a routine
+    one.
+    """
+    tracked = _tracked_relpaths(root)
+    if tracked is None:
+        return set()
+
+    listing = _git(root, "ls-files", "-z", "--others", "--exclude-standard")
+    if listing.returncode != 0:
+        raise RuntimeError(
+            f"{root} is inside a git work tree, but listing untracked files "
+            f"failed with status {listing.returncode}: "
+            f"{listing.stderr.strip()!r}. Not treated as 'nothing visible', "
+            f"because that would silently disarm this guard."
+        )
+    visible = {entry for entry in listing.stdout.split("\0") if entry}
+
+    hits = set()
+    for entry in root.iterdir():
+        if not entry.is_dir() or entry.name in SKIP_DIR_PARTS or entry.name == "tests":
+            continue
+        rels = [
+            str(f.relative_to(root))
+            for f in entry.rglob("*")
+            if f.is_file()
+            and f.suffix in TEXT_SUFFIXES
+            and not (SKIP_DIR_PARTS & set(f.relative_to(root).parts))
+            and not _is_test_module(f.relative_to(root))
+        ]
+        if rels and not any(r in tracked for r in rels) and any(r in visible for r in rels):
+            hits.add(entry.name)
+    return hits
 
 
 def _sites(token):
@@ -394,14 +649,20 @@ def test_each_population_filter_removes_something():
     rule, so a broken filter would pass. The leak checks below therefore use
     literal predicates against the KEPT set, never the helpers under test.
     """
-    all_text = [
-        p
-        for p in PLUGIN_ROOT.rglob("*")
-        if p.is_file()
-        and p.suffix in TEXT_SUFFIXES
-        and not (SKIP_DIR_PARTS & set(p.relative_to(PLUGIN_ROOT).parts))
-    ]
-    rels = [p.relative_to(PLUGIN_ROOT) for p in all_text]
+    # THE SUBTRACTION IS APPLIED TO THE SUPERSET TOO, and it has to be. This
+    # is what `kept` is measured against, so on a raw filesystem walk the two
+    # halves below would reason about two different populations: Half 1 could
+    # report a filter as live on the evidence of an untracked file that Half 2
+    # can never see. That subtraction is asserted by
+    # `test_the_superset_oracle_excludes_untracked_entrants`, not merely
+    # described here.
+    #
+    # SHARING THE SOURCE DOES NOT COST THE INDEPENDENCE THIS ARM RELIES ON.
+    # What must not be shared is the FILTER RULES — they are re-derived
+    # literally below, never by calling `_instruction_files`. The population
+    # SOURCE was always shared: it was `PLUGIN_ROOT.rglob("*")` written out on
+    # both sides before, and it is that walk minus the subtraction now.
+    rels = [p.relative_to(PLUGIN_ROOT) for p in _walked_text_files()]
     kept = {p.relative_to(PLUGIN_ROOT) for p in _instruction_files()}
     assert kept, "the instruction-file population is empty"
 
@@ -625,20 +886,16 @@ def test_population_reaches_every_directory_a_duplicate_has_appeared_in():
     # from the DIRECTORY LISTING instead of from the population function, so it
     # is an independent oracle rather than a second spelling of the same rule,
     # and any narrowing is visible whichever directory it drops.
-    expected = set()
-    for entry in PLUGIN_ROOT.iterdir():
-        if not entry.is_dir():
-            continue
-        if entry.name == "tests" or entry.name in SKIP_DIR_PARTS:
-            continue
-        if any(
-            f.is_file()
-            and f.suffix in TEXT_SUFFIXES
-            and not (SKIP_DIR_PARTS & set(f.relative_to(PLUGIN_ROOT).parts))
-            and not _is_test_module(f.relative_to(PLUGIN_ROOT))
-            for f in entry.rglob("*")
-        ):
-            expected.add(entry.name)
+    # THE SUBTRACTION APPLIES TO THIS ORACLE TOO, AND OMITTING IT WOULD
+    # RELOCATE THE DEFECT RATHER THAN FIX IT. This one walks a PER-ENTRY
+    # subtree instead of the plugin root, so it is the site a mechanical edit
+    # skips. If `_instruction_files` subtracted untracked entrants and this did
+    # not, an untracked directory holding a single .md file would enter
+    # `expected`, could never enter `tops`, and THIS ARM would go red — the
+    # same unexplainable local failure as before, moved one test down. That is
+    # asserted by `test_the_directory_oracle_ignores_a_stale_untracked_dir`
+    # rather than left to this comment, which is all that guarded it before.
+    expected = _directories_holding_shipped_text()
     unreached = sorted(expected - tops)
     assert not unreached, (
         f"the instruction population no longer reaches {unreached}; it covers "
@@ -648,6 +905,361 @@ def test_population_reaches_every_directory_a_duplicate_has_appeared_in():
         f"deliberately dropped, exclude it here by name with a comment saying "
         f"why, rather than letting the walk narrow silently."
     )
+
+
+# ---------------------------------------------------------------------------
+# The subtraction, asserted against a constructed repository
+# ---------------------------------------------------------------------------
+# THE SHIPPED TREE CANNOT ASSERT ANY OF THIS. Every file under this plugin is
+# tracked, so the subtraction removes NOTHING here — measured, 512 walked text
+# files and 512 tracked, difference zero. A green suite in this repository is
+# therefore consistent with a subtraction that works, and equally consistent
+# with one that is completely broken. The classes it must remove do not exist
+# in the tree, so they have to be built.
+#
+# THE FOURTH CASE IS THE NON-VACUITY ANCHOR, and it is not decoration: three
+# assertions that things are ABSENT are all satisfied by a function that
+# returns nothing at all. A tracked file must SURVIVE for the other three to
+# mean anything.
+
+
+def _bgit(root, *args):
+    """Build-side git, with the user's config neutralised.
+
+    The opposite choice from `_git`, and deliberate in both directions. This
+    one CREATES repositories, so it must not inherit a signing key, a hook
+    path or a default branch name from whoever runs the suite. `_git` only
+    reads an existing repository, where neutralising the global config would
+    discard the `safe.directory` allowances a normal checkout may depend on.
+    """
+    subprocess.run(
+        ["git", "-c", "init.defaultBranch=main", *args],
+        cwd=str(root),
+        capture_output=True,
+        check=True,
+        env={
+            **os.environ,
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+        },
+    )
+
+
+def _repo_carrying_every_class(root):
+    """A repository holding one file of each class the walk can meet.
+
+    Returned in the order: tracked, plain untracked, ignored, nested worktree.
+
+    THE NESTED FILE IS A COPY OF THE TRACKED ONE, on purpose. That is the
+    shape of the original failure rather than a convenient stand-in: a stale
+    worktree holds a whole second copy of the tree, so every statement counted
+    once in the shipped files is counted twice, and the count arms go red
+    against text nobody touched.
+    """
+    (root / "skills").mkdir(parents=True)
+    _bgit(root, "init")
+    _bgit(root, "config", "user.email", "t@e")
+    _bgit(root, "config", "user.name", "T")
+    (root / "skills" / "tracked.md").write_text("shipped\n", encoding="utf-8")
+    (root / ".gitignore").write_text(".worktrees/\nignored/\n", encoding="utf-8")
+    _bgit(root, "add", "skills/tracked.md", ".gitignore")
+    _bgit(root, "commit", "-m", "seed")
+
+    (root / "skills" / "plain.md").write_text("untracked\n", encoding="utf-8")
+    (root / "ignored").mkdir()
+    (root / "ignored" / "hidden.md").write_text("ignored\n", encoding="utf-8")
+    _bgit(root, "worktree", "add", "--detach", ".worktrees/stale")
+
+    return (
+        "skills/tracked.md",
+        "skills/plain.md",
+        "ignored/hidden.md",
+        ".worktrees/stale/skills/tracked.md",
+    )
+
+
+def test_subtraction_removes_every_class_of_untracked_entrant(tmp_path):
+    """All three classes, not just the one the obvious spelling catches.
+
+    DRIVEN THROUGH `_instruction_files`, so this asserts the POPULATION and
+    not the helper behind it. Any rewrite of the subtraction has to satisfy
+    these four facts, whatever mechanism it uses to reach them.
+    """
+    root = tmp_path / "plugin"
+    tracked_rel, plain_rel, ignored_rel, nested_rel = _repo_carrying_every_class(root)
+    population = {str(p.relative_to(root)) for p in _instruction_files(root)}
+
+    assert tracked_rel in population, (
+        f"the TRACKED file {tracked_rel!r} is not in the population. Without "
+        f"this the three exclusion assertions below are satisfied by an empty "
+        f"set, and this arm would certify a subtraction that removes "
+        f"everything. Population was: {sorted(population)}"
+    )
+    for label, rel in (
+        ("a plain untracked file", plain_rel),
+        ("an IGNORED file", ignored_rel),
+        ("a file inside a NESTED WORKTREE", nested_rel),
+    ):
+        assert rel not in population, (
+            f"{label} reached the instruction population: {rel!r}. The "
+            f"subtraction set must be the COMPLEMENT of tracked. If the "
+            f"subtraction was rewritten to enumerate untracked files "
+            f"positively with `git ls-files --others`, this is the failure: "
+            f"that spelling omits ignored files under `--exclude-standard`, "
+            f"and it never descends into a nested repository under any "
+            f"spelling. Both classes are live in this project, whose "
+            f"`.gitignore` carries an unanchored `.worktrees/`."
+        )
+
+
+def test_the_superset_oracle_excludes_untracked_entrants(tmp_path):
+    """The filter self-check's SUPERSET carries the subtraction too.
+
+    Deleting it there left the suite green on a clean tree, because a clean
+    tree has no untracked text files for it to admit. The damage is not a red
+    test: Half 1 of that self-check would report an exclusion rule as LIVE on
+    the evidence of a file Half 2 can never see, so the two halves would
+    measure two different populations and agree by accident.
+    """
+    root = tmp_path / "plugin"
+    tracked_rel, plain_rel, ignored_rel, nested_rel = _repo_carrying_every_class(root)
+    superset = {str(p.relative_to(root)) for p in _walked_text_files(root)}
+
+    assert tracked_rel in superset, (
+        f"the tracked file {tracked_rel!r} is missing from the superset, so "
+        f"the three exclusions below are satisfied by an empty set. Superset "
+        f"was: {sorted(superset)}"
+    )
+    for rel in (plain_rel, ignored_rel, nested_rel):
+        assert rel not in superset, (
+            f"{rel!r} reached the SUPERSET that the filter self-check measures "
+            f"`kept` against. That check would then compare a git-filtered "
+            f"population against an unfiltered superset, and its two halves "
+            f"would be reasoning about different file sets."
+        )
+
+
+def test_the_directory_oracle_ignores_a_stale_untracked_dir(tmp_path):
+    """The reach oracle carries the subtraction too, and this is the sharp one.
+
+    Without it, a stale untracked directory holding ONE markdown file enters
+    `expected`, can never enter `tops`, and the reach arm fails with the name
+    of a directory git has never heard of. That is the original defect exactly
+    — an unexplainable local red while `git status` reports clean — relocated
+    from the population function into its oracle.
+    """
+    root = tmp_path / "plugin"
+    _repo_carrying_every_class(root)
+    stale = root / "stale_leftover"
+    stale.mkdir()
+    (stale / "left_behind.md").write_text("residue\n", encoding="utf-8")
+
+    reached = _directories_holding_shipped_text(root)
+
+    assert "skills" in reached, (
+        f"the directory holding the tracked file is missing from the oracle, "
+        f"so the assertion below is satisfied by an empty set. Oracle "
+        f"returned: {sorted(reached)}"
+    )
+    assert "stale_leftover" not in reached, (
+        f"a stale UNTRACKED directory reached the directory oracle: "
+        f"{sorted(reached)}. The arm that consumes this subtracts `tops` — "
+        f"built from the population, which excludes untracked files — from "
+        f"this set, so the directory would show up as 'no longer reached' and "
+        f"redden the suite against a tree nobody changed."
+    )
+
+
+def test_no_repository_means_the_subtraction_is_empty(tmp_path):
+    """The hermetic-export branch, which CI otherwise never executes.
+
+    Every run in this project happens inside a work tree, so the no-repository
+    path would ship unexercised and would first be tried by a user. The walk
+    must still answer, and answer with everything it finds.
+    """
+    export = tmp_path / "export" / "skills"
+    export.mkdir(parents=True)
+    (export / "shipped.md").write_text("shipped\n", encoding="utf-8")
+
+    assert _tracked_relpaths(tmp_path / "export") is None, (
+        "a directory in no repository did not return None, so the subtraction "
+        "would filter an exported tree against some enclosing repository's "
+        "index and could empty the population. None is what keeps this module "
+        "working where there is no `.git`."
+    )
+
+
+def test_no_instruction_directory_is_invisible_to_the_population():
+    """A whole top-level directory git tracks NONE of would be unguarded.
+
+    Every count arm above would stay at one while a duplicate sat there.
+    """
+    invisible = sorted(_untracked_only_directories())
+    assert not invisible, (
+        f"these top-level directories hold shipped-shaped text files that git "
+        f"tracks NONE of: {invisible}. Every cap arm in this file would stay "
+        f"GREEN while a duplicate ceiling statement sat inside one of them, "
+        f"because the population is the tracked set.\n"
+        f"TWO READINGS, and `git status` tells you which — it is already "
+        f"printing these as untracked, or this test could not name them.\n"
+        f"  1. YOU ARE MID-WORK on a new instruction surface. Commit it. Until "
+        f"you do, this guard cannot see it, and neither can the single-source "
+        f"rule it enforces.\n"
+        f"  2. THE CHECKOUT IS PARTIALLY COVERED — a vendored or sparse tree "
+        f"where a whole instruction directory is untracked. Then the "
+        f"population is narrower than the shipped plugin and the counts above "
+        f"are unreliable.\n"
+        f"This guard is deliberately blind to IGNORED directories and NESTED "
+        f"WORKTREES, so a red here can never be a stale worktree you cannot "
+        f"see. Do not widen it to cover those; that reintroduces an "
+        f"unexplainable failure."
+    )
+
+
+def test_the_invisible_directory_guard_fires_only_on_the_visible_class(tmp_path):
+    """The restriction, asserted across all four classes.
+
+    Delete the `--exclude-standard` restriction in `_untracked_only_directories`
+    and the last two cases start firing — a red whose cause is invisible in
+    `git status`, which is the defect this module exists to remove.
+    """
+    root = tmp_path / "plugin"
+    _repo_carrying_every_class(root)
+
+    # A tracked directory with an untracked FILE in it must NOT fire: the
+    # trigger is a whole directory, not scratch work beside shipped files.
+    assert "skills" not in _untracked_only_directories(root), (
+        "a directory holding tracked files fired. The guard must require ZERO "
+        "tracked files, or ordinary scratch work reddens the suite."
+    )
+
+    # B: plain untracked directory — the residual case. MUST fire.
+    (root / "commands").mkdir()
+    (root / "commands" / "cmd.md").write_text("a surface\n", encoding="utf-8")
+    assert "commands" in _untracked_only_directories(root), (
+        "a wholly untracked instruction directory did NOT fire. This is the "
+        "narrow half of the partial-coverage residual and the only reason "
+        "this guard exists; without it the guard is inert."
+    )
+
+    # B': ignored directory — MUST stay silent, `git status` shows nothing.
+    (root / "ignored").mkdir(exist_ok=True)
+    (root / "ignored" / "surface.md").write_text("a surface\n", encoding="utf-8")
+    assert "ignored" not in _untracked_only_directories(root), (
+        "an IGNORED directory fired. `git status` is clean for it, so the red "
+        "it produces has no visible cause — the original defect reproduced by "
+        "its own fix. Restore the `--exclude-standard` restriction."
+    )
+
+    # B'': nested worktree — MUST stay silent. This is the original defect.
+    assert ".worktrees" not in _untracked_only_directories(root), (
+        "a NESTED WORKTREE fired. That is the exact shape that reddened this "
+        "module while `git status` reported clean. Restore the restriction."
+    )
+
+
+def test_a_partially_tracked_tree_narrows_the_population_silently(tmp_path):
+    """A RECORDED BOUND ON THE SUBTRACTION. RED here means it got better.
+
+    THE BOUND, AT ITS OWN SCOPE. The population narrows silently when a tree is
+    partially covered: the tracked set is non-empty so nothing raises, and every
+    count arm still sees the single source. THE RESIDUAL IS A FILE-SCOPED ONE.
+    An earlier version of this docstring stated it that way while the argument
+    beneath it was about files, and a reader could inherit the wide claim, think
+    of the directory-scoped predicate, and conclude nobody had. The two scopes
+    are now separated here, which is the point of this paragraph.
+
+    WHY THE FILE SCOPE IS NOT CLOSED, and it is a judgement rather than a shrug.
+    The obvious control is an anchor — assert some known file is in the tracked
+    set. That is a heuristic wearing a control's clothes, because it witnesses
+    only the files it NAMES while the failure is that some UNNAMED subset went
+    untracked. Measured: an anchor predicate is TRUE in both the legitimate case
+    and the broken one, so it separates nothing. The deeper reason is that the
+    two cases are THE SAME OBSERVATION — `walk minus tracked` is non-empty when
+    a file is legitimately untracked, which is the normal state this whole
+    change exists to handle, and also when the tree is partially covered. No
+    predicate reading from here separates them at FILE scope.
+
+    THE DIRECTORY SCOPE IS A DIFFERENT QUESTION AND IT IS NOW CLOSED. A whole
+    top-level directory of which git tracks NOTHING is distinguishable, because
+    the legitimate case has no such directory. That is asserted by
+    `test_no_instruction_directory_is_invisible_to_the_population`, restricted
+    to the git-status-visible class so it can never emit a red whose cause the
+    reader cannot see. So the sentence an earlier version of this docstring
+    ended on — "what is left uncovered is a partially-tracked tree that drops
+    some OTHER instruction directory whole" — IS NO LONGER TRUE, and that
+    narrow case is exactly what got closed.
+
+    WHAT REMAINS UNCOVERED, stated at the scope the argument supports: a
+    partially-covered tree that drops INDIVIDUAL FILES from directories which
+    still hold tracked files, or that drops a directory whose files are IGNORED
+    rather than merely untracked. The second is a deliberate trade, not an
+    oversight: covering it means firing on stale worktrees, whose red has no
+    visible cause.
+
+    ALSO ALREADY COVERED, so the residual is not overstated: a tree tracking
+    NOTHING under the root raises; a tree losing the single source drives every
+    count arm to zero; a tree losing `agents/` or `skills/` trips the named-pair
+    floor in the reach arm.
+
+    IF THIS GOES RED, the subtraction learned to tell the two apart at FILE
+    scope. Move the finding into an asserted control and delete this arm. Do
+    not weaken it.
+    """
+    root = tmp_path / "plugin"
+    _repo_carrying_every_class(root)
+    (root / "commands").mkdir()
+    (root / "commands" / "untracked_surface.md").write_text("x\n", encoding="utf-8")
+
+    population = {str(p.relative_to(root)) for p in _instruction_files(root)}
+
+    assert "commands/untracked_surface.md" not in population, (
+        "the fixture no longer represents a partially-covered tree; this arm "
+        "would then record a bound that does not exist."
+    )
+    assert "commands" not in _directories_holding_shipped_text(root), (
+        "a whole instruction directory that git does not track is now VISIBLE "
+        "to the reach oracle. THAT IS AN IMPROVEMENT, NOT A FAILURE. The "
+        "subtraction can apparently distinguish a partially-tracked tree from "
+        "an ordinary untracked file, which this module records as impossible "
+        "from here. Convert the finding into a real control and delete this arm."
+    )
+
+
+def test_the_rejected_spelling_still_misses_two_of_the_three_classes(tmp_path):
+    """A recorded bound on git, in the idiom of KNOWN_MISSES. RED = relaxed.
+
+    This pins the MEASUREMENT that chose the complement form over the obvious
+    one, so the reason cannot rot into prose that nobody re-derives. If git
+    ever makes `--others --exclude-standard` cover ignored files or descend
+    into nested repositories, this goes red and the constraint has relaxed —
+    move the finding, do not weaken the production helper to match.
+    """
+    root = tmp_path / "plugin"
+    _, plain_rel, ignored_rel, nested_rel = _repo_carrying_every_class(root)
+
+    others = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+
+    assert plain_rel in others, (
+        f"the one class this spelling was ever able to see is missing from "
+        f"{others}. The fixture is broken, not the finding."
+    )
+    for label, rel in (("the ignored", ignored_rel), ("the nested-worktree", nested_rel)):
+        assert rel not in others, (
+            f"`git ls-files --others --exclude-standard` now reports {label} "
+            f"file {rel!r}. THAT IS AN IMPROVEMENT IN GIT, NOT A FAILURE HERE. "
+            f"It removes one of the two reasons this module derives the "
+            f"subtraction set by complement. Record the change; do not treat "
+            f"this as licence to enumerate untracked files positively, since "
+            f"the complement form is also what makes the population "
+            f"independent of the user's global excludes file."
+        )
 
 
 @pytest.mark.parametrize(

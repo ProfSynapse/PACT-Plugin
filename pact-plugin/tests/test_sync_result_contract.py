@@ -222,15 +222,19 @@ class TestTheReasonSurvivesTheProcessBoundary:
     blind fails loudly here instead of going quietly green there.
     """
 
-    def _save(self, tmp_path, project, extra_args=(), pytest_marker=None):
+    def _save(self, db_path, project, extra_args=(), pytest_marker=None):
         """Run the REAL CLI in a child process.
 
         Returns (envelope, file bytes, stderr). The third element exists because
         stderr is the CLI's structured JSON channel, so what an arm writes there
         is part of its observable contract and not merely diagnostic noise.
+
+        `db_path` IS A STORE THAT IS PRESENT, not a bare temp path. `cli.main`
+        refuses a `--db-path` naming a store that is absent, for each command
+        other than `setup`. Callers pass the `memory_store` fixture result.
         """
         pkg_root = str(Path(__file__).parent.parent / "skills" / "pact-memory")
-        db = str(tmp_path / "probe.db")
+        db = str(db_path)
         child = (
             "import sys, json\n"
             f"sys.path.insert(0, {pkg_root!r})\n"
@@ -269,15 +273,17 @@ class TestTheReasonSurvivesTheProcessBoundary:
         (p / "CLAUDE.md").write_text(WORKING_MEMORY_SCAFFOLD, encoding="utf-8")
         return p
 
-    def test_suppressed_reaches_the_parent(self, tmp_path, project):
+    def test_suppressed_reaches_the_parent(self, memory_store, project):
         """ARM 1 -- the caller declined the sync."""
         before = (project / "CLAUDE.md").read_bytes()
-        result, after, _ = self._save(tmp_path, project, extra_args=("--no-sync",))
+        result, after, _ = self._save(
+            memory_store("probe.db"), project, extra_args=("--no-sync",)
+        )
 
         assert result["sync_status"] == "suppressed", result
         assert after == before, "a suppressed save wrote to CLAUDE.md"
 
-    def test_refused_reaches_the_parent(self, tmp_path, project):
+    def test_refused_reaches_the_parent(self, memory_store, project):
         """ARM 2 -- the guard declined the sync, and this is the one that used
         to be invisible. The child is spawned the way a test process spawns it,
         so the ambient-target guard raises inside the child, save() logs it as
@@ -285,18 +291,19 @@ class TestTheReasonSurvivesTheProcessBoundary:
         """
         before = (project / "CLAUDE.md").read_bytes()
         result, after, _ = self._save(
-            tmp_path, project, pytest_marker="probe.py::test_x (call)"
+            memory_store("probe.db"), project,
+            pytest_marker="probe.py::test_x (call)",
         )
 
         assert result["sync_status"] == "refused", result
         assert after == before, "a refused save wrote to CLAUDE.md"
 
     def test_wrote_reaches_the_parent_and_the_file_really_changed(
-        self, tmp_path, project
+        self, memory_store, project
     ):
         """ARM 3 -- the positive control. See the class docstring."""
         before = (project / "CLAUDE.md").read_bytes()
-        result, after, _ = self._save(tmp_path, project)
+        result, after, _ = self._save(memory_store("probe.db"), project)
 
         assert result["sync_status"] == "wrote", result
         assert after != before, (
@@ -305,7 +312,7 @@ class TestTheReasonSurvivesTheProcessBoundary:
         )
 
     def test_the_two_silent_outcomes_are_separated_only_by_the_status(
-        self, tmp_path, project
+        self, memory_store, project
     ):
         """THE WHOLE POINT, ASSERTED DIRECTLY RATHER THAN IMPLIED BY TWO ARMS.
 
@@ -314,12 +321,11 @@ class TestTheReasonSurvivesTheProcessBoundary:
         observation again -- and no assertion about the FILE can notice, because
         the file is the thing that is identical.
         """
-        # Separate scratch DIRECTORIES so the two children do not share a
-        # database file; they must exist before sqlite is handed a path inside.
-        db_a = tmp_path / "a"
-        db_b = tmp_path / "b"
-        db_a.mkdir()
-        db_b.mkdir()
+        # SEPARATE STORES so the two children do not share a database file.
+        # Each one must be PRESENT before a command other than `setup` is handed
+        # its path, which is what the `memory_store` fixture supplies.
+        db_a = memory_store("a.db")
+        db_b = memory_store("b.db")
 
         suppressed, after_suppressed, err_suppressed = self._save(
             db_a, project, extra_args=("--no-sync",)

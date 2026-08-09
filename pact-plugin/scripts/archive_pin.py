@@ -25,7 +25,10 @@ produces an UNEVALUABLE that the command must handle.
 
 Usage:
   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/archive_pin.py" --index N
-  python3 archive_pin.py --index 0 --db-path /tmp/test.db   # tests only
+  # tests only, and the store must be PRESENT first: the memory CLI refuses a
+  # `--db-path` naming an absent store for each command other than `setup`.
+  python3 .../pact-memory/scripts/cli.py setup --db-path /tmp/test.db
+  python3 archive_pin.py --index 0 --db-path /tmp/test.db
 
 Output (stdout, JSON, ALWAYS exit 0). `outcome`, `heading`, `claude_md_path`
 and `delete_string` are present as KEYS in every verdict; when a value is null

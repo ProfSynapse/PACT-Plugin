@@ -34,6 +34,8 @@ import argparse
 import json
 import os
 import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import NoReturn
 
@@ -43,6 +45,7 @@ _SKILL_ROOT = str(Path(__file__).resolve().parent.parent)
 if _SKILL_ROOT not in sys.path:
     sys.path.insert(0, _SKILL_ROOT)
 
+from scripts.config import store_scope
 from scripts.database import (
     CALLER_FACING_CREATE_FIELDS,
     CALLER_FACING_UPDATE_FIELDS,
@@ -53,9 +56,256 @@ from scripts.memory_api import PACTMemory
 from scripts.setup_memory import ensure_initialized, get_setup_status
 
 
+# The stream the ERROR ENVELOPE is written to. None means "use sys.stderr",
+# which is the state outside a guarded window.
+#
+# While `_own_stderr_for_envelope` holds fd 2, this is a private handle on the
+# ORIGINAL stderr. So the envelope continues to leave the process on fd 2. The
+# guard bounds WHO MAY WRITE to the channel. It does not move the payload to
+# another channel, because the stdout and stderr split is a shipped contract:
+# stdout carries the success envelope and stderr carries the error envelope,
+# and merging them would trade a corrupt error envelope for a corrupt success
+# envelope on the more common path.
+_ENVELOPE_STREAM = None
+
+
+def _envelope_stream():
+    """Return the stream the error envelope must be written to."""
+    return sys.stderr if _ENVELOPE_STREAM is None else _ENVELOPE_STREAM
+
+
+def _best_effort_report(action, *args, **kwargs) -> bool:
+    """Run one diagnostic write. Report whether it landed. Raise nothing.
+
+    THE POLICY IN ONE PLACE: a diagnostic write is BEST EFFORT and it must not
+    change the outcome of an operation that succeeded. A caller who sends
+    stderr into a program that stops reading has decided it does not want the
+    rest of the output, and turning that decision into a failure of the
+    command is incorrect.
+
+    THE TWO CLASSES ARE MEASURED AND THEY ARE NOT ONE CLASS. A write to a
+    reader-less pipe raises BrokenPipeError, which is an OSError. A flush on a
+    CLOSED Python file object raises ValueError, which is not. Catching
+    OSError alone leaves the second class live.
+
+    THIS BOUNDS REPORTING ONLY. It must not wrap an operation, and it must not
+    wrap descriptor state. A caller that hides an operation behind this turns
+    a failure into a silent success, which is the opposite of the defect it
+    exists to close.
+    """
+    try:
+        action(*args, **kwargs)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _neutralise_unwritable_std_streams() -> None:
+    """Point a standard stream that cannot be written at the null device.
+
+    WHY THE GUARDED WRITES ARE NOT ENOUGH, AND THIS IS THE WHOLE REASON THIS
+    FUNCTION EXISTS. `_best_effort_report` bounds the write it wraps. It cannot
+    bound the flush the INTERPRETER performs on the way out. A piped stdout is
+    block buffered, so a small envelope lands in the buffer and the guarded
+    `print` raises NOTHING. The bytes stay pending, the interpreter flushes them
+    during finalization, that flush meets the reader-less pipe, and CPython
+    reports `Exception ignored while flushing sys.stdout` and then exits 120.
+    The 120 replaces the status the operation earned.
+
+    THE CONDITION IS A STREAM THAT REFUSES A FLUSH, NOT A SIZE. Whether a write
+    raises at the call or survives in a buffer until shutdown depends on the
+    stdio buffer size and on the pipe capacity of the system. Those move with
+    the platform and with the interpreter, so a byte threshold recorded here
+    would decay with no event to show it. Ask the stream instead: attempt the
+    flush, and act only when it refuses.
+
+    THE REDIRECT IS WHAT MAKES THE LATER FLUSH SUCCEED. Pending bytes stay in
+    the buffer after a failed flush, and the interpreter retries them. After the
+    descriptor points at the null device that retry succeeds, so finalization
+    reports nothing and the exit status stays the one the command chose.
+
+    ⚠️ CALL THIS ONLY FROM THE `__main__` BLOCK. It rebinds a process-global
+    descriptor, so an in-process caller of `main()`, which the unit tests of this
+    CLI are, would have the descriptor of the TEST RUNNER pointed at the null
+    device and lose the rest of its own output. The `__main__` block is the only
+    caller that ends the process, which is the condition that makes the rebind
+    safe. An AST arm pins that placement.
+    """
+    for stream, fd in ((sys.stdout, 1), (sys.stderr, 2)):
+        if _best_effort_report(stream.flush):
+            continue
+        null_fd = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(null_fd, fd)
+        finally:
+            os.close(null_fd)
+
+
+def _replay_capture(capture) -> None:
+    """Copy the captured bytes to the restored stderr. Verbatim, and by design.
+
+    To clean the bytes would mean to parse a progress format, which is the
+    coupling the guard exists to avoid.
+    """
+    os.lseek(capture.fileno(), 0, os.SEEK_SET)
+    while True:
+        chunk = os.read(capture.fileno(), 65536)
+        if not chunk:
+            break
+        os.write(2, chunk)
+
+
+@contextmanager
+def _own_stderr_for_envelope():
+    """Own file descriptor 2 for the length of a command handler.
+
+    THE DEFECT THIS CLOSES. Both envelopes are machine-readable, and a caller
+    parses stderr to read the error one. A DEPENDENCY MAY ALSO WRITE THERE: the
+    embedding backend emits a download progress bar, and the standard-library
+    logging last-resort handler emits WARNING and above when no handler is
+    configured. Either one puts bytes in front of the envelope, and the parse
+    then fails on output that looks correct to a human reader.
+
+    WHY THE FILE DESCRIPTOR AND NOT `sys.stderr`. Rebinding `sys.stderr` bounds
+    a writer that goes through Python. It does NOT bound a writer that reaches
+    file descriptor 2 directly, which a compiled dependency can do. That
+    narrower guard passes the tests written for the emitter of the day and
+    leaves the general fault open.
+
+    WHY NOT A PROGRESS-BAR SWITCH IN THE DEPENDENCY. That names the emitter of
+    the day. It goes stale without a sound when the backend changes, and it
+    does not reach the logging handler at all. This guard names no library and
+    no output shape.
+
+    ⚠️ DISPOSAL DIFFERS BY EXIT PATH, AND EACH LOSS IS DELIBERATE.
+      ON FAILURE the captured bytes are DISCARDED. There is nowhere to put
+      them: stderr must hold the envelope alone, and stdout is the success
+      channel. The loss is a dependency diagnostic, and it is bounded, because
+      the envelope carries the error and the exit code carries the outcome.
+      ON SUCCESS the captured bytes are REPLAYED to stderr. Nothing parses
+      stderr on success, so the guard protects nothing there, and a silent
+      command that takes 30 seconds for a first-run model download looks hung.
+      WHAT REPLAY DOES NOT RESTORE IS THE TIMING. The bytes arrive after the
+      wait they explain, so a progress bar reads as a block of finished frames
+      rather than as live progress. That is a chosen trade and not an
+      oversight. The bytes are replayed VERBATIM, because cleaning them would
+      mean parsing a progress format, which is the coupling this guard exists
+      to avoid.
+
+    ⚠️ FILE DESCRIPTOR 2 IS PROCESS-GLOBAL, so for the length of this window
+    ANYTHING in the process that writes to stderr is captured, and not the
+    handler alone. The hazard is LATENT rather than live: this package starts
+    no thread today. Add a worker thread that logs, and its output joins the
+    capture. Do not read this guard as a per-caller channel.
+
+    FAILS OPEN. If the descriptor cannot be duplicated, this yields without
+    guarding, so the command behaves as it did before rather than failing for
+    a reason the caller cannot act on.
+    """
+    global _ENVELOPE_STREAM
+
+    try:
+        saved_fd = os.dup(2)
+    except OSError:
+        yield None
+        return
+
+    capture = tempfile.TemporaryFile()
+    previous_envelope = _ENVELOPE_STREAM
+    envelope_stream = os.fdopen(saved_fd, "w", buffering=1, closefd=False)
+    replay = False
+
+    sys.stderr.flush()
+    os.dup2(capture.fileno(), 2)
+    _ENVELOPE_STREAM = envelope_stream
+
+    try:
+        yield capture
+        replay = True
+    except SystemExit as exc:
+        # `_success` exits 0 and `_error` exits non-zero, so the exit code IS
+        # the outcome. A bare `sys.exit()` carries None and counts as success.
+        replay = exc.code in (0, None)
+        raise
+    finally:
+        # ⚠️ A FAILURE IN THE REPORTING PATH MUST NOT CHANGE THE OUTCOME OF AN
+        # OPERATION THAT SUCCEEDED. Writing a diagnostic is BEST EFFORT. The
+        # exit status is a CONTRACT about the operation, and the two are not
+        # the same promise.
+        #
+        # THE DEFECT THIS CLOSES, and it needs an ordinary command line rather
+        # than a constructed one. `cmd 2>&1 | head` leaves stderr a pipe with
+        # no reader once head stops. The replay below then raised, `_error`
+        # failed writing its own envelope to that same broken stream, and the
+        # process exited non-zero AFTER the handler had printed a success
+        # envelope on stdout. Stdout said success and the exit code said
+        # failure, for a command that did what it was asked.
+        #
+        # THE TWO FAILURE CLASSES ARE DIFFERENT AND BOTH ARE REACHABLE, so the
+        # clause names each. MEASURED, not assumed: a write to a reader-less
+        # pipe raises BrokenPipeError, which IS an OSError. A flush on a Python
+        # file object that is CLOSED raises ValueError, which is NOT an
+        # OSError. An OSError-only clause covers the first and lets the second
+        # through.
+        _best_effort_report(sys.stderr.flush)
+        _best_effort_report(envelope_stream.flush)
+
+        # STATE, NOT REPORTING, SO IT STAYS OUTSIDE THE BOUND. A descriptor
+        # left pointing at the capture silences the whole process, which is a
+        # worse outcome than a raise a caller can see.
+        _ENVELOPE_STREAM = previous_envelope
+        os.dup2(saved_fd, 2)
+
+        # ⚠️ CLOSE THE PRIVATE HANDLE BEFORE ITS DESCRIPTOR GOES AWAY, AND CLOSE
+        # IT BEST EFFORT. When the envelope write above met a reader-less
+        # stream, the bytes are STILL PENDING inside this handle: a failed flush
+        # does not discard them. The next line closes the descriptor beneath it.
+        # Left open, the handle keeps that residue over a descriptor that has
+        # gone, and its finalizer attempts one more flush and raises EBADF.
+        #
+        # WHY THAT MATTERS RATHER THAN BEING TIDINESS. In a SPAWNED process the
+        # interpreter turns that into `Exception ignored` text and exit 120,
+        # which discards the exit code the command chose. IN-PROCESS, which the
+        # unit tests of this CLI are, it surfaces as an unraisable exception
+        # inside the test runner. `_neutralise_unwritable_std_streams` cannot
+        # reach either case: it runs from `__main__` only, and it acts on the
+        # two standard streams rather than on this private handle.
+        #
+        # BEST EFFORT, because the close itself flushes and so can raise the
+        # same BrokenPipeError. A bare close would replace the outcome of the
+        # operation with a failure of the report, which is the defect this whole
+        # block exists to prevent.
+        _best_effort_report(envelope_stream.close)
+        os.close(saved_fd)
+
+        if replay:
+            _best_effort_report(_replay_capture, capture)
+        capture.close()
+
+
 def _success(result):
-    """Print a success JSON envelope to stdout and exit 0."""
-    print(json.dumps({"ok": True, "result": result}, indent=2, default=str))
+    """Print a success JSON envelope to stdout and exit 0.
+
+    THE EXIT STATUS DOES NOT DEPEND ON THE WRITE LANDING. A caller that pipes
+    this command into a program that stops reading, such as `head`, leaves
+    stdout a pipe with no reader. The operation is finished by then, so a
+    failed write is a lost REPORT and not a failed COMMAND.
+
+    ⚠️ THE WRAP HERE DELIVERS ONLY HALF OF THAT, AND AN EARLIER WORDING CLAIMED
+    THE WHOLE OF IT. `_best_effort_report` bounds the write it wraps, which is
+    the case where the write RAISES. A piped stdout is block buffered, so a
+    small envelope lands in the buffer and this call raises NOTHING. The
+    interpreter flushes those bytes during finalization, that flush meets the
+    reader-less pipe, and the process exits 120 with `Exception ignored while
+    flushing sys.stdout` on the terminal of the caller. Measured, on the shipped
+    handler.
+    `_neutralise_unwritable_std_streams`, called from the `__main__` block, is
+    what closes the second case. Read the two together: this wrap keeps the
+    exception out of the handler, and that step keeps the exit status intact.
+    """
+    _best_effort_report(
+        print, json.dumps({"ok": True, "result": result}, indent=2, default=str)
+    )
     sys.exit(0)
 
 
@@ -63,10 +313,23 @@ def _error(error_type, message, exit_code=1, **extra) -> NoReturn:
     """Print an error JSON envelope to stderr and exit with given code.
 
     Any extra kwargs are merged into the envelope (e.g. allowed_fields).
+
+    WRITES THROUGH `_envelope_stream()`, NOT THROUGH `sys.stderr` DIRECTLY.
+    Inside a guarded handler that resolves to a private handle on the original
+    stderr, so the envelope leaves the process on file descriptor 2 while a
+    dependency writing to that descriptor is captured instead.
+
+    THE EXIT CODE SURVIVES A FAILED WRITE, AND IT IS THE POINT OF THE GUARD
+    HERE. If the stream carrying this envelope is unwritable, the caller loses
+    the TEXT and keeps the NON-ZERO EXIT CODE. That is the correct trade: the
+    exit code is the smaller and more reliable channel, and it continues to
+    carry the outcome. Left unguarded, a broken stream replaced this call with
+    an exception, and the process died with a status that described the
+    reporting failure rather than the operation.
     """
     envelope = {"ok": False, "error": error_type, "message": message}
     envelope.update(extra)
-    print(json.dumps(envelope), file=sys.stderr)
+    _best_effort_report(print, json.dumps(envelope), file=_envelope_stream())
     sys.exit(exit_code)
 
 
@@ -663,6 +926,19 @@ _COMMANDS = {
     "delete": cmd_delete,
 }
 
+# THE COMMANDS THAT MAY BRING A STORE INTO EXISTENCE AT A CALLER PATH.
+#
+# DECLARED AS A SET RATHER THAN TESTED AS A STRING, so the exemption has one
+# name and a future author who adds a second command must justify the addition
+# rather than widen a comparison in passing.
+#
+# ⚠️ EACH OTHER COMMAND CREATES A SCHEMA ON AN ABSENT STORE TODAY, so this set
+# is NOT a description of which commands can create. `database.ensure_initialized`
+# builds the schema for `save`, `get` and the rest. This set states which
+# command is ALLOWED to, at a path a caller typed. Read it as a rule and not as
+# a summary of the code below it.
+_COMMANDS_THAT_MAY_CREATE_A_CALLER_PATH = frozenset({"setup"})
+
 
 def main(argv=None):
     """
@@ -691,8 +967,94 @@ def main(argv=None):
     # second predicate for it.
     _refuse_live_db_under_pytest(db_path)
 
+    # THE SCOPE ENTERS AFTER THE REFUSAL GUARD, AND THE ORDER IS LOAD-BEARING.
+    # The guard keys on `db_path is None` and must read the caller's own
+    # argument. Bind the store first and a later reader of the resolver sees a
+    # path where the caller supplied none, which is how a guard gets disarmed by
+    # a change that looks unrelated to it. An assertion in the test suite pins
+    # this order.
+    #
+    # ONE SCOPE COVERS ALL EIGHT HANDLERS. That is what repairs the three legs
+    # of `setup` together: the leg that CREATES the directory and the leg that
+    # REPORTS it both reach `get_memory_dir()` with no argument, so neither one
+    # could honour `--db-path` while only the schema leg took a parameter.
+    # THE STDERR GUARD WRAPS THE SCOPE, NOT THE OTHER WAY ROUND, so that
+    # anything the store scope reaches can write to stderr without reaching
+    # the channel the error envelope leaves on.
     try:
-        handler(args, db_path=db_path)
+        with _own_stderr_for_envelope():
+            # ⚠️ A CALLER PATH IS OPENED, NEVER BROUGHT INTO EXISTENCE. THE FILE
+            # HALF OF THE PATH REFUSAL LIVES HERE.
+            #
+            # A path a caller TYPED is a spelling somebody chose, so an absent
+            # store at that path is a TYPO, and the correct answer to a typo is
+            # to fail. `--db-path` aimed at a directory that is present with a
+            # mistyped FILE NAME used to build a store and report an ordinary
+            # result, which put a throwaway store inside the live store
+            # directory. An archive then landed in a database about to be
+            # discarded, while the pin it came from became eligible for delete.
+            #
+            # WHY THIS BOUNDARY AND NOT `database.get_connection`. That location
+            # was built and rejected. A refusal there reaches EACH caller of the
+            # connection factory, which breaks the custom-store contract that
+            # production and the test suite depend on, and `get_connection`
+            # cannot tell a person from a library caller. Here the command name
+            # is a FACT on `args`, so the decision reads something rather than
+            # infers it.
+            #
+            # THE DERIVED ROUTE IS UNTOUCHED, AND THAT OUTRANKS THE REFUSAL. A
+            # caller that passes no `--db-path` never reaches this branch, so an
+            # environment-derived or home-derived store still creates on its
+            # first run. `config.DERIVED_STORE_ORIGINS` carries that rule.
+            #
+            # RESIDUAL 1, STATED RATHER THAN IMPLIED: a library caller that
+            # passes a mistyped path stays uncovered here. The accepted reason
+            # is that a library caller is code, and code does not typo.
+            #
+            # RESIDUAL 2, AND IT IS AN EXCEPTION TO THE RULE ABOVE. `--db-path
+            # ""` is a caller path that is not a store, and it is NOT refused
+            # here. The falsy coercion further up collapses it to None before
+            # this branch reads it, so it takes the DERIVED route. That
+            # coercion is deliberate and stays. Naming the exception is what
+            # keeps the rule honest: the refusal covers a caller path that
+            # ARRIVES as a path, not the empty string.
+            #
+            # RESIDUAL 3: a caller path that names a DIRECTORY is present to
+            # this test, so it is not refused here. It fails later, loudly and
+            # without a create, as SYSTEM_ERROR from sqlite. A tighter test
+            # (`is_file`) would give it the named refusal, and it would also
+            # redden two arms that pin SYSTEM_ERROR for that input, so the
+            # loud-and-non-destructive answer stays.
+            #
+            # ⚠️ THE MESSAGE STATES THE OBSERVATION, NOT AN INFERENCE FROM IT,
+            # for the same reason the guard above does. `Path.exists()` answers
+            # False for a path that is ABSENT and for a path this process
+            # cannot STAT, so an unreadable parent directory reads the same as
+            # a typo. A message that asserts absence tells a caller with a
+            # permission fault to run `setup`, which does not repair one.
+            if (
+                db_path is not None
+                and args.command not in _COMMANDS_THAT_MAY_CREATE_A_CALLER_PATH
+                and not db_path.exists()
+            ):
+                shown = _scrub(str(db_path))
+                _error(
+                    "DB_PATH_NOT_FOUND",
+                    f"--db-path '{shown}' did not answer as a store that is "
+                    f"present. The test is `Path.exists()`, which answers "
+                    f"False for a path that is absent AND for a path this "
+                    f"process cannot stat, so a permission fault on a parent "
+                    f"directory reads the same way. That one fact is the "
+                    f"whole of what it observed. This command opens a store "
+                    f"that is present and does not bring one into existence. "
+                    f"If the path is a typo, correct it. If the store should "
+                    f"be there, check that this process can read the parent "
+                    f"directory. To bring a store into existence at that "
+                    f"path, run: setup --db-path '{shown}'",
+                )
+
+            with store_scope(db_path):
+                handler(args, db_path=db_path)
     except SystemExit:
         raise  # Let _success/_error exits propagate
     except Exception as exc:
@@ -704,4 +1066,17 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    # THE NEUTRALISE STEP BELONGS HERE AND NOT INSIDE `main()`. This block runs
+    # only when a shell started this file, which is the only case where the
+    # process is about to end and a rebind of a standard descriptor harms
+    # nobody. `main()` is ALSO called in-process by the unit tests of this CLI,
+    # and there the same rebind would point a descriptor of the TEST RUNNER at
+    # the null device and silence the remainder of that run.
+    #
+    # `finally` AND NOT AN `except`: `main()` leaves through SystemExit on every
+    # path, success and failure alike, so an except clause for one of them would
+    # cover half the exits.
+    try:
+        main()
+    finally:
+        _neutralise_unwritable_std_streams()

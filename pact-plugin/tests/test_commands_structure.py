@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from helpers import parse_frontmatter
+from shared.intentional_wait import KNOWN_RESOLVERS
 
 COMMANDS_DIR = Path(__file__).parent.parent / "commands"
 
@@ -1377,3 +1378,103 @@ def test_no_undeclared_teammate_stopping_command():
         f"(it does if its flow ends teammate participation; imPACT.md does "
         f"not, because it terminates one unrecoverable agent)."
     )
+
+
+class TestResolverVocabularyIsSingleSourced:
+    """No instruction surface may name a resolver outside KNOWN_RESOLVERS.
+
+    `metadata.intentional_wait.expected_resolver` is FREE-FORM: `validate_wait`
+    checks only that it is a non-empty string. A wrong value therefore
+    validates, warns nothing, and looks correct forever. The shipped dispatch
+    templates instructed `team-lead` — absent from the vocabulary — and nothing
+    reported it; a teammate noticed by hand. A template is a COPY SOURCE, so
+    compliance REPRODUCES such a value once per consumer rather than bounding
+    it, and the field quietly stops being usable for grouping or filtering.
+
+    SCOPED TO INSTRUCTION SURFACES, NOT THE REPOSITORY, and `tests/` is
+    excluded deliberately. `test_intentional_wait.test_custom_resolver_accepted`
+    passes a non-canonical value ON PURPOSE: that test IS the pin on free-form
+    acceptance. A repository-wide version of this guard would fail it, and the
+    natural repair would be to delete the very test that makes the property
+    true. A guard that eats the guard below it is worse than no guard.
+
+    WHAT THIS DOES NOT SEE — do NOT widen the pattern to chase it. The
+    extractor keys on the literal token `expected_resolver`, so it is blind to
+    a surface that instructs the value WITHOUT naming the key ("tell the
+    teammate the resolver is the team-lead"), and to a phrase split across
+    adjacent string literals, which no line-oriented search matches in its
+    rendered form. Both were measured absent when this pin was written: every
+    prose site that names a resolver already spells it `lead`. Pushing the
+    pattern into prose would buy those cases at the price of false reds that
+    cost more than the class is worth.
+    """
+
+    PLUGIN_ROOT = Path(__file__).parent.parent
+    SCAN_DIRS = ("agents", "commands", "protocols", "skills")
+    SCAN_SUFFIXES = (".md", ".py", ".json")
+
+    # Captures the VALUE in both spellings that ship: the template form
+    # `expected_resolver=lead` and the JSON form `"expected_resolver": "lead"`.
+    #
+    # THE VALUE CLASS INCLUDES `-` DELIBERATELY, and membership is tested AFTER
+    # the match rather than excluded inside it. A pattern that tried to reject a
+    # bad value inline — a negative lookahead for `team-`, say — does not simply
+    # fail to match: the engine backtracks and succeeds on a TRUNCATED token, so
+    # the failure would name a value nobody wrote. Capture the whole token, then
+    # compare it against the imported vocabulary.
+    ASSIGNMENT_RE = re.compile(
+        r"expected_resolver[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9_-]+)"
+    )
+
+    def _sites(self):
+        """Return [(relpath, lineno, value)] for every assignment found."""
+        found = []
+        for subdir in self.SCAN_DIRS:
+            root = self.PLUGIN_ROOT / subdir
+            if not root.is_dir():
+                continue
+            for path in sorted(root.rglob("*")):
+                if not path.is_file() or path.suffix not in self.SCAN_SUFFIXES:
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except (UnicodeDecodeError, OSError):
+                    continue
+                rel = path.relative_to(self.PLUGIN_ROOT)
+                for lineno, line in enumerate(text.splitlines(), 1):
+                    for match in self.ASSIGNMENT_RE.finditer(line):
+                        found.append((str(rel), lineno, match.group(1)))
+        return found
+
+    def test_extractor_still_reaches_the_instruction_surfaces(self):
+        """Non-vacuity control for the arm below.
+
+        An extractor that matches nothing passes the membership check forever,
+        and its output on success is byte-identical to its output when it found
+        nothing to check. Only this arm separates the two.
+        """
+        sites = self._sites()
+        assert sites, (
+            "no `expected_resolver` assignment found under "
+            f"{list(self.SCAN_DIRS)}. Either the dispatch templates stopped "
+            "instructing the field, or ASSIGNMENT_RE no longer matches the "
+            "spelling they use. Until that is resolved the membership arm is "
+            "VACUOUS — it passes because it checks nothing."
+        )
+
+    def test_no_instruction_surface_names_a_resolver_outside_the_vocabulary(self):
+        sites = self._sites()
+        # Repeated so this arm cannot pass vacuously when run in isolation.
+        assert sites, "non-vacuity control failed: no assignment extracted"
+        offenders = [s for s in sites if s[2] not in KNOWN_RESOLVERS]
+        assert not offenders, (
+            "instruction surface(s) tell a teammate to write a resolver value "
+            f"that KNOWN_RESOLVERS does not contain "
+            f"({sorted(KNOWN_RESOLVERS)}):\n"
+            + "\n".join(f"  - {p}:{n} -> {v!r}" for p, n, v in offenders)
+            + "\n\nFix the SURFACE, not the vocabulary. Widening "
+            "KNOWN_RESOLVERS to admit the spelling keeps two spellings of one "
+            "vocabulary alive, which is the generator of exactly this defect. "
+            "The field is free-form, so nothing else will ever redden to tell "
+            "you."
+        )

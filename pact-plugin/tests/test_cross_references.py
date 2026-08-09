@@ -11,7 +11,9 @@ L7. Worktree CLAUDE.md scope warnings in dispatch templates and agent-teams skil
 L8. Custom start flows note in agent-teams SKILL.md cross-references pact-secretary.md
 L9. Dead-reference guard for #452 file relocation
 L10. Lead-Side HALT Fan-Out slug stability — canonical heading + 4 consumer files
+L11. Archive step's resolution pointer resolves to a step that is present
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,7 @@ REPACT_PATH = COMMANDS_DIR / "rePACT.md"
 PEER_REVIEW_PATH = COMMANDS_DIR / "peer-review.md"
 AGENT_STALL_PATH = PROTOCOLS_DIR / "pact-agent-stall.md"
 AGENT_TEAMS_SKILL_PATH = SKILLS_DIR / "pact-agent-teams" / "SKILL.md"
+HARVEST_SKILL_PATH = SKILLS_DIR / "pact-handoff-harvest" / "SKILL.md"
 SECRETARY_PATH = AGENTS_DIR / "pact-secretary.md"
 ORCHESTRATION_SKILL_PATH = SKILLS_DIR / "orchestration" / "SKILL.md"
 ALGEDONIC_PATH = PROTOCOLS_DIR / "algedonic.md"
@@ -326,4 +329,108 @@ class TestLeadSideHaltFanOutSlugStability:
             "protocols/algedonic.md and is referenced from this file via "
             "a slug-link; if the heading was renamed, propagate the new "
             "slug to every consumer site."
+        )
+
+
+# L11: the archive step's resolution pointer.
+#
+# The pointer text in the agent body. It is DESCRIPTIVE. It names the skill and
+# the ROLE of the step. It does not name the subcommand, so a rename of the
+# subcommand cannot dangle it.
+RESOLUTION_POINTER = "the resolution step your `pact-handoff-harvest` skill defines"
+
+# What identifies the step the pointer aims at. The step is a fenced code block
+# that calls the harvest CLI and passes the context file.
+HARVEST_CLI_FILE = "pact_harvest.py"
+RESOLUTION_FLAG = "--context-file"
+
+
+def _fenced_blocks(text):
+    """Every fenced code block body in a markdown document."""
+    return re.findall(r"^```[^\n]*\n(.*?)^```", text, re.MULTILINE | re.DOTALL)
+
+
+def _resolution_blocks(skill_text):
+    """Blocks that call the harvest CLI and pass the context file."""
+    return [
+        body
+        for body in _fenced_blocks(skill_text)
+        if HARVEST_CLI_FILE in body and RESOLUTION_FLAG in body
+    ]
+
+
+class TestArchiveResolutionPointerResolves:
+    """L11: the archive step points at a resolution step that is present.
+
+    `agents/pact-secretary.md` tells the secretary to resolve its session
+    directory with the resolution step that the `pact-handoff-harvest` skill
+    defines. Nothing pinned that pointer. Measured before this pin shipped:
+    delete the resolution paragraph and its code block from the skill, and the
+    whole suite stayed green. The pointer aimed at nothing.
+
+    WHAT THIS KEYS ON, AND WHY NOT THE TWO OBVIOUS THINGS.
+
+    Not the SUBCOMMAND name. A rename of it is maintenance and not breakage,
+    the pointer is descriptive so a rename cannot dangle it, and
+    `test_pact_harvest_cli.py` guards the name at 10 sites.
+
+    Not the step HEADING. A heading is prose. An ordinary reword turns a
+    heading pin red against correct text, and nothing else in this repository
+    reads that heading.
+
+    This keys on the code block that calls the harvest CLI and passes
+    `--context-file`. A change to that flag is large, the CLI consumes it, and
+    the CLI tests pin it at 8 sites. The flag appears once in the skill, so the
+    predicate selects one block and not the artifact-resolution block beside it.
+
+    MEASURED ACROSS FIVE MUTATIONS of the skill, before this pin was written:
+    removal RED, subcommand rename green, `SESSION_DIR` rename green, heading
+    reword green, pointer deleted RED.
+
+    The same pattern for another rule is
+    `test_index_upkeep_pointer_resolves_to_a_rule_that_exists` in
+    `test_agent_memory_cap_single_source.py`. This copy sits here rather than
+    beside it because that module has one subject, the index limits, and this
+    pin shares its technique and not its subject.
+    """
+
+    @pytest.fixture
+    def secretary_content(self):
+        return SECRETARY_PATH.read_text(encoding="utf-8")
+
+    @pytest.fixture
+    def harvest_skill_content(self):
+        return HARVEST_SKILL_PATH.read_text(encoding="utf-8")
+
+    def test_pointer_is_present_in_the_agent_body(self, secretary_content):
+        """Half one. The pointer must be there for the target half to matter."""
+        assert RESOLUTION_POINTER in secretary_content, (
+            f"agents/pact-secretary.md no longer carries the resolution "
+            f"pointer {RESOLUTION_POINTER!r}. If the archive step was changed "
+            f"to name the command directly, delete this class with it. If the "
+            f"wording drifted, update the constant. Do NOT delete the pointer "
+            f"and leave the step unreferenced: a hand-built path from a slug "
+            f"and a session id is the failure that step prevents."
+        )
+
+    def test_pointer_resolves_to_one_resolution_step(self, harvest_skill_content):
+        """Half two. The step the pointer aims at must be present, and be one.
+
+        The count carries the two directions. Zero means the step went away and
+        the pointer dangles. More than one means the predicate lost the
+        specificity that makes it name the resolution step and not another
+        call to the same CLI.
+        """
+        blocks = _resolution_blocks(harvest_skill_content)
+        assert len(blocks) == 1, (
+            f"the pointer in agents/pact-secretary.md aims at the resolution "
+            f"step in skills/pact-handoff-harvest/SKILL.md, and that skill now "
+            f"holds {len(blocks)} block(s) that call {HARVEST_CLI_FILE} with "
+            f"{RESOLUTION_FLAG}.\n"
+            f"ZERO means the step was removed and the pointer dangles. The "
+            f"secretary is told to follow a step that is no longer written, so "
+            f"restore the step or re-point the agent body.\n"
+            f"MORE THAN ONE means a second block now matches, so this pin no "
+            f"longer names one step. Narrow the predicate rather than raise "
+            f"the count."
         )

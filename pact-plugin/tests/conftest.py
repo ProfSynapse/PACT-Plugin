@@ -13,6 +13,7 @@ re-export to be discoverable, but none are currently defined there.
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -526,3 +527,56 @@ def _reset_memory_init_state():
         # on its own assertion, which is a better signal than a collection error.
         return
     reset_initialization()
+
+
+# The memory CLI. Reached by subprocess, never imported, for the same reason
+# `_MEMORY_DIR_ENV` is a literal above: a module-level import of the memory
+# package turns a missing optional dependency into a total collection failure.
+_MEMORY_CLI = (
+    Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts" / "cli.py"
+)
+
+
+@pytest.fixture
+def memory_store(tmp_path):
+    """Bring a memory store into existence at a caller path, and return it.
+
+    WHY THIS FIXTURE IS NECESSARY, AND IT IS A CONTRACT AND NOT A CONVENIENCE.
+    `cli.main` refuses a `--db-path` that names a store that is ABSENT, for each
+    command other than `setup`. A path a caller TYPED is a spelling somebody
+    chose, so an absent store there is a typo. `setup` is the one command
+    allowed to create at such a path, because bringing a store into existence at
+    a named location is its operation.
+
+    So a test that scopes itself with `--db-path` must ASK for its store first.
+    Use this fixture rather than a bare `tmp_path / "x.db"`, which names a store
+    that does not yet exist and which each command other than `setup` refuses.
+
+    IT SPAWNS `setup` RATHER THAN CALLING `initialize_database`. Two reasons.
+    The subprocess binds no store scope in the test process, which the store
+    isolation depends on. And it drives the exemption through the real boundary,
+    so this fixture fails if the exemption breaks.
+
+    Usage:
+        def test_x(self, memory_store):
+            db = memory_store("m.db")      # a Path, and the store is present
+    """
+    def _make(name="memory.db"):
+        path = tmp_path / name
+        if path.exists():
+            return path
+        proc = subprocess.run(
+            [sys.executable, str(_MEMORY_CLI), "setup", "--db-path", str(path)],
+            capture_output=True, text=True, timeout=120,
+        )
+        assert proc.returncode == 0, (
+            f"the memory store could not be created at {path}, so the test "
+            f"below would measure this failure rather than its own subject. "
+            f"rc={proc.returncode} stderr={proc.stderr[:400]!r}"
+        )
+        assert path.exists(), (
+            f"`setup` reported success and left no store at {path}"
+        )
+        return path
+
+    return _make

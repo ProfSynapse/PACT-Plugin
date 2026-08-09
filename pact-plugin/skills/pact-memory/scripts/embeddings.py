@@ -23,6 +23,41 @@ logger = logging.getLogger(__name__)
 # Model2Vec configuration
 MODEL_NAME = "minishlab/potion-base-8M"
 EMBEDDING_DIM = 256
+
+# The median record length in the store, in tokens, at the time of measurement.
+#
+# A NAMED CONSTANT RATHER THAN A COMMENT, so a test can compare the window
+# against it. It records a population, not a target.
+MEASURED_MEDIAN_TOKENS = 1992
+
+# The token window passed to the encoder.
+#
+# THE DEFECT THIS ENDS. The call below passed no window, so the encoder applied
+# its own default of 512 tokens. A median record therefore reached the semantic
+# index at roughly its first quarter, and nothing reported the loss.
+#
+# THE BASIS. The window is a little above the measured median above. It is the
+# SMALLEST DEFENSIBLE MEMBER OF A PLATEAU and NOT A PEAK: the author of the
+# measurement flagged a marginal cell and declined to name one best value,
+# because four metric-and-arm pairs gave four different maxima. Read it as the
+# cheapest value that loses nothing separable.
+#
+# WHAT IT DOES NOT DO. It does not cover the store. The longest record runs to
+# roughly 28,000 tokens and the encoder continues to cut it heavily. This
+# window reduces the loss. It does not end it.
+#
+# TWO TRIGGERS TO RE-CHECK IT, and the second one matters more:
+#   1. The record-length distribution moves, so the median above goes stale.
+#   2. MODEL_NAME changes. The tokenizer changes with the model, so the token
+#      count of one record changes. The truncation also has a CHARACTER
+#      pre-slice at `max_length * model.median_token_length`, and that
+#      multiplier is a MODEL PROPERTY rather than a library constant. The
+#      measured density of the store sits below the multiplier for the model
+#      above, so the token cut is the arm that binds and a token-level test
+#      covers the behaviour. A different model can move the multiplier below
+#      the density of the store, and the character pre-slice then binds
+#      instead, so that argument must be re-made rather than assumed.
+EMBEDDING_MAX_TOKENS = 2048
 # Minimum free RAM (MB) required before running embedding catch-up.
 # Model2Vec uses ~59MB; 75MB provides a safety margin.
 MIN_CATCHUP_RAM_MB = 75.0
@@ -88,7 +123,11 @@ class EmbeddingService:
 
         try:
             # model2vec.encode returns numpy array of shape (n_texts, dim)
-            embeddings = self._model.encode([text])
+            #
+            # PASS THE WINDOW EXPLICITLY. Omit the keyword and the encoder
+            # applies its own default, which is smaller than a median record
+            # in this store and truncates without a report.
+            embeddings = self._model.encode([text], max_length=EMBEDDING_MAX_TOKENS)
             return embeddings[0].tolist()
         except Exception as e:
             logger.warning(f"Embedding generation failed: {e}")

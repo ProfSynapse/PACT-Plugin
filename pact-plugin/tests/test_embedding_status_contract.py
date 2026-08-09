@@ -28,7 +28,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -113,8 +113,21 @@ class TestFaultExit:
         assert result == "fault"
 
     def test_fault_does_not_drop_the_vector(self, mem, conn):
-        """The handler wraps the insert AND the commit, so it can be reached
-        after a successful write. Dropping here could destroy a good vector."""
+        """THE FAULT HANDLER ADDS NO DROP OF ITS OWN.
+
+        WHY THE ASSERTION IS NOT `assert_not_called`, WHICH IS WHAT IT WAS.
+        The replace path now drops before it inserts, so a drop DOES happen
+        inside this method. The old spelling bound to "no drop anywhere in
+        this method" when the property it protects is "no drop in the
+        HANDLER". The two agreed while the write path performed no drop, and
+        they stopped agreeing the moment a replace was possible.
+
+        So the assertion below pins the EXACT call list: one drop, the
+        deferred one that belongs to the replace. A drop added in the handler
+        appends a second entry and this arm goes red. A drop that stops
+        deferring its commit changes the recorded kwargs and this arm goes red
+        too, which is the stronger property the old spelling could not state.
+        """
         conn.commit.side_effect = RuntimeError("commit failed after write")
         with patch("scripts.memory_api.SQLITE_EXTENSIONS_ENABLED", True), \
              patch("scripts.memory_api.generate_embedding_text", return_value="text"), \
@@ -122,7 +135,7 @@ class TestFaultExit:
              patch.object(PACTMemory, "_drop_existing_vector") as drop:
             mem._store_embedding(conn, "mem-1", _memory())
 
-        drop.assert_not_called()
+        assert drop.call_args_list == [call(conn, "mem-1", commit=False)]
 
 
 class TestSuccess:
@@ -262,9 +275,12 @@ class TestCliStderrStaysCleanOnTheFaultPath:
     and requires it to be `fault` -- proving the branch under test executed.
     """
 
-    def _run_cli_save_with_a_forced_fault(self, tmp_path):
+    def _run_cli_save_with_a_forced_fault(self, db_path):
+        """`db_path` IS A STORE THAT IS PRESENT. `cli.main` refuses a
+        `--db-path` naming a store that is absent, for each command other
+        than `setup`, so callers pass the `memory_store` fixture result."""
         pkg_root = str(Path(__file__).parent.parent / "skills" / "pact-memory")
-        db = str(tmp_path / "probe.db")
+        db = str(db_path)
         child = (
             "import sys, json\n"
             # memory_api uses relative imports, so it must load as part of the
@@ -302,8 +318,8 @@ class TestCliStderrStaysCleanOnTheFaultPath:
             timeout=120, env=env,
         )
 
-    def test_fault_is_reported_on_stdout_and_stderr_stays_empty(self, tmp_path):
-        proc = self._run_cli_save_with_a_forced_fault(tmp_path)
+    def test_fault_is_reported_on_stdout_and_stderr_stays_empty(self, memory_store):
+        proc = self._run_cli_save_with_a_forced_fault(memory_store("probe.db"))
 
         payload = json.loads(proc.stdout)
         assert payload["ok"] is True
@@ -369,7 +385,7 @@ class TestAmbientWorkingMemorySyncIsRefusedUnderPytest:
     redirected into tmp for the duration.
     """
 
-    def test_save_succeeds_while_the_ambient_sync_is_refused(self, tmp_path):
+    def test_save_succeeds_while_the_ambient_sync_is_refused(self, tmp_path, memory_store):
         project = tmp_path / "proj"
         project.mkdir()
         claude_md = project / "CLAUDE.md"
@@ -379,7 +395,7 @@ class TestAmbientWorkingMemorySyncIsRefusedUnderPytest:
         before = claude_md.read_text(encoding="utf-8")
 
         pkg_root = str(Path(__file__).parent.parent / "skills" / "pact-memory")
-        db = str(tmp_path / "probe.db")
+        db = str(memory_store("probe.db"))
         child = (
             "import sys, json\n"
             f"sys.path.insert(0, {pkg_root!r})\n"

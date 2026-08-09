@@ -23,8 +23,14 @@ Test strategy, stated because it is load-bearing:
 this file states an answer. Two answers are legal and they mean different
 things:
 
-  * `db_path=str(tmp_path / ...)` — this call CAN reach a real save, and is
-    scoped to a temp store.
+  * `db_path=str(memory_store(...))` — this call CAN reach a real save, and is
+    scoped to a temp store the fixture BROUGHT INTO EXISTENCE first. A bare
+    `tmp_path / "x.db"` no longer reaches: it names a store that is ABSENT,
+    and the CLI boundary refuses an absent caller path for each command other
+    than `setup`. Such a call returns NOT_ARCHIVED, and an arm that reads only
+    a pre-save field (`heading`, `delete_string`) stays GREEN while measuring
+    nothing. Where the reach is the point, assert a POST-SAVE field as well,
+    because no pre-save field can fail when the reach stops.
   * `db_path=None` — this call provably never reaches a store, because the
     enclosing test stubs `_run_memory_cli` (or `subprocess.run`) or
     short-circuits before the spawn (bad index, unresolvable CLAUDE.md,
@@ -1055,14 +1061,36 @@ class TestLiveDbGuard:
             f"`archive_pin --index N` would stop working. stderr={proc.stderr[:400]}"
         )
 
-    def test_an_explicit_db_path_is_accepted_under_pytest(self, tmp_path):
-        """The guard must block only the UNSCOPED case, not every spawn."""
+    def test_an_explicit_db_path_is_accepted_under_pytest(
+        self, tmp_path, memory_store
+    ):
+        """The guard must block only the UNSCOPED case, not every spawn.
+
+        THE STORE IS PRESENT SO THE SPAWN IS GENUINELY ACCEPTED. `main` refuses
+        a `--db-path` naming a store that is absent. An absent path here would
+        leave the arm green while the command was refused at the boundary,
+        because the refusal carries a different error name and the assertion
+        below only looks for `UNSCOPED_TEST_DB`. The exit-code assertion is what
+        makes acceptance observable rather than merely un-refuted.
+        """
         proc = self._spawn_cli(
             tmp_path, with_pytest_var=True,
-            extra_argv=("--db-path", str(tmp_path / "scoped.db")),
+            extra_argv=("--db-path", str(memory_store("scoped.db"))),
         )
         assert "UNSCOPED_TEST_DB" not in proc.stderr, (
             f"guard fired despite an explicit --db-path; stderr={proc.stderr[:400]}"
+        )
+        # NON-VACUITY: prove the command REACHED the store rather than merely
+        # avoided one named error. `NOT_FOUND` is a store-level answer, so it
+        # can only come from a lookup that ran. The exit code is 1 on that
+        # answer, which is correct and is why this arm reads the error name.
+        assert "DB_PATH_NOT_FOUND" not in proc.stderr, (
+            f"an explicit --db-path at a store that is present was refused at "
+            f"the boundary; stderr={proc.stderr[:400]}"
+        )
+        assert json.loads(proc.stderr)["error"] == "NOT_FOUND", (
+            f"the spawn did not reach a store lookup, so this arm did not show "
+            f"that an explicit --db-path is accepted; stderr={proc.stderr[:400]}"
         )
 
     @pytest.mark.parametrize("pass_cwd", [True, False])
@@ -1362,10 +1390,10 @@ class TestArchivePin_RealCLI:
     deselected marker or a legible failure, not as unexplained flakiness.
     """
 
-    def test_archives_and_verifies_containment(self, claude_md, tmp_path):
+    def test_archives_and_verifies_containment(self, claude_md, tmp_path, memory_store):
         claude_md(_two_pin_file())
         verdict = archive_pin.build_verdict(
-            0, db_path=str(tmp_path / "mem.db")
+            0, db_path=str(memory_store("mem.db"))
         )
         assert verdict["outcome"] == "ARCHIVED"
         assert verdict["heading"] == "First Pin"
@@ -1374,7 +1402,7 @@ class TestArchivePin_RealCLI:
         assert verdict["chars"] > 0
 
     def test_archived_record_carries_the_block_in_context_not_a_list_field(
-        self, claude_md, tmp_path
+        self, claude_md, tmp_path, memory_store
     ):
         """D3, verified at the destination rather than asserted in a comment.
 
@@ -1387,7 +1415,7 @@ class TestArchivePin_RealCLI:
         """
         content = _two_pin_file()
         claude_md(content)
-        db = str(tmp_path / "mem.db")
+        db = str(memory_store("mem.db"))
         verdict = archive_pin.build_verdict(0, db_path=db)
         assert verdict["outcome"] == "ARCHIVED"
 
@@ -1405,7 +1433,7 @@ class TestArchivePin_RealCLI:
             )
 
     def test_adversarial_body_round_trips_byte_exact(
-        self, claude_md, tmp_path
+        self, claude_md, tmp_path, memory_store
     ):
         """Apostrophes, backticks, tabs, CRLF and trailing whitespace all
         survive. These are the classes that break shell-quoted or
@@ -1420,7 +1448,7 @@ class TestArchivePin_RealCLI:
             "<!-- PACT_MANAGED_END -->\n"
         )
         claude_md(content)
-        db = str(tmp_path / "mem.db")
+        db = str(memory_store("mem.db"))
         verdict = archive_pin.build_verdict(0, db_path=db)
         assert verdict["outcome"] == "ARCHIVED"
 
@@ -1434,7 +1462,7 @@ class TestArchivePin_RealCLI:
         assert "`backticks`" in fetched["context"]
         assert "\t" in fetched["context"]
 
-    def test_save_stdout_is_a_clean_json_envelope(self, claude_md, tmp_path):
+    def test_save_stdout_is_a_clean_json_envelope(self, claude_md, tmp_path, memory_store):
         """The real CLI's stdout parses, on any interpreter.
 
         WHAT THIS COVERS. `save` succeeds and its stdout is a well-formed
@@ -1471,7 +1499,7 @@ class TestArchivePin_RealCLI:
 
         rc, stdout, stderr = archive_pin._run_memory_cli(
             ["save", "--stdin"],
-            db_path=str(tmp_path / "mem.db"),
+            db_path=str(memory_store("mem.db")),
             stdin_data=payload,
             cwd=tmp_path,
         )
@@ -1820,27 +1848,49 @@ class TestArchivePin_Unevaluable:
 class TestArchivePin_CliContract:
     """main() surface: always exit 0, always a parseable verdict."""
 
-    @pytest.mark.parametrize("index", [0, 1, 99, -1])
-    def test_always_exits_zero(self, claude_md, capsys, index, tmp_path):
+    @pytest.mark.parametrize(
+        "index, expected",
+        [(0, "ARCHIVED"), (1, "ARCHIVED"), (99, "UNEVALUABLE"), (-1, "UNEVALUABLE")],
+        ids=["0", "1", "99", "-1"],
+    )
+    def test_always_exits_zero(self, claude_md, capsys, index, expected,
+                               memory_store):
         """SACROSANCT in-band degradation: the script reports, the command
-        decides. A non-zero exit would turn a measurement into a decision."""
+        decides. A non-zero exit would turn a measurement into a decision.
+
+        THE ROW SET SPANS SUCCESS AND FAILURE, AND EACH ROW PINS WHICH ONE IT
+        IS. An acceptance set of three outcome names cannot say that, and it
+        already failed to: rows 0 and 1 were the success rows, the boundary
+        refusal moved them to NOT_ARCHIVED, and the set silently collapsed onto
+        the failure branch while staying green. The exit contract then had
+        nothing behind it on the side a curator relies on, which
+        `commands/prune-memory.md` tells them to rely on.
+
+        THE STORE MUST BE PRESENT FOR THE SUCCESS ROWS TO REACH A SAVE. The
+        fixture supplies that. The per-row expected outcome is what HOLDS it
+        there afterwards: without it the set can collapse a second time and
+        nothing turns red.
+        """
         claude_md(_two_pin_file())
         rc = archive_pin.main(
-            ["--index", str(index), "--db-path", str(tmp_path / "m.db")]
+            ["--index", str(index), "--db-path", str(memory_store("m.db"))]
         )
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
-        assert payload["outcome"] in {
-            "ARCHIVED", "NOT_ARCHIVED", "UNEVALUABLE"
-        }
+        assert payload["outcome"] == expected, (
+            f"row {index} reached {payload['outcome']!r} rather than "
+            f"{expected!r}. If this is the success row, the call no longer "
+            f"reaches a save and the exit contract is pinned on the failure "
+            f"branch only."
+        )
 
     def test_every_verdict_carries_outcome_and_heading_keys(
-        self, claude_md, capsys, monkeypatch, tmp_path
+        self, claude_md, capsys, monkeypatch, tmp_path, memory_store
     ):
         """`heading` is present in ALL THREE verdicts so a consumer never
         has to distinguish an absent key from a null value."""
         claude_md(_two_pin_file())
-        db = str(tmp_path / "m.db")
+        db = str(memory_store("m.db"))
 
         seen = {}
         # ARCHIVED (real CLI)
@@ -1864,19 +1914,30 @@ class TestArchivePin_CliContract:
             assert "heading" in payload, f"{outcome} dropped the heading key"
 
     def test_heading_is_the_real_heading_not_an_index_echo(
-        self, claude_md, capsys, tmp_path
+        self, claude_md, capsys, memory_store
     ):
         """The caller cross-checks this value against the curator's
         selection to catch an index shift between listing and archival —
         which would otherwise archive one pin and evict another while
         containment still passed, the right property measured on the wrong
         object. An index echo would make that check compare the index
-        against itself and pass unconditionally."""
+        against itself and pass unconditionally.
+
+        THE OUTCOME ASSERTION IS WHAT KEEPS THIS ARM ON THE ARCHIVED PATH.
+        `heading` resolves BEFORE the save, so it stays correct when the save
+        is refused. Without the outcome the arm measures heading resolution on
+        a verdict that never archived, which is not the case the curator
+        cross-checks.
+        """
         claude_md(_two_pin_file())
         archive_pin.main(
-            ["--index", "1", "--db-path", str(tmp_path / "m.db")]
+            ["--index", "1", "--db-path", str(memory_store("m.db"))]
         )
         payload = json.loads(capsys.readouterr().out)
+        assert payload["outcome"] == "ARCHIVED", (
+            f"the call did not reach a save, so this arm no longer measures "
+            f"the heading on the path the curator cross-checks: {payload}"
+        )
         assert payload["heading"] == "Second Pin"
         assert "1" != payload["heading"]
 
@@ -2257,7 +2318,7 @@ class TestArchivePin_SyncStatusReachesTheArchive:
     would keep passing while it did.
     """
 
-    def test_the_archives_own_argv_yields_suppressed(self, tmp_path):
+    def test_the_archives_own_argv_yields_suppressed(self, tmp_path, memory_store):
         """Drives the REAL `_run_memory_cli` with the module's OWN constant."""
         project = tmp_path / "proj"
         (project / ".claude").mkdir(parents=True)
@@ -2268,7 +2329,7 @@ class TestArchivePin_SyncStatusReachesTheArchive:
 
         _, stdout, _ = archive_pin._run_memory_cli(
             [archive_pin._ARCHIVE_SUBCOMMAND, "--stdin", "--no-sync"],
-            db_path=str(tmp_path / "m.db"),
+            db_path=str(memory_store("m.db")),
             stdin_data=payload,
             cwd=str(project),
         )
@@ -2282,7 +2343,7 @@ class TestArchivePin_SyncStatusReachesTheArchive:
         assert result["sync_status"] == "suppressed"
 
     def test_dropping_the_flag_changes_the_status_and_writes_the_file(
-        self, tmp_path
+        self, tmp_path, memory_store
     ):
         """CONTROL for the arm above, and it earns its place twice.
 
@@ -2302,7 +2363,7 @@ class TestArchivePin_SyncStatusReachesTheArchive:
 
         _, stdout, _ = archive_pin._run_memory_cli(
             [archive_pin._ARCHIVE_SUBCOMMAND, "--stdin"],
-            db_path=str(tmp_path / "m.db"),
+            db_path=str(memory_store("m.db")),
             stdin_data=payload,
             cwd=str(project),
         )

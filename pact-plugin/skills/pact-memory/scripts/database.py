@@ -35,7 +35,12 @@ except ImportError:
     import sqlite3
     SQLITE_EXTENSIONS_ENABLED = False
 
-from .config import get_memory_dir
+from .config import (
+    DERIVED_STORE_ORIGINS,
+    resolve_db_path,
+    store_path_origin,
+    store_scope,
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -101,13 +106,72 @@ class AmbiguousPrefixError(LookupError):
 def get_db_path() -> Path:
     """Get the database file path, creating parent directories if needed.
 
-    Resolves through `config.get_memory_dir()` on EVERY call. Holding the value
+    Resolves through `config.resolve_db_path()` on EVERY call. Holding the value
     in a module constant is what let an import-time binding outlive a later
     redirect, so the directory and the file are recomputed together here.
+
+    COMPOSES NOTHING. This function used to build the file name itself, which
+    made it a second derivation that could name a different file than the
+    resolver did. It now adds the side effect and nothing else: resolve, then
+    create the parent. The parent comes from the resolved FILE, so a scoped
+    caller gets the directory of its own store rather than the default one.
     """
-    memory_dir = get_memory_dir()
-    memory_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return memory_dir / "memory.db"
+    path = resolve_db_path()
+    # ⚠️ CREATE THE PARENT FOR A DERIVED PATH ONLY, NEVER FOR ONE THE CALLER
+    # SUPPLIED. The side effect used to aim at the DEFAULT directory, so a
+    # caller path reached `sqlite3.connect` with no tree behind it and a typo
+    # failed loudly. When the resolver began returning the caller path, this
+    # line began building the tree for it, and the typo started to SUCCEED. A
+    # mistyped store takes the write, the command reports success, and the
+    # record sits in a file the caller does not know about.
+    #
+    # LOUD TO SILENT IS THE WRONG DIRECTION ON A CALLER-CONTROLLED VALUE, so
+    # the origin decides. The derived origins carry no caller path and MUST
+    # keep the create, because production passes no path and has to reach and
+    # build the real store. That is the redirect-never-refuse rule, and this
+    # test does not weaken it: an unscoped caller takes the same branch it
+    # always took.
+    #
+    # `setup` KEEPS CREATING A CALLER PATH, and that asymmetry is deliberate.
+    # Bringing a store into existence at a named location is what `setup` is
+    # for, so the create IS its operation. `save`, `get` and `archive_pin`
+    # open a store that should be there, so an absent path is a typo, and the
+    # correct answer to a typo is to fail. That leg runs through
+    # `setup_memory.ensure_directories` and does not reach this line.
+    #
+    # ⚠️ THIS LINE COVERS THE DIRECTORY HALF ONLY, AND SAYING SO IS THE POINT.
+    # A typo in the FILE NAME reaches a directory that is present, so this test
+    # has nothing to refuse. THE FILE HALF LIVES AT THE CLI BOUNDARY, in
+    # `cli.main`, which refuses a caller `--db-path` that names a store that is
+    # absent.
+    #
+    # IT DOES NOT LIVE IN `get_connection`, and that location was tried and
+    # rejected rather than passed over. A refusal there reaches each caller of
+    # the connection factory, so it breaks the custom-store contract that
+    # production and the test suite depend on. `get_connection` also cannot
+    # tell a person from a library caller, so a refusal there answers a
+    # question it cannot see. Read the two halves together. A comment that
+    # claims the whole hazard from here would retire a question that another
+    # file answers.
+    # ⚠️ TWO READS OF THE RESOLVER STATE, AND WHAT MAKES THAT SAFE IS A
+    # PROPERTY OF THE PACKAGE RATHER THAN OF THESE TWO LINES. The path arrives
+    # from one call and the origin from a second, so a change to the store
+    # scope between them would make the origin describe a different path. No
+    # such change can occur here: this package starts NO THREAD, and neither
+    # call yields, so no other code runs between them.
+    #
+    # THAT NO-THREAD PROPERTY NOW CARRIES TWO DEPENDENTS AND NOTHING PINS IT.
+    # The ContextVar note in `config.py` records the first: a scope set in one
+    # thread is not readable in a thread started after it, and the design
+    # shipped that as a named residual because the package starts no thread.
+    # This double read is the second. ONE DEPENDENT IS A RESIDUAL. TWO IS A
+    # COUPLING, and a reader who adds a worker thread must find each of them.
+    # A single call that returns the path and the origin together would remove
+    # this one, at the cost of moving the `DB_FILENAME` composition out of
+    # `resolve_db_path`, which a test pins as the ONE composing site.
+    if store_path_origin() in DERIVED_STORE_ORIGINS:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return path
 
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -119,8 +183,16 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
 
     Returns:
         SQLite connection configured with WAL mode and foreign keys.
+
+    `db_path` IS AN INPUT TO THE RESOLVER, NOT A RIVAL OF IT. This used to read
+    `db_path or get_db_path()`, which was a second rule for the same question:
+    the connection opened the caller file while every layer that asked the
+    resolver got the default one, and the two named different files inside a
+    single invocation. Binding the scope instead sends the caller value THROUGH
+    the resolver, so the layers below agree with the connection above.
     """
-    path = db_path or get_db_path()
+    with store_scope(db_path):
+        path = get_db_path()
 
     # Track whether the DB file is newly created for permission hardening
     is_new = not path.exists()
@@ -170,16 +242,22 @@ def db_connection(db_path: Optional[Path] = None):
     Usage:
         with db_connection() as conn:
             cursor = conn.execute("SELECT * FROM memories")
+
+    THE SCOPE COVERS THE WHOLE BODY, not only the connect call, so anything the
+    caller does inside the block resolves to the same file. A pathless call
+    INHERITS an enclosing scope, which is how the search and catch-up layers
+    reach a caller store without one of them accepting a path parameter.
     """
-    conn = get_connection(db_path)
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    with store_scope(db_path):
+        conn = get_connection()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
@@ -847,7 +925,21 @@ def create_memory(
     # string-list fields so the two ingresses are symmetric.
     normalized = dict(memory)
     for field in LIST_FIELDS:
-        items = normalized.get(field)
+        if field not in normalized:
+            continue
+        # THE SAME GUARD THE UPDATE INGRESS USES (see update_memory). This
+        # line held a TRUTHINESS test where a TYPE test belongs. A bare
+        # string passed `if items:` and reached `list()` inside
+        # _merge_with_dedup, which yields the CHARACTERS of that string. The
+        # content-hash dedup then kept one item per unique character, so the
+        # order and the repeats went away and the prose could not be
+        # recovered.
+        #
+        # THE TRUTHINESS TEST WAS ITSELF PART OF THE DEFECT. It skipped a
+        # FALSY non-list ("", {}, 0) in silence. The update ingress applies
+        # no such pre-test, so it refuses those values today. This call makes
+        # the two ingresses agree on every non-list input.
+        items = _normalize_list_field(field, normalized[field])
         if items:
             normalized[field] = _merge_with_dedup(field, [], items)
 

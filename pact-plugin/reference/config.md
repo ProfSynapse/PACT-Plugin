@@ -21,7 +21,22 @@ All PACT options are `PACT_*` environment variables, resolved once per session b
 
 **Consumer** distinguishes two runtimes. **LLM-consumed** options (`PACT_PR_GREEDY_FIX`, `PACT_AUTONOMOUS_SCOPE_DETECTION`) are surfaced to the orchestrator at session start in an injected **PACT Runtime Config** block, because markdown flows cannot read environment variables. **Hook-consumed** options (the two `*_MODE` gates) are read directly by the Python hooks at hook load.
 
-## Where to set them
+## `PACT_TEST_MEMORY_DIR`: for tests only
+
+**It moves the memory database and nothing else.** It does NOT move `session-tracking/`, which is in the same root but resolves through `get_claude_config_dir()` and thus follows `CLAUDE_CONFIG_DIR`. If you set only this variable, the database moves and the `session-tracking/` data stays where it was. This divides one set of memory data between two trees. The boundary comes first here because that division is the risk.
+
+**It is there so that a test process cannot touch the live database. It is not a supported procedure to move your data.** A general procedure of that type is not available at this time. The test harness sets this variable. Do not set it to move a database of your own.
+
+**It is missing from the Options table above, and that is on purpose.** Each row in that table resolves one time for each session, through `hooks/shared/pact_config.py`. This variable resolves at use time, in `get_memory_dir()` in `skills/pact-memory/scripts/config.py`, and it is a test-harness variable, not a control on behavior. A row in that table can tell the reader three things that are incorrect.
+
+If you find the variable in a process list or in the source, these are its mechanics:
+
+- **Controls** the memory database: `get_memory_dir()` and each path derived from it, which is `memory.db`.
+- **Default**, if unset: `~/.claude/pact-memory`.
+- **An empty value counts as unset.** Thus `PACT_TEST_MEMORY_DIR=""` cannot move the database to the current directory by accident.
+- **The resolver redirects. It does not refuse.** It cannot tell a test path from a live one. It sees only if you set the variable.
+
+## Where to set the options
 
 Any env-var source works. In order of persistence:
 
