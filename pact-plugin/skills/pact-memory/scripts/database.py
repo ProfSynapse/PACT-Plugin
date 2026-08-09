@@ -867,7 +867,21 @@ def create_memory(
     # string-list fields so the two ingresses are symmetric.
     normalized = dict(memory)
     for field in LIST_FIELDS:
-        items = normalized.get(field)
+        if field not in normalized:
+            continue
+        # THE SAME GUARD THE UPDATE INGRESS USES (see update_memory). This
+        # line held a TRUTHINESS test where a TYPE test belongs. A bare
+        # string passed `if items:` and reached `list()` inside
+        # _merge_with_dedup, which yields the CHARACTERS of that string. The
+        # content-hash dedup then kept one item per unique character, so the
+        # order and the repeats went away and the prose could not be
+        # recovered.
+        #
+        # THE TRUTHINESS TEST WAS ITSELF PART OF THE DEFECT. It skipped a
+        # FALSY non-list ("", {}, 0) in silence. The update ingress applies
+        # no such pre-test, so it refuses those values today. This call makes
+        # the two ingresses agree on every non-list input.
+        items = _normalize_list_field(field, normalized[field])
         if items:
             normalized[field] = _merge_with_dedup(field, [], items)
 
