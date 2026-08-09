@@ -35,7 +35,12 @@ except ImportError:
     import sqlite3
     SQLITE_EXTENSIONS_ENABLED = False
 
-from .config import resolve_db_path, store_scope
+from .config import (
+    DERIVED_STORE_ORIGINS,
+    resolve_db_path,
+    store_path_origin,
+    store_scope,
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -112,7 +117,45 @@ def get_db_path() -> Path:
     caller gets the directory of its own store rather than the default one.
     """
     path = resolve_db_path()
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # ⚠️ CREATE THE PARENT FOR A DERIVED PATH ONLY, NEVER FOR ONE THE CALLER
+    # SUPPLIED. The side effect used to aim at the DEFAULT directory, so a
+    # caller path reached `sqlite3.connect` with no tree behind it and a typo
+    # failed loudly. When the resolver began returning the caller path, this
+    # line began building the tree for it, and the typo started to SUCCEED. A
+    # mistyped store takes the write, the command reports success, and the
+    # record sits in a file the caller does not know about.
+    #
+    # LOUD TO SILENT IS THE WRONG DIRECTION ON A CALLER-CONTROLLED VALUE, so
+    # the origin decides. The derived origins carry no caller path and MUST
+    # keep the create, because production passes no path and has to reach and
+    # build the real store. That is the redirect-never-refuse rule, and this
+    # test does not weaken it: an unscoped caller takes the same branch it
+    # always took.
+    #
+    # `setup` KEEPS CREATING A CALLER PATH, and that asymmetry is deliberate.
+    # Bringing a store into existence at a named location is what `setup` is
+    # for, so the create IS its operation. `save`, `get` and `archive_pin`
+    # open a store that should be there, so an absent path is a typo, and the
+    # correct answer to a typo is to fail. That leg runs through
+    # `setup_memory.ensure_directories` and does not reach this line.
+    # ⚠️ TWO READS OF THE RESOLVER STATE, AND WHAT MAKES THAT SAFE IS A
+    # PROPERTY OF THE PACKAGE RATHER THAN OF THESE TWO LINES. The path arrives
+    # from one call and the origin from a second, so a change to the store
+    # scope between them would make the origin describe a different path. No
+    # such change can occur here: this package starts NO THREAD, and neither
+    # call yields, so no other code runs between them.
+    #
+    # THAT NO-THREAD PROPERTY NOW CARRIES TWO DEPENDENTS AND NOTHING PINS IT.
+    # The ContextVar note in `config.py` records the first: a scope set in one
+    # thread is not readable in a thread started after it, and the design
+    # shipped that as a named residual because the package starts no thread.
+    # This double read is the second. ONE DEPENDENT IS A RESIDUAL. TWO IS A
+    # COUPLING, and a reader who adds a worker thread must find each of them.
+    # A single call that returns the path and the origin together would remove
+    # this one, at the cost of moving the `DB_FILENAME` composition out of
+    # `resolve_db_path`, which a test pins as the ONE composing site.
+    if store_path_origin() in DERIVED_STORE_ORIGINS:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     return path
 
 

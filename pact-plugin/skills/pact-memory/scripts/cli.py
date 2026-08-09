@@ -74,6 +74,46 @@ def _envelope_stream():
     return sys.stderr if _ENVELOPE_STREAM is None else _ENVELOPE_STREAM
 
 
+def _best_effort_report(action, *args, **kwargs) -> bool:
+    """Run one diagnostic write. Report whether it landed. Raise nothing.
+
+    THE POLICY IN ONE PLACE: a diagnostic write is BEST EFFORT and it must not
+    change the outcome of an operation that succeeded. A caller who sends
+    stderr into a program that stops reading has decided it does not want the
+    rest of the output, and turning that decision into a failure of the
+    command is incorrect.
+
+    THE TWO CLASSES ARE MEASURED AND THEY ARE NOT ONE CLASS. A write to a
+    reader-less pipe raises BrokenPipeError, which is an OSError. A flush on a
+    CLOSED Python file object raises ValueError, which is not. Catching
+    OSError alone leaves the second class live.
+
+    THIS BOUNDS REPORTING ONLY. It must not wrap an operation, and it must not
+    wrap descriptor state. A caller that hides an operation behind this turns
+    a failure into a silent success, which is the opposite of the defect it
+    exists to close.
+    """
+    try:
+        action(*args, **kwargs)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _replay_capture(capture) -> None:
+    """Copy the captured bytes to the restored stderr. Verbatim, and by design.
+
+    To clean the bytes would mean to parse a progress format, which is the
+    coupling the guard exists to avoid.
+    """
+    os.lseek(capture.fileno(), 0, os.SEEK_SET)
+    while True:
+        chunk = os.read(capture.fileno(), 65536)
+        if not chunk:
+            break
+        os.write(2, chunk)
+
+
 @contextmanager
 def _own_stderr_for_envelope():
     """Own file descriptor 2 for the length of a command handler.
@@ -147,24 +187,51 @@ def _own_stderr_for_envelope():
         replay = exc.code in (0, None)
         raise
     finally:
-        sys.stderr.flush()
-        envelope_stream.flush()
+        # ⚠️ A FAILURE IN THE REPORTING PATH MUST NOT CHANGE THE OUTCOME OF AN
+        # OPERATION THAT SUCCEEDED. Writing a diagnostic is BEST EFFORT. The
+        # exit status is a CONTRACT about the operation, and the two are not
+        # the same promise.
+        #
+        # THE DEFECT THIS CLOSES, and it needs an ordinary command line rather
+        # than a constructed one. `cmd 2>&1 | head` leaves stderr a pipe with
+        # no reader once head stops. The replay below then raised, `_error`
+        # failed writing its own envelope to that same broken stream, and the
+        # process exited non-zero AFTER the handler had printed a success
+        # envelope on stdout. Stdout said success and the exit code said
+        # failure, for a command that did what it was asked.
+        #
+        # THE TWO FAILURE CLASSES ARE DIFFERENT AND BOTH ARE REACHABLE, so the
+        # clause names each. MEASURED, not assumed: a write to a reader-less
+        # pipe raises BrokenPipeError, which IS an OSError. A flush on a Python
+        # file object that is CLOSED raises ValueError, which is NOT an
+        # OSError. An OSError-only clause covers the first and lets the second
+        # through.
+        _best_effort_report(sys.stderr.flush)
+        _best_effort_report(envelope_stream.flush)
+
+        # STATE, NOT REPORTING, SO IT STAYS OUTSIDE THE BOUND. A descriptor
+        # left pointing at the capture silences the whole process, which is a
+        # worse outcome than a raise a caller can see.
         _ENVELOPE_STREAM = previous_envelope
         os.dup2(saved_fd, 2)
         os.close(saved_fd)
+
         if replay:
-            os.lseek(capture.fileno(), 0, os.SEEK_SET)
-            while True:
-                chunk = os.read(capture.fileno(), 65536)
-                if not chunk:
-                    break
-                os.write(2, chunk)
+            _best_effort_report(_replay_capture, capture)
         capture.close()
 
 
 def _success(result):
-    """Print a success JSON envelope to stdout and exit 0."""
-    print(json.dumps({"ok": True, "result": result}, indent=2, default=str))
+    """Print a success JSON envelope to stdout and exit 0.
+
+    THE EXIT STATUS DOES NOT DEPEND ON THE WRITE LANDING. A caller that pipes
+    this command into a program that stops reading, such as `head`, leaves
+    stdout a pipe with no reader. The operation is finished by then, so a
+    failed write is a lost REPORT and not a failed COMMAND.
+    """
+    _best_effort_report(
+        print, json.dumps({"ok": True, "result": result}, indent=2, default=str)
+    )
     sys.exit(0)
 
 
@@ -177,10 +244,18 @@ def _error(error_type, message, exit_code=1, **extra) -> NoReturn:
     Inside a guarded handler that resolves to a private handle on the original
     stderr, so the envelope leaves the process on file descriptor 2 while a
     dependency writing to that descriptor is captured instead.
+
+    THE EXIT CODE SURVIVES A FAILED WRITE, AND IT IS THE POINT OF THE GUARD
+    HERE. If the stream carrying this envelope is unwritable, the caller loses
+    the TEXT and keeps the NON-ZERO EXIT CODE. That is the correct trade: the
+    exit code is the smaller and more reliable channel, and it continues to
+    carry the outcome. Left unguarded, a broken stream replaced this call with
+    an exception, and the process died with a status that described the
+    reporting failure rather than the operation.
     """
     envelope = {"ok": False, "error": error_type, "message": message}
     envelope.update(extra)
-    print(json.dumps(envelope), file=_envelope_stream())
+    _best_effort_report(print, json.dumps(envelope), file=_envelope_stream())
     sys.exit(exit_code)
 
 

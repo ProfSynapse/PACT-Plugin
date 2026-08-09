@@ -2901,3 +2901,194 @@ class TestTheStderrGuardItself:
 
         captured = capfd.readouterr()
         assert "AFTER-THE-RAISE" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# A caller-supplied store path is opened, not created
+# ---------------------------------------------------------------------------
+
+
+class TestACallerSuppliedPathIsNotCreated:
+    """A typo on `--db-path` must fail loudly, as it did before the resolver.
+
+    THE REGRESSION THESE ARMS CLOSE. The directory side effect used to aim at
+    the DEFAULT memory directory. When the resolver began returning a caller
+    path, the side effect began building the tree for THAT path, so a mistyped
+    `--db-path` stopped raising and started to succeed against an empty store.
+    A write lands in a file the caller does not know about, and the command
+    reports success.
+
+    LOUD TO SILENT IS THE WRONG DIRECTION ON A CALLER-CONTROLLED VALUE. The
+    derived route keeps its create, because production passes no path and must
+    reach and build the real store.
+    """
+
+    def test_an_absent_caller_parent_is_not_created(self, cli_script_path, tmp_path):
+        """RED BEFORE THE FIX: the tree was built and the command succeeded."""
+        absent = tmp_path / "typo-dir"
+        db = absent / "x.db"
+        assert not absent.exists()
+
+        result = subprocess.run(
+            [sys.executable, cli_script_path, "get", "abc1234", "--db-path", str(db)],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        assert not absent.exists(), (
+            "a mistyped --db-path built its own directory tree, so the typo "
+            "succeeded against an empty store instead of failing"
+        )
+        assert not db.exists()
+        assert result.returncode != 0
+
+    def test_the_derived_route_still_creates_the_store(self, cli_script_path, tmp_path):
+        """THE OTHER HALF, AND IT OUTRANKS THE ARM ABOVE.
+
+        The scope must REDIRECT and never REFUSE. A production caller passes no
+        `--db-path`, so the store comes from the derived route and the create
+        must still happen. An arm that only proved the refusal would pass
+        against a fix that broke production.
+        """
+        derived_root = tmp_path / "derived-home" / "pact-memory"
+        assert not derived_root.exists()
+
+        env = dict(os.environ)
+        env["PACT_TEST_MEMORY_DIR"] = str(derived_root)
+        env.pop("PYTEST_CURRENT_TEST", None)
+
+        result = subprocess.run(
+            [sys.executable, cli_script_path, "list"],
+            capture_output=True, text=True, timeout=120, env=env,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert derived_root.is_dir(), (
+            "the derived route stopped creating the store directory, which "
+            "breaks every production caller that passes no --db-path"
+        )
+
+
+# ---------------------------------------------------------------------------
+# A failed diagnostic write must not change the outcome
+# ---------------------------------------------------------------------------
+
+
+class TestAFailedReportDoesNotChangeTheOutcome:
+    """`cmd 2>&1 | head` is an ordinary command line, not a constructed one.
+
+    Once `head` stops reading, stderr is a pipe with no reader. The guard's
+    replay then raised, the error envelope could not reach the same broken
+    stream, and the process died with a status describing the REPORTING
+    failure rather than the OPERATION. A successful command printed a success
+    envelope on stdout and exited non-zero.
+    """
+
+    def test_a_broken_stderr_does_not_replace_a_success_exit(self):
+        """RED BEFORE THE FIX: the replay raised and took the exit code with it.
+
+        DETERMINISTIC BY CONSTRUCTION, and that is deliberate. The reviewer met
+        this through a live dependency writing a progress bar into the capture.
+        A noise source that depends on a backend being installed makes the arm
+        pass for the wrong reason wherever that backend is absent, so this arm
+        writes the captured bytes itself and points file descriptor 2 at a
+        reader-less pipe by hand. It reproduces the mechanism rather than the
+        occasion.
+        """
+        from scripts.cli import _own_stderr_for_envelope
+
+        read_end, write_end = os.pipe()
+        saved = os.dup(2)
+        try:
+            os.dup2(write_end, 2)
+            # No reader from here on, so any write to descriptor 2 raises.
+            os.close(read_end)
+
+            with pytest.raises(SystemExit) as exc:
+                with _own_stderr_for_envelope():
+                    # Lands in the CAPTURE, because the guard holds descriptor
+                    # 2 while the block runs. The replay meets the broken pipe
+                    # after the guard restores it.
+                    os.write(2, b"captured diagnostic line\n")
+                    sys.exit(0)
+
+            assert exc.value.code == 0, (
+                "a failure in the reporting path replaced the outcome of an "
+                "operation that succeeded"
+            )
+        finally:
+            os.dup2(saved, 2)
+            os.close(saved)
+            os.close(write_end)
+
+    def test_a_broken_stdout_does_not_replace_a_success_exit(self, monkeypatch):
+        """RED BEFORE THE FIX: the success write raised and took the exit code.
+
+        THE OTHER STREAM, AND THE SAME MECHANISM. The reported occasion was
+        `cmd 2>&1 | head`, which breaks stderr. `cmd | head` breaks STDOUT, and
+        it is as ordinary a command line. On the unfixed path the success
+        envelope write raised, `main` caught it as an unexpected exception and
+        reported SYSTEM_ERROR, so a command that did what it was asked exited
+        non-zero.
+
+        A FIX THAT CURED ONLY THE REPORTED STREAM WOULD CURE THE OCCASION AND
+        LEAVE THE MECHANISM, which is the standard this suite refuses
+        elsewhere. So this arm exists rather than the symmetry of the argument.
+
+        DETERMINISTIC BY CONSTRUCTION, for the same reason the stderr arm is:
+        it points the stream at a reader-less pipe by hand rather than wait for
+        a payload large enough to fill one.
+        """
+        # IMPORTS `_success` ALONE, DELIBERATELY. An arm that also imported the
+        # helper the fix introduces would fail on the unfixed tree with an
+        # ImportError, which is red by ABSENCE OF A NAME rather than by
+        # behaviour. The cleanup below is therefore inline.
+        from scripts.cli import _success
+
+        read_end, write_end = os.pipe()
+        broken = os.fdopen(write_end, "w", buffering=1)
+        os.close(read_end)
+        monkeypatch.setattr(sys, "stdout", broken)
+        try:
+            with pytest.raises(SystemExit) as exc:
+                _success({"context": "an operation that succeeded"})
+
+            assert exc.value.code == 0, (
+                "a command that did what it was asked reported failure "
+                "because its own success envelope could not be written"
+            )
+        finally:
+            try:
+                broken.close()
+            except (OSError, ValueError):
+                pass
+
+    def test_a_best_effort_report_swallows_both_failure_classes(self):
+        """THE TWO CLASSES ARE MEASURED HERE, not assumed.
+
+        A write to a reader-less pipe raises BrokenPipeError, which IS an
+        OSError. A flush on a CLOSED file object raises ValueError, which is
+        NOT. A clause naming OSError alone leaves the second class live.
+        """
+        from scripts.cli import _best_effort_report
+
+        r, w = os.pipe()
+        broken = os.fdopen(w, "w", buffering=1)
+        os.close(r)
+        try:
+            assert _best_effort_report(broken.write, "x\n") in (True, False)
+            assert _best_effort_report(broken.flush) is False
+        finally:
+            # Close through the helper too. A bare close on a broken pipe
+            # raises in the finalizer and pytest reports it as unraisable.
+            _best_effort_report(broken.close)
+
+        r2, w2 = os.pipe()
+        closed = os.fdopen(w2, "w", buffering=1)
+        _best_effort_report(closed.close)
+        os.close(r2)
+        assert _best_effort_report(closed.flush) is False
+
+        # CONTROL: a write that CAN land reports True, so the two results above
+        # are a bounded failure and not a helper that reports False always.
+        import io
+        assert _best_effort_report(io.StringIO().write, "ok") is True

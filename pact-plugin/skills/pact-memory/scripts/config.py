@@ -204,6 +204,38 @@ def resolve_db_path() -> Path:
     return get_memory_dir() / DB_FILENAME
 
 
+# WHERE A RESOLVED STORE PATH CAME FROM.
+#
+# THE ORIGIN IS CARRIED, NOT INFERRED, and that is the whole point of these
+# names. A caller that wants to treat a caller-supplied path differently from
+# a derived one could instead test whether a scope is bound, and that test is
+# a PROXY: it holds only while every present and future binding site binds a
+# path a person typed. Nothing can hold that. An origin the resolver REPORTS
+# cannot drift away from the resolution it describes.
+STORE_ORIGIN_SCOPE = "scope"
+STORE_ORIGIN_ENV = "environment"
+STORE_ORIGIN_HOME = "home"
+
+# The origins the RESOLVER derives with no caller path. A consumer that creates
+# a directory as a side effect must create it for THESE and not for a path the
+# caller supplied.
+DERIVED_STORE_ORIGINS = frozenset({STORE_ORIGIN_ENV, STORE_ORIGIN_HOME})
+
+
+def store_path_origin() -> str:
+    """Report where `resolve_db_path` takes the store file from. Creates nothing.
+
+    THE ORDER HERE MIRRORS `get_memory_dir` AND MUST CONTINUE TO. A reader that
+    changes one order and not the other makes this function describe a
+    resolution that does not happen.
+    """
+    if _STORE_DB_PATH.get() is not None:
+        return STORE_ORIGIN_SCOPE
+    if os.environ.get(MEMORY_DIR_ENV):
+        return STORE_ORIGIN_ENV
+    return STORE_ORIGIN_HOME
+
+
 def compute_db_path() -> Path:
     """Return the memory database file path. Creates no directory.
 
