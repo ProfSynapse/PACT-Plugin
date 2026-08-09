@@ -34,6 +34,8 @@ import argparse
 import json
 import os
 import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import NoReturn
 
@@ -54,6 +56,112 @@ from scripts.memory_api import PACTMemory
 from scripts.setup_memory import ensure_initialized, get_setup_status
 
 
+# The stream the ERROR ENVELOPE is written to. None means "use sys.stderr",
+# which is the state outside a guarded window.
+#
+# While `_own_stderr_for_envelope` holds fd 2, this is a private handle on the
+# ORIGINAL stderr. So the envelope continues to leave the process on fd 2. The
+# guard bounds WHO MAY WRITE to the channel. It does not move the payload to
+# another channel, because the stdout and stderr split is a shipped contract:
+# stdout carries the success envelope and stderr carries the error envelope,
+# and merging them would trade a corrupt error envelope for a corrupt success
+# envelope on the more common path.
+_ENVELOPE_STREAM = None
+
+
+def _envelope_stream():
+    """Return the stream the error envelope must be written to."""
+    return sys.stderr if _ENVELOPE_STREAM is None else _ENVELOPE_STREAM
+
+
+@contextmanager
+def _own_stderr_for_envelope():
+    """Own file descriptor 2 for the length of a command handler.
+
+    THE DEFECT THIS CLOSES. Both envelopes are machine-readable, and a caller
+    parses stderr to read the error one. A DEPENDENCY MAY ALSO WRITE THERE: the
+    embedding backend emits a download progress bar, and the standard-library
+    logging last-resort handler emits WARNING and above when no handler is
+    configured. Either one puts bytes in front of the envelope, and the parse
+    then fails on output that looks correct to a human reader.
+
+    WHY THE FILE DESCRIPTOR AND NOT `sys.stderr`. Rebinding `sys.stderr` bounds
+    a writer that goes through Python. It does NOT bound a writer that reaches
+    file descriptor 2 directly, which a compiled dependency can do. That
+    narrower guard passes the tests written for the emitter of the day and
+    leaves the general fault open.
+
+    WHY NOT A PROGRESS-BAR SWITCH IN THE DEPENDENCY. That names the emitter of
+    the day. It goes stale without a sound when the backend changes, and it
+    does not reach the logging handler at all. This guard names no library and
+    no output shape.
+
+    ⚠️ DISPOSAL DIFFERS BY EXIT PATH, AND EACH LOSS IS DELIBERATE.
+      ON FAILURE the captured bytes are DISCARDED. There is nowhere to put
+      them: stderr must hold the envelope alone, and stdout is the success
+      channel. The loss is a dependency diagnostic, and it is bounded, because
+      the envelope carries the error and the exit code carries the outcome.
+      ON SUCCESS the captured bytes are REPLAYED to stderr. Nothing parses
+      stderr on success, so the guard protects nothing there, and a silent
+      command that takes 30 seconds for a first-run model download looks hung.
+      WHAT REPLAY DOES NOT RESTORE IS THE TIMING. The bytes arrive after the
+      wait they explain, so a progress bar reads as a block of finished frames
+      rather than as live progress. That is a chosen trade and not an
+      oversight. The bytes are replayed VERBATIM, because cleaning them would
+      mean parsing a progress format, which is the coupling this guard exists
+      to avoid.
+
+    ⚠️ FILE DESCRIPTOR 2 IS PROCESS-GLOBAL, so for the length of this window
+    ANYTHING in the process that writes to stderr is captured, and not the
+    handler alone. The hazard is LATENT rather than live: this package starts
+    no thread today. Add a worker thread that logs, and its output joins the
+    capture. Do not read this guard as a per-caller channel.
+
+    FAILS OPEN. If the descriptor cannot be duplicated, this yields without
+    guarding, so the command behaves as it did before rather than failing for
+    a reason the caller cannot act on.
+    """
+    global _ENVELOPE_STREAM
+
+    try:
+        saved_fd = os.dup(2)
+    except OSError:
+        yield None
+        return
+
+    capture = tempfile.TemporaryFile()
+    previous_envelope = _ENVELOPE_STREAM
+    envelope_stream = os.fdopen(saved_fd, "w", buffering=1, closefd=False)
+    replay = False
+
+    sys.stderr.flush()
+    os.dup2(capture.fileno(), 2)
+    _ENVELOPE_STREAM = envelope_stream
+
+    try:
+        yield capture
+        replay = True
+    except SystemExit as exc:
+        # `_success` exits 0 and `_error` exits non-zero, so the exit code IS
+        # the outcome. A bare `sys.exit()` carries None and counts as success.
+        replay = exc.code in (0, None)
+        raise
+    finally:
+        sys.stderr.flush()
+        envelope_stream.flush()
+        _ENVELOPE_STREAM = previous_envelope
+        os.dup2(saved_fd, 2)
+        os.close(saved_fd)
+        if replay:
+            os.lseek(capture.fileno(), 0, os.SEEK_SET)
+            while True:
+                chunk = os.read(capture.fileno(), 65536)
+                if not chunk:
+                    break
+                os.write(2, chunk)
+        capture.close()
+
+
 def _success(result):
     """Print a success JSON envelope to stdout and exit 0."""
     print(json.dumps({"ok": True, "result": result}, indent=2, default=str))
@@ -64,10 +172,15 @@ def _error(error_type, message, exit_code=1, **extra) -> NoReturn:
     """Print an error JSON envelope to stderr and exit with given code.
 
     Any extra kwargs are merged into the envelope (e.g. allowed_fields).
+
+    WRITES THROUGH `_envelope_stream()`, NOT THROUGH `sys.stderr` DIRECTLY.
+    Inside a guarded handler that resolves to a private handle on the original
+    stderr, so the envelope leaves the process on file descriptor 2 while a
+    dependency writing to that descriptor is captured instead.
     """
     envelope = {"ok": False, "error": error_type, "message": message}
     envelope.update(extra)
-    print(json.dumps(envelope), file=sys.stderr)
+    print(json.dumps(envelope), file=_envelope_stream())
     sys.exit(exit_code)
 
 
@@ -703,9 +816,13 @@ def main(argv=None):
     # of `setup` together: the leg that CREATES the directory and the leg that
     # REPORTS it both reach `get_memory_dir()` with no argument, so neither one
     # could honour `--db-path` while only the schema leg took a parameter.
+    # THE STDERR GUARD WRAPS THE SCOPE, NOT THE OTHER WAY ROUND, so that
+    # anything the store scope reaches can write to stderr without reaching
+    # the channel the error envelope leaves on.
     try:
-        with store_scope(db_path):
-            handler(args, db_path=db_path)
+        with _own_stderr_for_envelope():
+            with store_scope(db_path):
+                handler(args, db_path=db_path)
     except SystemExit:
         raise  # Let _success/_error exits propagate
     except Exception as exc:

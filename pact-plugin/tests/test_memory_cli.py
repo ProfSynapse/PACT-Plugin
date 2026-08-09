@@ -2719,3 +2719,185 @@ class TestCliNoSyncFlag:
         assert seen["sync_to_claude"] is True, (
             "omitting --no-sync must reach the API as True, not as absent"
         )
+
+
+# ---------------------------------------------------------------------------
+# The error envelope must survive a stderr a dependency also writes to
+# ---------------------------------------------------------------------------
+
+
+class TestErrorEnvelopeSurvivesASharedStderr:
+    """Both envelopes are machine-readable, and stderr is not the CLI's alone.
+
+    THE DEFECT. The embedding catch-up runs against the caller store, so it
+    finds pending work there, loads the backend, and the backend writes a
+    download progress bar to stderr. The error envelope is written to the same
+    stream, so a caller that parses stderr meets the progress bytes first and
+    the parse fails on output that reads correctly to a human.
+
+    A SECOND EMITTER REACHES THE SAME STREAM and a progress-bar switch does not
+    touch it: the standard-library logging last-resort handler writes WARNING
+    and above to stderr when no handler is configured, and the memory layer
+    calls `logger.warning` in several places. That is why the guard bounds the
+    STREAM rather than one library.
+
+    THE THREE ARMS BELOW MEASURE DIFFERENT THINGS. Read the labels before you
+    delete one. One is red on the tree before the fix, one cannot go vacuous,
+    and one guards against the WRONG fix rather than against the defect.
+    """
+
+    def _store_with_pending_embeddings(self, cli_db):
+        """Put rows carrying no vector into the caller store.
+
+        THE PRECONDITION THE INTEGRATION ARM NEEDS. The catch-up loads the
+        backend only when it finds work, so a store with no pending row leaves
+        the noisy path unexercised.
+        """
+        from scripts.database import create_memory
+        try:
+            import pysqlite3 as sqlite3
+        except ImportError:
+            import sqlite3
+
+        id_a = "ambig00" + "a" + "0" * 24
+        id_b = "ambig00" + "b" + "0" * 24
+        conn = sqlite3.connect(str(cli_db))
+        conn.row_factory = sqlite3.Row
+        with patch("scripts.database.ensure_initialized"):
+            create_memory(conn, {"id": id_a, "context": "first pending record"})
+            create_memory(conn, {"id": id_b, "context": "second pending record"})
+        conn.commit()
+        pending = conn.execute("SELECT COUNT(*) AS n FROM memories").fetchone()["n"]
+        conn.close()
+        return pending
+
+    def test_stderr_parses_as_json_when_a_dependency_writes_there(
+        self, cli_script_path, cli_db
+    ):
+        """RED ON THE TREE BEFORE THIS FIX. INTEGRATION ARM.
+
+        Drives the real CLI as a subprocess against a store carrying pending
+        embeddings, which is the condition that puts a dependency's output on
+        stderr. Asserts the whole stream parses as one JSON envelope.
+
+        BOUND, STATED RATHER THAN IMPLIED: the noise source here is the REAL
+        backend. On a machine where that backend is absent, nothing writes to
+        stderr and this arm passes without exercising the guard. It is green
+        for the right reason only where the backend is installed. The hermetic
+        arm below is what covers that gap, and it is why two arms exist rather
+        than one.
+        """
+        pending = self._store_with_pending_embeddings(cli_db)
+        # CONTROL: the precondition really holds, so an empty stderr below
+        # cannot come from a store that had no work in it.
+        assert pending == 2
+
+        result = subprocess.run(
+            [sys.executable, cli_script_path, "get", "ambig00",
+             "--db-path", str(cli_db)],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        assert result.returncode == 1, f"stdout: {result.stdout}"
+        envelope = json.loads(result.stderr)
+        assert envelope["ok"] is False
+        assert envelope["error"] == "AMBIGUOUS_PREFIX"
+
+    def test_stdout_stays_clean_json_when_a_dependency_writes_to_stderr(
+        self, cli_script_path, cli_db
+    ):
+        """GREEN BEFORE AND AFTER THIS FIX. IT GUARDS THE WRONG FIX, NOT THE DEFECT.
+
+        DO NOT DELETE IT AS A PASSING ARM THAT PROVES NOTHING. It cannot go red
+        against the defect, because the success envelope was always clean. Its
+        mutant is a plausible REPAIR: a guard that quiets stderr by sending the
+        dependency output to stdout passes the integration arm above and
+        corrupts the success envelope, which is the more common path. This arm
+        is the only thing that separates the two.
+        """
+        pending = self._store_with_pending_embeddings(cli_db)
+        assert pending == 2
+
+        result = subprocess.run(
+            [sys.executable, cli_script_path, "list", "--db-path", str(cli_db)],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        envelope = json.loads(result.stdout)
+        assert envelope["ok"] is True
+
+
+class TestTheStderrGuardItself:
+    """HERMETIC ARMS. The noise is a write this test issues, not a dependency.
+
+    WHY THESE EXIST AT ALL. The integration arm above takes its noise from the
+    embedding backend, so it passes without exercising the guard wherever that
+    backend is absent, which is a green for the wrong reason. A guard that
+    works at the file-descriptor level is testable at that level with no
+    dependency present, so these arms cannot go vacuous.
+
+    They also pin the DISPOSAL, which differs by exit path on purpose.
+    """
+
+    def test_captured_bytes_do_not_reach_stderr_on_the_error_path(self, capfd):
+        """The whole point: noise in, envelope out, nothing else."""
+        from scripts.cli import _own_stderr_for_envelope, _error
+
+        capfd.readouterr()
+        with pytest.raises(SystemExit) as exc:
+            with _own_stderr_for_envelope():
+                os.write(2, b"NOISE-FROM-A-DEPENDENCY\n")
+                _error("AMBIGUOUS_PREFIX", "two matches")
+
+        assert exc.value.code == 1
+        captured = capfd.readouterr()
+        assert "NOISE-FROM-A-DEPENDENCY" not in captured.err
+        envelope = json.loads(captured.err)
+        assert envelope["error"] == "AMBIGUOUS_PREFIX"
+        # CONTROL: the guard did not divert the payload to the other channel.
+        assert captured.out == ""
+
+    def test_captured_bytes_are_replayed_on_the_success_path(self, capfd):
+        """DISPOSAL, DECIDED PER PATH. Success replays, failure discards.
+
+        Nothing parses stderr on success, so the guard protects nothing there,
+        and discarding would remove the only sign that a first-run model
+        download is happening. A silent command that runs for 30 seconds looks
+        hung. Replay does NOT restore the timing, and the guard's own comment
+        records that cost.
+        """
+        from scripts.cli import _own_stderr_for_envelope
+
+        capfd.readouterr()
+        with _own_stderr_for_envelope():
+            os.write(2, b"PROGRESS-FROM-A-DEPENDENCY\n")
+
+        captured = capfd.readouterr()
+        assert "PROGRESS-FROM-A-DEPENDENCY" in captured.err
+
+    def test_the_descriptor_is_restored_after_the_window(self, capfd):
+        """A guard that leaks its redirect would silence the whole process."""
+        from scripts.cli import _own_stderr_for_envelope
+
+        capfd.readouterr()
+        with _own_stderr_for_envelope():
+            os.write(2, b"inside\n")
+        os.write(2, b"AFTER-THE-WINDOW\n")
+
+        captured = capfd.readouterr()
+        assert "AFTER-THE-WINDOW" in captured.err
+
+    def test_the_descriptor_is_restored_when_the_handler_raises(self, capfd):
+        """Restoration sits in a `finally`, so an exit through an exception
+        cannot strand file descriptor 2 on the capture buffer."""
+        from scripts.cli import _own_stderr_for_envelope
+
+        capfd.readouterr()
+        with pytest.raises(RuntimeError):
+            with _own_stderr_for_envelope():
+                raise RuntimeError("handler blew up")
+        os.write(2, b"AFTER-THE-RAISE\n")
+
+        captured = capfd.readouterr()
+        assert "AFTER-THE-RAISE" in captured.err
