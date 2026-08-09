@@ -2934,10 +2934,26 @@ class TestACallerSuppliedPathIsNotCreated:
     LOUD TO SILENT IS THE WRONG DIRECTION ON A CALLER-CONTROLLED VALUE. The
     derived route keeps its create, because production passes no path and must
     reach and build the real store.
+
+    ⚠️ WHICH LAYER EACH ARM NOW MEASURES, BECAUSE ONE OF THEM MOVED. The CLI
+    boundary in `cli.main` refuses an absent caller `--db-path` BEFORE the
+    resolver runs, so the first arm below measures THE BOUNDARY REFUSAL and no
+    longer reaches the directory-half guard it was written for. It stays here
+    as a CLI-level statement of the same rule. The directory-half guard in
+    `database.get_db_path` is pinned at the layer that still reaches it, in
+    `tests/test_caller_path_is_not_created.py`, by the class named for the
+    directory half below the boundary, through a library caller. Do NOT read a
+    green result here as cover for that guard.
     """
 
+
     def test_an_absent_caller_parent_is_not_created(self, cli_script_path, tmp_path):
-        """RED BEFORE THE FIX: the tree was built and the command succeeded."""
+        """The CLI refuses a caller path that is absent, and creates nothing.
+
+        THIS ARM MEASURES THE BOUNDARY REFUSAL, NOT THE RESOLVER. It reads the
+        error NAME for that reason: a status alone cannot say WHICH layer
+        answered, and this arm went green for a different layer once already.
+        """
         absent = tmp_path / "typo-dir"
         db = absent / "x.db"
         assert not absent.exists()
@@ -2953,6 +2969,11 @@ class TestACallerSuppliedPathIsNotCreated:
         )
         assert not db.exists()
         assert result.returncode != 0
+        assert json.loads(result.stderr)["error"] == "DB_PATH_NOT_FOUND", (
+            f"a non-zero status came from somewhere other than the boundary "
+            f"refusal, so this arm no longer measures what it names. "
+            f"stderr={result.stderr[:300]}"
+        )
 
     def test_the_derived_route_still_creates_the_store(self, cli_script_path, tmp_path):
         """THE OTHER HALF, AND IT OUTRANKS THE ARM ABOVE.

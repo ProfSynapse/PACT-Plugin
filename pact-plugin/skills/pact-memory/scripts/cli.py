@@ -1007,19 +1007,50 @@ def main(argv=None):
             # environment-derived or home-derived store still creates on its
             # first run. `config.DERIVED_STORE_ORIGINS` carries that rule.
             #
-            # RESIDUAL, STATED RATHER THAN IMPLIED: a library caller that passes
-            # a mistyped path stays uncovered here. The accepted reason is that
-            # a library caller is code, and code does not typo.
+            # RESIDUAL 1, STATED RATHER THAN IMPLIED: a library caller that
+            # passes a mistyped path stays uncovered here. The accepted reason
+            # is that a library caller is code, and code does not typo.
+            #
+            # RESIDUAL 2, AND IT IS AN EXCEPTION TO THE RULE ABOVE. `--db-path
+            # ""` is a caller path that is not a store, and it is NOT refused
+            # here. The falsy coercion further up collapses it to None before
+            # this branch reads it, so it takes the DERIVED route. That
+            # coercion is deliberate and stays. Naming the exception is what
+            # keeps the rule honest: the refusal covers a caller path that
+            # ARRIVES as a path, not the empty string.
+            #
+            # RESIDUAL 3: a caller path that names a DIRECTORY is present to
+            # this test, so it is not refused here. It fails later, loudly and
+            # without a create, as SYSTEM_ERROR from sqlite. A tighter test
+            # (`is_file`) would give it the named refusal, and it would also
+            # redden two arms that pin SYSTEM_ERROR for that input, so the
+            # loud-and-non-destructive answer stays.
+            #
+            # ⚠️ THE MESSAGE STATES THE OBSERVATION, NOT AN INFERENCE FROM IT,
+            # for the same reason the guard above does. `Path.exists()` answers
+            # False for a path that is ABSENT and for a path this process
+            # cannot STAT, so an unreadable parent directory reads the same as
+            # a typo. A message that asserts absence tells a caller with a
+            # permission fault to run `setup`, which does not repair one.
             if (
                 db_path is not None
                 and args.command not in _COMMANDS_THAT_MAY_CREATE_A_CALLER_PATH
                 and not db_path.exists()
             ):
+                shown = _scrub(str(db_path))
                 _error(
                     "DB_PATH_NOT_FOUND",
-                    f"No store at --db-path '{db_path}'. This command opens a "
-                    f"store that is present. To bring one into existence at "
-                    f"that path, run: setup --db-path '{db_path}'",
+                    f"--db-path '{shown}' did not answer as a store that is "
+                    f"present. The test is `Path.exists()`, which answers "
+                    f"False for a path that is absent AND for a path this "
+                    f"process cannot stat, so a permission fault on a parent "
+                    f"directory reads the same way. That one fact is the "
+                    f"whole of what it observed. This command opens a store "
+                    f"that is present and does not bring one into existence. "
+                    f"If the path is a typo, correct it. If the store should "
+                    f"be there, check that this process can read the parent "
+                    f"directory. To bring a store into existence at that "
+                    f"path, run: setup --db-path '{shown}'",
                 )
 
             with store_scope(db_path):

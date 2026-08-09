@@ -23,8 +23,14 @@ Test strategy, stated because it is load-bearing:
 this file states an answer. Two answers are legal and they mean different
 things:
 
-  * `db_path=str(tmp_path / ...)` — this call CAN reach a real save, and is
-    scoped to a temp store.
+  * `db_path=str(memory_store(...))` — this call CAN reach a real save, and is
+    scoped to a temp store the fixture BROUGHT INTO EXISTENCE first. A bare
+    `tmp_path / "x.db"` no longer reaches: it names a store that is ABSENT,
+    and the CLI boundary refuses an absent caller path for each command other
+    than `setup`. Such a call returns NOT_ARCHIVED, and an arm that reads only
+    a pre-save field (`heading`, `delete_string`) stays GREEN while measuring
+    nothing. Where the reach is the point, assert a POST-SAVE field as well,
+    because no pre-save field can fail when the reach stops.
   * `db_path=None` — this call provably never reaches a store, because the
     enclosing test stubs `_run_memory_cli` (or `subprocess.run`) or
     short-circuits before the spawn (bad index, unresolvable CLAUDE.md,
@@ -1842,19 +1848,41 @@ class TestArchivePin_Unevaluable:
 class TestArchivePin_CliContract:
     """main() surface: always exit 0, always a parseable verdict."""
 
-    @pytest.mark.parametrize("index", [0, 1, 99, -1])
-    def test_always_exits_zero(self, claude_md, capsys, index, tmp_path):
+    @pytest.mark.parametrize(
+        "index, expected",
+        [(0, "ARCHIVED"), (1, "ARCHIVED"), (99, "UNEVALUABLE"), (-1, "UNEVALUABLE")],
+        ids=["0", "1", "99", "-1"],
+    )
+    def test_always_exits_zero(self, claude_md, capsys, index, expected,
+                               memory_store):
         """SACROSANCT in-band degradation: the script reports, the command
-        decides. A non-zero exit would turn a measurement into a decision."""
+        decides. A non-zero exit would turn a measurement into a decision.
+
+        THE ROW SET SPANS SUCCESS AND FAILURE, AND EACH ROW PINS WHICH ONE IT
+        IS. An acceptance set of three outcome names cannot say that, and it
+        already failed to: rows 0 and 1 were the success rows, the boundary
+        refusal moved them to NOT_ARCHIVED, and the set silently collapsed onto
+        the failure branch while staying green. The exit contract then had
+        nothing behind it on the side a curator relies on, which
+        `commands/prune-memory.md` tells them to rely on.
+
+        THE STORE MUST BE PRESENT FOR THE SUCCESS ROWS TO REACH A SAVE. The
+        fixture supplies that. The per-row expected outcome is what HOLDS it
+        there afterwards: without it the set can collapse a second time and
+        nothing turns red.
+        """
         claude_md(_two_pin_file())
         rc = archive_pin.main(
-            ["--index", str(index), "--db-path", str(tmp_path / "m.db")]
+            ["--index", str(index), "--db-path", str(memory_store("m.db"))]
         )
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
-        assert payload["outcome"] in {
-            "ARCHIVED", "NOT_ARCHIVED", "UNEVALUABLE"
-        }
+        assert payload["outcome"] == expected, (
+            f"row {index} reached {payload['outcome']!r} rather than "
+            f"{expected!r}. If this is the success row, the call no longer "
+            f"reaches a save and the exit contract is pinned on the failure "
+            f"branch only."
+        )
 
     def test_every_verdict_carries_outcome_and_heading_keys(
         self, claude_md, capsys, monkeypatch, tmp_path, memory_store
@@ -1886,19 +1914,30 @@ class TestArchivePin_CliContract:
             assert "heading" in payload, f"{outcome} dropped the heading key"
 
     def test_heading_is_the_real_heading_not_an_index_echo(
-        self, claude_md, capsys, tmp_path
+        self, claude_md, capsys, memory_store
     ):
         """The caller cross-checks this value against the curator's
         selection to catch an index shift between listing and archival —
         which would otherwise archive one pin and evict another while
         containment still passed, the right property measured on the wrong
         object. An index echo would make that check compare the index
-        against itself and pass unconditionally."""
+        against itself and pass unconditionally.
+
+        THE OUTCOME ASSERTION IS WHAT KEEPS THIS ARM ON THE ARCHIVED PATH.
+        `heading` resolves BEFORE the save, so it stays correct when the save
+        is refused. Without the outcome the arm measures heading resolution on
+        a verdict that never archived, which is not the case the curator
+        cross-checks.
+        """
         claude_md(_two_pin_file())
         archive_pin.main(
-            ["--index", "1", "--db-path", str(tmp_path / "m.db")]
+            ["--index", "1", "--db-path", str(memory_store("m.db"))]
         )
         payload = json.loads(capsys.readouterr().out)
+        assert payload["outcome"] == "ARCHIVED", (
+            f"the call did not reach a save, so this arm no longer measures "
+            f"the heading on the path the curator cross-checks: {payload}"
+        )
         assert payload["heading"] == "Second Pin"
         assert "1" != payload["heading"]
 

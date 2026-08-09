@@ -169,7 +169,7 @@ class TestDeleteStringEmitContract:
 
     @pytest.mark.parametrize("bad_index", [99, -1])
     def test_null_when_the_pin_does_not_resolve(
-        self, claude_md, bad_index, tmp_path
+        self, claude_md, bad_index, memory_store
     ):
         """THE DISCRIMINATING ROW.
 
@@ -187,6 +187,16 @@ class TestDeleteStringEmitContract:
         LIVE DATABASE. Measured at two rows per suite run, one per
         parametrization. The control has to stay reaching to be a control, so
         the fix is to SCOPE it, never to stub it.
+
+        SCOPING IS NECESSARY AND IT IS NOT SUFFICIENT, AND THAT COST THIS ARM
+        ITS REACH ONCE. A bare temp path names a store that is ABSENT, and the
+        CLI boundary refuses one for each command other than `setup`, so the
+        save was refused and the control stopped reaching while staying green.
+        The store must be PRESENT, which the fixture supplies. AND THE REACH
+        NEEDS ITS OWN ASSERTION: `delete_string` is computed from CLAUDE.md
+        BEFORE the save runs, so no assertion that reads it can fail when the
+        call stops reaching. The outcome assertion below reads a POST-SAVE
+        field, which is the only kind that can.
         """
         content = _two_pin_file()
         claude_md(content)
@@ -200,7 +210,11 @@ class TestDeleteStringEmitContract:
         # Without this the assertion above cannot distinguish "null because
         # the pin did not resolve" from "null always".
         resolving = archive_pin.build_verdict(
-            0, db_path=str(tmp_path / "mem.db")
+            0, db_path=str(memory_store("mem.db"))
+        )
+        assert resolving["outcome"] == "ARCHIVED", (
+            f"the control did not reach a real save, so it is no longer a "
+            f"control and the null above proves nothing: {resolving}"
         )
         assert resolving["delete_string"] is not None, (
             "delete_string is null even on a RESOLVING pin — the null above "
