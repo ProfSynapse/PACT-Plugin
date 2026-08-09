@@ -878,13 +878,13 @@ class TestLiveDbGuard:
     Neither covers the other's cases. The parent guard cannot see a spawn that
     bypasses it; the child guard cannot see intent that never crossed.
 
-    EVERY TEST HERE SANDBOXES `HOME`. That is not decoration: `config.py` binds
-    the database path from `Path.home()` AT IMPORT, so an in-process HOME
-    change is inert -- but a child re-imports, so HOME in the CHILD'S env does
-    redirect it. These tests exercise the exact production shape (no
-    --db-path) with zero risk to the live store, which is only possible
-    because the boundary that makes the defect hard to guard is the same
-    boundary that makes it safe to test.
+    EVERY TEST HERE SANDBOXES `HOME`. That is not decoration: `config.py`
+    resolves the database path at USE time, so `HOME` redirects the store in
+    this process and in a child alike. Sandbox `HOME` in each test added
+    here. These tests exercise the exact production shape (no --db-path)
+    with zero risk to the live store, which is only possible because the
+    boundary that makes the defect hard to guard is the same boundary that
+    makes it safe to test.
     """
 
     @staticmethod
