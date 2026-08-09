@@ -2,10 +2,13 @@
 
 Location: pact-plugin/scripts/memory_repair/__init__.py
 
-Every module in this package opens `sqlite3` directly. No module here
-imports `cli.py` or `memory_api.py` from the pact-memory scripts package.
-An import of that package EXECUTES code that creates the live store
-directory, so an import is a write. These tools must run before that
-package is safe to import.
+Each module here opens `sqlite3` directly, and imports neither `cli.py` nor
+`memory_api.py` from the pact-memory scripts package. Keep each module here,
+and each module added later, the same way. In that package, functions create
+the live store directory as a side result of a path resolution, so an import
+puts each of them one call away. This rule holds so that nobody must audit
+which call is safe. Do not read an absent import as a guarantee, because a
+subprocess reaches those functions with no import at all. These tools depend
+on nothing from that package, so they run without it.
 """
 from __future__ import annotations

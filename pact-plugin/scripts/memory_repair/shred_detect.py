@@ -36,9 +36,12 @@ the file: a `-wal` sidecar or a `-shm` sidecar stops the run. The check and
 the open both use one resolved path, so the check cannot bind to a
 different spelling of the same file.
 
-THE TOOL IMPORTS NO MODULE FROM THE PACT-MEMORY SCRIPTS PACKAGE. An import
-of that package runs code that creates the live store directory, so an
-import is a write.
+THE TOOL IMPORTS NO MODULE FROM THE PACT-MEMORY SCRIPTS PACKAGE. Functions
+in that package create the live store directory as a side result of a path
+resolution, so an import puts each of them one call away. This rule holds
+so that nobody must audit which call is safe. Do not read an absent import
+as a guarantee, because a subprocess reaches those functions with no import
+at all.
 
 THE TOOL READS THE `memories` TABLE ONLY. That table is an ordinary sqlite
 table. The tool names the `vec_memories` virtual table in no query, so it
