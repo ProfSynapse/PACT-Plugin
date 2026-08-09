@@ -194,8 +194,55 @@ def fields_of(report, memory_id):
 
 class TestThePredicateReachesAllSevenFields:
 
-    def test_the_field_map_covers_seven_fields_and_no_more(self):
-        assert len(shred_detect.LIST_FIELDS) == 7
+    def test_the_field_map_agrees_with_the_store(self):
+        """THE DETECTOR MUST READ THE FIELDS THE STORE WRITES.
+
+        THIS ARM REPLACES A COUNT THAT FACED THE WRONG WAY. The line here used
+        to read `len(shred_detect.LIST_FIELDS) == 7`. Add an eighth field to
+        `database.LIST_FIELDS` and the detector omits that column from its
+        SELECT, so the damage in it goes unseen. The count then BLOCKED the
+        repair rather than DEMANDED it, and a pin that obstructs its own fix
+        is worse than no pin.
+
+        THE DUPLICATION IS CORRECT AND STAYS. `shred_detect` imports no part
+        of `database` on purpose, so the repair tool rests on neither the CLI
+        nor the memory API. A TEST MAY IMPORT THE TWO, which is the reason the
+        agreement belongs here rather than in the package.
+
+        COMPARED AS SETS, IN THE TWO DIRECTIONS. The shapes differ: this side
+        is a sorted tuple and the other is a union of two frozensets. A length
+        check passes on two sets of seven that disagree on a name, and a
+        one-directional check passes when one side gains a field.
+
+        MUTANT, EITHER DIRECTION: add a name to one side, or remove one. This
+        arm reddens for a missing field and for an extra one.
+        """
+        from scripts.database import LIST_FIELDS as STORE_LIST_FIELDS
+
+        detector = set(shred_detect.LIST_FIELDS)
+        store = set(STORE_LIST_FIELDS)
+        # NON-VACUITY GATE. Two empty sets agree, and an import that resolved
+        # a renamed or emptied constant would pass the comparison below while
+        # measuring nothing.
+        assert detector, "the detector field set is empty"
+        assert store, "the store field set is empty"
+        assert detector == store, (
+            "the detector and the store disagree on the list fields. "
+            "MISSING FROM THE DETECTOR: {0}. EXTRA IN THE DETECTOR: {1}. A "
+            "field the store writes and the detector omits carries damage "
+            "that no pass reports".format(
+                sorted(store - detector), sorted(detector - store))
+        )
+
+    def test_the_field_map_is_internally_consistent(self):
+        """A DIFFERENT PROPERTY FROM THE AGREEMENT ABOVE, and it stays.
+
+        This one guards the construction INSIDE `shred_detect`: the flat tuple
+        must equal the union of the string fields and the dict-field keys. The
+        arm above guards the boundary against `database`. Neither covers the
+        other: a name added to the two sides of the boundary in step keeps the
+        agreement arm green while it can break this construction.
+        """
         assert set(shred_detect.LIST_FIELDS) == (
             set(shred_detect.STRING_LIST_FIELDS)
             | set(shred_detect.DICT_LIST_FIELD_KEYS)
