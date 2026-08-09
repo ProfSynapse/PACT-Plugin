@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -3037,6 +3038,22 @@ class TestAFailedReportDoesNotChangeTheOutcome:
         DETERMINISTIC BY CONSTRUCTION, for the same reason the stderr arm is:
         it points the stream at a reader-less pipe by hand rather than wait for
         a payload large enough to fill one.
+
+        ⚠️ WHAT THIS ARM DOES AND DOES NOT COVER, MEASURED RATHER THAN ARGUED.
+        The replacement stream here is LINE buffered, so the write raises inside
+        `_success` and this arm sees it. Reverting `_success` to its unguarded
+        form turns this arm RED, so it does separate guarded from unguarded, and
+        it is worth keeping for that.
+        IT CANNOT REACH THE REPORTED SCENARIO. A stdout that is a real pipe is
+        BLOCK buffered, so the write raises nothing here and the failure lands
+        in the flush the interpreter performs at shutdown. This arm catches
+        `SystemExit` inside the test process, so it never reaches finalization
+        at all: an in-process arm sees the SystemExit CODE, and only a child
+        process sees the exit STATUS. Those differ exactly where finalization
+        fails.
+        `TestTheExitStatusSurvivesAReaderLessPipe` below holds the child-process
+        arms that cover that case. Do not delete this arm in favour of them:
+        the two answer different questions.
         """
         # IMPORTS `_success` ALONE, DELIBERATELY. An arm that also imported the
         # helper the fix introduces would fail on the unfixed tree with an
@@ -3094,14 +3111,14 @@ class TestAFailedReportDoesNotChangeTheOutcome:
         assert _best_effort_report(io.StringIO().write, "ok") is True
 
     def test_the_private_envelope_handle_leaves_no_unflushed_residue(self):
-        """THE RESIDUE IN THE PRIVATE HANDLE, MEASURED IN THIS PROCESS.
+        """THE IN-PROCESS CELL, WHICH THE NEUTRALISE STEP DOES NOT COVER.
 
-        This arm runs IN-PROCESS on purpose. The defect it pins is not the exit
-        status of a spawned command: it is a handle that keeps bytes over a
-        descriptor which has gone, and an in-process caller of `main()`, which
-        the unit tests of this CLI are, meets it directly.
+        `_neutralise_unwritable_std_streams` runs from the `__main__` block
+        alone, so an IN-PROCESS caller of `main()`, which the unit tests of this
+        CLI are, gets no protection from it. That is deliberate: the rebind is
+        safe only for a process about to end.
 
-        WHAT THIS ARM COVERS. When the envelope write meets a reader-less
+        WHAT IS LEFT FOR THIS ARM. When the envelope write meets a reader-less
         stream, the bytes stay pending inside the PRIVATE handle. The window
         then closes the descriptor beneath that handle. Nothing closes the
         handle, so its finalizer attempts one more flush against a descriptor
@@ -3136,4 +3153,364 @@ class TestAFailedReportDoesNotChangeTheOutcome:
             "the private envelope handle kept unflushed bytes over a descriptor "
             "that was closed, so its finalizer reported an unraisable exception "
             f"into the test runner: {[str(x.exc_value) for x in seen]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The exit STATUS a shell sees, measured in a child process
+# ---------------------------------------------------------------------------
+
+
+def _spawn_with_readerless_pipes(argv, env, break_stdout, break_stderr):
+    """Run cli.py as a CHILD and return (returncode, stdout_text, stderr_text).
+
+    THE CONDITION IS A MISSING READER, NOT A NUMBER OF BYTES. The parent closes
+    the read end of each pipe immediately after the spawn, so the reader is gone
+    BEFORE the child writes anything. That is what a consumer which stops early
+    leaves behind.
+
+    NO SIZE THRESHOLD APPEARS HERE, DELIBERATELY. Whether a given write raises
+    at the call or survives in a buffer until interpreter shutdown depends on
+    the stdio buffer size and on the pipe capacity of the system. Those move
+    with the platform and the interpreter, and a number written here would decay
+    with no event to show it. Removing the reader makes the condition hold at
+    every size.
+
+    A BROKEN STREAM RETURNS A SENTINEL rather than text, because its bytes went
+    into a pipe nobody reads. Do not assert on a sentinel: a probe that merges
+    a stream into the one it discards cannot report on that stream.
+    """
+    read_ends, write_ends, files = [], [], {}
+
+    def target(broken, name):
+        if broken:
+            r, w = os.pipe()
+            read_ends.append(r)
+            write_ends.append(w)
+            return w
+        files[name] = tempfile.TemporaryFile()
+        return files[name].fileno()
+
+    out_target = target(break_stdout, "out")
+    err_target = target(break_stderr, "err")
+
+    proc = subprocess.Popen(
+        [sys.executable] + argv,
+        stdout=out_target,
+        stderr=err_target,
+        stdin=subprocess.DEVNULL,
+        env=env,
+    )
+    # The reader is gone from here on, and the child has not written yet.
+    for fd in read_ends + write_ends:
+        os.close(fd)
+    returncode = proc.wait(timeout=120)
+
+    def read_back(name):
+        handle = files.get(name)
+        if handle is None:
+            return "<discarded: this stream was the reader-less pipe>"
+        handle.seek(0)
+        text = handle.read().decode("utf-8", "replace")
+        handle.close()
+        return text
+
+    return returncode, read_back("out"), read_back("err")
+
+
+class TestTheExitStatusSurvivesAReaderLessPipe:
+    """A shell must read the OUTCOME of the operation, not of the report.
+
+    WHY A CHILD PROCESS AND NOT A MONKEYPATCHED STREAM. An in-process arm can
+    observe the ``SystemExit`` code, and only a child observes the exit STATUS.
+    The two differ where interpreter finalization fails, which is where this
+    defect lives, so an in-process arm cannot reach it by construction.
+
+    ⚠️ 120 IS A SHARED STATUS. CPython uses it for any finalization failure, so
+    a number alone cannot name a cause. Each arm below asserts the shutdown TEXT
+    beside the number, and carries a control with no broken stream.
+    """
+
+    def test_a_broken_stdout_leaves_a_successful_run_at_zero(self, cli_script_path, tmp_path):
+        """RED BEFORE THE FIX: exit 120, with the shutdown text on stderr.
+
+        A success envelope is a REPORT. Once it is written the operation is
+        finished, so a reader that has gone away costs the caller the text and
+        must not change the outcome.
+        """
+        store = tmp_path / "derived" / "pact-memory"
+        store.mkdir(parents=True)          # a redirect target that is present
+        env = dict(os.environ)
+        env["PACT_TEST_MEMORY_DIR"] = str(store)
+        env.pop("PYTEST_CURRENT_TEST", None)
+
+        rc, _out, err = _spawn_with_readerless_pipes(
+            [cli_script_path, "list"], env, break_stdout=True, break_stderr=False
+        )
+
+        assert "Exception ignored" not in err, (
+            "the interpreter reported a shutdown failure on the terminal of "
+            f"the caller; stderr was: {err!r}"
+        )
+        assert rc == 0, (
+            "a command that did what it was asked reported failure, because "
+            f"the reader of its own success envelope had gone away (exit {rc})"
+        )
+
+    def test_a_broken_stderr_keeps_the_refusal_code_distinct(self, cli_script_path, tmp_path):
+        """RED BEFORE THE FIX: exit 120, which erases the refusal code.
+
+        THE CONSUMER IS REAL. This refusal exits 2, and `/PACT:prune-memory`
+        reads that code to choose between refuse and proceed. Exit 120 is the
+        finalization status of the interpreter and carries no exit code of ours,
+        so a caller cannot separate a REFUSAL from a generic failure.
+
+        THIS COMMAND OPENS NO STORE. The refusal fires before any store is
+        reached, which is why it is safe to run here.
+        """
+        env = dict(os.environ)
+        env["PYTEST_CURRENT_TEST"] = "test_a_broken_stderr_keeps_the_refusal_code_distinct"
+
+        rc, out, _err = _spawn_with_readerless_pipes(
+            [cli_script_path, "get", "abc1234"], env,
+            break_stdout=False, break_stderr=True,
+        )
+
+        assert rc != 120, (
+            "the exit code became the finalization status of the interpreter, "
+            "so the refusal is no longer distinguishable from a generic failure"
+        )
+        assert rc == 2, f"expected the refusal code 2, got {rc}; stdout: {out!r}"
+
+    def test_the_neutralise_step_is_reachable_only_from_the_main_block(
+        self, cli_script_path
+    ):
+        """THE GATE ON THE REBIND, PINNED WHERE A BEHAVIOURAL ARM CANNOT REACH.
+
+        `_neutralise_unwritable_std_streams` rebinds a PROCESS-GLOBAL
+        descriptor. That is safe for a spawned CLI, which is about to end, and
+        it is NOT safe for an in-process caller of `main()`, which the unit
+        tests of this CLI are: there the same rebind would point a descriptor of
+        the TEST RUNNER at the null device and lose the rest of that run.
+
+        WHY A SYNTAX ARM AND NOT A BEHAVIOURAL ONE. To show the hazard by
+        behaviour, a test would have to CAUSE it, and a test that silences the
+        runner cannot then report. So the placement is pinned instead: the call
+        must sit in the `__main__` block and in no function body.
+        """
+        import ast
+
+        tree = ast.parse(Path(cli_script_path).read_text())
+        name = "_neutralise_unwritable_std_streams"
+
+        # CONTROL FIRST. A rename would empty every set below and read as a
+        # clean pass, so the arm asserts its own subject is present.
+        defined = [
+            node.name for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        ]
+        assert defined == [name], (
+            f"{name} is not defined in cli.py, so this arm has no subject and "
+            "its other assertions are vacuous"
+        )
+
+        def is_the_call(node):
+            return (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == name
+            )
+
+        def is_the_main_guard(test):
+            """True for `__name__ == "__main__"` in either operand order."""
+            if not isinstance(test, ast.Compare):
+                return False
+            if len(test.ops) != 1 or not isinstance(test.ops[0], ast.Eq):
+                return False
+            if len(test.comparators) != 1:
+                return False
+            ends = (test.left, test.comparators[0])
+            names = {n.id for n in ends if isinstance(n, ast.Name)}
+            texts = {
+                c.value for c in ends
+                if isinstance(c, ast.Constant) and isinstance(c.value, str)
+            }
+            return names == {"__name__"} and texts == {"__main__"}
+
+        # ⚠️ COUNT WHAT THE PREDICATE ADMITS, NOT ONLY WHAT IT FORBIDS.
+        #
+        # An earlier spelling of this arm asked two questions: is the call
+        # inside a function, and is there a call below SOME module-level `if`.
+        # An independent reviewer defeated it by ADDING a module-level
+        # `if True:` call while KEEPING the correct one. Every arm passed, and
+        # the measured harm was worse than the case the arm was built for: a
+        # plain `import scripts.cli` left descriptor 1 on the null device, so an
+        # import-time rebind reaches EVERY IMPORTER rather than one caller, and
+        # this suite imports that module.
+        #
+        # THE REPAIR IS A COMPLEMENT OVER PLACEMENT. Collect the calls the
+        # `__main__` guard admits, then require that no other call by this NAME
+        # is present anywhere in the module. A list of bad placements has to
+        # name each one, and the list was short by at least one.
+        #
+        # ⚠️ WHAT THIS CLOSES AND WHAT IT DOES NOT, AND AN EARLIER WORDING HERE
+        # CLAIMED THE WHOLE OF IT. The complement is CLOSED OVER PLACEMENT and
+        # OPEN OVER SPELLING. It removes the need to name each position, so a
+        # bare module-level call and a call below `if True:` are covered without
+        # being listed. It does NOT remove the need to name each spelling: the
+        # predicate accepts a Call whose func is a Name with this exact id, so a
+        # call through an ALIAS enters neither the admitted set nor the stray
+        # set, and an independent reviewer defeated this arm that way. MEASURED,
+        # not argued: with the alias in place all syntax arms pass, and
+        # importing the module leaves descriptor 1 on the null device.
+        #
+        # THE ALPHABET IS DELIBERATELY NOT WIDENED. Adding attribute calls, then
+        # `globals()`, then `getattr` keeps two spellings in step while the next
+        # one stays free, which is the generator of the defect rather than its
+        # cure. The behavioural arm below covers the spelling axis instead: it
+        # asks what the DESCRIPTOR is after an import, which no spelling can
+        # hide. Read the two arms as one pair. This one reports the LINE NUMBER,
+        # which the behavioural arm cannot, and the behavioural arm reaches the
+        # spellings this one cannot.
+        admitted = {
+            id(call)
+            for node in tree.body
+            if isinstance(node, ast.If) and is_the_main_guard(node.test)
+            for call in ast.walk(node)
+            if is_the_call(call)
+        }
+        every_call = [node for node in ast.walk(tree) if is_the_call(node)]
+
+        assert every_call, (
+            f"{name} is never called, so the exit status of a spawned command "
+            "is no longer protected"
+        )
+        assert admitted, (
+            f"{name} is called, but never below `if __name__ == \"__main__\"`. "
+            "That guard is the only caller which ends the process, and it is "
+            "what makes a rebind of a process-global descriptor safe"
+        )
+        stray = sorted(node.lineno for node in every_call if id(node) not in admitted)
+        assert not stray, (
+            f"{name} is also called outside the `__main__` guard, at line(s) "
+            f"{stray}. Each such call rebinds a process-global descriptor for a "
+            "caller that does not end the process. At module level that reaches "
+            "every importer of this module, and this suite imports it"
+        )
+
+    def test_an_import_does_not_rebind_the_standard_output_descriptor(
+        self, cli_script_path
+    ):
+        """THE SPELLING AXIS, WHICH THE SYNTAX ARM ABOVE CANNOT REACH.
+
+        The syntax arm is closed over PLACEMENT and open over SPELLING: it keys
+        on a call by NAME, so a call through an alias escapes it. This arm asks
+        the question no spelling can answer around: AFTER AN IMPORT, WHAT IS
+        DESCRIPTOR 1. An import must not rebind it, because a rebind at import
+        time reaches every importer of this module, and this suite is one.
+
+        WHY A CHILD PROCESS. The harm under test is a descriptor of the RUNNING
+        process pointed at the null device. An in-process version would silence
+        the runner that has to report the result, so the measurement would
+        destroy its own report. The child reports through its EXIT STATUS and
+        through stderr, which this arm leaves intact.
+
+        ⚠️ TWO CONDITIONS ARE NEEDED, AND THE FIRST SPELLING OF THIS ARM HAD
+        ONLY ONE. A reader-less pipe on descriptor 1 is not sufficient. The
+        neutralise step rebinds ONLY when a flush FAILS, and a flush of an EMPTY
+        buffer succeeds even against a reader-less pipe. So the child must also
+        leave BYTES PENDING before the import. Without them the step runs,
+        finds a writable stream and rebinds nothing, and this arm passes against
+        the very mutants it exists to catch. MEASURED: with the pending write
+        absent, all four variants of the acceptance matrix passed.
+
+        THE CHILD CLEARS THE HAZARD FOR ITSELF BEFORE IT EXITS, after the
+        measurement and never before it. Otherwise the pending bytes meet the
+        reader-less pipe during interpreter shutdown, the process exits 120, and
+        the status this arm reads stops naming what it measured.
+        """
+        skill_root = str(Path(cli_script_path).resolve().parent.parent)
+        child = (
+            "import os, stat, sys\n"
+            f"sys.path.insert(0, {skill_root!r})\n"
+            # CONDITION 1: bytes pending on a block-buffered stdout, so a flush
+            # during the import has something to fail on.
+            "sys.stdout.write('pending')\n"
+            "import scripts.cli\n"
+            "st = os.fstat(1)\n"
+            "null = os.stat(os.devnull)\n"
+            "on_null = stat.S_ISCHR(st.st_mode) and st.st_rdev == null.st_rdev\n"
+            "sys.stderr.write('ON_NULL=%s MODE=%s\\n' % (on_null, oct(st.st_mode)))\n"
+            # Measurement is done. Now make this child's own exit clean, so the
+            # status reports the CHECK and not a shutdown failure of the probe.
+            "fd = os.open(os.devnull, os.O_WRONLY)\n"
+            "os.dup2(fd, 1)\n"
+            "os.close(fd)\n"
+            "sys.exit(3 if on_null else 0)\n"
+        )
+        env = dict(os.environ)
+
+        rc, _out, err = _spawn_with_readerless_pipes(
+            ["-c", child], env, break_stdout=True, break_stderr=False
+        )
+
+        assert "ON_NULL=" in err, (
+            "the child did not reach its own check, so this arm proves nothing; "
+            f"stderr: {err[:400]!r}"
+        )
+        assert rc != 3, (
+            "importing the module rebound descriptor 1 to the null device. An "
+            "import-time rebind reaches EVERY importer of this module, and this "
+            f"suite imports it; child reported: {err.strip()!r}"
+        )
+        assert rc == 0, f"the child failed for another reason; stderr: {err[:400]!r}"
+
+    def test_the_controls_with_no_broken_stream_agree(self, cli_script_path, tmp_path):
+        """NON-VACUITY, AND IT MUST CERTIFY THE CAUSE RATHER THAN THE NUMBER.
+
+        Without a broken stream the same two commands give the same two codes,
+        so the arms above measure the broken pipe and not the commands.
+
+        ⚠️ A BARE EXIT CODE DOES NOT NAME ITS CAUSE, AND AN EARLIER SPELLING OF
+        THIS CONTROL DID NOT REACH PAST IT. An independent reviewer renamed the
+        `get` subcommand to `getx`. `cli.py get abc1234` then became an argparse
+        usage error, which ALSO exits 2. The refusal arm passed and this control
+        passed, with the subcommand gone.
+
+        WHY THE PAIR FAILED TOGETHER, which is the part worth keeping: this
+        control ran the same command and asserted the same bare number as the
+        arm it guards, so it moved in LOCKSTEP with it. A pair whose halves
+        share one weakness is a single point of failure presented as two.
+
+        THIS CONTROL HOLDS THE UNBROKEN STDERR, so it is the half that CAN read
+        the envelope. The refusal arm cannot, because its stderr is the
+        reader-less pipe, which is the condition it exists to test. So the cause
+        is asserted here and the status is asserted there, and the two halves
+        now fail for different reasons.
+        """
+        store = tmp_path / "derived" / "pact-memory"
+        store.mkdir(parents=True)
+        ok_env = dict(os.environ)
+        ok_env["PACT_TEST_MEMORY_DIR"] = str(store)
+        ok_env.pop("PYTEST_CURRENT_TEST", None)
+        rc_ok, out_ok, _e = _spawn_with_readerless_pipes(
+            [cli_script_path, "list"], ok_env, break_stdout=False, break_stderr=False
+        )
+        assert rc_ok == 0
+        assert '"ok": true' in out_ok.lower(), (
+            "the success leg exited 0 without a success envelope on stdout, so "
+            f"the 0 above does not name its cause; stdout: {out_ok[:200]!r}"
+        )
+
+        refuse_env = dict(os.environ)
+        refuse_env["PYTEST_CURRENT_TEST"] = "test_the_controls_with_no_broken_stream_agree"
+        rc_refuse, _o2, err_refuse = _spawn_with_readerless_pipes(
+            [cli_script_path, "get", "abc1234"], refuse_env,
+            break_stdout=False, break_stderr=False,
+        )
+        assert rc_refuse == 2
+        assert "UNSCOPED_TEST_DB" in err_refuse, (
+            "the refusal leg exited 2 for some OTHER cause than the store-path "
+            "refusal. An argparse usage error exits 2 as well, so a bare 2 "
+            f"cannot separate the two; stderr: {err_refuse[:300]!r}"
         )

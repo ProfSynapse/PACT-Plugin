@@ -100,6 +100,47 @@ def _best_effort_report(action, *args, **kwargs) -> bool:
         return False
 
 
+def _neutralise_unwritable_std_streams() -> None:
+    """Point a standard stream that cannot be written at the null device.
+
+    WHY THE GUARDED WRITES ARE NOT ENOUGH, AND THIS IS THE WHOLE REASON THIS
+    FUNCTION EXISTS. `_best_effort_report` bounds the write it wraps. It cannot
+    bound the flush the INTERPRETER performs on the way out. A piped stdout is
+    block buffered, so a small envelope lands in the buffer and the guarded
+    `print` raises NOTHING. The bytes stay pending, the interpreter flushes them
+    during finalization, that flush meets the reader-less pipe, and CPython
+    reports `Exception ignored while flushing sys.stdout` and then exits 120.
+    The 120 replaces the status the operation earned.
+
+    THE CONDITION IS A STREAM THAT REFUSES A FLUSH, NOT A SIZE. Whether a write
+    raises at the call or survives in a buffer until shutdown depends on the
+    stdio buffer size and on the pipe capacity of the system. Those move with
+    the platform and with the interpreter, so a byte threshold recorded here
+    would decay with no event to show it. Ask the stream instead: attempt the
+    flush, and act only when it refuses.
+
+    THE REDIRECT IS WHAT MAKES THE LATER FLUSH SUCCEED. Pending bytes stay in
+    the buffer after a failed flush, and the interpreter retries them. After the
+    descriptor points at the null device that retry succeeds, so finalization
+    reports nothing and the exit status stays the one the command chose.
+
+    ⚠️ CALL THIS ONLY FROM THE `__main__` BLOCK. It rebinds a process-global
+    descriptor, so an in-process caller of `main()`, which the unit tests of this
+    CLI are, would have the descriptor of the TEST RUNNER pointed at the null
+    device and lose the rest of its own output. The `__main__` block is the only
+    caller that ends the process, which is the condition that makes the rebind
+    safe. An AST arm pins that placement.
+    """
+    for stream, fd in ((sys.stdout, 1), (sys.stderr, 2)):
+        if _best_effort_report(stream.flush):
+            continue
+        null_fd = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(null_fd, fd)
+        finally:
+            os.close(null_fd)
+
+
 def _replay_capture(capture) -> None:
     """Copy the captured bytes to the restored stderr. Verbatim, and by design.
 
@@ -226,9 +267,9 @@ def _own_stderr_for_envelope():
         # interpreter turns that into `Exception ignored` text and exit 120,
         # which discards the exit code the command chose. IN-PROCESS, which the
         # unit tests of this CLI are, it surfaces as an unraisable exception
-        # inside the test runner. Nothing else reaches that residue: this handle
-        # is private to the window, and it is not one of the two standard
-        # streams, so a guard on those cannot see it.
+        # inside the test runner. `_neutralise_unwritable_std_streams` cannot
+        # reach either case: it runs from `__main__` only, and it acts on the
+        # two standard streams rather than on this private handle.
         #
         # BEST EFFORT, because the close itself flushes and so can raise the
         # same BrokenPipeError. A bare close would replace the outcome of the
@@ -249,6 +290,18 @@ def _success(result):
     this command into a program that stops reading, such as `head`, leaves
     stdout a pipe with no reader. The operation is finished by then, so a
     failed write is a lost REPORT and not a failed COMMAND.
+
+    ⚠️ THE WRAP HERE DELIVERS ONLY HALF OF THAT, AND AN EARLIER WORDING CLAIMED
+    THE WHOLE OF IT. `_best_effort_report` bounds the write it wraps, which is
+    the case where the write RAISES. A piped stdout is block buffered, so a
+    small envelope lands in the buffer and this call raises NOTHING. The
+    interpreter flushes those bytes during finalization, that flush meets the
+    reader-less pipe, and the process exits 120 with `Exception ignored while
+    flushing sys.stdout` on the terminal of the caller. Measured, on the shipped
+    handler.
+    `_neutralise_unwritable_std_streams`, called from the `__main__` block, is
+    what closes the second case. Read the two together: this wrap keeps the
+    exception out of the handler, and that step keeps the exit status intact.
     """
     _best_effort_report(
         print, json.dumps({"ok": True, "result": result}, indent=2, default=str)
@@ -930,4 +983,17 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    # THE NEUTRALISE STEP BELONGS HERE AND NOT INSIDE `main()`. This block runs
+    # only when a shell started this file, which is the only case where the
+    # process is about to end and a rebind of a standard descriptor harms
+    # nobody. `main()` is ALSO called in-process by the unit tests of this CLI,
+    # and there the same rebind would point a descriptor of the TEST RUNNER at
+    # the null device and silence the remainder of that run.
+    #
+    # `finally` AND NOT AN `except`: `main()` leaves through SystemExit on every
+    # path, success and failure alike, so an except clause for one of them would
+    # cover half the exits.
+    try:
+        main()
+    finally:
+        _neutralise_unwritable_std_streams()
