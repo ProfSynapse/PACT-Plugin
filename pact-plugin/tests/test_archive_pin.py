@@ -878,13 +878,34 @@ class TestLiveDbGuard:
     Neither covers the other's cases. The parent guard cannot see a spawn that
     bypasses it; the child guard cannot see intent that never crossed.
 
-    EVERY TEST HERE SANDBOXES `HOME`. That is not decoration: `config.py` binds
-    the database path from `Path.home()` AT IMPORT, so an in-process HOME
-    change is inert -- but a child re-imports, so HOME in the CHILD'S env does
-    redirect it. These tests exercise the exact production shape (no
-    --db-path) with zero risk to the live store, which is only possible
-    because the boundary that makes the defect hard to guard is the same
-    boundary that makes it safe to test.
+    A SPAWN THAT RESOLVES THE STORE FROM `HOME` SANDBOXES IT. That is not
+    decoration. `config.py` resolves the database path at USE time, and a child
+    is a fresh interpreter, so it reads `HOME` and lands in the sandbox.
+
+    TWO KINDS OF SPAWN HERE NEED NO SANDBOX, AND THIS IS MEASURED RATHER THAN
+    ASSUMED. A child given `--db-path` opens the store that path names and
+    resolves nothing from `HOME`, which is how the `memory_store` fixture
+    works. A child pointed at a PROBE cannot open the store at all, which is
+    how the tripwire arm works. AN INSTRUCTION DEMANDING A SANDBOX FROM EACH
+    SPAWN WOULD CONDEMN THE TWO OF THEM, so the rule is narrower than that.
+
+    `_refuse_a_store_reaching_spawn` below holds the rule as a mechanism rather
+    than as a request: a child that can reach the pact-memory CLI with no
+    `--db-path` must carry a `HOME` that does not resolve the operator's home.
+
+    IN THIS PROCESS THE LEVER IS DIFFERENT AND `HOME` IS INERT. The autouse
+    fixture `_isolate_config_root_to_tmp` patches `Path.home` and states that it
+    deliberately does NOT set `HOME`. So an in-process `HOME` change moves no
+    store, and the in-process protection comes from that fixture rather than
+    from anything this class does. Do not read the child sandbox as in-process
+    protection, and do not build an arm on an in-process `HOME` change: it
+    measures nothing. `test_the_store_path_resolves_at_use_time` below pins the
+    use-time property that the child leg rests on.
+
+    These tests exercise the exact production shape (no --db-path)
+    with zero risk to the live store, which is only possible because the
+    boundary that makes the defect hard to guard is the same boundary that
+    makes it safe to test.
     """
 
     @staticmethod
@@ -911,6 +932,196 @@ class TestLiveDbGuard:
             [sys.executable, str(cli), "get", "f" * 32, *extra_argv],
             capture_output=True, text=True, timeout=120, env=env,
         )
+
+    @staticmethod
+    def _operator_home() -> Path:
+        """The home the OPERATOR resolves, read from the password database.
+
+        NOT `Path.home()`, which the autouse `_isolate_config_root_to_tmp`
+        fixture patches, and NOT `HOME`, which that fixture deliberately leaves
+        alone. The password database is the one source that neither lever
+        moves, so it is what says whether a child reaches the real store.
+        """
+        import pwd  # POSIX. This suite does not run where it is absent.
+
+        return Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+
+    @pytest.fixture(autouse=True)
+    def _refuse_a_store_reaching_spawn(self, monkeypatch):
+        """Make a spawn that can reach the live store FAIL rather than ask.
+
+        The class docstring tells the next author to sandbox `HOME`. AN
+        INSTRUCTION THAT REQUESTS COMPLIANCE IS NOT A MECHANISM. This observes
+        each spawn that runs and refuses the one that can reach the store.
+
+        WHY THE PREDICATE IS THE SAFETY PROPERTY RATHER THAN `tmp_path`. A
+        sandbox below `tmp_path` is the CONVENTION here. The property that
+        keeps the store safe is different: the child must not resolve the
+        OPERATOR'S home. A spawn that points `HOME` at another temporary root
+        is safe, and a `tmp_path`-shaped assertion reddens it, which taxes an
+        author who did the safe thing in an unexpected place.
+
+        WHY IT IS SCOPED TO STORE-REACHING SPAWNS. Not each child here is a
+        hazard. `test_tripwire_the_child_actually_receives_pytest_current_test`
+        spawns a PROBE written into `tmp_path` and passes the inherited
+        environment, which carries the operator's `HOME`. That is safe, because
+        the probe cannot open the store. An arm that demanded a sandbox from
+        EACH spawn reddens that test, which is an over-block on correct work.
+
+        WHY AN EXPLICIT `--db-path` EXEMPTS A SPAWN, AND THE ARM MEASURED THIS
+        RATHER THAN ASSUMED IT. A child given `--db-path` opens the store it
+        names and resolves nothing from `HOME`, so its `HOME` cannot reach the
+        operator. The `memory_store` fixture spawns `setup --db-path` with the
+        inherited environment, and an arm without this exemption reddens it.
+        THE HAZARD IS THE PRODUCTION SHAPE WITH NO `--db-path`, which is the
+        shape this class exercises on purpose.
+
+        ITS BOUND, STATED: this sees the spawns that RUN. A skipped test
+        escapes it, and so does a spelling it does not wrap.
+        `test_no_spawn_spelling_escapes_the_guard` closes the second half.
+        """
+        real_run = subprocess.run
+        memory_package = (
+            Path(archive_pin.__file__).resolve().parent.parent
+            / "skills" / "pact-memory"
+        )
+        operator_home = self._operator_home()
+
+        def guarded(argv, *args, **kwargs):
+            words = [
+                str(word)
+                for word in (argv if isinstance(argv, (list, tuple)) else [argv])
+            ]
+            reaches_store = any(str(memory_package) in word for word in words)
+            resolves_from_home = "--db-path" not in words
+            if reaches_store and resolves_from_home:
+                env = kwargs.get("env")
+                assert env is not None, (
+                    "this spawn can reach the pact-memory CLI and passes no "
+                    "env, so the child inherits HOME and resolves the store "
+                    f"below {operator_home}. Pass an env with a sandboxed HOME."
+                )
+                home = env.get("HOME")
+                assert home, (
+                    "this spawn can reach the pact-memory CLI and its env "
+                    "carries no HOME, so the child falls back to the password "
+                    f"database and resolves the store below {operator_home}."
+                )
+                assert Path(home).resolve() != operator_home, (
+                    f"this spawn sets HOME to {home}, which resolves the "
+                    f"operator's own home at {operator_home}, so the child "
+                    "opens the LIVE memory store. Point HOME into a sandbox. "
+                    "Below tmp_path is the shape used here, and any directory "
+                    "other than the operator's home satisfies this arm."
+                )
+            return real_run(argv, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", guarded)
+
+    def test_no_spawn_spelling_escapes_the_guard(self):
+        """The fixture above wraps `subprocess.run` and nothing else.
+
+        So a spawn reached by another spelling leaves its sight. This REFUSES
+        those spellings in this class rather than widening the wrapper, because
+        a refusal has a fixed alphabet where a wrapper list grows forever.
+        """
+        source = Path(__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        cls = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef) and node.name == type(self).__name__
+        )
+
+        def dotted(node):
+            parts = []
+            while isinstance(node, ast.Attribute):
+                parts.append(node.attr)
+                node = node.value
+            if isinstance(node, ast.Name):
+                parts.append(node.id)
+                return ".".join(reversed(parts))
+            return None
+
+        wrapped = "subprocess.run"
+        unwrapped = {
+            "subprocess.Popen", "subprocess.check_output", "subprocess.call",
+            "subprocess.check_call", "os.system", "os.popen", "os.execv",
+            "os.execve", "os.spawnv", "os.posix_spawn",
+        }
+        seen = [
+            dotted(node.func) for node in ast.walk(cls) if isinstance(node, ast.Call)
+        ]
+        escaping = sorted({name for name in seen if name in unwrapped})
+        assert not escaping, (
+            f"{escaping} spawn a child in this class and the guard fixture "
+            f"wraps {wrapped!r} alone, so those calls reach a child unobserved. "
+            f"Route them through `_spawn_cli`, or wrap them in the fixture too."
+        )
+
+        # THE FLOOR. Without it a renamed class or a broken walk makes the
+        # assertion above pass over an empty set, which is the shape that ships
+        # a guard reporting green because it read nothing.
+        assert seen.count(wrapped) >= 1, (
+            f"the walk over {type(self).__name__} found no {wrapped!r} call, so "
+            f"the refusal above passed over an empty set and proves nothing."
+        )
+
+    def test_the_store_path_resolves_at_use_time(self, tmp_path, monkeypatch):
+        """The class docstring above states a BEHAVIOUR. This asserts it.
+
+        WHY AN ARM RATHER THAN A TEXT PIN ON THAT SENTENCE. A text pin goes red
+        when the WORDS change. This goes red when the BEHAVIOUR changes, and the
+        behaviour is the condition that makes the sentence incorrect, so it is
+        what the guard must watch. A pin on the prose is green on the day the
+        resolver changes, which is the one day it is needed.
+
+        THE CLAIM THIS DISCHARGES: `config.py` resolves the store path at USE
+        time. Under the refuted claim it bound the path once at import, and the
+        second resolution below would then repeat the first.
+
+        WHY THE LEVER IS `Path.home` AND NOT THE `HOME` VARIABLE. The autouse
+        fixture `_isolate_config_root_to_tmp` patches `Path.home` and states
+        that it deliberately does NOT set `HOME`, so an in-process `HOME` change
+        moves nothing here and an arm built on one measures nothing. This drives
+        the lever the harness leaves live.
+
+        `resolve_db_path` CREATES NO DIRECTORY, so this arm reads a location and
+        leaves no tree behind, in the sandbox or in the live store.
+        """
+        from pathlib import Path as _Path
+
+        from scripts.config import (  # the pytest harness is the stated carve-out
+            MEMORY_DIR_ENV,
+            STORE_ORIGIN_HOME,
+            resolve_db_path,
+            store_path_origin,
+        )
+
+        # THE VARIABLE OUTRANKS THE HOME LEG AND THE SUITE SETS IT FOR EACH TEST.
+        # Without this the two resolutions below agree for a reason that has
+        # nothing to do with use-time resolution, and the arm proves nothing.
+        monkeypatch.delenv(MEMORY_DIR_ENV, raising=False)
+        assert store_path_origin() == STORE_ORIGIN_HOME, (
+            "the resolver is not on its home leg, so this arm would measure an "
+            "override rather than the behaviour the class docstring claims"
+        )
+
+        first = tmp_path / "first-home"
+        monkeypatch.setattr(_Path, "home", lambda: first)
+        from_first = resolve_db_path()
+
+        second = tmp_path / "second-home"
+        monkeypatch.setattr(_Path, "home", lambda: second)
+        from_second = resolve_db_path()
+
+        assert from_first != from_second, (
+            "the resolved store did not follow the second change, so "
+            "`config.py` bound the path once instead of resolving it at use "
+            "time. The class docstring above is then incorrect, and the child "
+            "sandbox rests on a property that no longer holds."
+        )
+        assert first in from_first.parents, from_first
+        assert second in from_second.parents, from_second
 
     def test_child_refuses_the_live_db_when_spawned_under_pytest(
         self, tmp_path
@@ -1138,10 +1349,16 @@ class TestLiveDbGuard:
             "database. Most likely cause: _run_memory_cli stopped passing a "
             "full env copy."
         )
+        # THIS BLOCK PINS NOTHING IN `cli.py`. It probes the CHILD environment
+        # and compares nothing against that module, so the docstring named below
+        # can be rewritten with this suite green. A citation inside an assertion
+        # MESSAGE renders only when the assertion fails. A reader who searches
+        # for what guards a `cli.py` docstring must not stop at a hit like this
+        # one: right file, incorrect mechanism.
         assert report["pytest_importable_here"] is False, (
             "pytest IS visible in the child, so the guard could have used an "
-            "in-process check — revisit the forced-choice reasoning in "
-            "cli.py's _refuse_live_db_under_pytest docstring"
+            "in-process check. Re-read the forced-choice reasoning recorded "
+            "with the child-side live-store refusal."
         )
 
     def test_parent_rejects_falsy_but_present_db_path(self, tmp_path):
