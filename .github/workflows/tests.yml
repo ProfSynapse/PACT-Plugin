@@ -143,6 +143,36 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    # THE TESTED SET. IT IS NOT THE SUPPORTED FLOOR, AND THE TWO ARE
+    # DIFFERENT QUESTIONS THAT LIVE IN DIFFERENT FILES.
+    #   THE TESTED SET is this matrix: which interpreters CI runs.
+    #   THE SUPPORTED FLOOR is `requires-python` in pyproject.toml at the
+    #   repository root. It stays UNMEASURED. A green here on 3.13 and 3.14
+    #   says nothing about it. To settle the floor takes a run of this suite
+    #   on the lowest target, which is separate work with its own evidence.
+    #
+    # WHY 3.14 JOINED 3.13. Local runs in the release arc before this change
+    # used 3.14 while CI pinned 3.13, so a local green and a CI green were
+    # not the same green. This matrix closes that gap rather than widening
+    # coverage. NO VERSION LITERAL SITS IN THIS COMMENT ON PURPOSE: the
+    # plugin version lives in four pinned files, and one more copy here is
+    # one more thing a later bump can miss.
+    #
+    # `fail-fast: false` so a cell that reddens does not cancel the other one
+    # and hide its result.
+    #
+    # CHECK NAMES, BECAUSE A MATRIX RENAMES THEM. A single job reports a
+    # check called `pytest`. This matrix reports `pytest (3.13)` and
+    # `pytest (3.14)`, so the name `pytest` stops reporting. Measured on
+    # 2026-08-10 against this repository: NO required status check is
+    # configured, on classic branch protection or in the one active ruleset,
+    # so the rename blocks no pull request. IF SOMEBODY LATER REQUIRES A
+    # STATUS CHECK, require a stable aggregate name rather than a matrix
+    # cell, because each change to the matrix renames the cells.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
     steps:
       # Third-party actions are pinned to a full commit SHA (supply-chain
       # hardening: a moving tag like @v5 can be repointed to malicious code).
@@ -160,7 +190,9 @@ jobs:
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
-          python-version: "3.13"
+          # The value comes from the matrix above, which this file declares.
+          # It is not event input, so it carries no injection surface.
+          python-version: ${{ matrix.python-version }}
 
       - name: Install test dependencies
         # See the "DEPENDENCY SET" header note for why each lib is required.
@@ -229,15 +261,13 @@ jobs:
   # ---------------------------------------------------------------------------
   # OPTIONAL FALLBACKS (do NOT enable without the stated verification first)
   #
-  # (1) Cross-version matrix — adopt ONLY after a one-off task confirms the
-  #     suite passes on the lowest target. The >=3.7 floor is unverified.
+  # (1) Cross-version matrix: ADOPTED, and it is live on the job above with
+  #     3.13 and 3.14. This entry stays to record what it did NOT settle.
   #
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       python-version: ["3.13", "3.12", "3.11"]   # extend downward post-verify
-  #   ...
-  #     - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-  #       with:
-  #         python-version: ${{ matrix.python-version }}
+  #     THE FLOOR REMAINS OPEN AND THIS MATRIX DID NOT ANSWER IT.
+  #     `requires-python = ">=3.7"` in pyproject.toml is UNMEASURED. The
+  #     matrix records which interpreters CI runs, and that is a different
+  #     question. Do not read the tested set as the supported floor.
+  #     To extend the matrix DOWNWARD takes a run on the lower target first,
+  #     which is separate work with its own evidence.
   # ---------------------------------------------------------------------------
