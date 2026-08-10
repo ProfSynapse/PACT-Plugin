@@ -2,9 +2,9 @@
 
 Location: pact-plugin/scripts/memory_repair/__init__.py
 
-Each module here opens `sqlite3` directly, and imports neither `cli.py` nor
-`memory_api.py` from the pact-memory scripts package. Keep each module here,
-and each module added later, the same way. In that package, functions create
+Each module here opens `sqlite3` directly and imports nothing from the
+pact-memory scripts package. Keep each module here, and each module added
+later, free of an import from that package. In that package, functions create
 the live store directory as a side result of a path resolution, so an import
 puts each of them one call away. This rule holds so that nobody must audit
 which call is safe. Do not read an absent import as a guarantee, because a
