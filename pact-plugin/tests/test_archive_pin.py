@@ -878,10 +878,21 @@ class TestLiveDbGuard:
     Neither covers the other's cases. The parent guard cannot see a spawn that
     bypasses it; the child guard cannot see intent that never crossed.
 
-    EVERY TEST HERE SANDBOXES `HOME`. That is not decoration: `config.py`
-    resolves the database path at USE time, so `HOME` redirects the store in
-    this process and in a child alike. Sandbox `HOME` in each test added
-    here. These tests exercise the exact production shape (no --db-path)
+    EACH SPAWN HERE SANDBOXES `HOME` FOR THE CHILD. That is not decoration.
+    `config.py` resolves the database path at USE time, and a child is a fresh
+    interpreter, so it reads `HOME` and lands in the sandbox. Sandbox `HOME` for
+    each spawn added here.
+
+    IN THIS PROCESS THE LEVER IS DIFFERENT AND `HOME` IS INERT. The autouse
+    fixture `_isolate_config_root_to_tmp` patches `Path.home` and states that it
+    deliberately does NOT set `HOME`. So an in-process `HOME` change moves no
+    store, and the in-process protection comes from that fixture rather than
+    from anything this class does. Do not read the child sandbox as in-process
+    protection, and do not build an arm on an in-process `HOME` change: it
+    measures nothing. `test_the_store_path_resolves_at_use_time` below pins the
+    use-time property that the child leg rests on.
+
+    These tests exercise the exact production shape (no --db-path)
     with zero risk to the live store, which is only possible because the
     boundary that makes the defect hard to guard is the same boundary that
     makes it safe to test.
@@ -911,6 +922,63 @@ class TestLiveDbGuard:
             [sys.executable, str(cli), "get", "f" * 32, *extra_argv],
             capture_output=True, text=True, timeout=120, env=env,
         )
+
+    def test_the_store_path_resolves_at_use_time(self, tmp_path, monkeypatch):
+        """The class docstring above states a BEHAVIOUR. This asserts it.
+
+        WHY AN ARM RATHER THAN A TEXT PIN ON THAT SENTENCE. A text pin goes red
+        when the WORDS change. This goes red when the BEHAVIOUR changes, and the
+        behaviour is the condition that makes the sentence incorrect, so it is
+        what the guard must watch. A pin on the prose is green on the day the
+        resolver changes, which is the one day it is needed.
+
+        THE CLAIM THIS DISCHARGES: `config.py` resolves the store path at USE
+        time. Under the refuted claim it bound the path once at import, and the
+        second resolution below would then repeat the first.
+
+        WHY THE LEVER IS `Path.home` AND NOT THE `HOME` VARIABLE. The autouse
+        fixture `_isolate_config_root_to_tmp` patches `Path.home` and states
+        that it deliberately does NOT set `HOME`, so an in-process `HOME` change
+        moves nothing here and an arm built on one measures nothing. This drives
+        the lever the harness leaves live.
+
+        `resolve_db_path` CREATES NO DIRECTORY, so this arm reads a location and
+        leaves no tree behind, in the sandbox or in the live store.
+        """
+        from pathlib import Path as _Path
+
+        from scripts.config import (  # the pytest harness is the stated carve-out
+            MEMORY_DIR_ENV,
+            STORE_ORIGIN_HOME,
+            resolve_db_path,
+            store_path_origin,
+        )
+
+        # THE VARIABLE OUTRANKS THE HOME LEG AND THE SUITE SETS IT FOR EACH TEST.
+        # Without this the two resolutions below agree for a reason that has
+        # nothing to do with use-time resolution, and the arm proves nothing.
+        monkeypatch.delenv(MEMORY_DIR_ENV, raising=False)
+        assert store_path_origin() == STORE_ORIGIN_HOME, (
+            "the resolver is not on its home leg, so this arm would measure an "
+            "override rather than the behaviour the class docstring claims"
+        )
+
+        first = tmp_path / "first-home"
+        monkeypatch.setattr(_Path, "home", lambda: first)
+        from_first = resolve_db_path()
+
+        second = tmp_path / "second-home"
+        monkeypatch.setattr(_Path, "home", lambda: second)
+        from_second = resolve_db_path()
+
+        assert from_first != from_second, (
+            "the resolved store did not follow the second change, so "
+            "`config.py` bound the path once instead of resolving it at use "
+            "time. The class docstring above is then incorrect, and the child "
+            "sandbox rests on a property that no longer holds."
+        )
+        assert first in from_first.parents, from_first
+        assert second in from_second.parents, from_second
 
     def test_child_refuses_the_live_db_when_spawned_under_pytest(
         self, tmp_path
@@ -1138,10 +1206,16 @@ class TestLiveDbGuard:
             "database. Most likely cause: _run_memory_cli stopped passing a "
             "full env copy."
         )
+        # THIS BLOCK PINS NOTHING IN `cli.py`. It probes the CHILD environment
+        # and compares nothing against that module, so the docstring named below
+        # can be rewritten with this suite green. A citation inside an assertion
+        # MESSAGE renders only when the assertion fails. A reader who searches
+        # for what guards a `cli.py` docstring must not stop at a hit like this
+        # one: right file, incorrect mechanism.
         assert report["pytest_importable_here"] is False, (
             "pytest IS visible in the child, so the guard could have used an "
-            "in-process check — revisit the forced-choice reasoning in "
-            "cli.py's _refuse_live_db_under_pytest docstring"
+            "in-process check. Re-read the forced-choice reasoning recorded "
+            "with the child-side live-store refusal."
         )
 
     def test_parent_rejects_falsy_but_present_db_path(self, tmp_path):

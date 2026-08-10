@@ -3,20 +3,36 @@ Presence pins for the import-bar cause in the memory-repair package.
 
 Location: pact-plugin/tests/test_import_bar_cause_presence.py
 
-WHAT THIS PROVES, AND IT IS NARROW ON PURPOSE. Each module in the
-memory-repair package that states the import bar also carries the sentence
-that forbids an audit of which call is safe. That sentence is the only one
-that stops a reader treating the bar as a DISTANCE to be measured rather than
-a rule to keep.
+WHAT THIS PROVES, AND IT IS NARROW ON PURPOSE. FOUR PROPERTIES, and the
+heading below states what each one leaves open. Two are a PRESENCE, one is a
+POPULATION RULE, and one is an ABSENCE.
+
+  1. PRESENCE. Each module in the memory-repair package that states the import
+     bar also carries the sentence that forbids an audit of which call is safe.
+     That sentence is the only one that stops a reader who treats the bar as a
+     DISTANCE to be measured rather than a rule to keep.
+  2. PRESENCE. The package `__init__.py` carries the obligation that binds a
+     later editor.
+  3. POPULATION RULE. Each .py file in the package states the bar or takes a
+     declared exemption, and each carrier known today stays in the derived
+     population.
+  4. ABSENCE. No file in the plugin tree carries one of the refuted spellings,
+     apart from a declared exclusion.
 
 WHAT A GREEN HERE DOES NOT MEAN. Read this before you trust it.
 
   * It does NOT check that the surrounding prose is true. No test can read a
     natural-language cause for truth.
-  * It does NOT catch an incorrect cause ADDED elsewhere, in this package or
-    outside it. The population is derived from the files that state the bar,
-    so a new file that states nothing about it is invisible here.
-  * It proves the PRESENCE of two sentences, and nothing more.
+  * It does NOT catch an incorrect cause in NEW WORDS. The refuted-spelling
+    arms hold the spellings that shipped and were removed, so they catch a
+    revert or a bad merge that reintroduces the ORIGINAL BYTES. A paraphrase
+    passes.
+  * THE REFUTED-SPELLING ARMS REACH THE PLUGIN TREE AND NO FURTHER. They walk
+    `PLUGIN_DIR`, so a refuted spelling written above that directory, at the
+    repository root, is outside the scan.
+  * A NEW FILE THAT SAYS NOTHING IS REACHED INSIDE THE PACKAGE, AND NOT
+    OUTSIDE IT. The population rule fails on a new .py in the package that does
+    not state the bar. The same file elsewhere in the tree is invisible here.
 
 THE POPULATION HAS THREE PARTS, AND EACH COVERS A FAILURE THE OTHERS MISS.
 
@@ -26,8 +42,10 @@ THE POPULATION HAS THREE PARTS, AND EACH COVERS A FAILURE THE OTHERS MISS.
      of the population AND declared exempt, and a carrier file deleted. A
      plain rename is NOT one of them, because part 3 catches that on its own.
   3. `EXEMPT_MODULES` extends part 2 to files nobody has written yet, which
-     fixed paths cannot reach. A module leaves the population only by a
-     declared line, and not by a rename that reads as tidying.
+     fixed paths cannot reach. AGAINST A RENAME, a module leaves the
+     must-state-the-bar rule only by a declared line, and not by a rename that
+     reads as tidying. A DELETION is a second exit, and part 2 covers it for
+     the paths it holds.
 
 EACH SET IN THIS FILE IS KEYED ON A RELATIVE PATH AND NOT ON A BASENAME. A
 basename is not an identity: `__init__.py` occurs 9 times in the plugin tree,
@@ -50,12 +68,14 @@ rule narrower than the one that must hold.
 
 If you update a constant to agree with new prose, or to quiet a red, and you
 give no cause, this file becomes a MIRROR of the thing it guards, and its
-green stops meaning anything. That covers the required sentences, the subject
-phrase the population is derived from, and each set of file names.
+green stops meaning anything.
 
-MATCHING IS WHITESPACE-INSENSITIVE BY NECESSITY. Each guarded sentence wraps
-across lines in the file that carries it, so a line-oriented search or a
-literal comparison cannot find it even when it is present. Flatten first.
+MATCHING IGNORES WHITESPACE AND CASE, AND `carries` DOES THE TWO TOGETHER.
+WHITESPACE: each guarded sentence wraps across lines in the file that carries
+it, so a line-oriented search or a literal comparison cannot find it even when
+it is present. Flatten first. CASE: this repository capitalises an
+anti-permission rule for emphasis, so a strict comparison reddens on a
+legitimate re-capitalisation. The reason for each sits above `carries`.
 
 Used by: pytest.
 """
@@ -100,15 +120,15 @@ BAR_SUBJECT = "pact-memory scripts package"
 # THE FLOOR. Its unique coverage is TWO conditions, and `TestTheFloorEarnsIts
 # Place` below asserts each one by emptying this set and reading the result.
 #   1. A carrier renamed out of the population AND declared exempt. The
-#      exempt arm then passes, because the name is declared, and only this
+#      exempt arm then passes, because the path is declared, and only this
 #      floor holds.
 #   2. A carrier file deleted. It leaves the disk and the population together,
 #      so the exempt arm sees nothing missing.
 # A PLAIN RENAME IS NOT UNIQUE TO THIS FLOOR. The exempt arm catches that on
 # its own, measured with this set emptied.
 #
-# To remove a name from this floor, state a cause, as for the two sentence
-# constants above. A name removed to quiet a red turns the floor into a report
+# To remove a path from this floor, state a cause, as for the two sentence
+# constants above. A path removed to quiet a red turns the floor into a report
 # of the current population, which is the same mirror failure.
 MINIMUM_CARRIERS = frozenset({"__init__.py", "shred_detect.py"})
 
@@ -116,15 +136,28 @@ MINIMUM_CARRIERS = frozenset({"__init__.py", "shred_detect.py"})
 # `PACKAGE_DIR`, as stated above `MINIMUM_CARRIERS`. Empty today, and that is
 # the point: each .py file in this package must state the bar, or appear here.
 #
-# The floor above protects the carriers known when it was written. It cannot
-# protect a carrier written later, because its names are fixed. This closes
-# that gap from the other side: a file leaves the population ONLY by an entry
-# here, which is a visible line in a diff, rather than by a rename of the
-# subject phrase, which reads as tidying and is what defeated the derivation.
+# AN ENTRY HERE LIFTS ONE RULE AND NOT THE OTHER, AND THIS FILE USES THE WORD
+# POPULATION FOR TWO SETS. An entry removes the file from the MUST-STATE-THE-BAR
+# rule above. It does NOT remove the file from the DERIVED POPULATION, which is
+# the set of files that DO state the bar and which
+# `modules_missing_the_cause_clause` reads. So an exempt file that states the
+# bar is under the cause-clause rule as before.
 #
-# To add a name here, state a cause. A name added to quiet a red is the mirror
-# failure again. A KNOWN CARRIER CANNOT ESCAPE THIS WAY: MINIMUM_CARRIERS is
-# checked separately, so an exemption for one of those names goes red anyway.
+# The floor above protects the carriers known when it was written. It cannot
+# protect a carrier written later, because its paths are fixed. This closes
+# that gap from the other side, AGAINST A RENAME: a file leaves the
+# must-state-the-bar rule by an entry here, which is a visible line in a diff,
+# rather than by a rename of the subject phrase, which reads as tidying and is
+# what defeated the derivation. DELETION IS A SECOND EXIT AND IT TAKES NO ENTRY.
+# `MINIMUM_CARRIERS` covers a deletion for the paths it holds. A carrier added
+# later and then deleted is covered by nothing here.
+#
+# To add a path here, state a cause. A path added to quiet a red is the mirror
+# failure again. A KNOWN CARRIER CANNOT ESCAPE THIS WAY, AND THE REASON IS NOT
+# THAT AN EXEMPTION ALONE GOES RED. An exemption alone changes nothing, because
+# the file continues to state the bar and stays in the derived population. The
+# escape asks for an exemption AND a rename together, and `MINIMUM_CARRIERS`
+# reads the derived population, so it goes red on that pair.
 EXEMPT_MODULES: frozenset = frozenset()
 
 # The tree the refuted-spelling arms walk. A FILESYSTEM WALK and NOT a git
@@ -326,7 +359,7 @@ class TestThePopulationRules:
             f"derived population and their copy of the required sentence is "
             f"now unguarded. Either the docstring was rewritten, or the "
             f"subject phrase {BAR_SUBJECT!r} changed. Do not repair this by "
-            f"removing a name from MINIMUM_CARRIERS without a stated cause."
+            f"removing a path from MINIMUM_CARRIERS without a stated cause."
         )
 
     def test_each_module_states_the_bar_or_is_declared_exempt(self):
@@ -334,15 +367,18 @@ class TestThePopulationRules:
 
         MINIMUM_CARRIERS holds fixed paths, so it cannot reach a carrier added
         later. This reaches it: a new .py file must state the bar, or take a
-        line in EXEMPT_MODULES. A file then leaves the population only by a
-        visible declaration, and not by a rename of the subject phrase.
+        line in EXEMPT_MODULES. AGAINST A RENAME, a file then leaves THIS RULE
+        only by a visible declaration. A DELETED file leaves by a second exit
+        and takes no declaration, and the floor above covers that for the paths
+        it holds.
         """
         silent = modules_neither_stating_nor_exempt(PACKAGE_DIR, EXEMPT_MODULES)
         assert not silent, (
             f"{silent} do not name the guarded package. Add the import-bar "
             f"paragraph to each, or add the path to EXEMPT_MODULES with a "
-            f"stated cause. A module outside the population carries none of "
-            f"the sentences the arms below require."
+            f"stated cause. AN EXEMPTION LIFTS THIS RULE ALONE: a module that "
+            f"takes a line in EXEMPT_MODULES and states the bar anyway is "
+            f"under the cause-clause rule as before."
         )
 
 
@@ -381,7 +417,13 @@ class TestTheInstrumentIsLive:
 
 
 class TestTheCauseClauseIsPresent:
-    """The population is BOTH carrier files, and it is derived rather than listed."""
+    """The cause clause over the DERIVED population, and not over a listed one.
+
+    The first two arms read the package on disk, so a carrier added later is
+    covered on the day it arrives and no count in this class goes stale. The
+    last arm reads a package built inside the test, because the boundary it
+    pins asks for a module the shipped package does not hold.
+    """
 
     def test_each_module_stating_the_bar_carries_the_cause_clause(self):
         missing = modules_missing_the_cause_clause(PACKAGE_DIR)
@@ -401,6 +443,59 @@ class TestTheCauseClauseIsPresent:
             f"editor. A description of an invariant does not command its "
             f"preservation. Required sentence: {REQUIRED_PACKAGE_OBLIGATION!r}"
         )
+
+    def test_an_exemption_does_not_lift_the_cause_clause_requirement(
+        self, tmp_path, monkeypatch
+    ):
+        """AN EXEMPTION LIFTS ONE RULE, and the arm message once said all of them.
+
+        `modules_missing_the_cause_clause` derives from `modules_stating_the_bar`
+        and reads no exemption at all. So a module that takes a line in
+        `EXEMPT_MODULES` and states the bar anyway is under the cause-clause
+        rule as before.
+
+        THE EXEMPTION MUST DO WORK HERE, or this arm agrees with a mechanism
+        that is broken. `silent.py` carries that weight: the population
+        predicate reports it without the exemption and reports nothing with it.
+        `helpers.py` then shows the cause arm reaches an EXEMPT module. The
+        last pair is the control: it puts the clause into the same file and
+        reads the predicate again, so the red above comes from the absent
+        clause and not from the construction.
+
+        WHY `EXEMPT_MODULES` IS PATCHED, AND THE ARM IS BLIND WITHOUT IT. The
+        shipped set is EMPTY. An edit that teaches the cause arm to read that
+        set changes nothing observable while it stays empty, so a local
+        exemption alone cannot catch the edit that makes the message above
+        true. This puts the same two paths into the shipped constant, so such
+        an edit drops `helpers.py` and this arm fails.
+
+        RESIDUAL, AND IT IS THE BOUND OF THE WHOLE ARM. This pins the
+        BEHAVIOUR. It does not catch an edit to the arm message above that says
+        something incorrect about behaviour that did not change.
+        """
+        package = tmp_path / "memory_repair"
+        package.mkdir()
+        silent = package / "silent.py"
+        carrier = package / "helpers.py"
+        silent.write_text('"""This module says nothing."""\n', encoding="utf-8")
+        carrier.write_text(f'"""Names the {BAR_SUBJECT}."""\n', encoding="utf-8")
+        exempt = frozenset({"silent.py", "helpers.py"})
+        monkeypatch.setitem(globals(), "EXEMPT_MODULES", exempt)
+
+        assert modules_neither_stating_nor_exempt(package, frozenset()) == ["silent.py"]
+        assert modules_neither_stating_nor_exempt(package, exempt) == []
+
+        assert modules_missing_the_cause_clause(package) == ["helpers.py"], (
+            "the cause arm let an EXEMPT module through. An exemption lifts "
+            "the must-state-the-bar rule alone, so the arm message above is "
+            "correct only while this holds."
+        )
+
+        carrier.write_text(
+            f'"""Names the {BAR_SUBJECT}. {REQUIRED_CAUSE_CLAUSE}"""\n',
+            encoding="utf-8",
+        )
+        assert modules_missing_the_cause_clause(package) == []
 
 
 class TestTheFloorEarnsItsPlace:
