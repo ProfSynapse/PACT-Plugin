@@ -355,11 +355,19 @@ class TestThePopulationRules:
         """
         gone = carriers_missing_from_the_floor(PACKAGE_DIR, MINIMUM_CARRIERS)
         assert not gone, (
-            f"{gone} no longer name the guarded package, so they left the "
-            f"derived population and their copy of the required sentence is "
-            f"now unguarded. Either the docstring was rewritten, or the "
-            f"subject phrase {BAR_SUBJECT!r} changed. Do not repair this by "
-            f"removing a path from MINIMUM_CARRIERS without a stated cause."
+            f"{gone} are in MINIMUM_CARRIERS and are NOT in the derived "
+            f"population. A path is in that population only while a file at "
+            f"that path carries the subject phrase {BAR_SUBJECT!r}. A FAILURE "
+            f"OF ONE HALF IS ENOUGH, and the causes named below are EXAMPLES "
+            f"and not a closed set. HALF 1, no file is at that path, such as "
+            f"after a deletion or a move. HALF 2, a file is at that path and "
+            f"its text does not carry the phrase, such as after a docstring "
+            f"rewrite or a change to BAR_SUBJECT. READ THE DISK FOR EACH PATH "
+            f"BEFORE YOU REPAIR, because this result can hold paths that left "
+            f"for different reasons at the same time. While a path is out, "
+            f"the cause-clause arm covers nothing at that path. Do not repair "
+            f"this by removal of a path from MINIMUM_CARRIERS without a "
+            f"stated cause."
         )
 
     def test_each_module_states_the_bar_or_is_declared_exempt(self):
