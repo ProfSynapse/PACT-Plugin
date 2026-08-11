@@ -235,12 +235,27 @@ REFUTED_SPELLINGS = frozenset(
         # sentence about the test-harness variable.
         #
         # MEASURED before it was added, across 519 .py and .md files in the
-        # plugin tree: this spelling and two wider candidates each return 0
-        # hits, so the entry bans no sentence that is present. A control string
-        # that IS present returned 3 hits in the same walk, so the zero is a
-        # measured absence and not an empty read. This is PREVENTIVE, and the
-        # warning above against an entry added to quiet a red does not apply,
-        # because nothing is red.
+        # plugin tree: this spelling and two wider candidates each returned 0
+        # FILES, so the entry bans no sentence that is present. A control
+        # string that IS present returned 3 files in the same walk, so the zero
+        # is a measured absence and not an empty read. This is PREVENTIVE, and
+        # the warning above against an entry added to quiet a red does not
+        # apply, because nothing is red.
+        #
+        # 🔴 THE ZERO ABOVE WAS TAKEN BEFORE THIS COMMENT EXISTED. A re-run
+        # finds each of the three candidates INSIDE THIS FILE, because this
+        # comment names them. NO OCCURRENCE OF ONE OF THEM SITS OUTSIDE THIS
+        # FILE. That is the claim to check.
+        #
+        # STATE THE RULE AND NOT THE COUNT. A count breaks the moment a later
+        # note names one of the phrases again, so the act of confirmation can
+        # falsify the record it confirms. The rule above survives its own
+        # confirmation, because one more self-reference leaves it true.
+        #
+        # THE CLASS, and it reaches past this comment. A CLAIM ABOUT A CORPUS
+        # THAT THE CLAIM ITSELF JOINS MUST BE STATED SO THAT JOINING THE
+        # CORPUS DOES NOT FALSIFY IT. An unreproducible correct claim and an
+        # incorrect claim look the same to the next reader.
         "for test isolation only",
         # THE REFUTED CALIBRATION DEMAND. The secretary instruction asked the
         # store for a mean drift direction. The store cannot answer: the
