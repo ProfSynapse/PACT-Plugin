@@ -24,9 +24,10 @@ WHAT A GREEN HERE DOES NOT MEAN. Read this before you trust it.
   * It does NOT check that the surrounding prose is true. No test can read a
     natural-language cause for truth.
   * It does NOT catch an incorrect cause in NEW WORDS. The refuted-spelling
-    arms hold the spellings that shipped and were removed, so they catch a
-    revert or a bad merge that reintroduces the ORIGINAL BYTES. A paraphrase
-    passes.
+    arms hold FIXED SPELLINGS, so they catch a revert, a bad merge, or an
+    editor who restores a removed sentence from memory. A paraphrase passes.
+    SOME ENTRIES SHIPPED AND SOME DID NOT, and the rule above
+    `REFUTED_SPELLINGS` states the test that decides membership.
   * THE REFUTED-SPELLING ARMS REACH THE PLUGIN TREE AND NO FURTHER. They walk
     `PLUGIN_DIR`, so a refuted spelling written above that directory, at the
     repository root, is outside the scan.
@@ -169,8 +170,29 @@ PLUGIN_DIR = Path(__file__).resolve().parent.parent
 
 SCANNED_SUFFIXES = (".py", ".md")
 
-# Each claim below was measured incorrect and removed. A revert or a bad merge
-# reintroduces the ORIGINAL BYTES, which is the condition this catches.
+# Each claim below was measured incorrect and removed. A revert, a bad merge,
+# or an editor who restores a removed sentence from memory reproduces the
+# ORIGINAL BYTES, which is the condition this catches.
+#
+# 🔴 THE TEST FOR MEMBERSHIP, THREE PARTS, ALL MEASURED RATHER THAN ASSUMED.
+# A spelling joins this set when the three hold TOGETHER:
+#   1. THE CLAIM IS REFUTED AND SETTLED. A claim that an OPEN measurement can
+#      move does not qualify.
+#   2. THE RETURN OF THE SPELLING IS A LIVE RISK.
+#   3. BANNING THE SPELLING BANS NO TRUE SENTENCE. Measure this. A zero-hit
+#      search means nothing unless a control string that IS present returns
+#      hits in the same walk.
+#
+# WHETHER THE SPELLING SHIPPED IS NOT THE TEST, and a reader who applies that
+# rule will remove a correct member. Two entries here were drafted and removed
+# BEFORE release. A criterion that excludes a member the set holds is not the
+# criterion.
+#
+# PART 1 IS THE ONE THAT REFUSES AN ENTRY MOST OFTEN, and it refuses on a
+# TIMING ground rather than a truth ground. While a measurement that could
+# confirm a claim stays open, that claim cannot join, because A LIST THAT BANS
+# A POSSIBLY-TRUE SENTENCE GETS DISABLED BY THE FIRST PERSON IT OBSTRUCTS, and
+# the whole guard goes with it. Wait for the measurement. Then decide.
 REFUTED_SPELLINGS = frozenset(
     {
         "an import is a write",
@@ -183,6 +205,64 @@ REFUTED_SPELLINGS = frozenset(
         # The second corrected claim. It was written outside the memory-repair
         # package, which is why the population above covers the plugin tree.
         "an in-process HOME change is inert",
+        # THE PERMISSIVE `--db-path` FRAMING. It was drafted, then removed
+        # because it PERMITS the flag. The bar is a POLICY: an agent does not
+        # select a store, and a path a caller chooses is not the store the
+        # memory of the team lives in.
+        #
+        # 🔴 DO NOT RESTATE A MECHANISM HERE, AND DO NOT CORRECT ONE BACK IN.
+        # This comment held a mechanism sentence, that the flag does not reach
+        # the readiness path, and a measurement REFUTED it.
+        #
+        # NO TRUE MECHANISM SENTENCE IS AVAILABLE TO WRITE IN ITS PLACE, and
+        # that is a MEASURED result rather than a caution. The verb sweep is
+        # complete. The flag ISOLATES save, update and delete, each measured
+        # with a live control. The remaining four verbs are UNMEASURED, because
+        # their control is inert, so they are not clear and they are not
+        # refuted. A sentence about the whole flag is therefore incorrect for
+        # one part of the surface and unsupported for the rest.
+        # A POLICY CAUSE HAS NO SUCH SURFACE, so no measurement can move it.
+        #
+        # WHY THE CAUSE MATTERS AS MUCH AS THE ENTRY. A guard justified by a
+        # claim the repair removed is the defect this work closes, arriving in
+        # the enforcement. A reader who probes an incorrect cause concludes the
+        # entry is unfounded, and that is one probe from a disabled entry.
+        #
+        # THE REFUTED CONTENT IS THE WORD "only", which turns a description into
+        # a PERMISSION. That is the same reasoning this file applies to the word
+        # "before" in the entry above, so the entry is narrow for the same cause.
+        # A wider entry such as "is for test isolation" would ban a TRUE future
+        # sentence about the test-harness variable.
+        #
+        # MEASURED before it was added, across 519 .py and .md files in the
+        # plugin tree: this spelling and two wider candidates each return 0
+        # hits, so the entry bans no sentence that is present. A control string
+        # that IS present returned 3 hits in the same walk, so the zero is a
+        # measured absence and not an empty read. This is PREVENTIVE, and the
+        # warning above against an entry added to quiet a red does not apply,
+        # because nothing is red.
+        "for test isolation only",
+        # THE REFUTED CALIBRATION DEMAND. The secretary instruction asked the
+        # store for a mean drift direction. The store cannot answer: the
+        # `memories` table holds each calibration as prose, with no numeric
+        # column, so no tool change closes the gap and the DEMAND had to go.
+        #
+        # WHY THIS SPELLING AND NOT A WIDER ONE. `per-domain breakdown` is
+        # PRESENT TODAY in the corrected sentence, which tells the secretary
+        # NOT to report one, so an entry for it would ban a TRUE sentence. The
+        # spelling here names the impossible statistic and appears nowhere.
+        #
+        # ONE ENTRY COVERS THE REVERT. The two impossible demands, the mean and
+        # the per-domain breakdown, shipped in ONE sentence, so a revert
+        # restores the two together and this entry catches it. A second entry
+        # would help only against a partial restore, and it would grow the list
+        # past its purpose.
+        #
+        # MEASURED before it was added, across 519 .py and .md files: 0 hits
+        # for this spelling and 0 for `summarize by domain`. A control string
+        # that IS present returned 3 hits in the same walk, so the zero is a
+        # measured absence and not an empty read.
+        "mean drift direction",
     }
 )
 
@@ -591,11 +671,17 @@ class TestTheRefutedCauseStaysOut:
     """The negative arm, and its bound is the spellings named.
 
     This does NOT detect a new incorrect cause in new words. It detects the
-    return of a claim that shipped, which is worth catching because a revert or
-    a bad merge reintroduces the original bytes rather than a paraphrase.
+    RETURN OF A NAMED SPELLING, which is worth catching because a revert, a bad
+    merge, or an editor who restores a removed sentence from memory reproduces
+    the original bytes rather than a paraphrase.
+
+    A SPELLING HERE NEED NOT HAVE SHIPPED. Two entries were drafted and removed
+    before release, and they are members for the same reason as the rest: the
+    claim is settled, the return is a live risk, and the ban costs no true
+    sentence. The rule above `REFUTED_SPELLINGS` states that test in full.
 
     ITS POPULATION IS THE PLUGIN TREE AND NOT THE PACKAGE. A revert lands where
-    the claim was written, and one of the two claims was written outside the
+    the claim was written, and one of the claims was written outside the
     memory-repair package. A population narrower than the thing it protects
     reports a clean green over the files it happens to hold.
     """
