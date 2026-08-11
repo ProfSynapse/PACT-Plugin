@@ -148,6 +148,12 @@ DECLARED_CARRIERS = frozenset(
         "protocols/pact-state-recovery.md",
         "protocols/pact-protocols.md",
         "skills/pact-handoff-harvest/SKILL.md",
+        # A REFERENCE PAGE, and the first carrier that is not a SKILL.md. It
+        # teaches module-level API calls against the store. The route alphabet
+        # missed it, because it names the calls and no path, no CLI and no
+        # store file. MEASURED across the 44 markdown files below a skill
+        # directory that are not SKILL.md: this is the ONE live member.
+        "skills/pact-memory/references/memory-patterns.md",
         "scripts/memory_repair/__init__.py",
         "scripts/memory_repair/shred_detect.py",
         "scripts/archive_pin.py",
@@ -192,7 +198,36 @@ POPULATION_PATTERNS = (
     "protocols/*.md",
     "reference/*.md",
     "skills/*/SKILL.md",
+    # THE MEMORY SKILL OWN DIRECTORY, and the cause is measured. A reference
+    # page beside the skill that teaches store access taught 21 module-level
+    # API calls, named the CLI zero times, and held no rule. `skills/*/SKILL.md`
+    # cannot reach a reference page, so the page was outside the walk.
+    # THIS IS NOT THE WIDENING REFUSED EARLIER. That one reached the memory
+    # package and each hook, which reach the store legitimately. This reaches
+    # one skill directory, where a page about the store is expected rather than
+    # incidental, and it reaches the NEXT page written there.
+    "skills/pact-memory/**/*.md",
+    # THE MEMORY-REPAIR TOOLING DIRECTORY. `scripts/archive_pin.py` names three
+    # route tokens outside the bar, so the alphabet reaches it. This gives it a
+    # net that does NOT depend on `DECLARED_CARRIERS`. MEASURED: the one other
+    # file here, `check_pin_caps.py`, names no route token, so this pattern
+    # needs no exemption. It does NOT reach the memory package or the hooks.
+    "scripts/*.py",
 )
+
+# THE MEMORY-REPAIR PACKAGE, walked as a DIRECTORY rather than as a path list.
+# Each module here must carry the bar, so a module added later joins the rule
+# on the day it arrives, and a path dropped from `DECLARED_CARRIERS` does not
+# take the coverage with it.
+#
+# WHY A DIRECTORY AND NOT AN ALPHABET. MEASURED: with the bar region removed,
+# the two modules here name NO route token at all. So no widening of
+# `ROUTE_TOKENS` can reach them, and only membership of this directory can.
+REPAIR_PACKAGE_DIR = "scripts/memory_repair"
+
+# MODULES HERE THAT DO NOT HAVE TO CARRY THE BAR. Empty today. Add a path only
+# with a stated cause, as for each other set in this file.
+REPAIR_PACKAGE_EXEMPTIONS: dict = {}
 
 # A FILE REACHES THE STORE WHEN IT NAMES ONE OF THESE. The token set is derived
 # from the THREE ROUTES the acceptance test names, which are the CLI, an import,
@@ -219,7 +254,41 @@ ROUTE_TOKENS = {
     "search --query": "the CLI, by a verb instruction",
     "--limit": "the CLI, by a verb instruction",
     "archive_pin.py": "the CLI, at one remove",
+    # THE IMPORT ROUTE, SPELLED AS A MODULE-LEVEL CALL. A page taught
+    # `memory.save(...)` and `memory.search(...)` and named no package path, no
+    # CLI and no store file, so each token above missed it. The route was
+    # present and the SPELLING was new, which is the same miss this file has
+    # recorded three times. These name the route as a caller writes it.
 }
+
+# 🔴 THE FORBIDDEN ROUTE, AND IT TAKES THE OPPOSITE RULE. These name the
+# module API, which the store-access bar forbids. A file that teaches one of
+# them teaches the route the rule removes.
+#
+# EACH TOKEN HERE IS EXPECTED TO BE IDLE. That is the whole difference from
+# the set above. `ROUTE_TOKENS` name LEGITIMATE routes, so a token there that
+# selects nothing is decay and an arm reports it. A token HERE that selects
+# nothing means the tree is HEALTHY, and an arm that reddens on that is
+# measuring the wrong thing.
+#
+# THE HISTORY THAT PRODUCED THE SPLIT, because a later reader will meet the
+# same pressure. These three sat in `ROUTE_TOKENS`. A page taught the module
+# API, the repair converted it to the CLI, and the tokens went idle one by
+# one. The must-do-work arm reddened each time, and each red invited a token
+# removal that would have left the guard blind to the NEXT page that teaches
+# the forbidden route. ONE RULE OVER TWO KINDS OF TOKEN WAS THE DEFECT.
+#
+# THESE TOKENS DO SELECT FOR ARM 3. A file that names one reaches the store,
+# so it needs the rule, and it needs it more than a file that uses the CLI.
+FORBIDDEN_ROUTE_TOKENS = {
+    "memory.save(": "the module API, which the bar forbids",
+    "memory.search(": "the module API, which the bar forbids",
+    "memory.update(": "the module API, which the bar forbids",
+}
+
+# The set arm 3 selects with. A file that reaches the store by ONE route needs
+# the rule, and the two kinds of route select alike.
+SELECTING_TOKENS = {**ROUTE_TOKENS, **FORBIDDEN_ROUTE_TOKENS}
 
 # THE ALPHABET FLOOR, and it is NOT the same set as `DECLARED_CARRIERS`. The
 # alphabet exists to reach INSTRUCTION SURFACES, so its floor holds the markdown
@@ -456,6 +525,29 @@ def compared_carriers(root: Path) -> list[str]:
     see, because a file with no marker is not in the derived set.
     """
     return sorted(set(derived_carriers(root)) | set(DECLARED_CARRIERS))
+
+
+def repair_modules_without_the_bar(root: Path, exemptions: dict) -> list[str]:
+    """Modules of the memory-repair package that hold no begin marker.
+
+    🔴 THE SECOND NET, AND ITS INDEPENDENCE IS THE WHOLE POINT. The declared
+    floor is a LIST, so an edit that drops a path from the list takes the
+    coverage with it. This reads the DIRECTORY, so the same edit changes
+    nothing here.
+
+    MEASURED, and it is why the net is a directory rather than an alphabet:
+    with the bar region removed, neither module here names one route token, so
+    arm 3 cannot reach them by any widening of `ROUTE_TOKENS`.
+    """
+    package = root / REPAIR_PACKAGE_DIR
+    if not package.is_dir():
+        return []
+    return sorted(
+        relative_name(path, root)
+        for path in package.glob("*.py")
+        if relative_name(path, root) not in exemptions
+        and MARKER_BEGIN not in path.read_text(encoding="utf-8", errors="replace")
+    )
 
 
 def declared_carriers_without_a_marker(root: Path) -> list[str]:
@@ -728,6 +820,23 @@ class TestEveryDeclaredCarrierIsPlaced:
     a larger set reporting green.
     """
 
+    def test_each_repair_module_holds_the_marker(self):
+        """THE SECOND NET, INDEPENDENT OF THE DECLARED LIST.
+
+        A carrier loses ALL coverage when one edit drops its path from
+        `DECLARED_CARRIERS` and a second drops its region. This arm reads the
+        DIRECTORY, so the first edit cannot reach it.
+        """
+        missing = repair_modules_without_the_bar(PLUGIN_DIR, REPAIR_PACKAGE_EXEMPTIONS)
+        assert not missing, (
+            f"these modules of {REPAIR_PACKAGE_DIR} hold no begin marker: "
+            f"{missing}. Each module of that package carries the store-access "
+            f"rule. Place the marked region from {SOURCE_HOME}, or add the "
+            f"path to REPAIR_PACKAGE_EXEMPTIONS WITH A STATED CAUSE. DO NOT "
+            f"repair this by an edit to DECLARED_CARRIERS: that list is a "
+            f"separate net and this arm is the one that survives its removal."
+        )
+
     def test_each_declared_carrier_holds_the_marker(self):
         missing = declared_carriers_without_a_marker(PLUGIN_DIR)
         assert not missing, (
@@ -865,9 +974,32 @@ class TestEachStoreReachingSurfaceCarriesTheBar:
             f"arm 3 while each other arm keeps passing. Restore the token."
         )
 
+    def test_no_forbidden_route_token_is_taught_without_the_bar(self):
+        """A file that teaches the FORBIDDEN route needs the rule most.
+
+        THIS ARM IS EXPECTED TO PASS OVER AN EMPTY SELECTION, and that is the
+        one place in this file where an empty set is the GOOD outcome. The
+        companion arm that refuses an idle token applies to `ROUTE_TOKENS`
+        alone, for that reason.
+        """
+        teaching = sorted(
+            name
+            for name, hits in files_reaching_the_store(
+                PLUGIN_DIR, FORBIDDEN_ROUTE_TOKENS
+            ).items()
+            if marker_fault(read_carrier(PLUGIN_DIR, name)) is not None
+        )
+        assert not teaching, (
+            f"{teaching} teach the module API and hold no marked region. The "
+            f"bar forbids that route, so a reader of one of these files is "
+            f"taught the thing the rule removes, with no rule beside it. "
+            f"Place the marked region from {SOURCE_HOME}, or correct the file "
+            f"to the CLI route."
+        )
+
     def test_no_store_reaching_surface_is_silent(self):
         silent = store_reaching_files_without_the_bar(
-            PLUGIN_DIR, ROUTE_TOKENS, POPULATION_EXEMPTIONS
+            PLUGIN_DIR, SELECTING_TOKENS, POPULATION_EXEMPTIONS
         )
         assert not silent, (
             f"{silent} name a route to the memory store and hold no readable "
@@ -921,6 +1053,10 @@ class TestTheAlphabetDoesNotSelectItself:
         for token in sorted(ROUTE_TOKENS):
             if not any(carries(text, token) for text in stripped):
                 idle.append(token)
+        # FORBIDDEN_ROUTE_TOKENS ARE NOT READ HERE, and the omission is the
+        # ruling rather than an oversight. A forbidden-route token that
+        # selects nothing means no file teaches that route, which is the
+        # outcome the bar exists to produce.
         assert not idle, (
             f"these tokens appear only inside the bar text, or nowhere: "
             f"{idle}. A token taken from the guarded wording selects the "
@@ -1031,12 +1167,28 @@ def _model_tree(tmp_path: Path) -> Path:
         "protocols/pact-state-recovery.md": "The store file is memory.db.",
         "protocols/pact-protocols.md": "The store file is memory.db.",
         "skills/pact-handoff-harvest/SKILL.md": "Run search --query for context.",
+        # THE MODEL MUST AGREE WITH THE TREE ON THIS ONE. archive_pin.py names
+        # three route tokens OUTSIDE its marked region, so the alphabet is its
+        # second net. A model that gave it no token would report a hole this
+        # carrier does not have.
+        "scripts/archive_pin.py": "# Reached by cli.py, writes through archive_pin.py.",
     }
-    # A CARRIER ADDED LATER MUST NOT CRASH THE MODEL. An unknown key once raised
-    # KeyError here, so a maintainer who added a carrier saw each model arm fail
-    # with a stack trace rather than the one arm that had a thing to say.
+    # 🔴 THE DEFAULT DEPENDS ON THE FILE TYPE, AND THAT IS A FIX FOR A CLASS
+    # RATHER THAN FOR ONE PATH. A markdown carrier joins `ALPHABET_FLOOR`, so
+    # it must name a route token OUTSIDE the bar. A Python carrier does not,
+    # and two of them name no token at all.
+    #
+    # ONE DEFAULT FOR THE TWO TYPES BROKE THE MODEL WHEN A MARKDOWN CARRIER WAS
+    # DECLARED. Two model arms failed, in the model, while the tree was
+    # correct. So a maintainer who did the live work correctly read a stale
+    # model rather than a missing sentence. A type-aware default makes that
+    # unrepresentable, so the NEXT markdown carrier costs no edit here.
     for name in sorted(DECLARED_CARRIERS):
-        text = prose.get(name, "This module states the bar and names no route.")
+        if name.endswith(".py"):
+            default = "This module states the bar and names no route."
+        else:
+            default = "The store file is memory.db."
+        text = prose.get(name, default)
         comment = "#" if name.endswith(".py") else ""
         _write(root, name, f"{comment} Heading\n\n{text}\n\n{_region()}")
     _write(root, "agents/pact-preparer.md", "This file teaches research.\n")
@@ -1046,6 +1198,14 @@ def _model_tree(tmp_path: Path) -> Path:
 
 def _mutate(path: Path, old: str, new: str) -> None:
     """Replace `old` with `new`, and refuse a mutation that changes nothing."""
+    assert path.is_file(), (
+        f"{path.name} is absent from the model tree, so this mutation cannot "
+        f"run. THE LIKELY CAUSE IS A CARRIER PATH REMOVED FROM "
+        f"DECLARED_CARRIERS, because the model builds one file for each "
+        f"declared path. READ THAT SET BEFORE YOU EDIT THIS MODEL. A carrier "
+        f"dropped from the declared list loses one of its two nets, and the "
+        f"repair is to restore the path rather than to repair this arm."
+    )
     text = path.read_text(encoding="utf-8")
     mutated = text.replace(old, new)
     assert mutated != text, (
@@ -1215,6 +1375,45 @@ class TestTheFloorGoesRed:
         assert absent == [SOURCE_HOME]
         assert declared_carriers_without_a_marker(root) == [SOURCE_HOME]
         assert SOURCE_HOME in pointer_warning(absent)
+
+    def test_a_carrier_keeps_a_net_when_its_declared_path_goes(self, tmp_path):
+        """🔴 THE TWO-EDIT ATTACK, AND IT IS THE ONE THAT DEFEATED THIS GUARD.
+
+        Edit one drops a path from `DECLARED_CARRIERS`. Edit two drops that
+        file region. The floor cannot report a path it no longer holds, and
+        the derived population cannot see a file with no marker. So the
+        carrier had NO net and the suite stayed green.
+
+        EACH CARRIER MUST KEEP A SECOND NET THAT THE FIRST EDIT CANNOT REACH.
+        A Python module of the repair package keeps the DIRECTORY net. Each
+        other carrier keeps the ROUTE ALPHABET, measured with its region
+        removed, so the token comes from the file rather than from the bar.
+        """
+        root = _model_tree(tmp_path)
+        for victim in sorted(DECLARED_CARRIERS):
+            _mutate(root / victim, _region(), "")
+            reduced = frozenset(DECLARED_CARRIERS - {victim})
+
+            floor_net = victim in [
+                name
+                for name in reduced
+                if MARKER_BEGIN not in read_carrier(root, name)
+            ]
+            package_net = victim in repair_modules_without_the_bar(
+                root, REPAIR_PACKAGE_EXEMPTIONS
+            )
+            alphabet_net = victim in store_reaching_files_without_the_bar(
+                root, ROUTE_TOKENS, POPULATION_EXEMPTIONS
+            )
+            assert not floor_net, "the floor saw a path it no longer holds"
+            assert package_net or alphabet_net, (
+                f"{victim} has NO net once its declared path goes. One edit to "
+                f"DECLARED_CARRIERS and one to the file then pass in silence. "
+                f"Give it a second net: the repair package uses the directory, "
+                f"and each other carrier must name a route token OUTSIDE its "
+                f"marked region."
+            )
+            root = _model_tree(tmp_path)
 
     def test_the_floor_is_not_the_derived_population(self, tmp_path):
         """A carrier nobody declared joins the comparison, with no edit here."""
