@@ -21,6 +21,12 @@ from pathlib import Path
 
 from .paths import get_claude_config_dir
 
+# The status returned when each link is correct and nothing was written. The
+# caller ROUTES ON THIS VALUE, so export it rather than let a second magic
+# string sit beside the "failed" test in session_init. A substring search on
+# free text is what a later reader gets incorrect.
+SYMLINKS_VERIFIED_MESSAGE = "PACT symlinks verified"
+
 # Suffix of the temporary link that the atomic swap builds beside its target.
 # It does NOT end in ".md", so a sweep of the destination directory for
 # "pact-*.md" does not meet it.
@@ -167,5 +173,5 @@ def setup_plugin_symlinks() -> str | None:
             messages.append(f"{agents_failed} agents failed")
 
     if not messages:
-        return "PACT symlinks verified"
+        return SYMLINKS_VERIFIED_MESSAGE
     return "PACT: " + ", ".join(messages)

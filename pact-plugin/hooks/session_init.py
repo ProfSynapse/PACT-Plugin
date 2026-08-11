@@ -105,7 +105,7 @@ from shared.session_registry import resolve as _registry_resolve
 from shared.paths import get_claude_config_dir
 
 # Import extracted modules (decomposed for maintainability per M5 audit finding).
-from shared.symlinks import setup_plugin_symlinks
+from shared.symlinks import SYMLINKS_VERIFIED_MESSAGE, setup_plugin_symlinks
 from shared.claude_md_manager import (
     ensure_project_memory_md,
     file_lock,
@@ -153,6 +153,24 @@ _UNKNOWN_ROLE_NOTICE = (
     "unrecognized agent_type), so lead-only session setup was skipped. If you "
     "meant to drive PACT as the orchestrator, relaunch with "
     "`--agent PACT:pact-orchestrator`."
+)
+
+
+# Caveat appended to the symlink refresh status when the refresh MOVED
+# something. It names the subject of the repair and the one thing the repair
+# does NOT reach.
+#
+# EMITTED ONLY WHEN A LINK MOVED, and that is a correctness property rather
+# than a matter of taste. The refresh makes the resolution SURFACE current and
+# it does NOT make a LOADED body current, because an agent keeps the body it
+# got at spawn. A notice that spoke on a quiet session start would report
+# "surface current" almost always, and a reader would take that as "the bodies
+# are fresh". ONE-DIRECTIONAL EMISSION removes that reading: the notice emits
+# no green, so no green can be misread.
+_SYMLINK_REPOINT_NOTICE = (
+    "The PACT agent and protocol links now point at the current plugin root. "
+    "This does NOT refresh an agent that is live: an agent keeps the body it "
+    "got at spawn, and a new spawn gets the current body."
 )
 
 
@@ -931,14 +949,30 @@ def main():
         if source in ("startup", "resume") and _should_warn_unknown_role(input_data):
             system_messages.append(_UNKNOWN_ROLE_NOTICE)
 
-        # 1. Set up plugin symlinks (enables @~/.claude/protocols/pact-plugin/ references)
-        # Context resets (compact/clear): symlinks are already set up from original session
-        if not is_context_reset:
-            symlink_result = setup_plugin_symlinks()
-            if symlink_result and "failed" in symlink_result.lower():
-                system_messages.append(symlink_result)
-            elif symlink_result:
+        # 1. Refresh the plugin symlinks (enables @~/.claude/protocols/pact-plugin/
+        # references, and resolves an unprefixed agent name to the CURRENT root).
+        #
+        # NO SOURCE GATE ON THE CALL. It ran behind `if not is_context_reset:` on
+        # the assumption that a context reset inherits the links of the original
+        # session. THAT PREDICATE ANSWERS EXISTENCE AND THE CALLER ASKS CURRENCY:
+        # a link can be present and out of date at one moment. An install that
+        # landed mid-launch left each link at the prior root until the next
+        # launch, so a compact or a clear now repairs them.
+        #
+        # THE GATE MOVES TO THE NO-CHANGE MESSAGE, where it is the correct
+        # predicate. That message answers "did the user see this before", a
+        # repetition question, and the gate answers repetition correctly.
+        symlink_result = setup_plugin_symlinks()
+        if symlink_result and "failed" in symlink_result.lower():
+            system_messages.append(symlink_result)
+        elif symlink_result == SYMLINKS_VERIFIED_MESSAGE:
+            # Nothing moved. Suppress on a context reset, so a quiet compact
+            # gains no new output.
+            if not is_context_reset:
                 context_parts.append(symlink_result)
+        elif symlink_result:
+            # A LINK MOVED. Report it on each source, with the caveat beside it.
+            context_parts.append(f"{symlink_result}. {_SYMLINK_REPOINT_NOTICE}")
 
         # 3. Ensure project has CLAUDE.md with memory sections
         project_md_msg = ensure_project_memory_md()

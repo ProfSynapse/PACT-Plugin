@@ -411,6 +411,51 @@ class TestAtomicRepoint:
         assert "protocols updated" in result
         assert protocols_link.resolve() == (plugin_root / "protocols").resolve()
 
+    def test_the_count_comes_from_a_comparison_made_before_the_write(
+        self, tmp_path, monkeypatch
+    ):
+        """THE ORDER OF THE READ AND THE WRITE IS CORRECTNESS, NOT STYLE.
+
+        The count of links that moved comes from a comparison of the link
+        target against the file it is about to point at. THAT COMPARISON MUST
+        RUN BEFORE THE WRITE. A later change that re-reads the link AFTER the
+        write makes the two values agree at each run, so the count goes to 0
+        and the report goes silent from then on, with a green suite.
+
+        WHICH HALF OF THIS ARM DOES THE WORK, MEASURED RATHER THAN ASSUMED.
+        Against a mutant that writes first and compares after, THE TARGET
+        ASSERTION PASSES and THE COUNT ASSERTION REDDENS. The destination holds
+        the prior link at the moment of the swap under either order, so the
+        target assertion does NOT separate the two orders on its own. It
+        records the state that the count is taken from, and the count is what
+        catches the change.
+        """
+        from shared.symlinks import setup_plugin_symlinks
+
+        plugin_root, agents_dst = self._agent_link_at_wrong_target(tmp_path)
+        prior_target = os.readlink(agents_dst / "pact-test.md")
+
+        targets_at_swap = []
+        real_replace = os.replace
+
+        def watched_replace(src, dst):
+            targets_at_swap.append(os.readlink(dst))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", watched_replace)
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+        result = setup_plugin_symlinks()
+
+        assert targets_at_swap == [prior_target], (
+            "At the instant of the swap the destination must still hold the "
+            "PRIOR target. The count that reaches the user comes from a "
+            "comparison against that target, and a comparison made after the "
+            "write reports a clean pass on each run."
+        )
+        assert "1 agents updated" in result
+
     def test_stale_temporary_path_does_not_block_the_repoint(self, tmp_path, monkeypatch):
         """A crashed run can leave a temporary path behind. The swap removes it
         first, and leaves none of its own behind."""
