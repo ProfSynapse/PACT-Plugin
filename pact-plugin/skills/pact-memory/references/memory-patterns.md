@@ -170,20 +170,20 @@ results = json.loads(raw)
 
 for mem in results:
     print(f"\n=== Past Context ===")
-    print(f"Context: {mem["context"]}")
-    print(f"Goal: {mem["goal"]}")
+    print(f"Context: {mem['context']}")
+    print(f"Goal: {mem['goal']}")
 
-    if mem["lessons_learned"]:
+    if mem['lessons_learned']:
         print(f"\nLessons:")
-        for lesson in mem["lessons_learned"]:
+        for lesson in mem['lessons_learned']:
             print(f"  - {lesson}")
 
-    if mem["decisions"]:
+    if mem['decisions']:
         print(f"\nDecisions:")
-        for dec in mem["decisions"]:
-            print(f"  - {dec["decision"]}")
-            if dec["rationale"]:
-                print(f"    Rationale: {dec["rationale"]}")
+        for dec in mem['decisions']:
+            print(f"  - {dec['decision']}")
+            if dec['rationale']:
+                print(f"    Rationale: {dec['rationale']}")
 ```
 
 ## Pattern 5: Decision Tracking
@@ -202,13 +202,13 @@ decisions = json.loads(raw)
 
 # Compile decision history
 for mem in decisions:
-    if mem["decisions"]:
-        print(f"\n{mem["created_at"]}: {mem["context"]}")
-        for dec in mem["decisions"]:
-            print(f"  Decision: {dec["decision"]}")
-            print(f"  Rationale: {dec["rationale"]}")
-            if dec["alternatives"]:
-                print(f"  Alternatives: {', '.join(dec["alternatives"])}")
+    if mem['decisions']:
+        print(f"\n{mem['created_at']}: {mem['context']}")
+        for dec in mem['decisions']:
+            print(f"  Decision: {dec['decision']}")
+            print(f"  Rationale: {dec['rationale']}")
+            if dec['alternatives']:
+                print(f"  Alternatives: {', '.join(dec['alternatives'])}")
 ```
 
 ## Pattern 6: Entity Reference
@@ -228,14 +228,14 @@ auth_memories = json.loads(raw)
 # Compile entity knowledge
 entity_notes = {}
 for mem in auth_memories:
-    for entity in mem["entities"]:
-        if entity["name"] not in entity_notes:
-            entity_notes[entity["name"]] = {
-                "type": entity["type"],
+    for entity in mem['entities']:
+        if entity['name'] not in entity_notes:
+            entity_notes[entity['name']] = {
+                "type": entity['type'],
                 "notes": []
             }
-        if entity["notes"]:
-            entity_notes[entity["name"]]["notes"].append(entity["notes"])
+        if entity['notes']:
+            entity_notes[entity['name']]["notes"].append(entity['notes'])
 
 # Display accumulated knowledge
 for name, info in entity_notes.items():
