@@ -309,7 +309,7 @@ class TestAtomicRepoint:
 
     The previous shape was ``dst.unlink()`` then ``dst.symlink_to(target)``,
     which left the destination EMPTY between the two calls. That window is
-    harmless while the refresh runs at a launch only. It becomes a live hazard
+    harmless while the refresh runs at a launch only. It becomes a live risk
     once the refresh runs at each session start, because it can then fall
     mid-session while a spawn resolves the link, and a spawn that lands in it
     gets NO file at all.
@@ -320,7 +320,7 @@ class TestAtomicRepoint:
     separately, so a revert of one loop alone cannot stay green.
 
     THE SWAP DOES NOT PROTECT A USER OVERRIDE. ``os.replace`` onto a path that
-    holds a real file succeeds and destroys that file. The ``is_symlink()``
+    holds a plain file succeeds and destroys that file. The ``is_symlink()``
     guard at each call site is what protects it, and
     ``test_skips_real_agent_files`` is the arm that catches its removal.
     """
@@ -443,3 +443,91 @@ class TestAtomicRepoint:
         assert not fnmatch("pact-test.md" + _SWAP_SUFFIX, "pact-*.md")
         # Positive control: the pattern DOES meet the name it is meant for.
         assert fnmatch("pact-test.md", "pact-*.md")
+
+
+class TestAgentFailureReport:
+    """The agents loop REPORTS the files it could not write.
+
+    THE MEASURED STATE THIS CLOSES: with the destination directory at mode
+    0o500, so that no link can be written, setup_plugin_symlinks() returned
+    'PACT: protocols updated'. Thirteen agent links stayed at the prior root
+    and the message NAMED A SUCCESS. The agents loop caught OSError and ran a
+    bare `continue`, while the protocols loop appended a failure message for
+    the same error class.
+
+    IT MATTERS MORE AFTER THE REFRESH RUNS AT EACH SESSION START, because this
+    function is then the only mechanism that keeps the resolution surface
+    current. A silent failure in it is a stale agent body with no signal.
+
+    WHY THESE ARMS FORCE THE ERROR WITH A PATCH RATHER THAN WITH A DIRECTORY
+    MODE: a mode-based fixture does not hold for a run as root, where a 0o500
+    directory stays writable. The patch reaches the same except branch on each
+    platform and for each user.
+    """
+
+    @staticmethod
+    def _plugin_with_two_agents(tmp_path):
+        """Build a plugin root with two agent files, and NO protocols dir.
+
+        With no protocols directory, the protocols half is skipped, so each
+        message in the result comes from the agents loop.
+        """
+        plugin_root = tmp_path / "plugin"
+        agents_src = plugin_root / "agents"
+        agents_src.mkdir(parents=True)
+        (agents_src / "pact-good.md").write_text("agent def")
+        (agents_src / "pact-bad.md").write_text("agent def")
+        return plugin_root
+
+    def test_reports_the_count_of_agent_links_it_could_not_write(
+        self, tmp_path, monkeypatch
+    ):
+        """A run that writes NO agent link must not return a message that names
+        a success."""
+        from shared.symlinks import setup_plugin_symlinks
+
+        plugin_root = self._plugin_with_two_agents(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+        with patch.object(Path, "symlink_to", side_effect=OSError("Permission denied")):
+            result = setup_plugin_symlinks()  # must NOT raise
+
+        assert result is not None
+        assert "2 agents failed" in result
+        assert "verified" not in result, (
+            "A run that wrote nothing must not report the no-change message."
+        )
+        # CONTRACT WITH THE CALLER: session_init routes this result to the user
+        # by the predicate below. A reword that drops "failed" breaks the route.
+        assert "failed" in result.lower()
+
+    def test_one_bad_agent_file_does_not_stop_the_loop(self, tmp_path, monkeypatch):
+        """The loop CONTINUES past a file it cannot write, and reports the two
+        outcomes separately."""
+        from shared.symlinks import setup_plugin_symlinks
+
+        plugin_root = self._plugin_with_two_agents(tmp_path)
+        agents_dst = tmp_path / "home" / ".claude" / "agents"
+        real_symlink_to = Path.symlink_to
+
+        def fail_one_name(self, target, target_is_directory=False):
+            # Reaches the repoint path too, whose temporary name carries the
+            # same stem.
+            if self.name.startswith("pact-bad"):
+                raise OSError("Permission denied")
+            return real_symlink_to(self, target, target_is_directory)
+
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+        monkeypatch.setattr(Path, "symlink_to", fail_one_name)
+
+        result = setup_plugin_symlinks()
+
+        assert "1 agents linked" in result
+        assert "1 agents failed" in result
+        assert (agents_dst / "pact-good.md").is_symlink(), (
+            "The good file must be written. A loop that stops at the first "
+            "failure leaves the rest of the agents stale."
+        )
+        assert not (agents_dst / "pact-bad.md").exists()

@@ -150,10 +150,10 @@ def setup_plugin_symlinks() -> str | None:
                 # Skip if real file exists (user override)
             except OSError:
                 # COUNT the file, then CONTINUE. One bad file must not stop the
-                # loop, and the protocols loop above reports its own failures
-                # already. Before this count the agents loop was SILENT: a run
-                # that wrote no agent link at all returned a message that named
-                # a success, and the stale links had no signal of their own.
+                # loop, and the protocols loop above reports its own failures.
+                # Before this count the agents loop was SILENT: a run that
+                # wrote no agent link at all returned a message that named a
+                # success, and the stale links had no signal of their own.
                 agents_failed += 1
                 continue
 
