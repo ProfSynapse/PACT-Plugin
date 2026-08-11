@@ -280,6 +280,22 @@ ROUTE_TOKENS = {
 #
 # THESE TOKENS DO SELECT FOR ARM 3. A file that names one reaches the store,
 # so it needs the rule, and it needs it more than a file that uses the CLI.
+# 🔴 STATED BOUND: THIS ALPHABET IS BOUND TO A BINDING NAME AND CANNOT SEE A
+# REBIND. Each token below spells the receiver as `memory`. A reader who writes
+# `m = PACTMemory()` and then `m.save(...)` reaches the store by the forbidden
+# route and selects NOTHING here. MEASURED, and the instance is live outside
+# this guard: a repository testing scenario binds `m` and calls `m.list(...)`.
+#
+# THE DANGEROUS DIRECTION IS THE REPAIR. An author who converts `memory.save(`
+# to a different receiver satisfies this guard and keeps the forbidden route.
+# So a green from arm 3 says "no token matched", and it does NOT say "no file
+# reaches the store by the module API".
+#
+# DO NOT CLOSE THIS BY MORE SPELLINGS. A longer name list is the same defect
+# with more rows, because the receiver is free. The repair is a predicate over
+# the CALL rather than over the text. It is not on this branch, and the tracker
+# carries it with the population widening, because either repair alone leaves
+# the question open.
 FORBIDDEN_ROUTE_TOKENS = {
     "memory.save(": "the module API, which the bar forbids",
     "memory.search(": "the module API, which the bar forbids",
@@ -302,8 +318,11 @@ ALPHABET_FLOOR = frozenset(path for path in DECLARED_CARRIERS if path.endswith("
 # Keys are relative to `PLUGIN_DIR`. Values state the cause.
 #
 # EMPTY TODAY. THE RESULT THAT MADE IT EMPTY IS A FLOOR AND NOT A CENSUS, and
-# it is stated as the search that produced it: the eight tokens above, applied
-# to the five patterns below, selected the markdown carriers and no other file.
+# it is stated as the search that produced it: the tokens in `ROUTE_TOKENS`,
+# applied to `POPULATION_PATTERNS`, selected the markdown carriers and no other
+# file. THE COUNTS ARE NAMED BY THEIR CONSTANT RATHER THAN WRITTEN OUT, because
+# a written count goes stale on the day a token or a pattern is added, and the
+# stale form reads as a measurement.
 # A WIDER ALPHABET REACHES MORE. An eighteen-token set reaches two further
 # instruction surfaces, and the team-lead ruled those OUT on ACTIONABILITY: they
 # give an INTENT a reader cannot type, so the reader must open the memory skill
@@ -624,11 +643,31 @@ def copies_that_differ_only_by_case(root: Path) -> list[str]:
 
 
 def population_files(root: Path) -> list[Path]:
-    """Each instruction surface the arm-3 walk covers, at the five patterns."""
+    """Each instruction surface the arm-3 walk covers.
+
+    THE PATTERNS ARE `POPULATION_PATTERNS`, and this docstring does not count
+    them. A count here goes stale on the day one is added.
+
+    🔴 THE YIELD IS DE-DUPLICATED AND THE DECLARATION IS NOT TOUCHED. Two of
+    the patterns overlap on purpose, so one file can arrive two times.
+    MEASURED: 76 paths yielded and 75 distinct, with
+    `skills/pact-memory/SKILL.md` matched by `skills/*/SKILL.md` and by
+    `skills/pact-memory/**/*.md`.
+
+    DE-DUPLICATION HERE IS SET-IDENTICAL. It loses NO member, so it is neither
+    a widening nor a narrowing of the covered population. Removal of a glob
+    is a change to the DECLARED population, which must not move, so the
+    repair belongs to the yield rather than to `POPULATION_PATTERNS`.
+
+    WHY IT MATTERS WHEN NO ARM COUNTS. Each arm here asks `any(...)` or keys
+    on the path, so a repeat cannot move a verdict. THE FRAGILITY CENSUS
+    COUNTS, and that count decides whether a route token is one edit away from
+    idle. AN INFLATED COUNT READS AS SAFETY.
+    """
     found: list[Path] = []
     for pattern in POPULATION_PATTERNS:
         found.extend(root.glob(pattern))
-    return sorted(found)
+    return sorted(set(found))
 
 
 def files_reaching_the_store(root: Path, tokens: dict, ignore_bar: bool = False) -> dict:
@@ -1042,6 +1081,44 @@ class TestTheAlphabetDoesNotSelectItself:
     THE ALPHABET FLOOR CARRIES HALF OF THIS PROPERTY, by reading the stripped
     text. The arm below carries the other half, over the tokens.
     """
+
+    def test_the_population_holds_no_duplicate_path(self):
+        """🔴 THE CLASS, NOT THE INSTANCE.
+
+        `POPULATION_PATTERNS` holds two globs that overlap, so one file can
+        arrive two times. `population_files` de-duplicates the yield, and THIS
+        ARM GUARDS THAT DE-DUPLICATION.
+
+        🔴 STATED ACCURATELY, BECAUSE A MUTANT CORRECTED THE FIRST WORDING.
+        This arm does NOT detect a new overlapping glob, and it does not need
+        to. MEASURED: with a third overlapping glob added, the arm stays
+        GREEN, because the de-duplication absorbs the overlap and no duplicate
+        reaches the yield. A new glob is harmless while the de-duplication
+        stands. WHAT REDS IS THE REMOVAL OF THE DE-DUPLICATION, measured, and
+        that is the one edit that re-opens the defect.
+
+        THE FAILURE DIRECTION IS WHAT EARNS THE ROW. NO SHIPPED ARM COUNTS
+        THIS POPULATION: each one asks `any(...)` or keys on the path, so a
+        repeat moves no verdict and stays invisible. The fragility census is
+        the one instrument that counts, and its count decides whether a route
+        token sits one edit away from idle. AN INFLATED COUNT READS AS SAFETY,
+        so the defect hides in the direction of a clean answer.
+
+        MEASURED before the repair: 76 paths yielded, 75 distinct, the repeat
+        being `skills/pact-memory/SKILL.md`.
+        """
+        paths = population_files(PLUGIN_DIR)
+        repeated = sorted(
+            {str(p) for p in paths if paths.count(p) > 1}
+        )
+        assert not repeated, (
+            f"`population_files` yields {len(paths)} paths and "
+            f"{len(set(paths))} distinct. Repeated: {repeated}. TWO PATTERNS "
+            f"IN `POPULATION_PATTERNS` OVERLAP. DO NOT REPAIR THIS BY REMOVAL "
+            f"OF A PATTERN: that changes the DECLARED population, and the "
+            f"declaration must not move. De-duplicate the YIELD instead, which "
+            f"loses no member and is set-identical."
+        )
 
     def test_each_token_does_work_outside_the_bar_text(self):
         """No token may live only inside the marked regions."""
