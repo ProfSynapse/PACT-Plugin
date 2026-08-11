@@ -76,16 +76,13 @@ Run a task that completes successfully, triggering the memory enforcement hook.
 
 **Verification**:
 ```bash
-# Check recent pact-memory entries
-python3 -c "
-from pact_memory.scripts import PACTMemory
-m = PACTMemory()
-recent = m.list(limit=3)
-for r in recent:
-    print(f'{r.created_at}: {r.context[:80]}...')
-"
+# Check recent pact-memory entries. Run this from the repository root.
+# A memory operation goes through the pact-memory CLI. Do not import the
+# memory package, and pass no --db-path: the CLI resolves the default store.
+python3 pact-plugin/skills/pact-memory/scripts/cli.py list --limit 3
 ```
-Should show a recent entry related to the task.
+The command prints a JSON envelope with the 3 most recent records. Read the
+`created_at` and `context` fields. One record must relate to the task.
 
 ### Step 5: Verify Working Memory Sync
 
