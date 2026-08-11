@@ -317,9 +317,18 @@ class _CapabilityInjector:
     MEMBERSHIP PREDICATE, stated because leaving it unstated is what let the
     count be wrong three times. The covered set is EVERY `os.*` call in
     `_atomic_write_text` whose `NotImplementedError` must not reach the caller
-    unmapped. That is FIVE sites, of which FOUR are MAPPED to a distinct
-    `ContainmentError` and the FIFTH is SWALLOWED so the original exception
-    wins.
+    unmapped. That is SIX sites, of which FOUR are MAPPED to a distinct
+    `ContainmentError` and TWO are SWALLOWED.
+
+    THE SIXTH ARRIVED WHEN THE LINE-ENDING RESTORE MOVED INTO THIS FUNCTION,
+    AND IT IS THE PREDICATE ABOVE DOING ITS JOB. `_detect_line_ending` opens the
+    TARGET through the pinned parent descriptor, so it is a new `os.*` call
+    whose NotImplementedError must not reach the caller. It is SWALLOWED rather
+    than mapped, and that is deliberate: this read chooses a line ending, it
+    decides nothing about containment, so a refusal here would be a new
+    over-block on an axis that is not containment. A platform without
+    directory-descriptor support still refuses the WRITE one moment later at
+    site 3, which is where that refusal belongs.
 
     `dir_fd` was never the discriminator -- only a proxy close enough to look
     like one. Counting "sites that raise ContainmentError" gives four; counting
@@ -330,15 +339,20 @@ class _CapabilityInjector:
     Ask of any new `os.*` call: must its NotImplementedError not reach the
     caller? Yes means it belongs here, whatever its arguments look like.
 
-    Three of the five sites are `os.open`, so a naive patch cannot tell them
+    Four of the six sites are `os.open`, so a naive patch cannot tell them
     apart. The MECHANICAL discriminator -- an implementation detail of this
-    injector, not the definition -- is the pair (dir_fd, path):
+    injector, not the definition -- is the triple (dir_fd, path, O_CREAT). The
+    third term earns its place: sites 3 and 6 agree on the first two, so a
+    predicate built on the pair alone fires at BOTH and lands two hits where
+    each row asserts one:
 
         site 1  parent-directory open   os.open,    dir_fd is None      MAPPED
         site 2  ancestry walk           os.open,    dir_fd, path ".."   MAPPED
-        site 3  temp create             os.open,    dir_fd, path != ".."MAPPED
+        site 3  temp create             os.open,    dir_fd, O_CREAT     MAPPED
         site 4  rename                  os.replace                      MAPPED
         site 5  cleanup unlink          os.unlink,  dir_fd            SWALLOWED
+        site 6  line-ending detect      os.open,    dir_fd, no O_CREAT
+                                                                     SWALLOWED
 
     Getting this subtly wrong lands the injection on a DIFFERENT site while
     every assertion still passes -- which is why each test asserts the
@@ -377,10 +391,13 @@ class _CapabilityInjector:
         is_parent = dir_fd is None
         if is_walk:
             self.walk_calls += 1
+        is_create = dir_fd is not None and path != ".." and bool(flags & os.O_CREAT)
+        is_detect = dir_fd is not None and path != ".." and not (flags & os.O_CREAT)
         hit = (
             (self.site == 1 and is_parent)
             or (self.site == 2 and is_walk)
-            or (self.site == 3 and dir_fd is not None and path != "..")
+            or (self.site == 3 and is_create)
+            or (self.site == 6 and is_detect)
         )
         if hit:
             self.hits += 1
@@ -501,6 +518,47 @@ class TestCapabilityBranchInjection:
         assert _fd_count() == fds_before
         assert not [p for p in target.parent.iterdir() if p.name != target.name], (
             "a stray temp file was left next to the user's CLAUDE.md"
+        )
+
+    def test_the_line_ending_detect_site_is_swallowed_and_falls_back_to_lf(
+        self, tmp_path, monkeypatch, twin
+    ):
+        """Site 6 is SWALLOWED, and this row is the one that says so out loud.
+
+        THE OTHER FOUR ROWS ASSERT A REFUSAL. This one asserts that a refusal
+        does NOT happen, so it is the row that would be missing if somebody read
+        "all dir_fd sites map to ContainmentError" off the four mapped rows and
+        applied it here.
+
+        WHY SWALLOWED IS CORRECT. This read chooses a line ending. It decides
+        nothing about containment, so a refusal here would be a new over-block
+        on an axis that is not containment. The platform capability that is
+        missing still stops the WRITE, one moment later at site 3, and that is
+        where the refusal belongs.
+
+        THE FALLBACK IS LF, WHICH IS THE SAME ANSWER A TARGET NOT ON DISK GIVES.
+        So an unreadable target and an absent one agree, and neither converts a
+        document that has no CRLF in it.
+        """
+        project, target = _nested_project(tmp_path)
+
+        injector = _CapabilityInjector(6, _unsupported)
+        injector.install(monkeypatch)
+        twin._atomic_write_text(target, "NEW PAYLOAD\n", project)
+        monkeypatch.undo()
+
+        # NON-VACUITY: the injection fired. Without this the assertions below
+        # hold for a run where site 6 was never reached at all, which is the
+        # state a renamed helper or a moved detection would produce.
+        assert injector.hits == 1, (
+            f"site 6 injection fired {injector.hits}x, expected exactly 1. The "
+            f"line-ending detection is no longer reached through the pinned "
+            f"parent descriptor, so this row is measuring nothing"
+        )
+        # The write COMPLETED rather than refused, and it landed the payload.
+        assert target.read_text(encoding="utf-8") == "NEW PAYLOAD\n"
+        assert target.read_bytes() == b"NEW PAYLOAD\n", (
+            "the swallowed capability failure changed the bytes that landed"
         )
 
     def test_walk_site_is_genuinely_reached_on_the_nested_topology(

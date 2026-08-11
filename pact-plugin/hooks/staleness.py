@@ -346,65 +346,6 @@ def estimate_tokens(text: str) -> int:
 _estimate_tokens = estimate_tokens
 
 
-def _detect_line_ending(claude_md_path: Path) -> str:
-    """
-    Report the line ending this file predominantly uses, as raw bytes see it.
-
-    READ THE BYTES, BECAUSE EVERY TEXT READ IN THIS MODULE HAS ALREADY LOST THE
-    ANSWER. `Path.read_text` applies universal-newline translation, so a CRLF
-    file arrives as LF and the original ending is unrecoverable from the string
-    every other function here holds. This is the only place that looks.
-
-    DOMINANT WINS, AND A TIE GOES TO LF. The write this feeds is unrecoverable,
-    because CLAUDE.md is gitignored, so the correct rule is the one that changes
-    the fewest lines. Dominant-wins minimises that count by construction. A file
-    with no CRLF at all has a dominant of LF, so no file can gain an ending it
-    did not have.
-
-    A file written only with bare carriage returns reports LF. That matches what
-    this module does with such a file today, so the rule adds no new conversion.
-
-    Args:
-        claude_md_path: The file about to be read and possibly rewritten.
-
-    Returns:
-        Either the two-character CRLF sequence or a single newline.
-    """
-    try:
-        raw = claude_md_path.read_bytes()
-    except OSError:
-        return "\n"
-    crlf_count = raw.count(b"\r\n")
-    lf_count = raw.count(b"\n") - crlf_count
-    return "\r\n" if crlf_count > lf_count else "\n"
-
-
-def _restore_line_ending(content: str, line_ending: str) -> str:
-    """
-    Re-apply `line_ending` to a string that carries LF endings.
-
-    THIS IS THE LAST STEP BEFORE THE WRITE AND IT MUST STAY THERE. Everything
-    upstream measures an LF-normalised string: `estimate_tokens` counts it, the
-    offsets in `entry_starts` index it, and the strip consumes a span of it. Move
-    this earlier and every one of those measurements changes meaning.
-
-    `content` reaches here with no carriage return in it, because it descends
-    from a `read_text` that removed them and this module writes only newlines.
-    That is what makes the substitution safe and repeatable: a second pass over
-    an unchanged file produces the same bytes.
-
-    Args:
-        content: Full file content, with LF endings.
-        line_ending: The ending to write, from `_detect_line_ending`.
-
-    Returns:
-        `content` with its endings replaced, or unchanged when the target is LF.
-    """
-    if line_ending == "\n":
-        return content
-    return content.replace("\n", line_ending)
-
-
 def _strip_budget_warnings(pinned_content: str) -> str:
     """
     Remove the run of budget-warning comment lines at the head of a pinned body.
@@ -1027,12 +968,6 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
     except (OSError, UnicodeDecodeError):
         return None
 
-    # CAPTURE THE ENDING BEFORE ANYTHING MEASURES THE TEXT. The read above has
-    # already normalised it away, so this asks the bytes instead. Nothing
-    # between here and the write sees the answer: every step below operates on
-    # the LF-normalised `content`, exactly as it did before this was added.
-    line_ending = _detect_line_ending(claude_md_path)
-
     parsed = _parse_pinned_section(content)
     if parsed is None:
         return None
@@ -1112,15 +1047,14 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
                 # the file's existing permissions alone; the helper normalises
                 # it to 0o600, matching every other writer in the plugin.
                 #
-                # RESTORE THE ENDING HERE AND NOWHERE EARLIER. This is the last
-                # point before the bytes leave, so every measurement above ran
-                # on the same LF text it always ran on. `_atomic_write_text`
-                # translates nothing, so what this passes is what lands.
-                _atomic_write_text(
-                    claude_md_path,
-                    _restore_line_ending(new_content, line_ending),
-                    project_root,
-                )
+                # THE LINE ENDING IS NOT THIS SITE'S BUSINESS ANY MORE, AND DO
+                # NOT RESTORE ONE HERE. This module used to detect the ending
+                # above and re-apply it on this line. `_atomic_write_text` now
+                # reads the ending off the target and applies it for each of its
+                # callers, so a restore here would run the substitution two
+                # times. Every measurement above continues to run on the
+                # LF-normalised `content`, exactly as it always did.
+                _atomic_write_text(claude_md_path, new_content, project_root)
         except ContainmentError:
             return "Pinned staleness skipped: path precondition not met."
         except TimeoutError:
