@@ -59,16 +59,19 @@ Exit codes:
      is absent. Nothing was scanned.
 <!-- PACT_STORE_BAR_BEGIN -->
 **STORE ACCESS.** A memory operation (save, search, get, list, update or
-delete a record) goes through the pact-memory CLI. DO NOT USE `--db-path`,
-for one verb or for one purpose. YOU DO NOT SELECT A STORE. A path you
-choose is not the store the memory of the team lives in, so a save there is
+delete a record) goes through the pact-memory CLI. YOU DO NOT SELECT A
+STORE. Do not name a store by `--db-path`, by an environment variable, or by
+one more route somebody adds later. Let the CLI resolve it. A store you
+select is not the store the memory of the team lives in, so a save there is
 lost rather than shared. STORE INSPECTION is different: a row count, a
-column audit, a schema check, or any question about the file itself. To
-inspect, do not run a CLI verb, do not import a module below
-`skills/pact-memory/scripts/`, and do not open the store read-write. Check
+column audit, or a schema check on the file. To inspect, do not run a CLI
+verb, do not import a module below `skills/pact-memory/scripts/`, and do not
+open the store read-write. In ONE command, against ONE resolved path, check
 that `memory.db-wal` and `memory.db-shm` are both absent by their full
-names, then open the store with `mode=ro` and `immutable=1`. Without
-`immutable=1` the open fails. If a sidecar is present, stop and report.
+names, then open with `mode=ro` and `immutable=1`. Without `immutable=1` the
+open fails. If a sidecar is present, stop and report. The read does not load
+the vector extension, so it cannot answer a question about `vec_memories`.
+Stop and report rather than take a barred route.
 <!-- PACT_STORE_BAR_END -->
 The `pact-memory` skill carries the full rule.
 """

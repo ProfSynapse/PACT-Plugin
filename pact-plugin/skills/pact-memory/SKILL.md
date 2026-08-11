@@ -27,27 +27,32 @@ The PACT Memory skill provides:
 
 <!-- PACT_STORE_BAR_BEGIN -->
 **STORE ACCESS.** A memory operation (save, search, get, list, update or
-delete a record) goes through the pact-memory CLI. DO NOT USE `--db-path`,
-for one verb or for one purpose. YOU DO NOT SELECT A STORE. A path you
-choose is not the store the memory of the team lives in, so a save there is
+delete a record) goes through the pact-memory CLI. YOU DO NOT SELECT A
+STORE. Do not name a store by `--db-path`, by an environment variable, or by
+one more route somebody adds later. Let the CLI resolve it. A store you
+select is not the store the memory of the team lives in, so a save there is
 lost rather than shared. STORE INSPECTION is different: a row count, a
-column audit, a schema check, or any question about the file itself. To
-inspect, do not run a CLI verb, do not import a module below
-`skills/pact-memory/scripts/`, and do not open the store read-write. Check
+column audit, or a schema check on the file. To inspect, do not run a CLI
+verb, do not import a module below `skills/pact-memory/scripts/`, and do not
+open the store read-write. In ONE command, against ONE resolved path, check
 that `memory.db-wal` and `memory.db-shm` are both absent by their full
-names, then open the store with `mode=ro` and `immutable=1`. Without
-`immutable=1` the open fails. If a sidecar is present, stop and report.
+names, then open with `mode=ro` and `immutable=1`. Without `immutable=1` the
+open fails. If a sidecar is present, stop and report. The read does not load
+the vector extension, so it cannot answer a question about `vec_memories`.
+Stop and report rather than take a barred route.
 <!-- PACT_STORE_BAR_END -->
 
 The sections below give the detail behind each sentence above.
 
 MORE ON THE BRIGHT LINE, because an agent will look for an exception. THE RULE
 IS A POLICY, AND IT IS NOT A CLAIM ABOUT WHAT THE TOOL DOES. An agent does not
-select a store. One command carries an exemption, and the owner of the tool
-controls that exemption rather than you. The danger is NOT that the flag
-reaches the live store. The flag binds the store you name, so the danger is
-that your save lands in a store nobody reads. For a memory system, a write
-that goes nowhere costs as much as a write that goes incorrectly.
+select a store. The CLI can tell you to run `setup --db-path <path>`. That
+message is correct for the tool and it does not apply to you. You reach it
+only after you pass `--db-path`, which this rule forbids. Do not run it.
+Report it and ask the user. The danger is NOT that the flag reaches the live
+store. The flag binds the store you name, so the danger is that your save
+lands in a store nobody reads. For a memory system, a write that goes nowhere
+costs as much as a write that goes incorrectly.
 
 ### To inspect the store
 
