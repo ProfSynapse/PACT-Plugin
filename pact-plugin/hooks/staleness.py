@@ -984,10 +984,22 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
     # THE PROBE READS ANY LINE START, THE STRIP READS OFFSET 0. That gap is
     # deliberate. A warning a user has moved below the head is still this
     # module's own report, so the section HAS been reported on and the pass may
-    # run. The strip cannot reach that line, so this pass does not repair it: it
-    # adds one current warning above it and the old line stays. That is the
-    # ratified cost of the residual, one extra line, and it is what a section
-    # WITH entries already does in the same state.
+    # run. The strip cannot reach that line, so this pass does not repair it and
+    # the old line stays.
+    #
+    # WHETHER A CURRENT WARNING GOES ABOVE IT TURNS ON THE MEASURED BODY ALONE,
+    # AND THAT CONDITION IS NEW. `_body_without_warnings` takes lines of this
+    # shape out of the measurement wherever they sit, so the stranded line adds
+    # no token to the decision.
+    #   - If the pins of the user exceed the budget, this pass adds one warning
+    #     and the section carries two lines, which is what a section WITH
+    #     entries does in the same state.
+    #   - If the pins of the user are within the budget, this pass adds NOTHING,
+    #     writes nothing, and the stranded line is the only one left.
+    # THE EARLIER WORDING ASSERTED THE ADDITION WITH NO CONDITION ON IT, and it
+    # called the extra line a ratified cost of the residual. That was correct
+    # while the count included the stranded line. The exclusion at the
+    # measurement site retired it for the COUNT, and the line itself stays.
     #
     # THE FORBIDDEN DIRECTION IS UNCHANGED AND MUST STAY SO. A section carrying
     # NO line of this module's own shape never reaches the pass, whatever its
