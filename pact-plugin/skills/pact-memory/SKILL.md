@@ -109,8 +109,8 @@ If a sidecar is present:
 ### To save a memory
 
 Run the pact-memory CLI `save` command with no `--db-path`. The CLI resolves
-the default store. The store-access rule above gives the cause, and that
-cause covers a write.
+the default store. The section "Store access: the two routes" above gives the
+cause, and that cause covers a write.
 
 Do not run `python3 setup_memory.py init`. That script runs as a script, it
 writes, and it accepts no `--db-path`, so the write reaches the live store and
