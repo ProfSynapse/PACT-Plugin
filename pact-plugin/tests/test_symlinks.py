@@ -12,8 +12,10 @@ setup_plugin_symlinks():
 7. Skips existing real agent files (user override)
 8. Returns "PACT symlinks verified" when all links already correct
 9. Handles OSError during protocol symlink creation
+10. Repoints a link by an atomic swap, with no empty moment at the destination
 """
 
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -300,3 +302,144 @@ class TestProtocolsMkdirFailOpen:
 
         assert result is not None
         assert "protocols failed" in result
+
+
+class TestAtomicRepoint:
+    """A repoint leaves NO moment with no file at the destination.
+
+    The previous shape was ``dst.unlink()`` then ``dst.symlink_to(target)``,
+    which left the destination EMPTY between the two calls. That window is
+    harmless while the refresh runs at a launch only. It becomes a live hazard
+    once the refresh runs at each session start, because it can then fall
+    mid-session while a spawn resolves the link, and a spawn that lands in it
+    gets NO file at all.
+
+    NON-VACUITY: the first two arms observe ``os.replace``, which the old pair
+    does not call. A revert to unlink-then-symlink_to leaves the observation
+    list EMPTY and reddens each of them. They also cover the two loops
+    separately, so a revert of one loop alone cannot stay green.
+
+    THE SWAP DOES NOT PROTECT A USER OVERRIDE. ``os.replace`` onto a path that
+    holds a real file succeeds and destroys that file. The ``is_symlink()``
+    guard at each call site is what protects it, and
+    ``test_skips_real_agent_files`` is the arm that catches its removal.
+    """
+
+    @staticmethod
+    def _agent_link_at_wrong_target(tmp_path):
+        """Build a plugin root, a home, and ONE agent link at a prior root."""
+        plugin_root = tmp_path / "plugin"
+        agents_src = plugin_root / "agents"
+        agents_src.mkdir(parents=True)
+        (agents_src / "pact-test.md").write_text("current agent def")
+
+        prior_agents = tmp_path / "prior-plugin" / "agents"
+        prior_agents.mkdir(parents=True)
+        (prior_agents / "pact-test.md").write_text("prior agent def")
+
+        agents_dst = tmp_path / "home" / ".claude" / "agents"
+        agents_dst.mkdir(parents=True)
+        (agents_dst / "pact-test.md").symlink_to(prior_agents / "pact-test.md")
+        return plugin_root, agents_dst
+
+    @staticmethod
+    def _watch_replace(monkeypatch):
+        """Record the destination state at the instant BEFORE each atomic move."""
+        observed = []
+        real_replace = os.replace
+
+        def watched_replace(src, dst):
+            observed.append((os.path.lexists(dst), Path(dst).is_symlink()))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", watched_replace)
+        return observed
+
+    def test_agent_destination_holds_a_link_at_the_moment_of_the_swap(
+        self, tmp_path, monkeypatch
+    ):
+        """The agents loop moves the new link ONTO a destination that holds the
+        old link."""
+        from shared.symlinks import setup_plugin_symlinks
+
+        plugin_root, agents_dst = self._agent_link_at_wrong_target(tmp_path)
+        dst_link = agents_dst / "pact-test.md"
+        observed = self._watch_replace(monkeypatch)
+
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+        result = setup_plugin_symlinks()
+
+        assert observed == [(True, True)], (
+            "The destination must hold a symlink at the instant of the move. "
+            "An EMPTY list means os.replace was not called at all, which is "
+            "the unlink-then-symlink_to shape this test forbids."
+        )
+        assert "1 agents updated" in result
+        assert dst_link.is_symlink()
+        assert dst_link.resolve() == (plugin_root / "agents" / "pact-test.md").resolve()
+        assert dst_link.read_text() == "current agent def"
+
+    def test_protocols_destination_holds_a_link_at_the_moment_of_the_swap(
+        self, tmp_path, monkeypatch
+    ):
+        """The protocols loop takes the same swap as the agents loop.
+
+        PAIRS WITH the agents arm above: the two loops carry separate copies of
+        the repoint, so one arm alone cannot see a revert of the other.
+        """
+        from shared.symlinks import setup_plugin_symlinks
+
+        plugin_root = tmp_path / "plugin"
+        (plugin_root / "protocols").mkdir(parents=True)
+        prior_protocols = tmp_path / "prior-plugin" / "protocols"
+        prior_protocols.mkdir(parents=True)
+
+        protocols_dir = tmp_path / "home" / ".claude" / "protocols"
+        protocols_dir.mkdir(parents=True)
+        protocols_link = protocols_dir / "pact-plugin"
+        protocols_link.symlink_to(prior_protocols)
+
+        observed = self._watch_replace(monkeypatch)
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+        result = setup_plugin_symlinks()
+
+        assert observed == [(True, True)]
+        assert "protocols updated" in result
+        assert protocols_link.resolve() == (plugin_root / "protocols").resolve()
+
+    def test_stale_temporary_path_does_not_block_the_repoint(self, tmp_path, monkeypatch):
+        """A crashed run can leave a temporary path behind. The swap removes it
+        first, and leaves none of its own behind."""
+        from shared.symlinks import _SWAP_SUFFIX, setup_plugin_symlinks
+
+        plugin_root, agents_dst = self._agent_link_at_wrong_target(tmp_path)
+        dst_link = agents_dst / "pact-test.md"
+        stale_tmp = agents_dst / ("pact-test.md" + _SWAP_SUFFIX)
+        stale_tmp.write_text("left behind by a crashed run")
+
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+        result = setup_plugin_symlinks()
+
+        assert "1 agents updated" in result
+        assert dst_link.resolve() == (plugin_root / "agents" / "pact-test.md").resolve()
+        assert not os.path.lexists(stale_tmp), (
+            "The swap must leave no temporary path behind, so the next run "
+            "does not meet one."
+        )
+
+    def test_temporary_name_sits_outside_the_agent_glob(self):
+        """A sweep of the destination for "pact-*.md" must not meet a temporary
+        path. The suffix does not end in ".md"."""
+        from fnmatch import fnmatch
+
+        from shared.symlinks import _SWAP_SUFFIX
+
+        assert not fnmatch("pact-test.md" + _SWAP_SUFFIX, "pact-*.md")
+        # Positive control: the pattern DOES meet the name it is meant for.
+        assert fnmatch("pact-test.md", "pact-*.md")
