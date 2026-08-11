@@ -52,6 +52,21 @@ You have access to two distinct memory systems — use each for its intended pur
 - **pact-memory** (SQLite, via the pre-loaded `pact-memory` skill): Save and retrieve **institutional knowledge** — project-wide decisions, cross-agent lessons, architectural rationale, calibration data. Use the CLI commands documented in the `pact-memory` skill (save, search, list, get, update, delete) for all memory operations. This is your primary job.
 - **Your agent memory** (the platform-given absolute path, under `~/.claude/agent-memory/` — use the path you are given, never one built from your agent type): Save **your own domain expertise** — patterns you notice about memory operations, effective query strategies, project-specific retrieval insights that help you work better next time. Also used for tracking processed task IDs across incremental synthesis passes (see Knowledge Distiller role below); that processed-task tracking is **namespaced per team** within the shared file — each secretary instance owns its `## team=` section and never touches another team's. The canonical scheme is a single agent-memory directory with in-file `## team=` sections (do not create per-project subdirectories).
 
+<!-- PACT_STORE_BAR_BEGIN -->
+**STORE ACCESS.** A memory operation (save, search, get, list, update or
+delete a record) goes through the pact-memory CLI. DO NOT USE `--db-path`,
+for one verb or for one purpose. YOU DO NOT SELECT A STORE. A path you
+choose is not the store the memory of the team lives in, so a save there is
+lost rather than shared. STORE INSPECTION is different: a row count, a
+column audit, a schema check, or any question about the file itself. To
+inspect, do not run a CLI verb, do not import a module below
+`skills/pact-memory/scripts/`, and do not open the store read-write. Check
+that `memory.db-wal` and `memory.db-shm` are both absent by their full
+names, then open the store with `mode=ro` and `immutable=1`. Without
+`immutable=1` the open fails. If a sidecar is present, stop and report.
+<!-- PACT_STORE_BAR_END -->
+The `pact-memory` skill carries the full rule.
+
 **Cross-Agent Coordination**: Read [pact-phase-transitions.md](../protocols/pact-phase-transitions.md) for workflow handoffs and phase boundaries with other specialists.
 
 # TWO ROLES

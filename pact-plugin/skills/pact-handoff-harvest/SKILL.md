@@ -20,6 +20,21 @@ Determine which variant to run from the task subject/description: "harvest" or "
 
 ---
 
+<!-- PACT_STORE_BAR_BEGIN -->
+**STORE ACCESS.** A memory operation (save, search, get, list, update or
+delete a record) goes through the pact-memory CLI. DO NOT USE `--db-path`,
+for one verb or for one purpose. YOU DO NOT SELECT A STORE. A path you
+choose is not the store the memory of the team lives in, so a save there is
+lost rather than shared. STORE INSPECTION is different: a row count, a
+column audit, a schema check, or any question about the file itself. To
+inspect, do not run a CLI verb, do not import a module below
+`skills/pact-memory/scripts/`, and do not open the store read-write. Check
+that `memory.db-wal` and `memory.db-shm` are both absent by their full
+names, then open the store with `mode=ro` and `immutable=1`. Without
+`immutable=1` the open fails. If a sidecar is present, stop and report.
+<!-- PACT_STORE_BAR_END -->
+The `pact-memory` skill carries the full rule.
+
 ## Standard Harvest Workflow
 
 ### Read All HANDOFFs Before Saving
