@@ -38,7 +38,7 @@ Cap violations are denied by `hooks/pin_caps_gate.py` when the Edit/Write tool c
 1. Read existing CLAUDE.md.
 2. Locate or create a `## Pinned Context` section (place it before `## Working Memory`).
 3. **If the file carries a `<!-- PACT_MEMORY_PINNED_END -->` line, the new entry MUST go ABOVE that line.** The pinned region ends there. A pin placed below it sits outside the region, so the count and size caps do not measure it and the hook cannot deny it — the pin is silently uncapped. Insert immediately before that line, after the last existing entry. If the file has no such line, append at the end of the section as usual.
-4. Add the new entry with a date tag:
+4. Add the new entry with a date tag. **Make this write with the `Edit` tool. Do NOT use the `Write` tool.** Step 1 gave you the full file, so a `Write` call looks like the short route to the new content. A `Write` replaces each line of the file. If the file uses CRLF line endings, a `Write` changes each line to LF. The curator then sees a change to a file they did not edit. `Edit` keeps the line endings of the file. Use the example below:
    ```markdown
    <!-- pinned: YYYY-MM-DD -->
    ### Entry Title
