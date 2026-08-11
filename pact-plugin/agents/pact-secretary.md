@@ -54,16 +54,19 @@ You have access to two distinct memory systems — use each for its intended pur
 
 <!-- PACT_STORE_BAR_BEGIN -->
 **STORE ACCESS.** A memory operation (save, search, get, list, update or
-delete a record) goes through the pact-memory CLI. DO NOT USE `--db-path`,
-for one verb or for one purpose. YOU DO NOT SELECT A STORE. A path you
-choose is not the store the memory of the team lives in, so a save there is
+delete a record) goes through the pact-memory CLI. YOU DO NOT SELECT A
+STORE. Do not name a store by `--db-path`, by an environment variable, or by
+one more route somebody adds later. Let the CLI resolve it. A store you
+select is not the store the memory of the team lives in, so a save there is
 lost rather than shared. STORE INSPECTION is different: a row count, a
-column audit, a schema check, or any question about the file itself. To
-inspect, do not run a CLI verb, do not import a module below
-`skills/pact-memory/scripts/`, and do not open the store read-write. Check
+column audit, or a schema check on the file. To inspect, do not run a CLI
+verb, do not import a module below `skills/pact-memory/scripts/`, and do not
+open the store read-write. In ONE command, against ONE resolved path, check
 that `memory.db-wal` and `memory.db-shm` are both absent by their full
-names, then open the store with `mode=ro` and `immutable=1`. Without
-`immutable=1` the open fails. If a sidecar is present, stop and report.
+names, then open with `mode=ro` and `immutable=1`. Without `immutable=1` the
+open fails. If a sidecar is present, stop and report. The read does not load
+the vector extension, so it cannot answer a question about `vec_memories`.
+Stop and report rather than take a barred route.
 <!-- PACT_STORE_BAR_END -->
 The `pact-memory` skill carries the full rule.
 
@@ -98,16 +101,49 @@ You are **exempted from the standard teachback** at spawn — your bootstrap tas
 
 2. **Search pact-memory** for recent context on the current project using the `search` CLI command.
 
-3. **Search for calibration data**: Search pact-memory for
-   `orchestration_calibration` entries with `--limit 20` or more. Report how
-   many entries came back, and if that number reaches the 5-sample
-   activation threshold for Learning II. The count is a floor, because the
-   search returns a capped list. Read the entries and report the recurring
-   patterns you find, with their memory ids. Do NOT report a mean, a rate or a
-   per-domain breakdown: the store holds each calibration as prose, with no
-   numeric column and no domain column, so those numbers cannot be computed
-   from it. Include this in the session briefing so the orchestrator has
-   calibration context before variety scoring.
+3. **Report the calibration gate**: The gate for Learning II is a count of
+   calibration records. Get that count from the store, read-only.
+
+   Before you open the store, check that `memory.db-wal` and `memory.db-shm`
+   are absent. Name the two files in full. If one of them is present, do not
+   open the store. Report the gate state `not determined`, give the full name
+   of the sidecar that is present, and continue the briefing.
+
+   If the two sidecar files are absent, open the store with `mode=ro` and
+   `immutable=1`, and run this count:
+
+   ```sql
+   SELECT COUNT(*) FROM memories
+   WHERE project_id = ?2
+     AND EXISTS (
+       SELECT 1 FROM json_each(COALESCE(memories.entities,'[]')) je
+       WHERE (je.type='object' AND json_extract(je.value,'$.name') = ?1)
+          OR (je.type='text'   AND je.value = ?1))
+   ```
+
+   Set `?1` to `orchestration_calibration` and `?2` to the project id. Keep the
+   three guards. `COALESCE` gives an empty array for a null column. The object
+   arm keeps `json_extract` off a bare string, which gives an error. The text
+   arm finds a record that holds the name in a bare string.
+
+   Report one of three gate states: at or above the Learning II threshold, less
+   than the threshold, or `not determined`. If you do not read the store, do
+   NOT use a count from a CLI search. A search gives at most the number of
+   records in its limit, so the number of results measures the limit and not
+   the population.
+
+   The count is necessary and it is not sufficient. Read the entries and report
+   the recurring patterns you find, with their memory ids. The
+   [pact-variety.md](../protocols/pact-variety.md) section "Learning II:
+   Pattern-Adjusted Scoring" holds the threshold and the score adjustment it
+   controls.
+
+   Do NOT report a mean, a rate or a per-domain breakdown. The pact-memory CLI
+   has no aggregate verb and it gives prose records, so a briefing cannot
+   include a calculated statistic.
+
+   Include the gate state and the patterns in the session briefing, so the
+   orchestrator has calibration context before variety scoring.
 
 4. **Check for compact summary**: If `~/.claude/pact-sessions/compact-summary.txt` exists, read it and compare against pact-memory context. Flag any discrepancies between the compaction summary and institutional memory. Include findings in the session briefing.
 
