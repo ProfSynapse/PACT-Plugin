@@ -2613,38 +2613,65 @@ class TestBudgetWarningInteractions:
         assert self._count_warnings(claude_md.read_text(encoding="utf-8")) == 0
         assert result is None
 
-    def test_stranded_copies_can_cause_the_breach_they_report(self, tmp_path):
-        """A stranded warning is measured, so the module's own residue can trip it.
+    def test_a_stranded_copy_cannot_cause_the_breach_it_reports(self, tmp_path):
+        """The residue of the module is excluded from the COUNT, and it is KEPT.
 
-        THE PRECONDITION THAT MAKES THE LAW CONDITIONAL. The strip is anchored
-        at the head, so a warning a user has moved below it stays in the body --
-        and the body is what gets measured. With the user's own pins sitting
-        exactly at the budget, ONE stranded line is enough to push the
-        measurement over, and the hook then reports a breach the user's own text
-        did not cause.
+        THE SUBJECT HAS TWO HALVES AND THE SECOND IS THE ONE A LATER
+        SIMPLIFICATION WILL TRY TO REMOVE.
+          1. A warning line the anchored strip cannot reach contributes NO token
+             to the measurement, so the pins of the user decide the breach and
+             the residue of this module does not. With those pins sitting
+             exactly at the budget, the pass reports nothing.
+          2. THE MODULE DOES NOT DELETE THAT LINE TO ACHIEVE IT. The exclusion
+             runs on a throwaway copy at the measurement site. An in-place
+             exclusion scores the same on the count and takes a line out of a
+             file that is frequently gitignored.
 
-        This is not a defect to repair here. It is the accepted residual seen
-        from its sharp end, pinned so that a later change to the strip's anchor,
-        or to the length of the warning text itself, cannot move it unnoticed.
+        THIS ARM REPLACES ONE THAT PINNED THE DEFECT. The arm it replaces held
+        the opposite subject, that a stranded copy CAN cause the breach it
+        reports, and it asserted a count of 2 with a budget status string. That
+        was the accepted residual of the day. The measurement no longer counts
+        the output of this module, so the residual is closed rather than
+        accepted, and the arm wanted a retarget rather than a repair.
+
+        WHY THE FILE BYTES ARE ASSERTED. MEASURED on this fixture: the correct
+        fix gives 1 warning, `None`, and UNCHANGED bytes. An in-place exclusion
+        gives 0 warnings, `None`, and the stranded line DELETED. The return
+        value is `None` in the two arms, so an arm built on it alone is blind to
+        the corrupting variant. The count and the bytes are what separate them.
         """
         from staleness import PINNED_CONTEXT_TOKEN_BUDGET, check_pinned_staleness
         from staleness import estimate_tokens
 
         user_text = at_budget_body(prefix="### Big\n")
         words_only = user_text.split("\n", 1)[1]
+        stranded = self._warning_line(tokens=9999)
         claude_md = self._create_project_claude_md(
             tmp_path,
-            self._doc("### Big\n" + self._warning_line(tokens=9999) + words_only),
+            self._doc("### Big\n" + stranded + words_only),
         )
+        before = claude_md.read_bytes()
 
         result = check_pinned_staleness(claude_md_path=claude_md)
 
         content = claude_md.read_text(encoding="utf-8")
-        # One line the hook wrote at the head, plus the one it could not reach.
-        assert self._count_warnings(content) == 2
-        # The user's own text was never over budget. The residue crossed it.
+        # The pins of the user were never over budget, and the residue no longer
+        # pushes them over.
         assert estimate_tokens(user_text) <= PINNED_CONTEXT_TOKEN_BUDGET
-        assert result is not None and "budget" in result.lower()
+        assert result is None, (
+            f"the hook reported {result!r}. It is counting its own output "
+            f"again, so a line this module wrote is causing the breach it "
+            f"reports"
+        )
+        # The line the strip cannot reach is the only one left, and it is where
+        # the user left it.
+        assert self._count_warnings(content) == 1
+        assert stranded in content, "the strip reached below the head"
+        assert claude_md.read_bytes() == before, (
+            "the pass rewrote the file. The exclusion is running IN PLACE, so "
+            "it deletes a line the user positioned from a file that is "
+            "frequently gitignored and has no commit to recover from"
+        )
 
     @pytest.mark.parametrize("stranded", [0, 1, 3])
     def test_stranded_warnings_never_compound(self, tmp_path, stranded):

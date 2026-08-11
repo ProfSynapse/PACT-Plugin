@@ -131,24 +131,51 @@ _BUDGET_WARNING_SHAPE = (
 # to a predicate that looks like it.
 #
 # THE SYMPTOM THAT WILL MAKE SOMEBODY WANT TO LOOSEN THIS, AND WHY TO REFUSE.
-# A user who moves a warning line below the head keeps it, because this
-# predicate is anchored and cannot reach it. The report arrives as "the hook
-# shows two warnings", or as "the hook reports a breach my own pins did not
-# cause", because that line is measured with the rest of the body. Both are
-# real, and both are accepted. The law is CONDITIONAL, not a constant:
+# A warning line that is not at the head of the body keeps its place, because
+# this predicate is anchored and cannot reach it. The report arrives as "the
+# hook shows two warnings". That one is real and it is accepted. The law is
+# CONDITIONAL, not a constant:
+#     count = N + (1 if estimate_tokens(user_text) > BUDGET else 0)
+# where N is the number of lines of this shape that the anchored strip cannot
+# reach. No pass raises the count.
+#
+# THE CONDITION USED TO CARRY THE STRANDED LINES, AND THIS REPLACES THAT LAW:
 #     count = N + (1 if estimate_tokens(user_text + stranded) > BUDGET else 0)
-# where N is the number of lines the user moved below the head. No pass raises
-# the count.
+# The replaced form was correct while the measurement counted the whole body.
+# The measurement site now calls `_body_without_warnings`, so a line of this
+# shape contributes no token wherever it sits. That closes the second symptom,
+# "the hook reports a breach my own pins did not cause", which the replaced
+# form recorded as accepted.
+#
+# N IS NOT A COUNT OF WHAT A USER DID, AND THE EARLIER WORDING SAID IT WAS. It
+# read "the number of lines the user moved below the head". A pin written ABOVE
+# an existing warning takes that warning off offset 0 and raises N with no user
+# action at all, and `commands/pin-memory.md` instructs the tail placement
+# rather than enforcing it.
 #
 # DO NOT WIDEN THIS PATTERN TO REACH THEM. It DELETES, so a wider anchor reaches
 # text a user wrote inside a pin body, and this file is frequently gitignored.
 # The correct repair separates the two questions: EXCLUDE lines of this shape
 # from the COUNT wherever they sit, and keep the DELETE on the contiguous head
-# run. Apply that exclusion to a THROWAWAY COPY at the measurement site. Never
-# modify `pinned_content` itself -- `entry_starts` holds offsets into that
-# string and the stale-marker loop writes at those offsets, so an in-place
-# exclusion puts markers in wrong positions. The exclusion looks like a pure
-# read, which is what makes that easy to miss.
+# run. `_body_without_warnings` is that exclusion. Apply it to a THROWAWAY COPY
+# at the measurement site. Never modify `pinned_content` itself.
+#
+# TWO HAZARDS STAND BEHIND THAT RULE AND THEY BIND AT DIFFERENT PLACES.
+#   1. THE WRITE-BACK, and this is the one that binds AT THE MEASUREMENT SITE.
+#      `apply_staleness_markings` writes `pinned_content` back into the
+#      document, so an in-place exclusion there DELETES the stranded line from
+#      the user's file. Measured against a control: the warning count drops
+#      from 1 to 0, the file bytes change, and a line the user positioned is
+#      gone from a file that is frequently gitignored.
+#   2. THE OFFSETS, and this one binds ABOVE the marker loop. `entry_starts`
+#      holds offsets into that string and the stale-marker loop writes at those
+#      offsets, so an in-place exclusion applied before the loop puts markers in
+#      wrong positions. Measured: the second pin loses its marker, 2 becomes 1.
+# `entry_starts` is last read above the measurement, so hazard 2 is spent by
+# the time the measurement runs. DO NOT READ THAT AS PERMISSION: hazard 1 holds
+# there, and a later editor can put an exclusion higher up, where hazard 2 is
+# live again. The exclusion looks like a pure read, which is what makes each of
+# the two easy to miss.
 #
 # THIS REFUSAL IS ENFORCED AND NOT ONLY STATED. A test drives this compiled
 # object over a body whose only warning sits below the head and requires it to
@@ -158,10 +185,19 @@ _BUDGET_WARNING_SHAPE = (
 # anchor gives byte-identical output today.
 _LEADING_BUDGET_WARNING_RE = re.compile(rf"\A{_BUDGET_WARNING_SHAPE}")
 
-# RECOGNITION ONLY. NEVER GIVE THIS PATTERN TO CODE THAT DELETES. `(?m)^`
-# reports a match at ANY line start, which is what lets `_has_budget_warning`
-# see a warning a user has moved below the head. The deleting anchor stays
-# inside the compiled object above, so this wider reach cannot travel to it.
+# RECOGNITION AND MEASUREMENT ONLY. DO NOT GIVE THIS PATTERN TO CODE THAT
+# DELETES FROM THE DOCUMENT. `(?m)^` reports a match at ANY line start, which is
+# what lets `_has_budget_warning` see a warning that is not at the head, and what
+# lets `_body_without_warnings` take each one out of a MEASUREMENT COPY.
+#
+# THE SUBJECT OF THE BAR IS THE DOCUMENT, NOT THE PATTERN, and the earlier
+# wording said "code that deletes" without naming what gets deleted. The hazard
+# is a wide pattern that removes bytes from a user's file, which is frequently
+# gitignored, so an over-match has no commit to recover from. A copy that no
+# caller writes back removes no byte from the document, so the two callers above
+# are sanctioned. A caller that assigns the result over `pinned_content` is not.
+# The deleting anchor stays inside the compiled object above, so this wider reach
+# cannot travel to it.
 _ANY_BUDGET_WARNING_RE = re.compile(rf"(?m)^{_BUDGET_WARNING_SHAPE}")
 
 
@@ -374,12 +410,16 @@ def _strip_budget_warnings(pinned_content: str) -> str:
     Remove the run of budget-warning comment lines at the head of a pinned body.
 
     Returns the body a user would have written, with this module's own earlier
-    reports taken back out. Callers measure the RESULT, never the input, so the
-    reported count never includes the warning this module wrote at the HEAD. It
-    is NOT a pure function of the user's own text: a warning a user has moved
-    below the head survives this strip and is measured with the body. The note
-    at `_LEADING_BUDGET_WARNING_RE` says why the repair for that is not a wider
-    strip.
+    reports taken back out. THIS IS THE DELETING HALF and it is anchored: a
+    warning line that is not at the head SURVIVES this strip and keeps its place
+    in the document. The note at `_LEADING_BUDGET_WARNING_RE` says why the repair
+    for that is not a wider strip.
+
+    IT IS NOT THE MEASURING HALF, AND THE TWO ARE NOW SEPARATE.
+    `_body_without_warnings` takes the surviving lines out of a copy at the
+    measurement site, so a line this strip cannot reach contributes no token.
+    Do not read that as a reason to widen this one. The count and the delete
+    answer different questions, and only this one removes bytes a user can lose.
 
     A run, not a single line, because taking back N lines is the exact inverse
     of writing one -- so the function stays correct if a document somehow
@@ -444,6 +484,39 @@ def _has_budget_warning(pinned_content: str) -> bool:
         True when a budget warning this module wrote sits at any line start.
     """
     return _ANY_BUDGET_WARNING_RE.search(pinned_content) is not None
+
+
+def _body_without_warnings(pinned_content: str) -> str:
+    """
+    Return a MEASUREMENT COPY of the pinned body with each warning line gone.
+
+    THE RESULT IS FOR MEASURING AND FOR NOTHING ELSE. A caller that assigns it
+    back over `pinned_content` turns this strip into a DELETING pass:
+    `apply_staleness_markings` writes that name into the document, so the lines
+    removed here leave the user's file. Those lines sit where a user positioned
+    them, and CLAUDE.md is frequently gitignored, so no commit brings them back.
+    Measured against a control: an in-place exclusion at the measurement site
+    takes the warning count from 1 to 0 and changes the file bytes, while the
+    copy keeps the line and the pass reports no modification.
+
+    WHY A NAMED FUNCTION AND NOT AN INLINE `.sub` AT THE CALL SITE. The inline
+    form reads as a pure expression, which is the appearance that makes the
+    hazard above easy to miss. The name carries the contract, and this docstring
+    has somewhere to live.
+
+    IT REACHES A WARNING WHEREVER IT SITS, which is the point: the COUNT stops
+    depending on POSITION. A line stranded below the head and a line pushed off
+    the head by a new pin above it are then treated alike.
+    `_strip_budget_warnings` keeps the narrow anchor, because that one deletes.
+
+    Args:
+        pinned_content: The pinned section body. It is NOT modified.
+
+    Returns:
+        A new string with each budget-warning line of this module's own shape
+        removed. Measure it. Do not write it back.
+    """
+    return _ANY_BUDGET_WARNING_RE.sub("", pinned_content)
 
 
 def _find_terminator_offset(
@@ -808,12 +881,13 @@ def apply_staleness_markings(
 
       - THE NUMBER CANNOT GO STALE. It is recomputed against whatever the body
         holds now, so it tracks a growing or shrinking pinned section.
-      - THE WARNING CANNOT INFLATE ITS OWN COUNT. The measured body never
-        contains the warning at the HEAD, on pass 1 or pass 500, so the number
-        does not creep upward as the report of it is re-read. A warning a user
-        has moved below the head IS measured, and it is a FIXED contribution:
-        this module writes only at the head, and the head is taken back before
-        each measurement, so no pass can add a second one.
+      - THE WARNING CANNOT INFLATE ITS OWN COUNT. The measured body contains NO
+        line of this module's own shape, on pass 1 or pass 500, so the number
+        does not creep upward as the report of it is re-read. The head run is
+        taken back from the document, and `_body_without_warnings` takes the
+        rest out of the measurement copy, so the figure reports the pins of the
+        user and nothing this module wrote. A stranded line stays visible in the
+        document and no longer counts against the budget.
       - THE PASS IS IDEMPOTENT BY CONSTRUCTION, not by a guard. The emitted line
         is a pure function of the user's pinned body, so a second pass over
         unchanged pins produces identical bytes and writes nothing.
@@ -876,12 +950,17 @@ def apply_staleness_markings(
 
     total_stale = already_stale + len(stale_entries)
 
-    # Measure the body with the HEAD warning taken back. Step 1 removes the
-    # leading run on every pass and not only on the first one, which is the
-    # hazard the old presence guard reached for and missed. A warning a user has
-    # moved below the head is NOT removed and IS measured. That is the accepted
-    # residual.
-    pinned_tokens = estimate_tokens(pinned_content)
+    # Measure the body with EVERY warning of this module's own shape taken out,
+    # wherever it sits. Step 1 removed the leading run FROM THE DOCUMENT, on
+    # every pass and not only on the first one, which is the hazard the old
+    # presence guard reached for and missed. This takes the rest out of a
+    # THROWAWAY COPY, so the count stops depending on POSITION while the DELETE
+    # stays on the contiguous head run.
+    #
+    # THE RESULT IS NOT ASSIGNED BACK, AND THAT IS THE WHOLE SAFETY PROPERTY.
+    # `pinned_content` is written into the document below, so an in-place
+    # exclusion here would take a line the user positioned out of their file.
+    pinned_tokens = estimate_tokens(_body_without_warnings(pinned_content))
     budget_warning = ""
     if pinned_tokens > PINNED_CONTEXT_TOKEN_BUDGET:
         pinned_content = (
