@@ -13,14 +13,25 @@
 #   into any consumer project's session, so it carries zero consumer-pollution
 #   risk and may reference concrete project specifics freely.
 #
-# WHY A SINGLE PYTHON (3.13), NOT A >=3.7 MATRIX
-#   The dev runtime is 3.14.x; the declared `requires-python = ">=3.7"` floor is
-#   aspirational and NOT test-verified (the suite has never been run on 3.7).
-#   The gate's value — auto-running the structural/meta-tests — needs exactly
-#   ONE Python. 3.13 is GA on ubuntu-latest and is the closest-stable to the
-#   3.14 dev runtime. A 3.7-inclusive matrix is documented as a commented
-#   fallback below, to be adopted ONLY AFTER a separate task verifies the suite
-#   actually passes there (likely 3.14-era syntax has crept in) — never on faith.
+# WHY THIS MATRIX, AND WHAT THE DECLARED FLOOR RESTS ON
+#   The dev runtime is 3.14.x. The matrix runs 3.13 and 3.14: both are GA on
+#   ubuntu-latest, and 3.14 matches the dev runtime so a local green and a CI
+#   green are the same green.
+#   The declared `requires-python = ">=3.9"` floor is NOT test-verified: the
+#   suite has been run on NO interpreter below 3.13. What the floor DOES rest
+#   on is (a) an external constraint — GUI-launched macOS sessions run the
+#   bare-python3 surfaces on /usr/bin/python3, which is 3.9.x — and (b) the
+#   static 3.9 gate in tests/test_py39_annotation_compat.py plus the
+#   `--target-version py39` lint below. Both are STATIC. That gate's own R0
+#   note records that `feature_version` NARROWS rather than replaces live 3.9
+#   verification, and it was measured false-passing PEP 701 f-strings that a
+#   3.9 interpreter rejects. So `>=3.9` is the floor the repository targets and
+#   statically enforces, NOT a floor a run has confirmed.
+#   The earlier `>=3.7` declaration was REFUTED, not merely unmeasured: an
+#   assignment expression in hooks/shared/session_resume.py needs 3.8.
+#   A matrix reaching below 3.13 is documented as a commented fallback below,
+#   to be adopted ONLY AFTER a separate task verifies the suite actually passes
+#   there — never on faith.
 #
 # WHY `working-directory: pact-plugin`
 #   `tests/conftest.py` inserts sys.path entries relative to its own location and
@@ -265,9 +276,11 @@ jobs:
   #     3.13 and 3.14. This entry stays to record what it did NOT settle.
   #
   #     THE FLOOR REMAINS OPEN AND THIS MATRIX DID NOT ANSWER IT.
-  #     `requires-python = ">=3.7"` in pyproject.toml is UNMEASURED. The
-  #     matrix records which interpreters CI runs, and that is a different
-  #     question. Do not read the tested set as the supported floor.
+  #     `requires-python = ">=3.9"` in pyproject.toml is NOT MEASURED BY A RUN.
+  #     It is the floor the repository targets and statically enforces, and no
+  #     run below 3.13 backs it. The matrix records which interpreters CI runs,
+  #     and that is a different question. Do not read the tested set as the
+  #     supported floor, and do not read the declared floor as a tested one.
   #     To extend the matrix DOWNWARD takes a run on the lower target first,
   #     which is separate work with its own evidence.
   # ---------------------------------------------------------------------------

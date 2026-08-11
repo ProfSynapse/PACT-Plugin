@@ -584,20 +584,21 @@ PACT ships 20 skill modules — domain knowledge that loads on-demand, plus oper
 
 ## Memory System
 
-PACT includes a persistent memory system for cross-session learning:
+PACT includes a persistent memory system for cross-session learning. Every
+memory operation goes through the `pact-memory` CLI:
 
-```
+```bash
 # Save context, decisions, lessons learned
-memory.save({
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "context": "Building authentication system",
     "goal": "Add JWT refresh tokens",
     "lessons_learned": ["Always hash passwords with bcrypt"],
     "decisions": [{"decision": "Use Redis", "rationale": "Fast TTL"}],
     "entities": [{"name": "AuthService", "type": "component"}]
-})
+}'
 
 # Semantic search across all memories
-memory.search("rate limiting")
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" search "rate limiting"
 ```
 
 **Features:**
@@ -642,7 +643,7 @@ When installed as a plugin, PACT lives in your plugin cache:
 │   └── cache/
 │       └── pact-plugin/
 │           └── PACT/
-│               └── 4.6.32/     # Plugin version
+│               └── 4.6.33/     # Plugin version
 │                   ├── agents/
 │                   ├── commands/
 │                   ├── skills/

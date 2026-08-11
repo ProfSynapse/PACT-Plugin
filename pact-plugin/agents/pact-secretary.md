@@ -52,6 +52,24 @@ You have access to two distinct memory systems — use each for its intended pur
 - **pact-memory** (SQLite, via the pre-loaded `pact-memory` skill): Save and retrieve **institutional knowledge** — project-wide decisions, cross-agent lessons, architectural rationale, calibration data. Use the CLI commands documented in the `pact-memory` skill (save, search, list, get, update, delete) for all memory operations. This is your primary job.
 - **Your agent memory** (the platform-given absolute path, under `~/.claude/agent-memory/` — use the path you are given, never one built from your agent type): Save **your own domain expertise** — patterns you notice about memory operations, effective query strategies, project-specific retrieval insights that help you work better next time. Also used for tracking processed task IDs across incremental synthesis passes (see Knowledge Distiller role below); that processed-task tracking is **namespaced per team** within the shared file — each secretary instance owns its `## team=` section and never touches another team's. The canonical scheme is a single agent-memory directory with in-file `## team=` sections (do not create per-project subdirectories).
 
+<!-- PACT_STORE_BAR_BEGIN -->
+**STORE ACCESS.** A memory operation (save, search, get, list, update or
+delete a record) goes through the pact-memory CLI. YOU DO NOT SELECT A
+STORE. Do not name a store by `--db-path`, by an environment variable, or by
+one more route somebody adds later. Let the CLI resolve it. A store you
+select is not the store the memory of the team lives in, so a save there is
+lost rather than shared. STORE INSPECTION is different: a row count, a
+column audit, or a schema check on the file. To inspect, do not run a CLI
+verb, do not import a module below `skills/pact-memory/scripts/`, and do not
+open the store read-write. In ONE command, against ONE resolved path, check
+that `memory.db-wal` and `memory.db-shm` are both absent by their full
+names, then open with `mode=ro` and `immutable=1`. Without `immutable=1` the
+open fails. If a sidecar is present, stop and report. The read does not load
+the vector extension, so it cannot answer a question about `vec_memories`.
+Stop and report rather than take a barred route.
+<!-- PACT_STORE_BAR_END -->
+The `pact-memory` skill carries the full rule.
+
 **Cross-Agent Coordination**: Read [pact-phase-transitions.md](../protocols/pact-phase-transitions.md) for workflow handoffs and phase boundaries with other specialists.
 
 # TWO ROLES
@@ -83,7 +101,49 @@ You are **exempted from the standard teachback** at spawn — your bootstrap tas
 
 2. **Search pact-memory** for recent context on the current project using the `search` CLI command.
 
-3. **Search for calibration data**: Search pact-memory for `orchestration_calibration` entries. Summarize by domain: sample count, mean drift direction (underestimating or overestimating difficulty), and whether the 5-sample activation threshold for Learning II is met. Include this in the session briefing so the orchestrator has calibration context before any variety scoring.
+3. **Report the calibration gate**: The gate for Learning II is a count of
+   calibration records. Get that count from the store, read-only.
+
+   Before you open the store, check that `memory.db-wal` and `memory.db-shm`
+   are absent. Name the two files in full. If one of them is present, do not
+   open the store. Report the gate state `not determined`, give the full name
+   of the sidecar that is present, and continue the briefing.
+
+   If the two sidecar files are absent, open the store with `mode=ro` and
+   `immutable=1`, and run this count:
+
+   ```sql
+   SELECT COUNT(*) FROM memories
+   WHERE project_id = ?2
+     AND EXISTS (
+       SELECT 1 FROM json_each(COALESCE(memories.entities,'[]')) je
+       WHERE (je.type='object' AND json_extract(je.value,'$.name') = ?1)
+          OR (je.type='text'   AND je.value = ?1))
+   ```
+
+   Set `?1` to `orchestration_calibration` and `?2` to the project id. Keep the
+   three guards. `COALESCE` gives an empty array for a null column. The object
+   arm keeps `json_extract` off a bare string, which gives an error. The text
+   arm finds a record that holds the name in a bare string.
+
+   Report one of three gate states: at or above the Learning II threshold, less
+   than the threshold, or `not determined`. If you do not read the store, do
+   NOT use a count from a CLI search. A search gives at most the number of
+   records in its limit, so the number of results measures the limit and not
+   the population.
+
+   The count is necessary and it is not sufficient. Read the entries and report
+   the recurring patterns you find, with their memory ids. The
+   [pact-variety.md](../protocols/pact-variety.md) section "Learning II:
+   Pattern-Adjusted Scoring" holds the threshold and the score adjustment it
+   controls.
+
+   Do NOT report a mean, a rate or a per-domain breakdown. The pact-memory CLI
+   has no aggregate verb and it gives prose records, so a briefing cannot
+   include a calculated statistic.
+
+   Include the gate state and the patterns in the session briefing, so the
+   orchestrator has calibration context before variety scoring.
 
 4. **Check for compact summary**: If `~/.claude/pact-sessions/compact-summary.txt` exists, read it and compare against pact-memory context. Flag any discrepancies between the compaction summary and institutional memory. Include findings in the session briefing.
 

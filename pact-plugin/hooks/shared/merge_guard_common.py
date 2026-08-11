@@ -2780,9 +2780,10 @@ def _has_pipe_to_shell(command: str) -> bool:
 # — measured ~4x per input-doubling on pathological no-slash / all-slash input.
 # This is NOT within-match catastrophic backtracking (an anchored re.match is
 # linear, ~2x/double), so an atomic group `(?>...)` would NOT fix it (and atomic
-# groups are unavailable anyway — requires-python >=3.7). DO NOT reuse this token
-# UNGATED; if it is ever needed ungated, bound the path segments
-# `(?:[^\s)/]*/){0,K}` (the F1 mechanism), which caps the per-offset scan.
+# groups are unavailable anyway: they need 3.11, above the floor that
+# pyproject.toml declares). DO NOT reuse this token UNGATED; if it is ever
+# needed ungated, bound the path segments `(?:[^\s)/]*/){0,K}` (the F1
+# mechanism), which caps the per-offset scan.
 _PROCSUB_SHELL = r"(?:[^\s)/]*/)*(?:bash|sh|zsh)(?![\w/])"
 
 
