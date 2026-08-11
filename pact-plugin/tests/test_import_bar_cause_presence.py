@@ -262,10 +262,19 @@ REFUTED_SPELLINGS = frozenset(
         # `memories` table holds each calibration as prose, with no numeric
         # column, so no tool change closes the gap and the DEMAND had to go.
         #
-        # WHY THIS SPELLING AND NOT A WIDER ONE. `per-domain breakdown` is
-        # PRESENT TODAY in the corrected sentence, which tells the secretary
-        # NOT to report one, so an entry for it would ban a TRUE sentence. The
-        # spelling here names the impossible statistic and appears nowhere.
+        # WHY THIS SPELLING AND NOT A WIDER ONE. A wider entry would ban the
+        # NAME of the statistic rather than the DEMAND for it, and an
+        # instruction that forbids a statistic must be free to name the thing
+        # it forbids. So a name-only entry bans correct sentences as readily as
+        # incorrect ones. The spelling here carries the DEMAND, which no
+        # correct sentence needs.
+        #
+        # 🔴 THE REASON ABOVE IS INTRINSIC TO THE SPELLING, AND THAT IS
+        # DELIBERATE. An earlier wording rested on what another file says
+        # today. A justification that names another file's CURRENT CONTENT
+        # goes stale the moment that file changes, with no arm to report it,
+        # and the comment then argues for the entry from a fact that is no
+        # longer true. State a reason the spelling itself carries.
         #
         # ONE ENTRY COVERS THE REVERT. The two impossible demands, the mean and
         # the per-domain breakdown, shipped in ONE sentence, so a revert
@@ -711,14 +720,52 @@ class TestTheRefutedCauseStaysOut:
             f"spelling arms pass over an empty set."
         )
         reached = {relative_name(path, PLUGIN_DIR) for path in scanned}
+        # 🔴 ONE MEMBER OF EACH SCANNED SUFFIX, AND THE MARKDOWN ONE IS NOT
+        # DECORATION. `SCANNED_SUFFIXES` carries `.py` and `.md`. MEASURED: with
+        # the tuple narrowed to `.py` alone the walk drops 134 of its 519 files
+        # and NOTHING REDS, because a control built from `.py` members cannot
+        # see the markdown half go. AND THE LOSS IS NOT ABSTRACT: the spelling
+        # `mean drift direction` guards a sentence in `agents/pact-secretary.md`,
+        # which is markdown, so that narrowing disarms the entry in silence.
+        # A CONTROL WHOSE POPULATION DOES NOT COVER WHAT IT CERTIFIES REPORTS
+        # A CLEAN ANSWER OVER THE PART IT CANNOT REACH.
         for expected in (
             "scripts/memory_repair/__init__.py",
             "tests/test_archive_pin.py",
+            "agents/pact-secretary.md",
         ):
             assert expected in reached, (
                 f"{expected} is absent from the scanned population, so the walk "
                 f"no longer reaches the files that carried the corrected claims. "
                 f"Paths here are relative to {PLUGIN_DIR.name}."
+            )
+
+    def test_the_refused_set_is_not_empty(self):
+        """Non-vacuity ON THE SET, which is a different population from the walk.
+
+        THE WALK AND THE SET COLLAPSE SEPARATELY, and the arm above covers only
+        the first. MEASURED: with `REFUTED_SPELLINGS` emptied, the parametrized
+        arm below collects ZERO cases and the run reports 80 passed, 1 skipped,
+        exit 0. A COLLAPSED ARM REPORTS A SKIP, NOT A FAILURE, and this suite
+        already carries skips, so the loss hides in the noise of a green run.
+
+        THE SIBLING GUARD APPLIES THIS RULE TO ITS OWN CONSTANTS, so this
+        brings one file up to a standard the other holds rather than inventing
+        one.
+        """
+        assert REFUTED_SPELLINGS, (
+            "REFUTED_SPELLINGS is empty, so the arm that refuses a returned "
+            "spelling collects no case and passes by collecting nothing. "
+            "EITHER a correction removed the last entry, which must be a "
+            "deliberate act with a stated cause, OR an edit emptied the set by "
+            "accident."
+        )
+        for load_bearing in ("an import is a write", "mean drift direction"):
+            assert load_bearing in REFUTED_SPELLINGS, (
+                f"{load_bearing!r} left REFUTED_SPELLINGS. That is a control "
+                f"on the SET rather than a rule about the spelling: these two "
+                f"are load-bearing today, one from each repair this file "
+                f"records. Remove one only with a stated cause."
             )
 
     def test_each_exclusion_is_still_necessary(self):

@@ -849,6 +849,52 @@ class TestTheInstrumentIsLive:
             is not None
         )
 
+    def test_the_region_stripper_takes_the_region_and_leaves_the_rest(self):
+        """A unit pin on the helper the alphabet floor rests on.
+
+        WITHOUT THIS ARM THE STRIPPER CAN BREAK IN SILENCE. Measured on the
+        live tree: the floor returns the same list with the strip working and
+        with it disabled, because each markdown carrier names a route token
+        outside its region anyway. So no shipped arm reads the difference.
+
+        🔴 THE FIXTURE REGION MUST SPAN MORE THAN ONE LINE, and that is the
+        whole design rather than a detail. The strip matches with `re.DOTALL`.
+        A ONE-LINE fixture passes with that flag removed, so it catches a
+        stripper that returns its input and MISSES a stripper that lost the
+        flag. A fixture that cannot express one of the two faults is the
+        wrong-alphabet failure this file records elsewhere, written into a
+        control.
+
+        THE SECOND HALF IS THE OTHER DIRECTION. A strip that takes too much
+        removes a token the file names OF ITS OWN, which sends the floor the
+        opposite lie.
+        """
+        text = (
+            "Prose above names archive_pin.py for its own reason.\n"
+            f"{MARKER_BEGIN}\n"
+            "The rule names memory.db-wal and it wraps here, then it\n"
+            "names skills/pact-memory/scripts on a second line.\n"
+            f"{MARKER_END}\n"
+            "Prose below names cli.py for its own reason.\n"
+        )
+        stripped = strip_marked_regions(text)
+        for token in ("memory.db", "skills/pact-memory/scripts"):
+            assert not carries(stripped, token), (
+                f"{token!r} survived the strip, so a route token that sits "
+                f"INSIDE the bar still selects the carrier holding it. The "
+                f"alphabet floor then asks whether a file names a route OF "
+                f"ITS OWN and reads the bar's answer instead, which makes the "
+                f"floor unable to fire. TWO CAUSES: the strip returns its "
+                f"input, or its pattern lost `re.DOTALL` and so cannot cross "
+                f"the line break in the region above."
+            )
+        for token in ("archive_pin.py", "cli.py"):
+            assert carries(stripped, token), (
+                f"{token!r} sits OUTSIDE the marked region and the strip "
+                f"removed it. The strip must take the region alone, or the "
+                f"floor stops seeing a route a file names for its own reason."
+            )
+
 
 class TestEveryDeclaredCarrierIsPlaced:
     """The anti-shrinkage floor.
@@ -874,6 +920,45 @@ class TestEveryDeclaredCarrierIsPlaced:
             f"path to REPAIR_PACKAGE_EXEMPTIONS WITH A STATED CAUSE. DO NOT "
             f"repair this by an edit to DECLARED_CARRIERS: that list is a "
             f"separate net and this arm is the one that survives its removal."
+        )
+
+    def test_each_repair_exemption_can_do_work(self):
+        """An entry that no walk reaches excludes nothing and reads as coverage.
+
+        THE TWO SIBLING SETS HOLD THIS RULE AND THIS ONE DID NOT.
+        `POPULATION_EXEMPTIONS` and `DERIVED_POPULATION_EXCLUSIONS` each carry
+        an arm that refuses an idle entry. MEASURED: an idle key added to
+        `REPAIR_PACKAGE_EXEMPTIONS` left the suite green, so the third set
+        took a rule the file states for the other two.
+
+        A STALE KEY FAILS SAFE, because the module rejoins the package walk
+        and `test_each_repair_module_holds_the_marker` reddens. AN ENTRY THAT
+        CANNOT DO WORK FAILS OPEN. So the burden sits on REMOVAL.
+        """
+        package = PLUGIN_DIR / REPAIR_PACKAGE_DIR
+        walked = {relative_name(path, PLUGIN_DIR) for path in package.glob("*.py")}
+        idle = sorted(key for key in REPAIR_PACKAGE_EXEMPTIONS if key not in walked)
+        assert not idle, (
+            f"these repair-package exemptions cannot do work: {idle}. The "
+            f"package walk covers {REPAIR_PACKAGE_DIR}/*.py, so a key outside "
+            f"it excludes nothing from any arm and reads as coverage that was "
+            f"considered. MEMBERSHIP OF THE WALK IS THE TEST, not `is_file()`: "
+            f"a module present under another directory passes an existence "
+            f"check and joins no population. Paths are relative to "
+            f"{PLUGIN_DIR.name}."
+        )
+
+    def test_each_repair_exemption_states_a_cause(self):
+        """An entry with no cause is a name, and a name goes stale in silence."""
+        bare = sorted(
+            key for key, cause in REPAIR_PACKAGE_EXEMPTIONS.items()
+            if not str(cause).strip()
+        )
+        assert not bare, (
+            f"these repair-package exemptions state no cause: {bare}. A "
+            f"module is exempt from the store-access rule for a reason, and a "
+            f"reader who meets the entry without one cannot judge whether it "
+            f"continues to hold."
         )
 
     def test_each_declared_carrier_holds_the_marker(self):
@@ -1603,6 +1688,50 @@ class TestArmThreeGoesRed:
         ):
             text = strip_marked_regions(read_carrier(root, name))
             assert not any(carries(text, token) for token in ROUTE_TOKENS)
+
+    def test_the_floor_needs_the_strip_to_name_a_carrier(self, tmp_path):
+        """🔴 THE ONE CASE IN WHICH THE STRIP DECIDES THE ANSWER.
+
+        NEITHER STANDING POPULATION CAN SHOW THIS, and the two causes are
+        mirrors. MEASURED on the live tree: each markdown carrier names a route
+        token OUTSIDE its region, so the floor returns the same list with the
+        strip working and with it disabled. MEASURED on the model tree: its
+        region holds NO route token, so removal of the region changes nothing.
+        A DISCRIMINATING CASE NEEDS THE TWO CONDITIONS TOGETHER.
+
+        SO THIS BUILDS THEM. The region carries a route token, as the shipped
+        rule does. One markdown carrier names NO token outside its region. With
+        the strip working, that carrier is unreached and the floor NAMES it.
+        With the strip disabled, the token inside its own region selects it and
+        the floor names nothing.
+
+        WHY IT IS NOT THE MODEL TREE. `_model_tree` gives each markdown carrier
+        a token outside the region ON PURPOSE, because the alphabet floor is
+        its second net. Changing that would move a property four other arms
+        rest on. This builds a local tree instead and leaves the model alone.
+        """
+        root = tmp_path / "plugin"
+        victim = "reference/config.md"
+        assert victim in ALPHABET_FLOOR, (
+            f"{victim} left ALPHABET_FLOOR, so this arm no longer builds the "
+            f"case it describes. Choose another markdown carrier."
+        )
+        # THE REGION NAMES A ROUTE TOKEN, as the shipped rule does through
+        # `memory.db-wal`. That is what makes a carrier select ITSELF when the
+        # strip fails.
+        body = "STORE ACCESS. Check memory.db-wal and memory.db-shm.\n"
+        for name in sorted(ALPHABET_FLOOR):
+            own = "" if name == victim else "This page names cli.py.\n"
+            _write(root, name, f"Heading\n\n{own}\n{_region(body=body)}")
+
+        assert surfaces_the_alphabet_does_not_reach(root, ROUTE_TOKENS) == [victim], (
+            f"with a correct strip the floor must name {victim}, which names "
+            f"no route token outside its own region. IF THIS READS AS AN EMPTY "
+            f"LIST, THE STRIP IS NOT REMOVING THE REGION, so the token inside "
+            f"the bar selected the file and the floor lost the one question it "
+            f"asks. TWO CAUSES: the strip returns its input, or its pattern "
+            f"lost `re.DOTALL`."
+        )
 
 
 class TestArmFourGoesRed:
