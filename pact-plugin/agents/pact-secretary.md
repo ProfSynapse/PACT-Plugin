@@ -98,7 +98,16 @@ You are **exempted from the standard teachback** at spawn — your bootstrap tas
 
 2. **Search pact-memory** for recent context on the current project using the `search` CLI command.
 
-3. **Search for calibration data**: Search pact-memory for `orchestration_calibration` entries. Summarize by domain: sample count, mean drift direction (underestimating or overestimating difficulty), and whether the 5-sample activation threshold for Learning II is met. Include this in the session briefing so the orchestrator has calibration context before any variety scoring.
+3. **Search for calibration data**: Search pact-memory for
+   `orchestration_calibration` entries with `--limit 20` or more. Report how
+   many entries came back, and if that number reaches the 5-sample
+   activation threshold for Learning II. The count is a floor, because the
+   search returns a capped list. Read the entries and report the recurring
+   patterns you find, with their memory ids. Do NOT report a mean, a rate or a
+   per-domain breakdown: the store holds each calibration as prose, with no
+   numeric column and no domain column, so those numbers cannot be computed
+   from it. Include this in the session briefing so the orchestrator has
+   calibration context before variety scoring.
 
 4. **Check for compact summary**: If `~/.claude/pact-sessions/compact-summary.txt` exists, read it and compare against pact-memory context. Flag any discrepancies between the compaction summary and institutional memory. Include findings in the session briefing.
 
