@@ -23,6 +23,103 @@ The PACT Memory skill provides:
 - **Session Tracking**: Automatic file tracking and session context
 - **Cross-Session Learning**: Memories persist across sessions for cumulative knowledge
 
+## Store access: the two routes
+
+<!-- PACT_STORE_BAR_BEGIN -->
+**STORE ACCESS.** A memory operation (save, search, get, list, update or
+delete a record) goes through the pact-memory CLI. DO NOT USE `--db-path`,
+for one verb or for one purpose. YOU DO NOT SELECT A STORE. A path you
+choose is not the store the memory of the team lives in, so a save there is
+lost rather than shared. STORE INSPECTION is different: a row count, a
+column audit, a schema check, or any question about the file itself. To
+inspect, do not run a CLI verb, do not import a module below
+`skills/pact-memory/scripts/`, and do not open the store read-write. Check
+that `memory.db-wal` and `memory.db-shm` are both absent by their full
+names, then open the store with `mode=ro` and `immutable=1`. Without
+`immutable=1` the open fails. If a sidecar is present, stop and report.
+<!-- PACT_STORE_BAR_END -->
+
+The sections below give the detail behind each sentence above.
+
+MORE ON THE BRIGHT LINE, because an agent will look for an exception. THE RULE
+IS A POLICY, AND IT IS NOT A CLAIM ABOUT WHAT THE TOOL DOES. An agent does not
+select a store. One command carries an exemption, and the owner of the tool
+controls that exemption rather than you. The danger is NOT that the flag
+reaches the live store. The flag binds the store you name, so the danger is
+that your save lands in a store nobody reads. For a memory system, a write
+that goes nowhere costs as much as a write that goes incorrectly.
+
+### To inspect the store
+
+1. Check that `memory.db-wal` and `memory.db-shm` are both absent. Name the
+   two files in full. Do not use a glob.
+2. If one of the two files is present, stop. Report it. Do not read the store.
+3. If neither file is present, open the store read-only:
+   `sqlite3.connect("file:<path>?mode=ro&immutable=1", uri=True)`
+
+### What you must not do, and why
+
+- Do not run a pact-memory CLI verb to inspect the store. The CLI opens a
+  read-write connection and runs `PRAGMA journal_mode=WAL` on it, which
+  creates `memory.db-wal` and `memory.db-shm`. A CLI read is thus a write
+  to the store directory. A CLI run also reaches the same functions an import
+  reaches, so it defeats the next rule.
+- Do not import a module below `skills/pact-memory/scripts/`. In that package,
+  functions create the live store directory as a side result of a path
+  resolution, so an import puts each of them one call away. Do not read an
+  absent import as a guarantee, because a subprocess reaches those functions
+  with no import at all.
+- Do not open the store with a plain `sqlite3.connect`. A read-write open
+  creates the two sidecar files. That is a write to the store directory, even
+  when no SQL runs.
+- Do not copy the store with `cp`. A copy taken while commits sit in an
+  uncheckpointed WAL is silently short of data, and it passes
+  `PRAGMA integrity_check`. If you must have a copy, use `VACUUM INTO`.
+
+### Why the two flags, and why the check comes first
+
+`mode=ro` alone cannot open this store. sqlite must create `memory.db-shm` to
+read a WAL database, and `mode=ro` forbids that creation, so the open fails
+with `unable to open database file`. `immutable=1` tells sqlite to skip the
+WAL and read the main file directly, so the open succeeds and creates nothing.
+`immutable=1` is not extra hardening. It is the only flag that opens the file.
+
+The sidecar check is not a writer detector. It is a state selector. When the
+two sidecar files are absent, no WAL data is pending, so the main file is the
+whole database. That is the state in which `immutable=1` is correct. If a
+sidecar is present, committed data can sit outside the main file, and
+`immutable=1` then returns an older image and raises no error. One flag makes
+the read possible. The check makes the read correct.
+
+### If the check refuses
+
+A refusal is information. In normal operation the CLI closes its connection
+and sqlite removes the two sidecar files on that close, so the check passes. A
+sidecar that stays is evidence that a writer did not close cleanly.
+
+If a sidecar is present:
+
+1. Report the sidecar by its full name and its size.
+2. Do not read the store with `immutable=1`.
+3. Do not delete a sidecar. A sidecar can hold committed data that is not
+   in the main file at this time.
+4. Ask the user before you go further. A recovery needs a write, and a write
+   to this store is the user's decision.
+
+### To save a memory
+
+Run the pact-memory CLI `save` command with no `--db-path`. The CLI resolves
+the default store. The store-access rule above gives the cause, and that
+cause covers a write.
+
+Do not run `python3 setup_memory.py init`. That script runs as a script, it
+writes, and it accepts no `--db-path`, so the write reaches the live store and
+you cannot steer it away. The pytest refusal in the CLI is keyed on
+`PYTEST_CURRENT_TEST`, so it does not cover a run outside pytest.
+
+Do not import a module below `skills/pact-memory/scripts/` to write. Most of
+the modules in that package carry writing SQL.
+
 ## Quick Start
 
 All commands use the CLI entry point via `${CLAUDE_SKILL_DIR}`:
