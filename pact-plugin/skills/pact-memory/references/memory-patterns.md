@@ -5,14 +5,29 @@
 This document provides patterns and examples for effective use of the PACT Memory
 skill across different scenarios.
 
+<!-- PACT_STORE_BAR_BEGIN -->
+**STORE ACCESS.** A memory operation (save, search, get, list, update or
+delete a record) goes through the pact-memory CLI. DO NOT USE `--db-path`,
+for one verb or for one purpose. YOU DO NOT SELECT A STORE. A path you
+choose is not the store the memory of the team lives in, so a save there is
+lost rather than shared. STORE INSPECTION is different: a row count, a
+column audit, a schema check, or any question about the file itself. To
+inspect, do not run a CLI verb, do not import a module below
+`skills/pact-memory/scripts/`, and do not open the store read-write. Check
+that `memory.db-wal` and `memory.db-shm` are both absent by their full
+names, then open the store with `mode=ro` and `immutable=1`. Without
+`immutable=1` the open fails. If a sidecar is present, stop and report.
+<!-- PACT_STORE_BAR_END -->
+The `pact-memory` skill carries the full rule.
+
 ## Pattern 1: Phase Completion Memory
 
 Save context after completing each PACT phase to preserve learnings.
 
 ### After Prepare Phase
 
-```python
-memory.save({
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "context": "Completed research phase for the API gateway authentication system on the feature/api-auth branch. The project requires securing 15+ microservices that communicate both internally and with external third-party clients. Current architecture has no centralized auth - each service handles its own validation, leading to inconsistent security policies and duplicated code. Stakeholders require SSO capability for enterprise customers and API key support for developer integrations. Evaluated three main approaches: OAuth2 with dedicated auth server, JWT tokens with shared secret, and a hybrid approach. Reviewed documentation for Auth0, Keycloak, and custom implementations.",
     "goal": "Determine the optimal authentication strategy for the API gateway that balances security requirements, implementation complexity, and support for both internal services and external third-party integrations.",
     "lessons_learned": [
@@ -34,13 +49,13 @@ memory.save({
         {"name": "AuthService", "type": "service", "notes": "New service to be created for identity management"},
         {"name": "Redis Cluster", "type": "infrastructure", "notes": "Existing cluster to be used for token blacklist"}
     ]
-})
+}'
 ```
 
 ### After Architect Phase
 
-```python
-memory.save({
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "context": "Designing authentication microservice architecture",
     "goal": "Create scalable auth service with token management",
     "active_tasks": [
@@ -64,13 +79,13 @@ memory.save({
         {"name": "TokenBlacklist", "type": "component", "notes": "Redis-backed"},
         {"name": "RefreshTokenStore", "type": "table"}
     ]
-})
+}'
 ```
 
 ### After Code Phase
 
-```python
-memory.save({
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "context": "Implemented JWT authentication with refresh tokens",
     "goal": "Complete auth service implementation",
     "lessons_learned": [
@@ -89,13 +104,13 @@ memory.save({
         {"name": "JWTHandler", "type": "class"},
         {"name": "RateLimiter", "type": "middleware"}
     ]
-})
+}'
 ```
 
 ### After Test Phase
 
-```python
-memory.save({
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "context": "Completed authentication service testing",
     "goal": "Ensure auth service reliability and security",
     "lessons_learned": [
@@ -110,15 +125,15 @@ memory.save({
             "alternatives": ["Skip chaos testing for MVP"]
         }
     ]
-})
+}'
 ```
 
 ## Pattern 2: Blocker Documentation
 
 When hitting a blocker, save context for future reference.
 
-```python
-memory.save({
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "context": "Blocked on sqlite-lembed installation on M1 Mac",
     "goal": "Enable local embeddings for memory skill",
     "lessons_learned": [
@@ -136,7 +151,7 @@ memory.save({
         {"task": "Add sentence-transformers fallback", "status": "pending", "priority": "high"},
         {"task": "Test cross-platform compatibility", "status": "pending"}
     ]
-})
+}'
 ```
 
 ## Pattern 3: Search Before Starting
@@ -144,40 +159,31 @@ memory.save({
 Query for relevant context before beginning work.
 
 ```python
+import json, subprocess
+# CLI is a list so the command is one argument per element.
+CLI = ["python3", "${CLAUDE_SKILL_DIR}/scripts/cli.py"]
 # Starting work on authentication
-results = memory.search("authentication security tokens")
+raw = subprocess.run(
+    [*CLI, "search", "authentication security tokens"], capture_output=True, text=True, check=True
+).stdout
+results = json.loads(raw)
 
 for mem in results:
     print(f"\n=== Past Context ===")
-    print(f"Context: {mem.context}")
-    print(f"Goal: {mem.goal}")
+    print(f"Context: {mem["context"]}")
+    print(f"Goal: {mem["goal"]}")
 
-    if mem.lessons_learned:
+    if mem["lessons_learned"]:
         print(f"\nLessons:")
-        for lesson in mem.lessons_learned:
+        for lesson in mem["lessons_learned"]:
             print(f"  - {lesson}")
 
-    if mem.decisions:
+    if mem["decisions"]:
         print(f"\nDecisions:")
-        for dec in mem.decisions:
-            print(f"  - {dec.decision}")
-            if dec.rationale:
-                print(f"    Rationale: {dec.rationale}")
-```
-
-## Pattern 4: File-Based Context
-
-Search for memories related to files you're working on.
-
-```python
-# Get context for the file you're editing
-current_file = "src/auth/token_manager.py"
-related = memory.search_by_file(current_file)
-
-for mem in related:
-    print(f"Previous work on related files:")
-    print(f"  Context: {mem.context}")
-    print(f"  Files: {', '.join(mem.files)}")
+        for dec in mem["decisions"]:
+            print(f"  - {dec["decision"]}")
+            if dec["rationale"]:
+                print(f"    Rationale: {dec["rationale"]}")
 ```
 
 ## Pattern 5: Decision Tracking
@@ -185,18 +191,24 @@ for mem in related:
 Use memories as a decision log across the project.
 
 ```python
+import json, subprocess
+# CLI is a list so the command is one argument per element.
+CLI = ["python3", "${CLAUDE_SKILL_DIR}/scripts/cli.py"]
 # Search for past decisions on a topic
-decisions = memory.search("caching strategy decisions")
+raw = subprocess.run(
+    [*CLI, "search", "caching strategy decisions"], capture_output=True, text=True, check=True
+).stdout
+decisions = json.loads(raw)
 
 # Compile decision history
 for mem in decisions:
-    if mem.decisions:
-        print(f"\n{mem.created_at}: {mem.context}")
-        for dec in mem.decisions:
-            print(f"  Decision: {dec.decision}")
-            print(f"  Rationale: {dec.rationale}")
-            if dec.alternatives:
-                print(f"  Alternatives: {', '.join(dec.alternatives)}")
+    if mem["decisions"]:
+        print(f"\n{mem["created_at"]}: {mem["context"]}")
+        for dec in mem["decisions"]:
+            print(f"  Decision: {dec["decision"]}")
+            print(f"  Rationale: {dec["rationale"]}")
+            if dec["alternatives"]:
+                print(f"  Alternatives: {', '.join(dec["alternatives"])}")
 ```
 
 ## Pattern 6: Entity Reference
@@ -204,20 +216,26 @@ for mem in decisions:
 Build up knowledge about system components.
 
 ```python
+import json, subprocess
+# CLI is a list so the command is one argument per element.
+CLI = ["python3", "${CLAUDE_SKILL_DIR}/scripts/cli.py"]
 # Search for memories mentioning a component
-auth_memories = memory.search("AuthService")
+raw = subprocess.run(
+    [*CLI, "search", "AuthService"], capture_output=True, text=True, check=True
+).stdout
+auth_memories = json.loads(raw)
 
 # Compile entity knowledge
 entity_notes = {}
 for mem in auth_memories:
-    for entity in mem.entities:
-        if entity.name not in entity_notes:
-            entity_notes[entity.name] = {
-                "type": entity.type,
+    for entity in mem["entities"]:
+        if entity["name"] not in entity_notes:
+            entity_notes[entity["name"]] = {
+                "type": entity["type"],
                 "notes": []
             }
-        if entity.notes:
-            entity_notes[entity.name]["notes"].append(entity.notes)
+        if entity["notes"]:
+            entity_notes[entity["name"]]["notes"].append(entity["notes"])
 
 # Display accumulated knowledge
 for name, info in entity_notes.items():
@@ -230,11 +248,8 @@ for name, info in entity_notes.items():
 
 Save comprehensive session summary before ending.
 
-```python
-# Get files modified in this session
-tracked_files = memory.get_tracked_files()
-
-memory.save({
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "context": "Wrapping up a 4-hour session on the feature/jwt-auth branch implementing the JWT authentication system with refresh token support. Started the session by reviewing the architecture docs from the previous phase, then implemented the core TokenManager class and RateLimiter middleware. Hit a blocker mid-session when Redis connection pooling caused memory leaks under load testing - resolved by switching from redis-py's default connection handling to explicit pool management with max_connections=50. The implementation now passes all unit tests (47 tests) and integration tests (12 tests). Deferred chaos testing based on discussion with tech lead who wants to review the core implementation first. PR #234 is ready for review with all CI checks passing.",
     "goal": "Complete the JWT authentication implementation with refresh token rotation, including rate limiting middleware, ready for code review and stakeholder demo scheduled for tomorrow.",
     "active_tasks": [
@@ -264,64 +279,61 @@ memory.save({
         {"name": "src/auth/token_manager.py", "type": "file", "notes": "Primary implementation file, 340 lines"},
         {"name": "src/middleware/rate_limit.py", "type": "file", "notes": "Rate limiting middleware, 180 lines"}
     ]
-},
-files=tracked_files,
-include_tracked=False  # We're explicitly providing files
-)
+}'
 ```
 
 ## Pattern 8: Incremental Learning
 
-Update memories as understanding evolves. `memory.update()` merges list-valued
+Update memories as understanding evolves. The `update` command merges list-valued
 fields additively with content-hash deduplication, so you can pass just the new
 items — no read-merge-write-back required.
 
-```python
+```bash
 # Append new lessons and a new entity to memory abc123.
 # The existing lessons_learned and entities are preserved; duplicates (by
 # content hash) are silently deduplicated, so this call is idempotent.
-memory.update("abc123", {
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" update abc123 '{
     "lessons_learned": [
         "Redis cluster mode requires different connection handling",
-        "Sentinel provides better HA than standalone Redis",
+        "Sentinel provides better HA than standalone Redis"
     ],
     "entities": [
-        {"name": "RedisSentinel", "type": "component", "notes": "HA setup"},
-    ],
-})
+        {"name": "RedisSentinel", "type": "component", "notes": "HA setup"}
+    ]
+}'
 ```
 
-**Content-hash dedup makes incremental learning cheap.** Calling `update()`
-twice with the same lesson stores it once. You don't need to check "did I
+**Content-hash dedup makes incremental learning cheap.** Two `update` calls
+with the same lesson store it once. You don't need to check "did I
 already save this?" — just call `update` and let the merge handle it.
 
 **When you genuinely want wholesale replacement** (e.g. removing a stale item
-from a list), pass `replace=True`:
+from a list), pass `--replace`:
 
-```python
+```bash
 # Replace the entire lessons_learned column with exactly this one item.
 # Any existing lessons are discarded.
-memory.update("abc123", {"lessons_learned": ["Only lesson that matters"]}, replace=True)
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" update abc123 '{"lessons_learned": ["Only lesson that matters"]}' --replace
 ```
 
 > ⚠️ Previously, partial list updates silently clobbered the entire column.
 > If you see code that reads → merges in Python → writes back, it's obsolete
 > — delete the read/merge scaffolding and pass just the new items directly to
-> `update()`.
+> `update`.
 
 ## Anti-Patterns to Avoid
 
 ### Too Vague
 
-```python
+```bash
 # BAD - no actionable information, future you learns nothing
-memory.save({
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "context": "Working on auth",
     "lessons_learned": ["Things were hard"]
-})
+}'
 
 # GOOD - comprehensive and actionable
-memory.save({
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "context": "Debugging JWT token validation failures on the feature/auth-fixes branch. Users reported 401 errors after ~15 minutes of activity. Investigation revealed the issue was in the token refresh logic where concurrent requests could trigger multiple refresh attempts, causing token rotation conflicts. The auth system uses access tokens (15min TTL) with refresh tokens (7 day TTL, single-use with rotation).",
     "goal": "Identify and fix the root cause of intermittent 401 errors occurring after extended user sessions.",
     "lessons_learned": [
@@ -329,17 +341,17 @@ memory.save({
         "Added a mutex pattern around token refresh - first request to detect expiry acquires lock and refreshes, others wait for the new token",
         "The bug was hard to reproduce locally because it requires high latency (>500ms) to create the race window"
     ]
-})
+}'
 ```
 
 ### Too Granular
 
-```python
+```bash
 # BAD - noise in the memory system, not worth persisting
-memory.save({
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "context": "Fixed typo in variable name",
     "lessons_learned": ["Check spelling"]
-})
+}'
 
 # Note: Small fixes don't warrant memories. Save memories for:
 # - Phase completions
@@ -350,16 +362,18 @@ memory.save({
 
 ### Missing Rationale
 
-```python
+```bash
 # BAD - decision without context is useless for future reference
-memory.save({
+# The decision below gives no rationale and no alternatives.
+# Why? What alternatives? When does this apply?
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "decisions": [
-        {"decision": "Use Redis"}  # Why? What alternatives? When does this apply?
+        {"decision": "Use Redis"}
     ]
-})
+}'
 
 # GOOD - decision with full context
-memory.save({
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "decisions": [
         {
             "decision": "Use Redis for token blacklist instead of PostgreSQL",
@@ -370,20 +384,21 @@ memory.save({
             ]
         }
     ]
-})
+}'
 ```
 
 ### No Entity Links
 
-```python
+```bash
 # BAD - hard to connect to related work, won't surface in graph search
-memory.save({
-    "context": "Refactored the authentication service",
-    # Missing: which components? what files?
-})
+# The payload below names no entities.
+# Missing: which components? what files?
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
+    "context": "Refactored the authentication service"
+}'
 
 # GOOD - entities enable graph-based retrieval
-memory.save({
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     "context": "Refactored the authentication service to extract token management into a dedicated TokenManager class. This improves testability and separates concerns between identity validation and token lifecycle management.",
     "entities": [
         {"name": "AuthService", "type": "service", "notes": "Now delegates token ops to TokenManager"},
@@ -391,7 +406,7 @@ memory.save({
         {"name": "src/auth/auth_service.py", "type": "file", "notes": "Reduced from 450 to 280 lines"},
         {"name": "src/auth/token_manager.py", "type": "file", "notes": "New file, 200 lines"}
     ]
-})
+}'
 ```
 
 ## Best Practices Summary
