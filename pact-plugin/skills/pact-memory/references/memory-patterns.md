@@ -7,16 +7,19 @@ skill across different scenarios.
 
 <!-- PACT_STORE_BAR_BEGIN -->
 **STORE ACCESS.** A memory operation (save, search, get, list, update or
-delete a record) goes through the pact-memory CLI. DO NOT USE `--db-path`,
-for one verb or for one purpose. YOU DO NOT SELECT A STORE. A path you
-choose is not the store the memory of the team lives in, so a save there is
+delete a record) goes through the pact-memory CLI. YOU DO NOT SELECT A
+STORE. Do not name a store by `--db-path`, by an environment variable, or by
+one more route somebody adds later. Let the CLI resolve it. A store you
+select is not the store the memory of the team lives in, so a save there is
 lost rather than shared. STORE INSPECTION is different: a row count, a
-column audit, a schema check, or any question about the file itself. To
-inspect, do not run a CLI verb, do not import a module below
-`skills/pact-memory/scripts/`, and do not open the store read-write. Check
+column audit, or a schema check on the file. To inspect, do not run a CLI
+verb, do not import a module below `skills/pact-memory/scripts/`, and do not
+open the store read-write. In ONE command, against ONE resolved path, check
 that `memory.db-wal` and `memory.db-shm` are both absent by their full
-names, then open the store with `mode=ro` and `immutable=1`. Without
-`immutable=1` the open fails. If a sidecar is present, stop and report.
+names, then open with `mode=ro` and `immutable=1`. Without `immutable=1` the
+open fails. If a sidecar is present, stop and report. The read does not load
+the vector extension, so it cannot answer a question about `vec_memories`.
+Stop and report rather than take a barred route.
 <!-- PACT_STORE_BAR_END -->
 The `pact-memory` skill carries the full rule.
 
@@ -159,9 +162,11 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
 Query for relevant context before beginning work.
 
 ```python
-import json, subprocess
-# CLI is a list so the command is one argument per element.
-CLI = ["python3", "${CLAUDE_SKILL_DIR}/scripts/cli.py"]
+import json, os, subprocess
+# CLI is a list so the command is one argument per element. Python does not
+# expand ${...}. Read the variable, do not write its name.
+SKILL_DIR = os.environ["CLAUDE_SKILL_DIR"]
+CLI = ["python3", os.path.join(SKILL_DIR, "scripts", "cli.py")]
 # Starting work on authentication
 raw = subprocess.run(
     [*CLI, "search", "authentication security tokens"], capture_output=True, text=True, check=True
@@ -186,14 +191,16 @@ for mem in results:
                 print(f"    Rationale: {dec['rationale']}")
 ```
 
-## Pattern 5: Decision Tracking
+## Pattern 4: Decision Tracking
 
 Use memories as a decision log across the project.
 
 ```python
-import json, subprocess
-# CLI is a list so the command is one argument per element.
-CLI = ["python3", "${CLAUDE_SKILL_DIR}/scripts/cli.py"]
+import json, os, subprocess
+# CLI is a list so the command is one argument per element. Python does not
+# expand ${...}. Read the variable, do not write its name.
+SKILL_DIR = os.environ["CLAUDE_SKILL_DIR"]
+CLI = ["python3", os.path.join(SKILL_DIR, "scripts", "cli.py")]
 # Search for past decisions on a topic
 raw = subprocess.run(
     [*CLI, "search", "caching strategy decisions"], capture_output=True, text=True, check=True
@@ -211,14 +218,16 @@ for mem in decisions:
                 print(f"  Alternatives: {', '.join(dec['alternatives'])}")
 ```
 
-## Pattern 6: Entity Reference
+## Pattern 5: Entity Reference
 
 Build up knowledge about system components.
 
 ```python
-import json, subprocess
-# CLI is a list so the command is one argument per element.
-CLI = ["python3", "${CLAUDE_SKILL_DIR}/scripts/cli.py"]
+import json, os, subprocess
+# CLI is a list so the command is one argument per element. Python does not
+# expand ${...}. Read the variable, do not write its name.
+SKILL_DIR = os.environ["CLAUDE_SKILL_DIR"]
+CLI = ["python3", os.path.join(SKILL_DIR, "scripts", "cli.py")]
 # Search for memories mentioning a component
 raw = subprocess.run(
     [*CLI, "search", "AuthService"], capture_output=True, text=True, check=True
@@ -244,13 +253,13 @@ for name, info in entity_notes.items():
         print(f"  - {note}")
 ```
 
-## Pattern 7: Session Wrap-Up
+## Pattern 6: Session Wrap-Up
 
 Save comprehensive session summary before ending.
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
-    "context": "Wrapping up a 4-hour session on the feature/jwt-auth branch implementing the JWT authentication system with refresh token support. Started the session by reviewing the architecture docs from the previous phase, then implemented the core TokenManager class and RateLimiter middleware. Hit a blocker mid-session when Redis connection pooling caused memory leaks under load testing - resolved by switching from redis-py's default connection handling to explicit pool management with max_connections=50. The implementation now passes all unit tests (47 tests) and integration tests (12 tests). Deferred chaos testing based on discussion with tech lead who wants to review the core implementation first. PR #234 is ready for review with all CI checks passing.",
+    "context": "Wrapping up a 4-hour session on the feature/jwt-auth branch implementing the JWT authentication system with refresh token support. Started the session by reviewing the architecture docs from the previous phase, then implemented the core TokenManager class and RateLimiter middleware. Hit a blocker mid-session when Redis connection pooling caused memory leaks under load testing - resolved by switching from the default connection handling of redis-py to explicit pool management with max_connections=50. The implementation now passes all unit tests (47 tests) and integration tests (12 tests). Deferred chaos testing based on discussion with tech lead who wants to review the core implementation first. PR #234 is ready for review with all CI checks passing.",
     "goal": "Complete the JWT authentication implementation with refresh token rotation, including rate limiting middleware, ready for code review and stakeholder demo scheduled for tomorrow.",
     "active_tasks": [
         {"task": "Add unit tests for TokenManager", "status": "completed"},
@@ -260,15 +269,15 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
     ],
     "lessons_learned": [
         "Token rotation requires careful state management - we track the previous token hash to allow a 30-second grace period for in-flight requests using the old token",
-        "Redis connection pooling is essential for performance, but redis-py's default lazy connection creation causes memory issues under burst load. Explicit pool with max_connections and socket_timeout prevents resource exhaustion",
+        "Redis connection pooling is essential for performance, but the default lazy connection creation of redis-py causes memory issues under burst load. Explicit pool with max_connections and socket_timeout prevents resource exhaustion",
         "Always log auth failures with correlation IDs - debugging token issues in production is nearly impossible without request tracing. Added X-Correlation-ID header propagation through the middleware chain",
         "Rate limiting at the gateway level catches most abuse, but service-level limits are still needed for internal service-to-service calls that bypass the gateway",
-        "PyJWT's decode() method silently accepts expired tokens unless you explicitly pass options={'verify_exp': True} - this default is dangerous and should be overridden"
+        "The decode() method of PyJWT silently accepts expired tokens unless you set verify_exp to True in the options mapping - this default is dangerous and should be overridden"
     ],
     "decisions": [
         {
             "decision": "Defer chaos testing to next sprint",
-            "rationale": "Core functionality is complete and tested. Tech lead wants to review the implementation before we invest in chaos testing. This also gives the team time to set up the chaos engineering infrastructure (Chaos Monkey integration). Stakeholder demo is tomorrow and chaos tests aren't required for that milestone.",
+            "rationale": "Core functionality is complete and tested. Tech lead wants to review the implementation before we invest in chaos testing. This also gives the team time to set up the chaos engineering infrastructure (Chaos Monkey integration). Stakeholder demo is tomorrow and chaos tests are not required for that milestone.",
             "alternatives": ["Complete chaos tests now - rejected due to time constraints and missing infrastructure", "Skip chaos tests entirely - rejected as auth service is critical path"]
         }
     ],
@@ -282,7 +291,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" save '{
 }'
 ```
 
-## Pattern 8: Incremental Learning
+## Pattern 7: Incremental Learning
 
 Update memories as understanding evolves. The `update` command merges list-valued
 fields additively with content-hash deduplication, so you can pass just the new
