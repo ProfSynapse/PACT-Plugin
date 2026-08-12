@@ -101,9 +101,16 @@ _GATED_TOOLS = frozenset({"Edit", "Write"})
 #
 # THE PATTERN IS DERIVED FROM THE WRITERS AND NOT FROM A READING OF THIS FILE.
 # A pattern written against a guess passes a test written against the same
-# guess. `tests/test_working_memory.py` pins the emitted format, and that arm
-# lives with the WRITERS, because a person who edits a writer does not read the
-# tests of this gate.
+# guess. `tests/test_working_memory.py` holds the AGREEMENT between the two
+# sides: it drives each writer, takes the heading that writer actually emits,
+# and asserts THIS pattern accepts it. The arm lives with the WRITERS, because
+# a person who edits a writer does not read the tests of this gate.
+#
+# IT PINS A RELATION RATHER THAN A FORMAT, AND THE DIFFERENCE IS LOAD-BEARING.
+# An arm that pinned only the emitted format would redden when a WRITER moves
+# and stay GREEN when THIS pattern moves, so tightening the pattern here would
+# break the pair with a passing arm over it. Do not replace that arm with a
+# format assertion.
 _DATE_LED_HEADING_RE = re.compile(
     r"^###\s+\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?\s*$"
 )
