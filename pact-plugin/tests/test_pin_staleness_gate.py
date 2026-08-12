@@ -1058,3 +1058,134 @@ class TestPinStalenessGate_WhitespaceVariant:
         assert pin_staleness_gate._count_pin_comments(no_space) == 1, (
             "Zero-space `<!--pinned:` did not count."
         )
+
+
+class TestPinStalenessGate_FailOpenIsReported:
+    """The three broad catches must EMIT when they fail open.
+
+    WHY THESE ARMS EXIST, and it is one level up from the usual reason. The
+    emit turns a silent catch into a loud one, so a defect in this gate stops
+    presenting as total permissiveness with no signal. THE EMIT ITSELF WAS
+    UNARMED: a later edit could delete it and no arm reddened, which is the
+    same class of silent loss that the emit exists to catch.
+
+    THE OBJECT DRIVEN IS IN PROCESS FOR ALL THREE, and the capture is `capsys`.
+    A subprocess drive would carry the shipped entry point, and it cannot
+    inject a defect without a mutated tree, so the injection point decides the
+    object here. State the object beside the result: `_count_pin_comments` for
+    the count site, `_is_add_shaped_edit` for the shape site, and `main` for
+    the decision site.
+
+    EACH ARM ASSERTS THE VERDICT AS WELL AS THE MESSAGE. An arm that reads only
+    stderr passes a change that reports correctly and refuses wrongly.
+
+    EACH ARM CARRIES A DISTINCT STAGE NAME, so an arm cannot pass on the emit
+    of another site. That is what makes the three separable rather than three
+    readings of one.
+    """
+
+    def test_healthy_path_emits_nothing(self, gate_env, capsys):
+        """THE CONTROL. With no defect present, stderr stays EMPTY.
+
+        Without this arm the three below cannot show that the DEFECT produced
+        the message. A gate that emitted on each call would satisfy them all.
+        """
+        env = gate_env(marker_present=True)
+        import pin_staleness_gate
+        current = env["claude_md"].read_text(encoding="utf-8")
+        verdict = pin_staleness_gate._is_add_shaped_edit(
+            {"file_path": str(env["claude_md"]),
+             "old_string": "### Pin\nxxxx",
+             "new_string": "### Pin\nyyyy"},
+            env["claude_md"],
+            "Edit",
+        )
+        assert verdict is False, "the reword must stay allowed"
+        assert current  # the fixture carried content
+        captured = capsys.readouterr()
+        assert captured.err == "", (
+            "the healthy path emitted on stderr, so a message below proves "
+            f"nothing about a defect: {captured.err!r}"
+        )
+
+    def test_count_site_reports_when_the_oracle_raises(self, monkeypatch, capsys):
+        """SITE 1, object driven = `_count_pin_comments`, fail-open value 0."""
+        import pin_staleness_gate
+
+        def _raise(_text):
+            raise RuntimeError("rv2test count defect")
+
+        monkeypatch.setattr(pin_staleness_gate, "parse_pins", _raise)
+        result = pin_staleness_gate._count_pin_comments("<!-- pinned: 2026-04-20 -->\n### X\nb")
+        assert result == 0, "the count site must keep its fail-open value"
+        err = capsys.readouterr().err
+        assert "pin count" in err, (
+            "the pin-count catch failed open in SILENCE. Restore the "
+            f"_report_fail_open call at that catch. stderr was: {err!r}"
+        )
+        assert "RuntimeError" in err and "rv2test count defect" in err
+
+    def test_shape_site_reports_when_the_simulation_raises(
+        self, gate_env, monkeypatch, capsys
+    ):
+        """SITE 2, object driven = `_is_add_shaped_edit`, fail-open value False.
+
+        The injected error is a NameError because that is the shape of the
+        regression this emit was built for: a rename left a return that named
+        variables no longer present, and the catch returned the quiet value for
+        each payload with nothing reported.
+        """
+        env = gate_env(marker_present=True)
+        import pin_staleness_gate
+
+        def _raise(*_args, **_kwargs):
+            raise NameError("rv2test shape defect")
+
+        monkeypatch.setattr(
+            pin_staleness_gate, "_simulate_post_edit_document", _raise
+        )
+        verdict = pin_staleness_gate._is_add_shaped_edit(
+            {"file_path": str(env["claude_md"]),
+             "old_string": "### Pin\nxxxx",
+             "new_string": "### Pin\nxxxx<!-- pinned: 2026-05-01 -->\n### Y\nb"},
+            env["claude_md"],
+            "Edit",
+        )
+        assert verdict is False, "the shape site must keep its fail-open value"
+        err = capsys.readouterr().err
+        assert "add-shape detection" in err, (
+            "the add-shape catch failed open in SILENCE. This is the catch "
+            "that swallowed a NameError and killed the whole Edit path. "
+            f"stderr was: {err!r}"
+        )
+        assert "NameError" in err and "rv2test shape defect" in err
+
+    def test_decision_site_reports_when_the_gate_raises(
+        self, monkeypatch, capsys
+    ):
+        """SITE 3, object driven = `main`, fail-open value exit code 0."""
+        import io
+
+        import pin_staleness_gate
+
+        def _raise(_input_data):
+            raise RuntimeError("rv2test decision defect")
+
+        monkeypatch.setattr(pin_staleness_gate, "_check_tool_allowed", _raise)
+        monkeypatch.setattr(
+            sys, "stdin", io.StringIO(json.dumps({"tool_name": "Edit"}))
+        )
+        with pytest.raises(SystemExit) as exit_info:
+            pin_staleness_gate.main()
+        assert exit_info.value.code == 0, (
+            "the decision site must keep its fail-open exit code"
+        )
+        captured = capsys.readouterr()
+        assert "gate decision" in captured.err, (
+            "the outermost catch failed open in SILENCE. Restore the "
+            f"_report_fail_open call in main. stderr was: {captured.err!r}"
+        )
+        assert "RuntimeError" in captured.err
+        assert "suppressOutput" in captured.out, (
+            "the hook protocol line must stay on stdout"
+        )
