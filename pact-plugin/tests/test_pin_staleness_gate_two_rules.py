@@ -352,6 +352,107 @@ class TestRule2KnownResidual:
         assert fires(gate, old, new) is True
 
 
+# =========================================================================
+# THE HEADING CLASS REACHES THE VERDICT. THE POPULATION BELOW IS DERIVED.
+#
+# THE GUARDED THING is the verdict `count(new) > count(old)`. A heading adds 1
+# to a count when it is a PIN and 0 when it is a MEMORY ENTRY. So the population
+# is the cross product of TWO structural axes, and not a set of examples.
+#   AXIS A, THE EDIT SHAPE: a heading is added, removed, renamed, or unchanged.
+#   AXIS B, THE TITLE, whose dimensions are read off the heading a WRITER emits
+#   by decomposition: the token count after the date, a time present or absent,
+#   the whitespace run, and a date present or absent.
+#
+# WHICH COMBINATIONS MATTER WAS MEASURED AND NOT REASONED. For each combination
+# the verdict was computed two times, once with the shipped classifier and once
+# with a classifier that ALSO calls that title a memory entry. That second form
+# stands for EVERY growth of the rule that reaches the title, so the result does
+# not depend on a mutation somebody chose.
+#
+# EXACTLY TWO SHAPES CHANGE THE VERDICT, AND THE OTHER THREE DO NOT.
+#   ADD, and the added title becomes a memory entry: the gate goes QUIET on a
+#   true add. That is an under-block.
+#   RENAME, and the OLD title becomes a memory entry: the old count FALLS and
+#   the gate DENIES. That is an over-block, the cardinal direction.
+#   REMOVE, RENAME where the NEW title moves, and an UNCHANGED heading were each
+#   measured and NONE changes the verdict. DO NOT ADD ARMS FOR THEM. They would
+#   pass for a reason that has nothing to do with the rule.
+#
+# THE BOUND ON THIS POPULATION, STATED SO A CLOSED AXIS IS NOT READ AS A CLOSED
+# ALPHABET. `_is_memory_entry` is a CONJUNCTION of a date-led heading AND no
+# marker, and the slice selection is a third input. Measured: the same heading
+# counts 1 with a marker and 0 without one. So the two axes above close the
+# HEADING axis of the verdict and NOT the verdict.
+# =========================================================================
+
+# The titles that can move class. Each one walks ONE dimension to a boundary
+# value. The one-token entry is the boundary a blind pick reached when this
+# population was three multi-word examples.
+CLASS_MOVING_TITLES = (
+    ("one token after the date", "### 2026-08-05 Draft"),
+    ("two tokens after the date", "### 2026-08-05 Draft notes"),
+    ("three tokens after the date", "### 2026-08-05 Merge guard purpose"),
+    ("a time and one token", "### 2026-08-05 12:30 Draft"),
+    ("a double whitespace run", "###  2026-08-05 Draft notes"),
+    ("no date, one token", "### Draft"),
+    ("no date, two tokens", "### Draft notes"),
+)
+_TITLE_IDS = [name for name, _ in CLASS_MOVING_TITLES]
+_TITLES = [title for _, title in CLASS_MOVING_TITLES]
+REPLACEMENT_TITLE = "### Some other title"
+
+
+class TestTheClassMovingPopulationCanMove:
+    """NON-VACUITY ON THE POPULATION, AND THE TWO CLASSES BELOW NEED IT.
+
+    Each arm below rests on a title that the shipped rule counts as a PIN today
+    and that a grown rule can re-read as a memory entry. A title the shipped
+    rule ALREADY calls a memory entry cannot move, so an arm built on it passes
+    whatever the rule does. This measures the precondition rather than assume
+    it.
+    """
+
+    @pytest.mark.parametrize("title", _TITLES, ids=_TITLE_IDS)
+    def test_the_shipped_rule_counts_this_title_as_a_pin(self, gate, title):
+        assert gate._count_pin_comments(f"{title}\nbody\n") == 1, (
+            f"the shipped rule does NOT count {title!r} as a pin, so it cannot "
+            f"move class and each arm built on it says nothing about the rule"
+        )
+
+
+class TestRule2TheAddDirection:
+    """A TRUE ADD MUST BE REPORTED, ACROSS THE WHOLE TITLE POPULATION.
+
+    THIS IS THE SECOND SHAPE OF ONE MECHANISM and it was missing. A grown rule
+    re-reads the ADDED title as a memory entry, the new count does not rise, and
+    the gate says nothing where a pin arrived. That is an under-block, and an
+    arm on the rename shape alone cannot see it, because a rename moves no count
+    on the shipped tree.
+
+    THE TWO CLASSES GUARD EACH OTHER, WHICH IS WHY NEITHER NEEDS A SEPARATE
+    LIVENESS CONTROL. This class asserts the gate FIRES, so a gate that stopped
+    firing at all reddens here. The rename class asserts the gate stays QUIET,
+    so a gate that fires at everything reddens there.
+    """
+
+    @pytest.mark.parametrize("title", _TITLES, ids=_TITLE_IDS)
+    def test_an_added_pin_is_reported(self, gate, title):
+        old = "## Working Memory\n"
+        new = f"{title}\nbody\n## Working Memory\n"
+        assert fires(gate, old, new) is True, (
+            f"A TRUE PIN ADD WENT UNREPORTED.\n"
+            f"  added title: {title!r}\n"
+            f"\n"
+            f"WHAT PRODUCES THIS. The date-led rule grew until it re-reads this "
+            f"title as a memory entry. The title then adds nothing to the new "
+            f"count, the counts agree, and the gate stays quiet while a pin "
+            f"landed.\n"
+            f"\n"
+            f"THIS IS AN UNDER-BLOCK. The user passes the pin cap unseen. The "
+            f"rule belongs to the gate. Do not repair it here."
+        )
+
+
 class TestRule2TheRenameDirection:
     """A FAITHFUL RENAME OF A PIN MUST NOT BE DENIED, MEASURED AT THE COUNT.
 
@@ -379,19 +480,21 @@ class TestRule2TheRenameDirection:
     of False passes for many reasons, and a decision that returned False for
     everything would satisfy each quiet arm here forever. The control fires on a
     true add carrying the same date-prefixed title, so a retired decision shows
-    up in this class rather than in another file.
+    up in this class rather than in another file. The ADD class above supplies
+    the same guarantee across the whole population.
+
+    🔴 THE CASES COME FROM `CLASS_MOVING_TITLES` ABOVE AND NOT FROM AN EXAMPLE.
+    This class held three titles before, each of them MULTI-WORD, because they
+    were parametrized around one pair handed over in a report. A blind pick
+    then grew the rule so it admitted ONE token, and each of the three refused
+    anyway, so the arm passed while the over-block was live. The population is
+    now walked to the boundary of each dimension, and the one-token title is
+    that boundary.
     """
 
-    RENAMES = [
-        ("### 2026-08-05 Draft notes", "### Draft notes"),
-        ("### 2026-08-05 12:30 Draft notes", "### Draft notes"),
-        ("### 2026-08-05  Merge guard purpose", "### Merge guard purpose"),
-    ]
-
-    @pytest.mark.parametrize("old_title,new_title", RENAMES)
-    def test_a_rename_that_drops_the_date_stays_quiet(
-        self, gate, old_title, new_title
-    ):
+    @pytest.mark.parametrize("old_title", _TITLES, ids=_TITLE_IDS)
+    def test_a_rename_of_a_pin_stays_quiet(self, gate, old_title):
+        new_title = REPLACEMENT_TITLE
         old = f"{old_title}\nbody\n"
         new = f"{new_title}\nbody\n"
         assert fires(gate, old, new) is False, (

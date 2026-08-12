@@ -530,6 +530,26 @@ def _scan_for_removed_hook(raw: str) -> list[str]:
     return [h for h in _REMOVED_HOOK_BASENAMES if h in raw]
 
 
+_STOP_ASSERTION_FRAGMENT = "Stop must NOT be registered"
+
+
+def _assert_target_fails_on(target, fragment):
+    """Run a named target and require it to FAIL on the assertion `fragment` names.
+
+    THE FRAGMENT IS THE WHOLE POINT AND NOT DECORATION. A counter-test that
+    accepts ANY AssertionError declares a target whose failure can arrive from a
+    DIFFERENT line of the same body, so it stops being a statement about the
+    thing it names. That is the defect this file met once already, where a
+    counter-test named a host test and the host held two assertions.
+
+    THE BINDING IS ITSELF GUARDED, which the earlier shape was not:
+    `test_the_attribution_binding_refuses_a_raise_from_another_line` below
+    reddens if this function drops the fragment.
+    """
+    with pytest.raises(AssertionError, match=fragment):
+        target()
+
+
 class TestLayer4_CounterTestByRevert:
     """Each test names the SPECIFIC Layer 1/2/3 invariant it targets and
     proves, by in-memory mutation, that reverting the fix flips that
@@ -638,9 +658,58 @@ class TestLayer4_CounterTestByRevert:
         )
 
         # REVERT LEG: the named target must FAIL, and it must fail on the Stop
-        # assertion rather than on some other line of its body.
-        with pytest.raises(AssertionError, match="Stop must NOT be registered"):
-            target()
+        # assertion rather than on some other line of its body. The binding
+        # that holds that lives in `_assert_target_fails_on`, and the arm below
+        # is what keeps the binding from being dropped in silence.
+        _assert_target_fails_on(target, _STOP_ASSERTION_FRAGMENT)
+
+    def test_the_attribution_binding_refuses_a_raise_from_another_line(self):
+        """THE GUARD ON THE COUNTER-TEST ABOVE, WHICH HELD NOTHING BEFORE THIS.
+
+        THE HOLE THIS CLOSES WAS MEASURED AGAINST MY OWN INSTRUMENT. The
+        counter-test above binds its expected failure to the Stop assertion by
+        a message fragment. Remove that binding and the whole file stayed
+        green, so the guard that makes a raise ATTRIBUTABLE could be deleted
+        with nothing reporting it.
+
+        THE TWO LEGS ARE THE ARM, AND ONE LEG ALONE IS NOT.
+          REFUSE: a raise carrying a DIFFERENT message must not satisfy the
+          binding. A binding that dropped its fragment accepts that raise and
+          this leg reddens.
+          ACCEPT: a raise carrying the fragment must satisfy it. Without this
+          leg, a binding that refused everything would pass the leg above.
+
+        WHY IT CATCHES A BaseException RATHER THAN A NAMED CLASS. The failure
+        of a message binding is raised by the test framework, and its class is
+        framework-internal. The property under test is that the call did NOT
+        return normally, so the arm asserts on THAT and imports nothing
+        private.
+        """
+        def raises_from_another_line():
+            raise AssertionError("a different assertion in the same body failed")
+
+        def raises_from_the_stop_assertion():
+            raise AssertionError(f"{_STOP_ASSERTION_FRAGMENT}, and a detail")
+
+        refused = False
+        try:
+            _assert_target_fails_on(
+                raises_from_another_line, _STOP_ASSERTION_FRAGMENT
+            )
+        except BaseException:
+            refused = True
+        assert refused, (
+            "the counter-test binding ACCEPTED a raise from another line, so a "
+            "counter-test built on it declares a target whose failure can "
+            "arrive from an assertion it does not name. Restore the message "
+            "binding in _assert_target_fails_on."
+        )
+
+        # ACCEPT LEG, and it is what stops the leg above passing for a binding
+        # that refuses every raise.
+        _assert_target_fails_on(
+            raises_from_the_stop_assertion, _STOP_ASSERTION_FRAGMENT
+        )
 
     @pytest.mark.parametrize("removed_hook", _REMOVED_HOOK_BASENAMES)
     def test_reinjecting_removed_hook_flips_layer3_removed_hook_test(
