@@ -234,3 +234,205 @@ class TestTheOptionalTimeGroupIsUnexercised:
             f"Re-read the optional-group note in this class: its premise has "
             f"changed"
         )
+
+
+# ---------------------------------------------------------------------------
+# The bounded alphabet of `_DATE_LED_HEADING_RE`
+# ---------------------------------------------------------------------------
+
+# THE WRITER BASELINE, IN PARTS. `working_memory` builds `f"### {date_str}"`
+# with `now.strftime("%Y-%m-%d %H:%M")`, so these are the writer values and the
+# rendered whole is the only line the writers can produce.
+_BASE = {
+    "lead": "", "hashes": "###", "gap1": " ",
+    "year": "2026", "sep1": "-", "month": "08", "sep2": "-", "day": "12",
+    "gap2": " ", "hour": "04", "tsep": ":", "minute": "50",
+    "trail": "",
+}
+
+# ONE ENTRY FOR EACH PARSE-TREE DIMENSION, AND EACH STRADDLES ITS OWN BOUND.
+# The first value of each list is the writer value.
+#
+# 🔴 A NODE IS NOT A DIMENSION. A NODE PLUS ITS BOUNDS IS. `\s+` and `\s*` are
+# the SAME parser node with different bounds, so a population that samples one
+# string for each node produces identical text in the two cases and CANNOT
+# witness a change of bound. Where the pattern wants four digits this generates
+# three, four and five. Where it wants one or more spaces it generates zero,
+# one and two. A population confined to what the pattern accepts today cannot
+# report a widening.
+_DIMS = {
+    "lead": ["", "x "],
+    "hashes": ["###", "", "#", "##", "####", "######", "#######"],
+    "gap1": [" ", "", "  "],
+    "year": ["2026", "202", "20268"],
+    "sep1": ["-", "", "/"],
+    "month": ["08", "8", "088"],
+    "sep2": ["-", "", "/"],
+    "day": ["12", "1", "123"],
+    "gap2": [" ", "", "  "],
+    "hour": ["04", "4", "044"],
+    "tsep": [":", "", "."],
+    "minute": ["50", "5", "500"],
+    "trail": ["", " ", "  ", " Draft notes"],
+}
+
+
+def _render(parts):
+    return (
+        parts["lead"] + parts["hashes"] + parts["gap1"]
+        + parts["year"] + parts["sep1"] + parts["month"]
+        + parts["sep2"] + parts["day"]
+        + parts["gap2"] + parts["hour"] + parts["tsep"] + parts["minute"]
+        + parts["trail"]
+    )
+
+
+def _population():
+    """Return {rendered line: (dimension, value)}.
+
+    COUNT RULE, STATED BESIDE THE NUMBER: one case for each (dimension, value)
+    pair, ONE dimension varied at a time from the writer baseline, plus the
+    baseline and the whole optional group absent. One-at-a-time keeps a
+    difference ATTRIBUTABLE: the case that moved names the dimension.
+    """
+    seen = {_render(_BASE): ("baseline", "writer")}
+    no_time = dict(_BASE, gap2="", hour="", tsep="", minute="")
+    seen.setdefault(_render(no_time), ("timegroup", "absent"))
+    for dim, values in _DIMS.items():
+        for v in values[1:]:
+            seen.setdefault(_render(dict(_BASE, **{dim: v})), (dim, v))
+    return seen
+
+
+class TestTheDateLedPredicateAlphabetIsBounded:
+    """The accepted language of `_DATE_LED_HEADING_RE`, over a generated set.
+
+    WHY A GENERATOR RATHER THAN A CASE FOR EACH AXIS. The pinned project rule
+    has two halves. The first says derive the test alphabet from the guarded
+    thing. THE SECOND SAYS BOUND, DO NOT WIDEN: a widened alphabet keeps two
+    spellings in sync, which is the defect's own generator, while an operator
+    that makes over-reach unrepresentable has no alphabet at all. One case for
+    each axis is one more thing that can drift for each axis, and the axis
+    nobody enumerated stays open. ONE GENERATOR plus ONE set comparison is one
+    thing that can drift, and it reports a change at ANY node without an arm
+    naming that node.
+
+    🔴 WHAT THE ACCEPTED SET IS NOT. It is NOT the set the writers can emit.
+    MEASURED on the shipped pattern over this population: 6 accepted against 1
+    emittable. The gate deliberately accepts five lines no writer produces, and
+    each is a tolerance the pattern carries on purpose. So an arm asserting
+    "accepted equals emittable" is RED on a correct tree, and the oracle has to
+    name the tolerance rather than deny it.
+
+    THE SHAPE THAT HOLDS, AND IT IS TWO-DIRECTIONAL BY CONSTRUCTION.
+        accepted == emittable + DECLARED_TOLERANCE
+    A WIDENING adds a member to the left and reddens. A NARROWING removes one
+    and reddens. Neither direction needs an arm that names the node.
+
+    THE BOUND, AND IT IS NOT A PROOF. This is BOUNDED-EXHAUSTIVE OVER A
+    GENERATED POPULATION, not a proof about the language. The population is
+    one-at-a-time from a single baseline, so it does not reach an interaction
+    between two dimensions. AND THE ENUMERATION AGES: it is built from the
+    pattern AS IT IS TODAY, so an edit that ADDS a node adds a dimension no
+    list written today can hold. Do not read this class as coverage of the
+    predicate for ever.
+    """
+
+    # The lines the shipped pattern accepts that NO writer emits. Each is a
+    # deliberate tolerance, named with the reason it is correct to keep.
+    DECLARED_TOLERANCE = {
+        "### 2026-08-12": (
+            "THE OPTIONAL TIME GROUP, and a user ruling keeps it. The consumer "
+            "alphabet is wider than the producer alphabet because a human also "
+            "edits this file. Remove the group and a hand-written date-only "
+            "entry counts as a PIN, which is an over-block and the cardinal "
+            "direction."
+        ),
+        "###  2026-08-12 04:50": (
+            "A one-or-more whitespace run after the marker, so a second space "
+            "is tolerated. A human can type it."
+        ),
+        "### 2026-08-12  04:50": (
+            "The same one-or-more run before the time."
+        ),
+        "### 2026-08-12 04:50 ": (
+            "A zero-or-more trailing whitespace run. Trailing space is "
+            "invisible to a person and must not change the verdict."
+        ),
+        "### 2026-08-12 04:50  ": (
+            "The same trailing run with two spaces."
+        ),
+    }
+
+    def test_the_population_straddles_the_bound_of_each_dimension(self):
+        """NON-VACUITY ON THE GENERATOR, AND IT RUNS FIRST.
+
+        A population that only ever renders the writer values cannot witness a
+        change of bound, and the comparison below would then pass for ever.
+        This requires each dimension to carry a value the baseline does not.
+        """
+        pop = _population()
+        assert len(pop) > len(_DIMS), (
+            f"the population is {len(pop)} cases for {len(_DIMS)} dimensions, "
+            f"so at least one dimension contributed nothing"
+        )
+        dims_seen = {d for d, _ in pop.values()}
+        missing = set(_DIMS) - dims_seen
+        assert not missing, (
+            f"these dimensions produced no case of their own: {sorted(missing)}. "
+            f"A dimension whose variants all render to the baseline is not "
+            f"sampled, and the comparison below is blind to its bound"
+        )
+
+    def test_the_pattern_accepts_what_the_writers_emit(self):
+        """SOUNDNESS, ONE DIRECTION, AND IT IS THE HALF THAT PROTECTS THE USER.
+
+        If the pattern stops accepting the writer line, memory entries count as
+        pins, the gate over-blocks, and a faithful edit to Pinned Context is
+        DENIED. This is the direction with a user-facing cost.
+        """
+        from pin_staleness_gate import _DATE_LED_HEADING_RE
+
+        baseline = _render(_BASE)
+        assert _DATE_LED_HEADING_RE.match(baseline.strip()), (
+            f"_DATE_LED_HEADING_RE no longer accepts the line the writers "
+            f"emit: {baseline!r}. Memory entries now count as pins and the "
+            f"staleness gate OVER-BLOCKS a faithful edit"
+        )
+
+    def test_the_accepted_set_is_the_writer_line_plus_the_declared_tolerance(
+        self,
+    ):
+        """THE LOAD-BEARING ARM. It reddens on a WIDENING and on a NARROWING.
+
+        The left side comes from the pattern. The right side comes from the
+        writers plus a tolerance list a person maintains with a reason for each
+        entry. Two independent sources, one comparison.
+        """
+        from pin_staleness_gate import _DATE_LED_HEADING_RE
+
+        pop = _population()
+        accepted = {s for s in pop if _DATE_LED_HEADING_RE.match(s.strip())}
+        expected = {_render(_BASE)} | set(self.DECLARED_TOLERANCE)
+
+        widened = accepted - expected
+        narrowed = expected - accepted
+
+        assert not widened and not narrowed, (
+            f"THE ACCEPTED LANGUAGE OF _DATE_LED_HEADING_RE HAS MOVED.\n"
+            f"  WIDENED, now accepted and not declared: "
+            f"{sorted((s, pop[s]) for s in widened)}\n"
+            f"  NARROWED, declared and no longer accepted: "
+            f"{sorted((s, pop.get(s)) for s in narrowed)}\n"
+            f"\n"
+            f"A WIDENING means the gate now EXCLUDES lines from the pin count "
+            f"that it counted before. A curated pin can stop counting, so the "
+            f"gate goes quiet on a true add, and a rename that drops a title "
+            f"from the OLD side can make the gate FIRE on a faithful edit.\n"
+            f"A NARROWING means the gate now COUNTS lines it excluded before, "
+            f"so memory entries count as pins and a faithful edit is DENIED.\n"
+            f"\n"
+            f"If the change is deliberate, add or remove the entry in "
+            f"DECLARED_TOLERANCE in the SAME commit, with the reason it is "
+            f"correct. Do not delete this arm to go green."
+        )
