@@ -621,6 +621,14 @@ class TestLayer4_CounterTestByRevert:
         THE MATCH IS DELIBERATE. It binds the raise to the Stop assertion, so a
         second assertion added to the target later cannot supply the red in its
         place. That is the defect this repair exists to close.
+
+        🔴 THE LIMIT OF THE CONTROL LEG, STATED BECAUSE NOTHING HOLDS IT THERE.
+        The control leg reads the SHIPPED configuration today, through
+        `_load_hooks_json`. NO ARM KEEPS IT ON THAT DOCUMENT. An edit that
+        swaps the input for a small inline mapping, to make the leg faster or
+        to share a fixture with the revert leg below, PASSES WITH NOTHING GOING
+        RED, and the leg then certifies the target against a document nobody
+        ships. THE PASS WOULD BE TRUE AND ABOUT THE WRONG POPULATION.
         """
         target = TestLayer3_HooksJsonInvariants().test_stop_event_key_absent
 

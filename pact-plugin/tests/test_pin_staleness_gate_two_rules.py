@@ -388,7 +388,7 @@ class TestRule2KnownResidual:
 # The titles that can move class. Each one walks ONE dimension to a boundary
 # value. The one-token entry is the boundary a blind pick reached when this
 # population was three multi-word examples.
-CLASS_MOVING_TITLES = (
+_WRITER_DERIVED_TITLES = (
     ("one token after the date", "### 2026-08-05 Draft"),
     ("two tokens after the date", "### 2026-08-05 Draft notes"),
     ("three tokens after the date", "### 2026-08-05 Merge guard purpose"),
@@ -397,6 +397,53 @@ CLASS_MOVING_TITLES = (
     ("no date, one token", "### Draft"),
     ("no date, two tokens", "### Draft notes"),
 )
+
+# 🔴 THE SEPARATOR FAMILY, AND ITS SOURCE IS A HUMAN CORPUS RATHER THAN A
+# WRITER. The set above reads its dimensions off the heading a WRITER emits.
+# A writer emits ONE separator between the date and the words, a plain space,
+# so a set derived that way cannot see a separator no writer produces. The gate
+# reads a file a person also types, and a person types a colon after a date
+# without a thought.
+#
+# THE SOURCE, WITH ITS COUNTING RULE BESIDE IT. The `### ` headings inside the
+# four CLAUDE.md files this gate reads. MEASURED: 23 headings, of which 3 are
+# date-led, and ALL THREE ARE WRITER OUTPUT. So that corpus holds NO
+# human-typed date-led title and CANNOT answer the separator question directly.
+# It answers the question it can: the punctuation a person types inside the 20
+# curated pin titles. Counted there, one heading is one sample: hyphen 23,
+# long dash 8, backtick 6, colon 5, period 4, plus 3, comma 2, underscore 2,
+# semicolon 1, slash 1.
+#
+# THE CLOSURE RULE APPLIED TO THAT COUNT, so a later editor can check the set
+# rather than add a line to it: take each punctuation mark the count observed,
+# and drop the three the corpus shows only INSIDE a word or as markup, which
+# are the backtick, the underscore and the plus. Seven remain, and they are the
+# seven below.
+#
+# 🔴 THE SET IS WIDER THAN THE MUTATION THAT FOUND THE GAP, ON PURPOSE. The
+# mutation that exposed this axis admitted a colon, a comma and a hyphen. A set
+# cut to those three would be derived from the MUTANT, which is this defect one
+# level along. The source is the corpus, so the semicolon, the period, the
+# slash and the long dash are here too and no mutation to date reaches them.
+#
+# EACH ONE WAS DRIVEN THROUGH THE SHIPPED PREDICATE BEFORE IT ENTERED. All
+# seven behave alike today: counted as a pin, not date-led, quiet on a rename,
+# and firing on an add. A separator that behaved differently would make these
+# arms red on a correct tree, so the family was measured rather than assumed.
+_SEPARATOR_TITLES = tuple(
+    (f"a {name} after the date", f"### 2026-08-05{char} Draft notes")
+    for name, char in (
+        ("colon", ":"),
+        ("comma", ","),
+        ("semicolon", ";"),
+        ("period", "."),
+        ("hyphen", "-"),
+        ("slash", "/"),
+        ("long dash", "—"),
+    )
+)
+
+CLASS_MOVING_TITLES = _WRITER_DERIVED_TITLES + _SEPARATOR_TITLES
 _TITLE_IDS = [name for name, _ in CLASS_MOVING_TITLES]
 _TITLES = [title for _, title in CLASS_MOVING_TITLES]
 REPLACEMENT_TITLE = "### Some other title"
@@ -433,6 +480,15 @@ class TestRule2TheAddDirection:
     LIVENESS CONTROL. This class asserts the gate FIRES, so a gate that stopped
     firing at all reddens here. The rename class asserts the gate stays QUIET,
     so a gate that fires at everything reddens there.
+
+    🔴 THE LIMIT OF THIS CLASS, STATED BECAUSE THE CONSEQUENCE IS NOT VISIBLE
+    FROM A CASE. Each case starts from a document that holds ZERO pins, and a
+    reader can see that much. WHAT A READER CANNOT SEE IS WHAT IT COSTS: this
+    class holds the under-block direction at that ONE starting count and is
+    unmeasured at each other one. A comparison that SCALES the old count rather
+    than shifts it leaves each case here green, because zero multiplied by a
+    number is zero, and the same comparison goes quiet on a user who holds
+    three pins and adds a fourth. THAT CASE IS NOT COVERED HERE.
     """
 
     @pytest.mark.parametrize("title", _TITLES, ids=_TITLE_IDS)
