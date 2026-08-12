@@ -42,6 +42,11 @@ MEM_2 = "### 2026-08-11 20:02\n**Context**: two\n"
 # counter branches agree BY CONSTRUCTION and the straddle cases cannot bite.
 # That vacuity cost the design one whole run, so this file asserts it.
 OUT_OF_REGION = "## User notes\n\n### My own heading\nprose the user wrote\n"
+# The same out-of-region content with NO `### ` heading in it. The PAIR of
+# fixtures is what lets a case move the WHOLE-TEXT count while it leaves the
+# MANAGED-REGION count alone. One fixture cannot do that, because the two sides
+# then carry the same outside content and the two slices agree by construction.
+OUT_OF_REGION_PLAIN = "## User notes\n\nprose the user wrote\n"
 
 
 def managed(pins, mems=(), outside=""):
@@ -68,6 +73,23 @@ def unmanaged(pins, mems=(), outside=""):
         "\n## Working Memory\n\n"
         f"{''.join(mems)}"
     )
+
+
+def verdict_by_slice(gate, old, new, slice_name):
+    """Count the two sides across ONE named slice and report the verdict.
+
+    It reproduces what each branch of the selection would decide, so an arm can
+    assert that the two branches DISAGREE on a fixture pair. An arm for a branch
+    is vacuous while the two branches agree, and this is what measures that.
+    """
+    from shared.claude_md_manager import extract_managed_region
+
+    if slice_name == "region":
+        old_body = extract_managed_region(old)[0]
+        new_body = extract_managed_region(new)[0]
+    else:
+        old_body, new_body = old, new
+    return gate._count_pin_comments(new_body) > gate._count_pin_comments(old_body)
 
 
 def fires(gate, old, new, tool="Edit", tmp_path=None):
@@ -162,6 +184,115 @@ class TestRule1TheDecisionOwnsTheSlice:
         assert fires(gate, old, new, "Write", tmp_path) is False
 
 
+class TestRule1TheManagedBranchEarnsItsPlace:
+    """THE BRANCH THAT TAKES THE MANAGED REGION, BOUNDED IN THE TWO DIRECTIONS.
+
+    THE GAP THIS CLOSES WAS MEASURED RATHER THAN REASONED. The cases above
+    either reach the whole-text fallback, or they reach the managed branch with
+    the SAME out-of-region content on the two sides. In that second shape the
+    slices count 2 against 2 inside the region and 3 against 3 across the whole
+    text, so either slice returns the same verdict. The branch can then be made
+    dead and 47 of 47 arms stay green.
+
+    THE SEPARATING SHAPE IS THE ONE WHERE THE TWO SLICES DISAGREE. The managed
+    region is a SUBSET of the whole text, so a change INSIDE the region moves
+    the two counts together. Only a change OUTSIDE the region moves one count
+    and leaves the other, so the out-of-region content must DIFFER across the
+    two sides while the two sides are both managed.
+
+    THE REMOVAL FAILS IN THE TWO DIRECTIONS AND ONE ARM BOUNDS ONE OF THEM.
+    Without the branch, a user who adds a heading to their own notes is DENIED,
+    and a user who adds a true pin while a heading leaves their notes is
+    ALLOWED. An arm for the first direction alone leaves the second open, so
+    there are two arms here and not one.
+    """
+
+    OUTSIDE_GAINS_A_HEADING = (
+        (OUT_OF_REGION_PLAIN, OUT_OF_REGION),
+        ([PIN_A, PIN_B], [PIN_A, PIN_B]),
+    )
+    A_PIN_LANDS_WHILE_THE_OUTSIDE_LOSES_ONE = (
+        (OUT_OF_REGION, OUT_OF_REGION_PLAIN),
+        ([PIN_A, PIN_B], [PIN_A, PIN_B, PIN_C]),
+    )
+
+    @staticmethod
+    def _pair(case):
+        (out_old, out_new), (pins_old, pins_new) = case
+        return (
+            managed(pins_old, outside=out_old),
+            managed(pins_new, outside=out_new),
+        )
+
+    def test_a_heading_added_outside_the_managed_region_stays_quiet(
+        self, gate, tmp_path
+    ):
+        """The managed region does not move. The user edits their own notes.
+
+        A DENY here is an over-block on content the gate has no claim over,
+        which is the cardinal direction for this repository.
+        """
+        old, new = self._pair(self.OUTSIDE_GAINS_A_HEADING)
+        assert fires(gate, old, new, "Write", tmp_path) is False, (
+            "a heading the user added OUTSIDE the managed region was read as a "
+            "pin add, so the decision counted across the whole text while the "
+            "two sides both carry the managed markers"
+        )
+
+    def test_a_pin_added_inside_fires_while_the_outside_loses_a_heading(
+        self, gate, tmp_path
+    ):
+        """A TRUE pin add, with the whole-text count held level by the outside.
+
+        THIS IS THE OTHER FAILURE DIRECTION OF THE SAME BRANCH. Across the whole
+        text the counts are 3 against 3, so a decision that reached the whole
+        text would go quiet on a real add. The arm above cannot see that.
+        """
+        old, new = self._pair(self.A_PIN_LANDS_WHILE_THE_OUTSIDE_LOSES_ONE)
+        assert fires(gate, old, new, "Write", tmp_path) is True, (
+            "a true pin add inside the managed region went unreported, because "
+            "a heading left the user's own notes in the same edit and the two "
+            "movements cancel in a whole-text count"
+        )
+
+    @pytest.mark.parametrize(
+        "case_name",
+        ["OUTSIDE_GAINS_A_HEADING", "A_PIN_LANDS_WHILE_THE_OUTSIDE_LOSES_ONE"],
+    )
+    def test_the_two_slices_disagree_on_each_fixture_pair(self, gate, case_name):
+        """NON-VACUITY, AND THE TWO ARMS ABOVE ARE EVIDENCE ONLY WITH THIS.
+
+        An arm for a branch says nothing while the branch it selects returns
+        what the other branch returns. This measures the two verdicts and
+        asserts they DIFFER, so a fixture that stops separating the branches
+        reddens HERE rather than passing in silence up there.
+
+        It also asserts the PRECONDITION: the two sides must carry the managed
+        markers, or the pair never reaches the branch under test and the arms
+        above pass from the fallback.
+        """
+        from shared.claude_md_manager import extract_managed_region
+
+        old, new = self._pair(getattr(self, case_name))
+
+        assert extract_managed_region(old) is not None, (
+            "the OLD side carries no managed markers, so this pair takes the "
+            "whole-text fallback and says nothing about the managed branch"
+        )
+        assert extract_managed_region(new) is not None, (
+            "the NEW side carries no managed markers, so this pair takes the "
+            "whole-text fallback and says nothing about the managed branch"
+        )
+
+        region = verdict_by_slice(gate, old, new, "region")
+        whole = verdict_by_slice(gate, old, new, "whole")
+        assert region != whole, (
+            f"the managed-region slice and the whole-text slice AGREE on this "
+            f"pair (both {region}), so either slice gives the same answer and "
+            f"the arm built on it cannot separate the two branches"
+        )
+
+
 # =========================================================================
 # RULE 2, the conjunction predicate.
 # =========================================================================
@@ -219,6 +350,80 @@ class TestRule2KnownResidual:
         old = "### 2026-08-06\nbody f\n"
         new = PIN_DATE_TITLED
         assert fires(gate, old, new) is True
+
+
+class TestRule2TheRenameDirection:
+    """A FAITHFUL RENAME OF A PIN MUST NOT BE DENIED, MEASURED AT THE COUNT.
+
+    WHY THIS SITS HERE AND NOT WITH THE WRITERS. The date-led rule is read on
+    TWO surfaces. A PREDICATE reads one heading and answers whether it is a
+    memory entry. A COMPARISON reads an OLD text and a NEW text and answers
+    whether a pin arrived. A rule that grows fails differently on the two, and
+    an arm on the predicate cannot reach the comparison, because the comparison
+    needs two documents and a predicate arm has one heading. The predicate side
+    is bounded beside the writers. THIS IS THE COMPARISON SIDE.
+
+    THE SHAPE, AND IT IS AN ORDINARY EDIT RATHER THAN AN ADVERSARIAL ONE. A user
+    renames a pin and drops the date from its title. No marker is present on
+    either side, because that pin was never marked. The shipped rule refuses a
+    date FOLLOWED BY A TITLE, so the old title and the new title are counted
+    alike and the gate stays quiet.
+
+    GROW THE RULE AT ITS TAIL AND THE OLD TITLE BECOMES A MEMORY ENTRY. The OLD
+    count FALLS, the new count is then the greater, and the decision reports an
+    add where the user removed a date. A faithful rename is DENIED. That is an
+    over-block, which this repository treats as the cardinal direction, and it
+    is invisible to an arm that reads one heading.
+
+    🔴 THE QUIET ARMS ARE EVIDENCE ONLY BECAUSE OF THE CONTROL BELOW. An assert
+    of False passes for many reasons, and a decision that returned False for
+    everything would satisfy each quiet arm here forever. The control fires on a
+    true add carrying the same date-prefixed title, so a retired decision shows
+    up in this class rather than in another file.
+    """
+
+    RENAMES = [
+        ("### 2026-08-05 Draft notes", "### Draft notes"),
+        ("### 2026-08-05 12:30 Draft notes", "### Draft notes"),
+        ("### 2026-08-05  Merge guard purpose", "### Merge guard purpose"),
+    ]
+
+    @pytest.mark.parametrize("old_title,new_title", RENAMES)
+    def test_a_rename_that_drops_the_date_stays_quiet(
+        self, gate, old_title, new_title
+    ):
+        old = f"{old_title}\nbody\n"
+        new = f"{new_title}\nbody\n"
+        assert fires(gate, old, new) is False, (
+            f"THE GATE DENIED A FAITHFUL RENAME.\n"
+            f"  old title: {old_title!r}\n"
+            f"  new title: {new_title!r}\n"
+            f"No pin arrived. The user removed a date from a title.\n"
+            f"\n"
+            f"WHAT PRODUCES THIS. The date-led rule grew at its tail, so it now "
+            f"accepts a date FOLLOWED BY A TITLE. The OLD title is then read as "
+            f"a memory entry and drops out of the old count, the new count "
+            f"becomes the greater, and the comparison reports an add.\n"
+            f"\n"
+            f"THIS IS AN OVER-BLOCK AND IT IS THE CARDINAL DIRECTION. The user "
+            f"cannot edit Pinned Context and cannot see why. Do not repair it "
+            f"here. The rule belongs to the gate, and the tail anchor is what "
+            f"holds it."
+        )
+
+    def test_a_true_add_beside_a_date_prefixed_title_fires(self, gate):
+        """POSITIVE CONTROL ON THE DECISION, IN THIS CLASS RATHER THAN ELSEWHERE.
+
+        It carries the SAME date-prefixed title as the quiet arms and adds a
+        second heading beside it. A decision that stopped firing at all passes
+        each quiet arm above and fails here.
+        """
+        old = "### 2026-08-05 Draft notes\nbody\n"
+        new = "### 2026-08-05 Draft notes\nbody\n### Second pin\nbody\n"
+        assert fires(gate, old, new) is True, (
+            "the decision went quiet on a true add, so the quiet arms above "
+            "prove nothing: they pass for a decision that reports no add ever"
+        )
 
 
 # =========================================================================
