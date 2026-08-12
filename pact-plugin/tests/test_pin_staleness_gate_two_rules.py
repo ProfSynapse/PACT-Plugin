@@ -75,6 +75,55 @@ def unmanaged(pins, mems=(), outside=""):
     )
 
 
+def pinned_document(body=""):
+    """A document that CARRIES a `## Pinned Context` heading.
+
+    THE SLICE THIS SELECTS IS THE PINNED SECTION, because `_counts_show_an_add`
+    step 0 resolves that span on the two sides. So a count change INSIDE the
+    section reaches the comparison and a change below `## Working Memory` does
+    not. Use this shape for a claim about pins.
+    """
+    return (
+        "# Project Memory\n\n"
+        f"{MANAGED_START_MARKER}\n"
+        "## Pinned Context\n\n"
+        f"{body}"
+        "\n## Working Memory\n\n"
+        f"{MANAGED_END_MARKER}\n"
+    )
+
+
+def working_memory_document(body=""):
+    """A document with a `## Working Memory` heading and NO pinned heading.
+
+    🔴 THIS SHAPE IS WHAT MAKES RULE 2 MEASURABLE, AND THE OTHER SHAPE HIDES IT.
+    Step 0 needs a `## Pinned Context` span on the two sides. With no such
+    heading it DECLINES, the slice widens to the managed region, and the memory
+    entries enter the count. `_is_memory_entry` is then the only thing that
+    keeps the gate quiet, so removing it changes the verdict.
+
+    MEASURED, one memory-entry add driven through the two shapes:
+      pinned shape, shipped rule   counts 0 -> 0, quiet
+      pinned shape, rule 2 ABLATED counts 0 -> 0, quiet    <- the arm says nothing
+      this shape,   shipped rule   counts 0 -> 0, quiet
+      this shape,   rule 2 ABLATED counts 0 -> 1, FIRES    <- the arm bites
+    An arm for Rule 2 built on the pinned shape is quiet because of the SLICE
+    BOUND rather than because of the rule, so it passes whatever Rule 2 does.
+
+    THE SHAPE IS SHIPPED RATHER THAN CONTRIVED. A project file carries it
+    before any pin is added, and a machine writer reaches it with no human in
+    the route. It was confirmed against a live project file, which was READ for
+    its shape and never used as a fixture.
+    """
+    return (
+        "# Project Memory\n\n"
+        f"{MANAGED_START_MARKER}\n"
+        "## Working Memory\n\n"
+        f"{body}"
+        f"{MANAGED_END_MARKER}\n"
+    )
+
+
 def verdict_by_slice(gate, old, new, slice_name):
     """Count the two sides across ONE named slice and report the verdict.
 
@@ -92,14 +141,55 @@ def verdict_by_slice(gate, old, new, slice_name):
     return gate._count_pin_comments(new_body) > gate._count_pin_comments(old_body)
 
 
-def fires(gate, old, new, tool="Edit", tmp_path=None):
-    """Drive the shipped decision. True means the edit of a user is DENIED."""
+def fires(gate, old, new, tool="Edit", tmp_path=None, document=None):
+    """Drive the shipped decision. True means the edit of a user is DENIED.
+
+    🔴 THE EDIT BRANCH READS A FILE, SO EVERY EDIT CASE MUST SUPPLY THE
+    DOCUMENT ITS FRAGMENT LIVES IN. The decision builds the post-edit document
+    and compares it against the current one. THREE PATHS RETURN THE QUIET VALUE
+    WITHOUT EVER COMPARING ANYTHING, and a quiet-asserting arm goes green on
+    each of them:
+      1. THE READ FAILS. A path that does not exist raises, the catch returns
+         the quiet value, and the count never runs.
+      2. THE ANCHOR IS ABSENT. `str.replace` is then a no-op, the two documents
+         are equal, and the comparison is 0 against 0 whatever the gate does.
+      3. THE COUNT SLICE EXCLUDES THE CHANGE. Content added below
+         `## Working Memory` moves no count while a pinned span is resolved.
+    Path 1 was live in this file and it VACATED 16 rows: they passed, and the
+    comparison each one is named for never ran. A failure count is therefore a
+    LOWER BOUND on the rows a change reached, and not a measure of it.
+
+    THE TWO GUARDS BELOW CLOSE PATHS 1 AND 2 AT THE FIXTURE RATHER THAN AT THE
+    VERDICT, which is where the defect is. Path 3 is closed per group, by the
+    CHOICE OF DOCUMENT: see `pinned_document` and `working_memory_document`.
+    """
     if tool == "Write":
         target = tmp_path / "CLAUDE.md"
         target.write_text(old, encoding="utf-8")
         return gate._is_add_shaped_edit({"content": new}, target, "Write")
+
+    assert document is not None, (
+        "the Edit branch reads a file, so this case must name the document its "
+        "fragment lives in; a case with no document cannot reach the comparison"
+    )
+    occurrences = document.count(old)
+    assert occurrences == 1, (
+        f"THE FIXTURE CANNOT CARRY THIS ASSERTION.\n"
+        f"  the old_string occurs {occurrences} times in the document, not 1\n"
+        f"With no occurrence the edit is a NO-OP, the two documents are equal, "
+        f"and the arm goes green whatever the gate decides. With more than one "
+        f"the platform refuses the edit, so the gate judges a document that is "
+        f"never produced."
+    )
+    assert document.replace(old, new, 1) != document, (
+        "the payload leaves the document unchanged, so the comparison is the "
+        "document against itself and this arm cannot separate any verdict"
+    )
+
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(document, encoding="utf-8")
     return gate._is_add_shaped_edit(
-        {"old_string": old, "new_string": new}, Path("/nonexistent"), "Edit"
+        {"old_string": old, "new_string": new}, target, "Edit"
     )
 
 
@@ -297,13 +387,111 @@ class TestRule1TheManagedBranchEarnsItsPlace:
 # RULE 2, the conjunction predicate.
 # =========================================================================
 
-class TestRule2TheConjunction:
-    def test_e0_adding_a_memory_entry_stays_quiet(self, gate):
-        """E0. The measured defect: a memory write read as a pin add."""
-        assert fires(gate, "## Working Memory\n\n",
-                     f"## Working Memory\n\n{MEM_1}") is False
+class TestEachEditGroupRecordsWhatWasCompared:
+    """🔴 A GREEN LINE IS NOT EVIDENCE. THIS CLASS IS THE EVIDENCE.
 
-    def test_e2_a_marked_pin_titled_a_bare_date_fires(self, gate):
+    An Edit arm can go green from at least three places that the suite output
+    cannot separate: a failed read, a payload whose anchor the document lacks,
+    and a count slice that excludes the change. A quiet arm that took any of
+    those passes exactly like a quiet arm that ran the comparison and found no
+    add.
+
+    SO EACH GROUP RECORDS WHAT ITS DOCUMENT PUTS IN FRONT OF THE COUNT. These
+    two arms assert the SHAPE OF THE COMPARISON rather than the verdict, so a
+    document that stops reaching the count reddens HERE, with a message naming
+    the cause, rather than passing in silence in the classes below.
+    """
+
+    def test_the_pinned_group_puts_its_change_inside_the_counted_span(self, gate):
+        """The pinned document resolves a span, and the added pin is IN it."""
+        from staleness import _parse_pinned_section
+
+        document = pinned_document()
+        old = "## Working Memory\n"
+        new = f"{PIN_A}\n## Working Memory\n"
+        simulated = document.replace(old, new, 1)
+        assert simulated != document, "the payload is a no-op on this document"
+
+        current_span = _parse_pinned_section(document, allow_empty_section=True)
+        post_span = _parse_pinned_section(simulated, allow_empty_section=True)
+        assert current_span is not None and post_span is not None, (
+            "one side resolves no pinned section, so the decision does not take "
+            "the span bound and the pinned group is counting a wider slice than "
+            "its arms claim"
+        )
+        assert gate._count_pin_comments(current_span[2]) == 0
+        assert gate._count_pin_comments(post_span[2]) == 1, (
+            "the added pin is not inside the counted span, so an arm in the "
+            "pinned group would be quiet for the span bound rather than for "
+            "the verdict it names"
+        )
+
+    def test_the_working_memory_group_counts_the_entries_it_is_named_for(
+        self, gate, monkeypatch
+    ):
+        """The other document declines the span, so the entries ARE counted.
+
+        THIS IS THE SEPARATION RULE 2 NEEDS, RECORDED AS TWO COUNTS OF ONE
+        SLICE. The same bytes count 0 with the conjunction and 1 without it. On
+        the pinned document they count 0 either way, and an arm built there
+        says nothing about the rule.
+        """
+        from staleness import _parse_pinned_section
+        from shared.claude_md_manager import extract_managed_region
+
+        document = working_memory_document()
+        old = "## Working Memory\n\n"
+        new = f"## Working Memory\n\n{MEM_1}"
+        simulated = document.replace(old, new, 1)
+        assert simulated != document, "the payload is a no-op on this document"
+
+        assert _parse_pinned_section(document, allow_empty_section=True) is None, (
+            "this document resolves a pinned section, so the count narrows to "
+            "that span, the memory entry falls outside it, and the Rule 2 arms "
+            "built on this document pass whatever Rule 2 does"
+        )
+        region = extract_managed_region(simulated)
+        assert region is not None and MEM_1 in region[0], (
+            "the memory entry is not inside the managed region, so it is not "
+            "in the slice the count reads"
+        )
+        assert gate._count_pin_comments(region[0]) == 0
+
+        monkeypatch.setattr(gate, "_is_memory_entry", lambda pin: False)
+        assert gate._count_pin_comments(region[0]) == 1, (
+            "the SAME slice counts the same with the conjunction removed, so "
+            "the conjunction is not what holds this document quiet and the "
+            "ablation below cannot measure it"
+        )
+
+class TestRule2TheConjunction:
+    """🔴 THE TWO GROUPS BELOW TAKE DIFFERENT DOCUMENTS, AND THAT IS THE REPAIR.
+
+    A claim about PINS needs a document whose pinned span the count reaches, so
+    those cases take `pinned_document`. A claim about MEMORY ENTRIES needs a
+    document where the entries are INSIDE the counted slice, and the pinned
+    shape excludes them by its span bound, so those cases take
+    `working_memory_document`.
+
+    ONE DOCUMENT FOR EVERY CASE IS NOT A REPAIR, IT IS A BROADCAST. Measured:
+    the pinned shape returns quiet for a memory-entry add whether Rule 2 is
+    present or ablated, so a Rule 2 arm on that shape passes for the slice
+    bound rather than for the rule.
+    """
+
+    def test_e0_adding_a_memory_entry_stays_quiet(self, gate, tmp_path):
+        """E0. The measured defect: a memory write read as a pin add.
+
+        THE DOCUMENT HAS NO PINNED HEADING ON PURPOSE. That is what puts the
+        memory entry inside the counted slice, so this arm reddens when the
+        date-led exclusion is removed. See `working_memory_document`.
+        """
+        assert fires(gate, "## Working Memory\n\n",
+                     f"## Working Memory\n\n{MEM_1}",
+                     tmp_path=tmp_path,
+                     document=working_memory_document()) is False
+
+    def test_e2_a_marked_pin_titled_a_bare_date_fires(self, gate, tmp_path):
         """E2. THE ARM THAT KILLS THE DATE-ONLY RULE.
 
         The heading is a bare date AND the entry carries its marker, so it is
@@ -311,18 +499,29 @@ class TestRule2TheConjunction:
         gate would go quiet on a real add.
         """
         assert fires(gate, "## Working Memory\n",
-                     f"{PIN_DATE_TITLED}\n## Working Memory\n") is True
+                     f"{PIN_DATE_TITLED}\n## Working Memory\n",
+                     tmp_path=tmp_path,
+                     document=pinned_document()) is True
 
-    def test_e4_archiving_a_pin_while_memory_lands_stays_quiet(self, gate):
+    def test_e4_archiving_a_pin_while_memory_lands_stays_quiet(
+        self, gate, tmp_path
+    ):
         """E4. The archive case, which is the escape from a full pin cap.
 
         An over-block here is the livelock the whole gate exists to prevent.
-        """
-        old = f"{PIN_A}## Working Memory\n\n"
-        new = f"## Working Memory\n\n{MEM_1}{MEM_2}"
-        assert fires(gate, old, new) is False
 
-    def test_e1_adding_a_real_pin_through_the_edit_path_fires(self, gate):
+        THE DOCUMENT HAS NO PINNED HEADING, for the reason E0 gives: the two
+        memory entries must be inside the counted slice, or the arm passes
+        whether Rule 2 holds or not. Measured on this shape, the count runs
+        1 against 0 with the rule and 1 against 2 without it.
+        """
+        assert fires(gate, PIN_A, f"{MEM_1}{MEM_2}",
+                     tmp_path=tmp_path,
+                     document=working_memory_document(body=PIN_A)) is False
+
+    def test_e1_adding_a_real_pin_through_the_edit_path_fires(
+        self, gate, tmp_path
+    ):
         """E1. THE ARM THAT M2 MUST REDDEN.
 
         A suite that checks only that memory writes stopped over-blocking
@@ -331,11 +530,13 @@ class TestRule2TheConjunction:
         gate from a retired one.
         """
         assert fires(gate, "## Working Memory\n",
-                     f"{PIN_A}\n## Working Memory\n") is True
+                     f"{PIN_A}\n## Working Memory\n",
+                     tmp_path=tmp_path,
+                     document=pinned_document()) is True
 
 
 class TestRule2KnownResidual:
-    def test_r2_an_edit_that_adds_a_missing_marker_fires(self, gate):
+    def test_r2_an_edit_that_adds_a_missing_marker_fires(self, gate, tmp_path):
         """R2, A KNOWN AND ACCEPTED RESIDUAL, PINNED SO IT CANNOT MOVE UNSEEN.
 
         An edit that adds a missing marker to a date-titled pin moves NO pin,
@@ -349,7 +550,8 @@ class TestRule2KnownResidual:
         """
         old = "### 2026-08-06\nbody f\n"
         new = PIN_DATE_TITLED
-        assert fires(gate, old, new) is True
+        assert fires(gate, old, new, tmp_path=tmp_path,
+                     document=pinned_document(body=old)) is True
 
 
 # =========================================================================
@@ -492,10 +694,11 @@ class TestRule2TheAddDirection:
     """
 
     @pytest.mark.parametrize("title", _TITLES, ids=_TITLE_IDS)
-    def test_an_added_pin_is_reported(self, gate, title):
+    def test_an_added_pin_is_reported(self, gate, title, tmp_path):
         old = "## Working Memory\n"
         new = f"{title}\nbody\n## Working Memory\n"
-        assert fires(gate, old, new) is True, (
+        assert fires(gate, old, new, tmp_path=tmp_path,
+                     document=pinned_document()) is True, (
             f"A TRUE PIN ADD WENT UNREPORTED.\n"
             f"  added title: {title!r}\n"
             f"\n"
@@ -549,11 +752,12 @@ class TestRule2TheRenameDirection:
     """
 
     @pytest.mark.parametrize("old_title", _TITLES, ids=_TITLE_IDS)
-    def test_a_rename_of_a_pin_stays_quiet(self, gate, old_title):
+    def test_a_rename_of_a_pin_stays_quiet(self, gate, old_title, tmp_path):
         new_title = REPLACEMENT_TITLE
         old = f"{old_title}\nbody\n"
         new = f"{new_title}\nbody\n"
-        assert fires(gate, old, new) is False, (
+        assert fires(gate, old, new, tmp_path=tmp_path,
+                     document=pinned_document(body=old)) is False, (
             f"THE GATE DENIED A FAITHFUL RENAME.\n"
             f"  old title: {old_title!r}\n"
             f"  new title: {new_title!r}\n"
@@ -570,7 +774,7 @@ class TestRule2TheRenameDirection:
             f"holds it."
         )
 
-    def test_a_true_add_beside_a_date_prefixed_title_fires(self, gate):
+    def test_a_true_add_beside_a_date_prefixed_title_fires(self, gate, tmp_path):
         """POSITIVE CONTROL ON THE DECISION, IN THIS CLASS RATHER THAN ELSEWHERE.
 
         It carries the SAME date-prefixed title as the quiet arms and adds a
@@ -579,7 +783,8 @@ class TestRule2TheRenameDirection:
         """
         old = "### 2026-08-05 Draft notes\nbody\n"
         new = "### 2026-08-05 Draft notes\nbody\n### Second pin\nbody\n"
-        assert fires(gate, old, new) is True, (
+        assert fires(gate, old, new, tmp_path=tmp_path,
+                     document=pinned_document(body=old)) is True, (
             "the decision went quiet on a true add, so the quiet arms above "
             "prove nothing: they pass for a decision that reports no add ever"
         )
@@ -596,22 +801,48 @@ class TestRule4TheToolNameDecidesTheBranch:
         """Rule 4. The branch asks the TOOL rather than a payload key.
 
         An Edit payload that happens to carry a `content` key took the
-        whole-document branch before this, which reads a file the Edit never
-        names. The old and new strings here would FIRE on the fragment branch,
-        so a wrong branch is visible rather than silent.
+        whole-document branch before this, which read the `content` value as
+        the whole post-edit document rather than applying the Edit.
+
+        🔴 THE PAYLOAD CHANGED AND THE CLAIM DID NOT. This case used to name a
+        path that does not exist, because the Edit branch once compared the two
+        FRAGMENTS and never opened a file. That contract is retired: the branch
+        now reads the current document and simulates the edit, so an absent
+        path sends the case out through the failed-read exit and the arm says
+        nothing about which branch ran. The document below is what lets the
+        assertion be carried, and the assertion itself is unchanged.
+
+        THE TWO BRANCHES RETURN OPPOSITE VERDICTS ON THIS ONE PAYLOAD, WHICH IS
+        WHAT MAKES THE ARM SEPARATE THEM. Measured:
+          Edit branch, the strings applied to the document   counts 0 -> 1, FIRES
+          Write branch, the `content` value as the document  counts 0 -> 0, quiet
+        So a decision that reads the payload key rather than the tool goes
+        quiet here, and this arm reddens.
         """
+        document = pinned_document()
+        target = tmp_path / "CLAUDE.md"
+        target.write_text(document, encoding="utf-8")
+
+        old_string = "## Working Memory\n"
+        assert document.count(old_string) == 1, (
+            "the anchor is not unique in the fixture document, so the edit is "
+            "a no-op or the platform refuses it, and this arm would pass "
+            "whatever branch the decision takes"
+        )
+
         result = gate._is_add_shaped_edit(
             {
-                "old_string": "## Working Memory\n",
+                "old_string": old_string,
                 "new_string": f"{PIN_A}\n## Working Memory\n",
                 "content": "decoy",
             },
-            tmp_path / "absent.md",
+            target,
             "Edit",
         )
         assert result is True, (
-            "the decision took the Write branch on an Edit payload, so it "
-            "read a file rather than the strings the Edit supplied"
+            "the decision took the Write branch on an Edit payload, so it read "
+            "the `content` value as the whole post-edit document instead of "
+            "applying the old and new strings the Edit supplied"
         )
 
 
@@ -635,16 +866,34 @@ class TestAblationEachRuleEarnsItsPlace:
     """
 
     def test_removing_rule_2_changes_a_named_case_while_rule_1_stays(
-        self, gate, monkeypatch
+        self, gate, monkeypatch, tmp_path
     ):
         """Ablate the conjunction. Rule 1 stays. E0 must change verdict.
 
-        This is the coupling, measured: the whole-text fallback of Rule 1 keeps
-        the memory entries, so with Rule 2 removed a plain memory write
-        over-blocks again.
+        This is the coupling, measured: the WIDER SLICE of Rule 1 keeps the
+        memory entries, so with Rule 2 removed a plain memory write over-blocks
+        again.
+
+        🔴 THE DOCUMENT DECIDES WHETHER THIS ABLATION CAN BITE AT ALL, AND THE
+        BOUND IS NARROWER THAN THE CLASS TITLE SUGGESTS. Step 0 of
+        `_counts_show_an_add` narrows the count to the `## Pinned Context` span
+        when the two sides resolve one, and a memory entry lands BELOW
+        `## Working Memory`, outside that span. On a document that carries a
+        pinned heading the count is 0 against 0 WHETHER RULE 2 IS PRESENT OR
+        ABLATED, so the ablation returns the same verdict either way and
+        reports that Rule 2 earns nothing. THAT WOULD BE A MEASUREMENT OF THE
+        FIXTURE RATHER THAN OF THE RULE.
+        So this case takes the document with NO pinned heading, where step 0
+        declines and the entries enter the slice. Measured on that document:
+        0 against 0 with the rule, and 0 against 1 without it.
+        WHAT THIS BOUNDS: Rule 2 earns its place on documents where step 0
+        DECLINES. Where a pinned span resolves, the span bound alone already
+        holds the memory writes quiet.
         """
+        document = working_memory_document()
         old, new = "## Working Memory\n\n", f"## Working Memory\n\n{MEM_1}"
-        assert fires(gate, old, new) is False
+        assert fires(gate, old, new, tmp_path=tmp_path,
+                     document=document) is False
 
         monkeypatch.setattr(gate, "_is_memory_entry", lambda pin: False)
 
@@ -654,7 +903,8 @@ class TestAblationEachRuleEarnsItsPlace:
             "the ablation did not reach the counter, so the result below "
             "says nothing about what Rule 2 contributes"
         )
-        assert fires(gate, old, new) is True, (
+        assert fires(gate, old, new, tmp_path=tmp_path,
+                     document=document) is True, (
             "removing the conjunction changed NOTHING, so either Rule 2 earns "
             "nothing in the presence of Rule 1, or this arm is not measuring "
             "what it claims"
