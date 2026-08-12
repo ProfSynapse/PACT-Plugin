@@ -260,6 +260,36 @@ _BASE = {
 # three, four and five. Where it wants one or more spaces it generates zero,
 # one and two. A population confined to what the pattern accepts today cannot
 # report a widening.
+# The separator marks a person types between a date and a title. DERIVED BY
+# ANOTHER ENGINEER FROM A HUMAN CORPUS AND CONSUMED HERE. NOT RE-DERIVED.
+#
+# SOURCE. The four `CLAUDE.md` files, 23 headings, 20 of them human-curated pin
+# titles. The counting rule takes each punctuation mark the corpus shows, and
+# drops the marks it shows only inside a word or as markup.
+#
+# WHY THIS FILE DOES NOT DERIVE ITS OWN, AND IT IS NOT A COST ARGUMENT. The
+# alphabet is ONE FACT ABOUT THE WORLD, so there is nothing for a second
+# derivation to be independent of. Two derivations that agree are one witness
+# in two costumes. Two that disagree leave the pin counter and this predicate
+# guarding DIFFERENT LANGUAGES, and that disagreement is the defect rather than
+# a signal about the alphabet. One alphabet, one source, two consumers.
+#
+# THE BOUND THE SOURCE STATES ABOUT ITSELF: the corpus holds NO human-typed
+# date-led title, so the marks come from curated titles and reach THIS position
+# by inference rather than by observation.
+#
+# DO NOT ADD A MARK BY HAND. Re-run the derivation against the corpus. A mark
+# added here by hand is the second spelling this arrangement exists to prevent.
+_SEPARATOR_MARKS = (":", "—", "-", ".", ";", ",", "/")
+
+# Each mark is sampled in TWO SPACINGS, and the second sample is not decoration.
+# The space before the mark is a node with its own bound, so one spacing cannot
+# witness a change to that bound: a widening that accepts an optional space
+# renders identical text under one sample. The two spacings separate them.
+_PUNCTUATED_TRAILS = [f" {m} Draft notes" for m in _SEPARATOR_MARKS] + [
+    f"{m} Draft notes" for m in _SEPARATOR_MARKS
+]
+
 _DIMS = {
     "lead": ["", "x "],
     "hashes": ["###", "", "#", "##", "####", "######", "#######"],
@@ -273,7 +303,7 @@ _DIMS = {
     "hour": ["04", "4", "044"],
     "tsep": [":", "", "."],
     "minute": ["50", "5", "500"],
-    "trail": ["", " ", "  ", " Draft notes"],
+    "trail": ["", " ", "  ", " Draft notes"] + _PUNCTUATED_TRAILS,
 }
 
 
@@ -291,9 +321,22 @@ def _population():
     """Return {rendered line: (dimension, value)}.
 
     COUNT RULE, STATED BESIDE THE NUMBER: one case for each (dimension, value)
-    pair, ONE dimension varied at a time from the writer baseline, plus the
-    baseline and the whole optional group absent. One-at-a-time keeps a
-    difference ATTRIBUTABLE: the case that moved names the dimension.
+    pair, ONE dimension varied at a time, from TWO baselines. One-at-a-time
+    keeps a difference ATTRIBUTABLE: the case that moved names the dimension.
+
+    WHY TWO BASELINES AND NOT ONE, WHICH IS A MEASUREMENT RATHER THAN A TASTE.
+    The trail renders AFTER the time. A pattern node that sits BETWEEN the date
+    and the time is therefore unreachable from the writer baseline, whatever
+    the trail holds: the time is present, so the line fails before the trail is
+    read. MEASURED against a widening at that position: from the writer
+    baseline alone, 0 cases of the population separate the widened pattern from
+    the shipped one. From the no-time baseline, 6 do. ONE BASELINE MADE THE
+    ARM BLIND TO A WHOLE POSITION, and the population is the only place to fix
+    that, because no arm can report a case the population does not hold.
+
+    THIS IS NOT A PRODUCT AND THE DISTINCTION MATTERS FOR THE COST. Each case
+    still differs from a NAMED baseline in ONE dimension, so growth stays
+    linear in the number of values, and a failure still names what moved.
     """
     seen = {_render(_BASE): ("baseline", "writer")}
     no_time = dict(_BASE, gap2="", hour="", tsep="", minute="")
@@ -301,6 +344,10 @@ def _population():
     for dim, values in _DIMS.items():
         for v in values[1:]:
             seen.setdefault(_render(dict(_BASE, **{dim: v})), (dim, v))
+    for v in _DIMS["trail"]:
+        seen.setdefault(
+            _render(dict(no_time, trail=v)), ("timegroup absent + trail", v)
+        )
     return seen
 
 
@@ -331,11 +378,19 @@ class TestTheDateLedPredicateAlphabetIsBounded:
 
     THE BOUND, AND IT IS NOT A PROOF. This is BOUNDED-EXHAUSTIVE OVER A
     GENERATED POPULATION, not a proof about the language. The population is
-    one-at-a-time from a single baseline, so it does not reach an interaction
-    between two dimensions. AND THE ENUMERATION AGES: it is built from the
-    pattern AS IT IS TODAY, so an edit that ADDS a node adds a dimension no
-    list written today can hold. Do not read this class as coverage of the
-    predicate for ever.
+    one-at-a-time from TWO baselines, the writer line and the same line with
+    the time group absent, so it reaches ONE interaction and no other. AND THE
+    ENUMERATION AGES: it is built from the pattern AS IT IS TODAY, so an edit
+    that ADDS a node adds a dimension no list written today can hold. Do not
+    read this class as coverage of the predicate for ever.
+
+    THE SECOND BASELINE IS THERE BECAUSE THE FIRST ONE HID A POSITION, and the
+    lesson generalises past this pattern. A dimension that renders LATE cannot
+    reach a node that sits EARLY, because the line fails before the late text
+    is read. So a population built from one baseline is blind to every node
+    that the baseline's own earlier text already decides. WHEN YOU ADD A
+    DIMENSION, ASK WHICH NODES ITS POSITION CAN REACH, rather than assume a
+    value in the population reaches the node you meant to guard.
     """
 
     # The lines the shipped pattern accepts that NO writer emits. Each is a
@@ -350,10 +405,14 @@ class TestTheDateLedPredicateAlphabetIsBounded:
     # becomes one that requires the author to write a claim that is incorrect.
     # An omission becomes an assertion, and a reader can catch an assertion.
     #
-    # SO THE ONLY CONTROL THAT CATCHES A HOLLOW REASON IS A READER. The suite
-    # is green whether or not a reason here is derived, because this text
-    # changes no test outcome. Do not read a passing suite as evidence that the
-    # list below is bounded.
+    # SO A READER IS THE ONLY CONTROL FOR THE PART THAT CITES NOTHING, AND THE
+    # NARROWING MATTERS. A reason that CITES something is checkable without a
+    # judgement: take the citation, search for the cited thing with a control
+    # that proves the search is live, and see whether it is available. Only a
+    # claim with NO citation behind it wants a reader. THE SUITE CATCHES
+    # NEITHER KIND. It is green whether or not a reason here is derived,
+    # because this text changes no test outcome. Do not read a passing suite as
+    # evidence that the list below is bounded.
     #
     # WHY EACH REASON NAMES A COST AND A DIRECTION RATHER THAN THE FORM. A
     # reason that restates its entry is worse than no reason, because it makes
@@ -418,6 +477,36 @@ class TestTheDateLedPredicateAlphabetIsBounded:
             "under the two and the comparison cannot move. Two samples "
             "separate them. ADMITTED and WITHDRAWN with the entry above, whose "
             "node it shares."
+        ),
+        "### 2026-08-12 ": (
+            "THE TRAILING RUN WITH THE TIME GROUP ABSENT. The same node as the "
+            "two entries above, against a different neighbour: the optional "
+            "group matches empty, so the trailing run meets the end of the "
+            "line directly. ADMITTED for the same cause, because the character "
+            "is invisible whether or not a time precedes it. WITHDRAWN with "
+            "the two entries above, whose node it shares.\n"
+            "WHY IT APPEARS HERE AND NOT EARLIER, WHICH IS A PROPERTY OF THE "
+            "POPULATION RATHER THAN OF THE PATTERN. The pattern accepted this "
+            "line from the start. The population varied the trail from the "
+            "writer baseline only, so it held no case that carried a trailing "
+            "run AND an absent time group, and the comparison could not meet "
+            "one. A tolerance that no case reaches is invisible, not absent.\n"
+            "🔴 AND THIS IS NOT THE ABSORPTION THE BLOCK ABOVE WARNS ABOUT. IT "
+            "IS THE OPPOSITE CASE. An absorption adds a tolerance to "
+            "accommodate a pattern a person HAS JUST WIDENED. Here the pattern "
+            "is UNCHANGED, and the entry declares behaviour that was present "
+            "from the start and that no case exercised. THE TWO LOOK "
+            "IDENTICAL IN A DIFF, because each shows one entry added. To tell "
+            "them apart, read the PATTERN in the same commit. If the pattern "
+            "moved, the entry is an absorption and it wants the scrutiny the "
+            "block above describes. If the pattern held, the entry is a "
+            "declaration of what the population could not reach before."
+        ),
+        "### 2026-08-12  ": (
+            "THE SAME, AT TWO SPACES. Present for the same reason as the "
+            "two-space entry above: one sample cannot witness a change from a "
+            "zero-or-more run to a bounded one, because one space satisfies "
+            "the two alike."
         ),
     }
 
