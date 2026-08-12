@@ -147,19 +147,85 @@ class TestPinStalenessGate_MarkerPresent:
     """
 
     def test_edit_adding_new_pin_denied(self, gate_env):
-        """Net-new pin comment in new_string → ADD → deny."""
+        """An Edit that adds a pin to the pinned section is denied.
+
+        THE ANCHOR MUST BE PRESENT IN THE FIXTURE, and the assertion below
+        holds it there. The gate compares the document BEFORE the edit against
+        the document AFTER it, so an `old_string` the fixture does not carry
+        makes the edit a no-op: the two documents agree, no pin is added, and
+        the gate allows. Such an arm asserts nothing about an add and it goes
+        green whatever the gate does. An earlier revision of this arm carried
+        exactly that payload, correctly, because the gate then compared the two
+        payload fragments and read no document at all.
+        """
         env = gate_env(marker_present=True)
+        current = env["claude_md"].read_text(encoding="utf-8")
+        anchor = "### Pin\nxxxx\n"
+        assert current.count(anchor) == 1, (
+            "non-vacuity: the anchor must occur one time in the fixture, or "
+            "the edit applies nowhere and this arm cannot observe an add"
+        )
         result = _call_gate({
             "tool_name": "Edit",
             "tool_input": {
                 "file_path": str(env["claude_md"]),
-                "old_string": "some text",
-                "new_string": "<!-- pinned: 2026-04-20 -->\n### X\nbody",
+                "old_string": anchor,
+                "new_string": anchor + "<!-- pinned: 2026-05-01 -->\n### Y\nbody\n",
             },
         })
         assert result is not None
         assert "Pinned Context" in result
         assert "stale pins" in result
+
+    def test_edit_adding_pin_at_section_terminator_denied(self, gate_env):
+        """The add anchored on the line that TERMINATES the pinned section.
+
+        This anchor is the one a person reaches for to append a pin at the end
+        of the section, and it is the position an offset-based locus test read
+        as OUTSIDE the region. Measured on the project document: the same pin,
+        added by two anchors one byte apart, gave opposite verdicts. This arm
+        reddens if that test returns.
+        """
+        env = gate_env(marker_present=True)
+        current = env["claude_md"].read_text(encoding="utf-8")
+        anchor = "## Working Memory"
+        assert current.count(anchor) == 1, (
+            "non-vacuity: the anchor must occur one time in the fixture"
+        )
+        result = _call_gate({
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": str(env["claude_md"]),
+                "old_string": anchor,
+                "new_string": "<!-- pinned: 2026-05-01 -->\n### Y\nbody\n" + anchor,
+            },
+        })
+        assert result is not None
+        assert "stale pins" in result
+
+    def test_edit_with_absent_anchor_allowed(self, gate_env):
+        """An Edit whose anchor is absent writes nothing, so the gate allows.
+
+        The payload carries a pin comment, which the retired fragment
+        comparison read as an add. The document comparison reads what the edit
+        WRITES: the anchor occurs zero times, the replacement changes nothing,
+        the two documents are byte-identical, and no pin arrives.
+        """
+        env = gate_env(marker_present=True)
+        current = env["claude_md"].read_text(encoding="utf-8")
+        anchor = "some text"
+        assert current.count(anchor) == 0, (
+            "this arm needs an anchor the fixture does NOT carry"
+        )
+        result = _call_gate({
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": str(env["claude_md"]),
+                "old_string": anchor,
+                "new_string": "<!-- pinned: 2026-04-20 -->\n### X\nbody",
+            },
+        })
+        assert result is None
 
     def test_write_increasing_pin_count_denied(self, gate_env):
         """Write replacement with MORE pin comments than current → deny.

@@ -15,23 +15,21 @@ the directive.
 Gate triggers only when ALL hold:
   1. Tool is Edit or Write (enforced by hooks.json matcher)
   2. Target file path resolves to the project CLAUDE.md
-  3. The edit reaches the Pinned Context section, WHERE THAT SECTION
-     RESOLVES. STATE THE FALLBACK WHENEVER THIS CONDITION IS QUOTED,
-     because a locus claimed with no fallback is the same defect in a
-     new position: it leads a maintainer to believe the unbounded
-     shapes are closed, and they are not.
-       WRITE, and any comparison of two whole documents: the locus is
-       the Pinned Context section when BOTH SIDES resolve one. If
-       either side does not, the comparison FALLS BACK to the shipped
-       selection, which is the managed region when both sides carry
-       the markers and the whole text when they do not.
-       EDIT: the locus is the offset of `old_string` in the file on
-       disk, tested against the pinned span. A fragment wholly outside
-       that span does not reach the section and the gate stays quiet.
-       NO `## Pinned Context` HEADING AT ALL: there is no span, so
-       this condition does not bound the document. See
-       `_counts_show_an_add` for what that costs and why it is
-       irreducible here.
+  3. The POST-EDIT DOCUMENT has more pins than the current one.
+     THE GATE ASKS WHAT THE FILE BECOMES. It does not ask where the
+     edit sat. Edit and Write are the same question here: build the
+     document the tool call will produce, then compare the two
+     documents. See `_simulate_post_edit_document`.
+       THERE IS NO LOCUS, NO ANCHOR AND NO BOUNDARY IN THIS CONDITION,
+       and that is the repair rather than an omission. An earlier
+       revision tested where an Edit fragment sat against the pinned
+       span. Two edits one byte apart produced the SAME document and
+       got OPPOSITE verdicts, because an anchor is not the object the
+       decision is about.
+       THE SLICE THE COUNT USES IS A DIFFERENT MATTER and it survives:
+       `_counts_show_an_add` bounds the COUNT to the pinned section,
+       which answers which bytes belong to the pins. Do not read that
+       bound as a locus and do not remove it with one.
   4. Stale-pins-pending marker exists in session_dir
   5. Not a teammate session (teammates bypass; CLAUDE.md edits are scoped to the team-lead session)
 
@@ -86,6 +84,39 @@ def _emit_load_failure_deny(stage: str, error: BaseException) -> NoReturn:
         file=sys.stderr,
     )
     sys.exit(2)
+
+
+def _report_fail_open(stage: str, error: BaseException) -> None:
+    """Emit on a fail-open path, so a silent catch stops being silent.
+
+    FAIL-OPEN ON AN EXCEPTION IS THE CORRECT DIRECTION AND IT STAYS. A gate
+    that refuses the edits of a user must not break an edit over a defect of
+    its own. THE DEFECT WAS THAT THE CATCH SAID NOTHING, not that it was wide.
+
+    WHY A SILENT CATCH IS THE PROBLEM. It cannot separate A DEFECT IN THIS GATE
+    from AN ANOMALY IN THE DATA, and the two want different volumes. MEASURED
+    ON THIS BRANCH: a rename left a return naming variables that no longer
+    existed. The NameError reached the catch below, the whole Edit path
+    returned the quiet value for each payload, and NOTHING REPORTED IT. A plain
+    coding error presented as total permissiveness with no signal.
+
+    THIS COVERS THE RUN TIME AND AN ARM COVERS THE BUILD TIME. A positive case
+    that only the intended logic can produce catches a dead path when the suite
+    runs. It does NOT catch a path that a later edit kills in production. The
+    emit catches that one, and neither covers the other, so both are required.
+
+    STDERR IS THE CHANNEL because stdout carries the hook protocol. This
+    function never raises: an emit that fails must not become the fault it
+    reports.
+    """
+    try:
+        print(
+            f"PACT pin_staleness_gate fail-open at {stage}: "
+            f"{type(error).__name__}: {error}",
+            file=sys.stderr,
+        )
+    except Exception:  # noqa: BLE001 - the report must not become the fault
+        pass
 
 
 # ─── fail-closed wrapper on cross-package imports ──────────────────────────
@@ -285,9 +316,11 @@ def _is_memory_entry(pin) -> bool:
     A GUARD ON THE MARKER-ADDING EDIT WAS CONSIDERED AND REFUSED, AND THE
     REASON IS THE TRADE RATHER THAN AN IMPOSSIBILITY. An earlier note here said
     such a guard cannot separate the marker-adding edit from a true add without
-    reading a file the edit has not landed in. THAT REASON IS RETIRED: the
-    separation was driven, and the fragment IS resolvable against the file on
-    disk. `_fragment_reaches_pinned_region` below does that read today.
+    reading a file the edit has not landed in. THAT REASON IS RETIRED, AND THE
+    SIMULATION RETIRES IT TWICE OVER: the gate now builds the post-edit
+    document and compares it against the current one, so the file the edit has
+    not landed in IS the object this predicate reads. See
+    `_simulate_post_edit_document`.
     THE TRADE IS WHAT REFUSES THE GUARD, and it is a set difference:
       THE CANDIDATE, the strongest of the two that were driven: if the MULTISET
       of `### ` heading lines is unchanged across the edit, no heading
@@ -326,7 +359,20 @@ def _count_pin_comments(text: str) -> int:
 
     Symmetric-oracle invariant (closes 2 HIGH bypasses): the gate MUST
     count pins using the same parser that enforces the count cap at
-    add-time (`pin_caps.parse_pins`). A regex substring count of
+    add-time (`pin_caps.parse_pins`).
+
+    🔴 AND THE SAME PARSER IS NOT ENOUGH. IT MUST READ THE SAME KIND OF
+    OBJECT. The invariant said PARSER alone, and measured, the two gates
+    then used one parser on TWO OBJECTS: the cap gate parsed a SIMULATED
+    POST-EDIT DOCUMENT and this gate parsed an EDIT FRAGMENT. That is the
+    same defect one level up, because a parser agreeing on two different
+    inputs proves nothing about the two verdicts. THE INVARIANT NOW HAS TWO
+    CLAUSES: the same parser, AND the same kind of object, which is a
+    post-edit document. `_simulate_post_edit_document` is what supplies the
+    second clause. A future change that feeds this counter a fragment again
+    satisfies clause one and breaks clause two.
+
+    A regex substring count of
     `<!-- pinned:` is asymmetric with `parse_pins`, which:
       (a) recognizes a bare `### Heading` (no date comment) as a Pin,
       (b) tolerates arbitrary whitespace between `<!--` and `pinned:`
@@ -347,9 +393,9 @@ def _count_pin_comments(text: str) -> int:
     THE SLICE NOW BELONGS TO THE DECISION, in `_counts_show_an_add`, which is
     the only place that can see the two sides at one time. This function counts
     across the body its caller supplies and nothing else. (`_is_add_shaped_edit`
-    chooses WHICH comparison runs, the whole-document one or the fragment one.
-    It does not choose the slice, and an earlier revision of this paragraph
-    named it as if it did.)
+    chooses WHICH SIMULATION runs, the Write one or the Edit one. It does not
+    choose the slice, and it no longer chooses between two comparisons either,
+    because there is ONE comparison over two documents.)
 
     THE COUNT PREDICATE, WHICH IS THE OTHER HALF OF THE PAIR. `parse_pins`
     stays the oracle, so the symmetric-oracle invariant above holds. One class
@@ -365,7 +411,10 @@ def _count_pin_comments(text: str) -> int:
         return 0
     try:
         return sum(1 for pin in parse_pins(text) if not _is_memory_entry(pin))
-    except Exception:  # noqa: BLE001 — fail-open
+    except Exception as exc:  # noqa: BLE001 — fail-open
+        # BROAD CATCH, SO IT EMITS. A parse fault here is a defect rather
+        # than an expected state of the data.
+        _report_fail_open("pin count", exc)
         return 0
 
 
@@ -380,7 +429,8 @@ def _counts_show_an_add(old_text: str, new_text: str) -> bool:
     four pins to five.
 
     THE SELECTION, and it is a TOTAL function with no decline arm:
-      0. LOCUS FIRST. Ask each side for its `## Pinned Context` span. If BOTH
+      0. THE COUNT SLICE FIRST. Ask each side for its `## Pinned Context`
+         span. If BOTH
          sides resolve one, that section is the slice for the two.
       1. Otherwise, ask each side whether it carries the managed markers.
       2. If the two agree, use that branch for the two.
@@ -388,7 +438,11 @@ def _counts_show_an_add(old_text: str, new_text: str) -> bool:
     The whole text is a slice each side can always carry, so there is no
     failure direction to choose here and no exception arm to add.
 
-    STEP 0 IS THE LOCUS BOUND, AND ITS SAFETY IS A SUBSET RELATION RATHER THAN
+    STEP 0 IS A COUNT BOUND AND NOT A LOCUS. IT ANSWERS WHICH BYTES BELONG TO
+    THE PINS, AND THE GATE NO LONGER ASKS WHERE AN EDIT SAT AT ALL. Do not
+    remove this bound when retiring a locus: they are different questions and
+    removing this one re-opens the memory-entry over-count.
+    ITS SAFETY IS A SUBSET RELATION RATHER THAN
     A CASE LIST. It narrows the slice ONLY where both sides resolve a pinned
     section, and it falls back to the shipped selection everywhere else, so the
     documents it treats differently are a STRICT SUBSET of the ones the shipped
@@ -402,7 +456,7 @@ def _counts_show_an_add(old_text: str, new_text: str) -> bool:
     two-sided form fixes two and opens none.
 
     WHAT STEP 0 DOES NOT CLOSE, RECORDED SO A LATER READER DOES NOT READ THE
-    LOCUS AS COMPLETE. A document with NO `## Pinned Context` heading has NO
+    COUNT BOUND AS COMPLETE. A document with NO `## Pinned Context` heading has NO
     span, so the position is UNDEFINED rather than unavailable, and no file
     read and no instrument change supplies one. A prose-titled entry added to
     such a document continues to over-block. THE POPULATION IS NOT HAND EDITS
@@ -434,7 +488,7 @@ def _counts_show_an_add(old_text: str, new_text: str) -> bool:
     from shared.claude_md_manager import extract_managed_region
     from staleness import _parse_pinned_section
 
-    # STEP 0, THE LOCUS BOUND. `allow_empty_section=True` is what makes an
+    # STEP 0, THE COUNT BOUND. `allow_empty_section=True` is what makes an
     # EMPTY pinned section resolve. Without it an empty section is
     # indistinguishable from an absent one, this step declines, and the empty
     # side falls back to a wider slice while the other side does not. That is
@@ -462,130 +516,68 @@ def _counts_show_an_add(old_text: str, new_text: str) -> bool:
     return _count_pin_comments(new_slice) > _count_pin_comments(old_slice)
 
 
-def _changed_span_offsets(old_string: str, new_string: str) -> tuple[int, int]:
-    """Return the common prefix length and the common suffix length.
+def _simulate_post_edit_document(
+    tool_input: dict, current: str, tool_name: str = ""
+) -> str | None:
+    """Build the document as it WILL BE after this tool call.
 
-    AN EDIT REPLACES A FRAGMENT, AND MOST OF THAT FRAGMENT USUALLY SURVIVES.
-    The common prefix and the common suffix are the parts that do not move.
-    What lies between them is the text the edit CHANGED, and that is the part
-    whose position decides whether the edit reaches the pinned region.
+    THE GATE ASKS WHAT THE FILE BECOMES, NOT WHERE THE EDIT ANCHORED. An
+    earlier revision compared the two Edit FRAGMENTS and tested where the
+    fragment sat. Two edits one byte apart produced the SAME resulting
+    document and got OPPOSITE verdicts, because the anchor is not the object
+    the decision is about. Four bound repairs each moved that boundary and
+    each was superseded. THE SIMULATION REMOVES THE BOUNDARY RATHER THAN
+    MOVES IT: with a post-edit document there is no fragment, no anchor and
+    no locus to bound.
 
-    The two lengths never overlap: the suffix scan stops at the prefix, so a
-    payload where one side contains the other reports the shorter side fully
-    as prefix and reports no suffix.
+    THE SHAPE IS PORTED FROM `pin_caps.build_simulated_pins`, WHICH DOES THIS
+    FOR THE CAP GATE, so the two gates now read the same KIND of object. Its
+    three Edit edges are reproduced here:
+      `replace_all` TRUE  -> replace each occurrence.
+      `replace_all` FALSE -> replace the first occurrence.
+      an EMPTY `old_string` -> return the PRE-state. `str.replace` with an
+        empty needle puts the replacement between each character, which is a
+        document the tool never produces. Returning the pre-state makes the
+        caller compare pre against pre, so the normal contract applies and a
+        malformed payload cannot become a silent bypass.
+
+    WHERE I DIVERGE FROM THE PRECEDENT, AND WHY. `pin_caps` RAISES on a
+    non-string payload and leaves the fail-open to its caller. This returns
+    None instead, because the caller here is a SACROSANCT fail-open gate that
+    must not depend on an exception arriving at the correct handler. None and
+    a raise reach the same verdict, and None reaches it without a handler.
+
+    THE KNOWN LIMIT OF THE SIMULATION, STATED RATHER THAN HIDDEN. For a
+    NON-UNIQUE `old_string` with `replace_all` FALSE, this replaces the first
+    occurrence while the platform REFUSES the edit. So the gate judges a
+    document the platform will not produce. The edit fails either way, so
+    neither verdict reaches the file, and this is recorded as a limit rather
+    than repaired here.
+
+    Returns the post-edit document, or None when the payload cannot be read
+    as an edit at all.
     """
-    limit = min(len(old_string), len(new_string))
-    prefix_len = 0
-    while prefix_len < limit and old_string[prefix_len] == new_string[prefix_len]:
-        prefix_len += 1
-    suffix_len = 0
-    while (
-        suffix_len < limit - prefix_len
-        and old_string[len(old_string) - 1 - suffix_len]
-        == new_string[len(new_string) - 1 - suffix_len]
-    ):
-        suffix_len += 1
-    return prefix_len, suffix_len
+    if tool_name:
+        is_write = tool_name == "Write"
+    else:
+        is_write = "content" in tool_input
 
+    if is_write:
+        # A Write IS the post-edit document. No simulation is necessary.
+        new_content = tool_input.get("content", "")
+        if not isinstance(new_content, str):
+            return None
+        return new_content
 
-def _fragment_reaches_pinned_region(
-    old_string: str, new_string: str, claude_md_path: Path
-) -> bool | None:
-    """Report whether an Edit fragment touches the Pinned Context section.
-
-    AN EDIT PAYLOAD CARRIES NO SECTION HEADING, so the two fragments alone
-    cannot say WHERE the edit lands, and the gate used to fire on a memory
-    entry added far outside the pinned region. The position is not missing: the
-    caller holds the path, the tool contract makes `old_string` UNIQUE in the
-    file, and the file on disk is the pre-edit state. So the offset is a read
-    away.
-
-    THREE OUTCOMES, AND THE THIRD IS NOT A FAILURE:
-      True  - the fragment overlaps the pinned span. Compare the counts.
-      False - the fragment is wholly OUTSIDE the span, or the position could
-              not be established. Do not fire.
-      None  - NO PINNED SPAN EXISTS, so the locus test cannot run at all.
-              The caller proceeds with the comparison it would have made
-              before this function existed.
-
-    🔴 THE FALSE ARM AND THE None ARM LOOK ALIKE AND MUST NOT BE MERGED. Both
-    mean "no span to test against", and they take OPPOSITE directions on
-    purpose. A failed READ is an instrument failure: nothing is known, so the
-    safe direction is quiet. A document with NO `## Pinned Context` heading is
-    a KNOWN state whose span is UNDEFINED, and answering False there would
-    silence the gate on every unmarked document. That is not a repair, it is
-    suppression, and it would read as a repair because the suite would go
-    green. Merge these two arms and the gate stops working.
-
-    FAIL OPEN, AND THE TWO CASES ARE NAMED. A read that raises, and a fragment
-    that is NOT UNIQUE, both answer False. Non-uniqueness is what a
-    `replace_all` payload produces: it removes the uniqueness the tool contract
-    otherwise supplies, so no single offset exists and there is nothing to test.
-    Quiet is an under-block on a staleness reminder, which this project ranks
-    below a cardinal over-block on the user's own file.
-
-    AN EMPTY `old_string` IS THE None ARM AND NOT THE False ARM. There is no
-    fragment to locate, and answering False would drop a real add-detection:
-    the shipped comparison counts 0 against N for that payload and FIRES.
-    """
-    if not old_string:
+    old_string = tool_input.get("old_string", "")
+    new_string = tool_input.get("new_string", "")
+    if not isinstance(old_string, str) or not isinstance(new_string, str):
         return None
-
-    from staleness import _parse_pinned_section
-
-    try:
-        content = claude_md_path.read_text(encoding="utf-8")
-    except (IOError, OSError, UnicodeDecodeError):
-        return False
-
-    parsed = _parse_pinned_section(content, allow_empty_section=True)
-    if parsed is None:
-        return None
-
-    pinned_start, pinned_end, _ = parsed
-
-    if content.count(old_string) != 1:
-        return False
-
-    offset = content.find(old_string)
-
-    # TEST THE TEXT THE EDIT CHANGED, NOT THE FRAGMENT IT ANCHORED ON. THE
-    # COUNT MEASURES WHAT THE EDIT ADDED, SO THE LOCUS MUST MEASURE THE SAME
-    # THING. An anchor offset and an added-text position agree everywhere
-    # except at a boundary, and the boundary is where the anchor measures the
-    # incorrect object.
-    #
-    # WHY THE ANCHOR FAILS THERE, AND IT IS NOT A TUNING QUESTION. An Edit
-    # REPLACES its fragment, so an insertion anchors on the text that FOLLOWS
-    # the insertion point. Two edits then share one anchor offset:
-    #   a pin added IN FRONT of the terminator, which lands INSIDE the section,
-    #   an entry added AFTER the terminator, which lands OUTSIDE it.
-    # NO PREDICATE OVER THE ANCHOR OFFSET SEPARATES THOSE TWO. An earlier form
-    # here tested the anchor with inclusive bounds. It answered the first row
-    # correctly and OVER-BLOCKED the second, which moves the harm to the
-    # cardinal axis. A strict form answered the second correctly and MISSED
-    # the first, which is the direction this counter exists to close. The
-    # trade was a false choice, and the changed span removes it.
-    #
-    # THE COMMON PREFIX IS WHAT LOCATES THE ADDED TEXT. It is the run the two
-    # sides share, so the first character the edit changes sits at the anchor
-    # offset plus its length. In the two rows above the prefix differs, which
-    # is the property the anchor offset cannot see.
-    prefix_len, suffix_len = _changed_span_offsets(old_string, new_string)
-    changed_start = offset + prefix_len
-    changed_end = offset + len(old_string) - suffix_len
-
-    # A PURE INSERTION HAS AN EMPTY CHANGED SPAN, AND AN EMPTY SPAN STILL HAS A
-    # POSITION. The inclusive comparison is what makes an insertion AT a
-    # boundary count as reaching the region, which a width-based test would
-    # drop.
-    #
-    # FAILURE DIRECTION. Over-reach: none measured across the three rows.
-    # Under-reach: a payload with NO common prefix puts `changed_start` at the
-    # anchor offset, so this degrades to the anchor test rather than to
-    # silence. NULL OUTCOME: a document with no pinned span cannot run this
-    # test at all, which is N1 and is handled above.
-    return changed_start <= pinned_end and changed_end >= pinned_start
+    if old_string == "":
+        return current
+    if bool(tool_input.get("replace_all", False)):
+        return current.replace(old_string, new_string)
+    return current.replace(old_string, new_string, 1)
 
 
 def _is_add_shaped_edit(
@@ -626,41 +618,27 @@ def _is_add_shaped_edit(
         # guessing from a payload key. A non-Write tool carrying a `content`
         # key took the whole-document branch before this.
         #
-        # 🔴 THIS DOES NOT REACH THE STRADDLE, and a reader must not take it
-        # for a straddle repair. It selects WHICH COMPARISON runs. The straddle
-        # lives inside the comparison, in the slice each side reached, and
-        # `_counts_show_an_add` is what closes that.
-        if tool_name:
-            is_write = tool_name == "Write"
-        else:
-            is_write = "content" in tool_input
-        if is_write:
-            # Write tool — diff against current file content.
-            new_content = tool_input.get("content", "")
-            if not isinstance(new_content, str):
-                return False
-            try:
-                current = claude_md_path.read_text(encoding="utf-8")
-            except (IOError, OSError, UnicodeDecodeError):
-                # Cannot compare → fail-open.
-                return False
-            return _counts_show_an_add(current, new_content)
+        # THE TWO PATHS NOW ASK ONE QUESTION OF ONE KIND OF OBJECT. The tool
+        # name selects WHICH SIMULATION runs, and it no longer selects which
+        # COMPARISON runs, because there is one comparison. See
+        # `_simulate_post_edit_document`.
+        try:
+            current = claude_md_path.read_text(encoding="utf-8")
+        except (IOError, OSError, UnicodeDecodeError):
+            # Cannot read the pre-state, so there is nothing to compare
+            # against. Fail-open.
+            return False
 
-        # Edit tool — compare old_string vs new_string pin counts.
-        old_string = tool_input.get("old_string", "")
-        new_string = tool_input.get("new_string", "")
-        if not isinstance(old_string, str) or not isinstance(new_string, str):
+        simulated = _simulate_post_edit_document(tool_input, current, tool_name)
+        if simulated is None:
+            # The payload cannot be read as an edit. Fail-open.
             return False
-        # THE LOCUS TEST RUNS BEFORE THE COUNT, because a fragment outside the
-        # pinned region cannot add a pin to it whatever its counts say. A None
-        # answer means no span exists, so the comparison below runs unchanged.
-        reaches = _fragment_reaches_pinned_region(
-            old_string, new_string, claude_md_path
-        )
-        if reaches is False:
-            return False
-        return _counts_show_an_add(old_string, new_string)
-    except Exception:  # noqa: BLE001 — SACROSANCT fail-open
+
+        return _counts_show_an_add(current, simulated)
+    except Exception as exc:  # noqa: BLE001 — SACROSANCT fail-open
+        # THIS IS THE CATCH THAT SWALLOWED A NameError AND KILLED THE WHOLE
+        # EDIT PATH IN SILENCE. It keeps its direction and loses its silence.
+        _report_fail_open("add-shape detection", exc)
         return False
 
 
@@ -724,8 +702,10 @@ def main():
 
     try:
         deny_reason = _check_tool_allowed(input_data)
-    except Exception:
-        # SACROSANCT: any exception in gate logic → fail-open.
+    except Exception as exc:
+        # SACROSANCT: any exception in gate logic gives fail-open, AND IT
+        # REPORTS. This is the outermost of the three broad catches.
+        _report_fail_open("gate decision", exc)
         print(_SUPPRESS_OUTPUT)
         sys.exit(0)
 
