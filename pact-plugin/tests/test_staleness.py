@@ -2552,6 +2552,95 @@ class TestRestoreHasOneOwnerPerTwin:
             )
 
 
+class TestRestoreNormalisesBeforeItApplies:
+    """`_restore_line_ending` converts CRLF to LF BEFORE it applies the ending.
+
+    WHY THE TWO GATES ABOVE CANNOT REACH THIS, AND IT IS THE WHOLE REASON THIS
+    CLASS IS HERE. A removal of the normalise step applied to the TWO twins
+    alike is invisible to each of them, for a different reason:
+      - TestLineEndingHelperTwinCopyDrift compares the two twins AGAINST EACH
+        OTHER, so a symmetric removal keeps them identical and that gate stays
+        silent BY CONSTRUCTION.
+      - TestRestoreHasOneOwnerPerTwin counts CALL SITES, and a step removed
+        INSIDE the helper changes no count, so that gate stays silent too.
+    A symmetric removal sits in the blind spot of the two. The merge-guard
+    docstring above names this hazard in prose. Prose that names a hazard is
+    not a guard against it.
+
+    WHAT A REMOVAL COSTS, MEASURED RATHER THAN FEARED. Content that already
+    carries CRLF meets a plain `.replace("\\n", line_ending)` and each ending
+    becomes "\\r\\r\\n". That is corruption of the user's own text, and
+    CLAUDE.md is frequently gitignored, so no commit brings the original back.
+
+    THE STEP IS REACHABLE IN THE SHIPPED TREE, AND THE TRIGGER IS A
+    CONJUNCTION. The target must be CRLF-dominant, AND the content must carry a
+    carriage return. The content does NOT get one from the document: each of
+    the seam call sites reads the target with `read_text(encoding="utf-8")`,
+    which translates. It gets one by COMPOSITION, because a caller interpolates
+    an external payload into the text it hands the seam. So this arm guards a
+    live path rather than a hypothetical future one.
+    """
+
+    # THE TWO TWINS, as import targets. Parametrized rather than looped so a
+    # failure names WHICH copy broke.
+    _TWINS = ("shared.claude_md_manager", "working_memory")
+
+    @staticmethod
+    def _restore(module_name):
+        import importlib
+
+        return importlib.import_module(module_name)._restore_line_ending
+
+    @pytest.mark.parametrize("twin", _TWINS)
+    def test_crlf_content_does_not_gain_a_doubled_carriage_return(self, twin):
+        """THIS IS THE DISCRIMINATING ARM. Remove the normalise step and it
+        reddens in EACH twin.
+
+        Input carries CRLF and the target ending is CRLF, so the correct output
+        is the input unchanged. Without the normalise step each "\\n" is
+        rewritten while its leading "\\r" survives, giving "\\r\\r\\n".
+        """
+        restore = self._restore(twin)
+
+        result = restore("a\r\nb\r\n", "\r\n")
+
+        assert "\r\r\n" not in result, (
+            f"{twin}: the restore produced a DOUBLED carriage return "
+            f"{result!r}. It applied the ending without normalising first, so "
+            f"content that already carries CRLF is corrupted. Restore the "
+            f'.replace("\\r\\n", "\\n") step before the ending is applied'
+        )
+        assert result == "a\r\nb\r\n", (
+            f"{twin}: expected the CRLF input back unchanged, got {result!r}"
+        )
+
+    @pytest.mark.parametrize("twin", _TWINS)
+    def test_lf_content_still_converts_to_the_target_ending(self, twin):
+        """NON-VACUITY FOR THE ARM ABOVE. A `_restore_line_ending` that
+        returned its input unchanged would satisfy the doubling assertion
+        PERFECTLY and convert nothing, so that arm is evidence only once the
+        function is known to convert at all."""
+        restore = self._restore(twin)
+
+        assert restore("a\nb\n", "\r\n") == "a\r\nb\r\n", (
+            f"{twin}: the restore did not convert LF to the CRLF target, so "
+            f"the doubling arm above is passing on a function that does "
+            f"nothing"
+        )
+
+    @pytest.mark.parametrize("twin", _TWINS)
+    def test_an_lf_target_returns_the_content_untouched(self, twin):
+        """PINS A DIFFERENT PROPERTY, AND IT IS NAMED SO NOBODY COUNTS IT AS
+        COVERAGE OF THE NORMALISE STEP. The LF branch returns early, ABOVE the
+        normalise step, so this arm stays green when that step is removed. It
+        pins that an LF file is byte-identical to what the seam wrote before
+        the restore moved here."""
+        restore = self._restore(twin)
+
+        assert restore("a\r\nb\r\n", "\n") == "a\r\nb\r\n"
+        assert restore("a\nb\n", "\n") == "a\nb\n"
+
+
 class TestContainmentErrorTwinCopyDrift:
     """Drift detection for the ContainmentError twin.
 
