@@ -339,28 +339,85 @@ class TestTheDateLedPredicateAlphabetIsBounded:
     """
 
     # The lines the shipped pattern accepts that NO writer emits. Each is a
-    # deliberate tolerance, named with the reason it is correct to keep.
+    # deliberate tolerance. Each entry states WHY the tolerance is admitted and
+    # WHAT MUST BECOME TRUE for it to be withdrawn.
+    #
+    # 🔴 THIS LIST IS A MITIGATION AND IT IS NOT A BAR. A reason beside an
+    # entry constrains nothing a later editor writes. A person who widens the
+    # pattern can add the line here, write a fluent reason for it, and this
+    # class goes green. THE ABSORPTION STAYS OPEN AND THESE REASONS DO NOT
+    # CLOSE IT. What they change is the SHAPE OF THE FAILURE: a silent widening
+    # becomes one that requires the author to write a claim that is incorrect.
+    # An omission becomes an assertion, and a reader can catch an assertion.
+    #
+    # SO THE ONLY CONTROL THAT CATCHES A HOLLOW REASON IS A READER. The suite
+    # is green whether or not a reason here is derived, because this text
+    # changes no test outcome. Do not read a passing suite as evidence that the
+    # list below is bounded.
+    #
+    # WHY EACH REASON NAMES A COST AND A DIRECTION RATHER THAN THE FORM. A
+    # reason that restates its entry is worse than no reason, because it makes
+    # the list read as bounded while it stays open. So each entry states what
+    # the gate does if the tolerance is REMOVED, and which way that failure
+    # runs.
+    #
+    # THE SHARED ROOT, WHICH IS ONE FACT AND NOT FIVE. The consumer alphabet is
+    # wider than the producer alphabet. `working_memory.py` emits
+    # `f"### {date_str}"`, which is one space in two places and no trailing
+    # space. The comment beside `_DATE_LED_HEADING_RE` states that a person
+    # also writes an entry here by hand. Four mechanisms descend from that one
+    # cause and they differ in COST, which is what each entry below records.
     DECLARED_TOLERANCE = {
         "### 2026-08-12": (
-            "THE OPTIONAL TIME GROUP, and a user ruling keeps it. The consumer "
-            "alphabet is wider than the producer alphabet because a human also "
-            "edits this file. Remove the group and a hand-written date-only "
-            "entry counts as a PIN, which is an over-block and the cardinal "
-            "direction."
+            "THE OPTIONAL TIME GROUP. ADMITTED because the comment beside the "
+            "shipped pattern states that a person writes a date-only entry "
+            "here by hand. REMOVE IT and that entry stops being date-led, so "
+            "it counts as a PIN, the gate fires, and a faithful edit to Pinned "
+            "Context is DENIED. That is an over-block, and the over-block is "
+            "the cardinal direction. WITHDRAW IT when no date-only heading can "
+            "reach the managed region, which takes two things together: each "
+            "producer emits a time, AND the region takes no hand edit."
         ),
         "###  2026-08-12 04:50": (
-            "A one-or-more whitespace run after the marker, so a second space "
-            "is tolerated. A human can type it."
+            "A SECOND SPACE AFTER THE MARKER, at the leading run. ADMITTED "
+            "because a one-space rule lets a difference no reader can count "
+            "decide the verdict. REMOVE IT and a heading with two spaces stops "
+            "being date-led, so a memory entry counts as a PIN and the gate "
+            "over-blocks. THE TOLERANCE COSTS ONE THING ONLY: a pin titled a "
+            "bare date and carrying no marker stops counting. That is the R1 "
+            "population recorded at `_is_memory_entry`, and a user ruling "
+            "declares it empty. WITHDRAW IT when that ruling is withdrawn, or "
+            "when the region takes no hand edit."
         ),
         "### 2026-08-12  04:50": (
-            "The same one-or-more run before the time."
+            "A SECOND SPACE BEFORE THE TIME. THIS IS A DIFFERENT NODE from the "
+            "leading run, and it is sampled on its own because one node can "
+            "move while the other holds. ADMITTED for the same cause and at "
+            "the same cost as the leading run. WITHDRAW THE TWO TOGETHER: a "
+            "person who tightens one node and not the other leaves the gate "
+            "accepting one spelling of a heading and refusing the other, which "
+            "is harder to diagnose than either rule on its own."
         ),
         "### 2026-08-12 04:50 ": (
-            "A zero-or-more trailing whitespace run. Trailing space is "
-            "invisible to a person and must not change the verdict."
+            "A TRAILING WHITESPACE RUN. ADMITTED because the character is "
+            "INVISIBLE. A person cannot see it, an editor can add or remove it "
+            "without the author, and a verdict that turns on it cannot be "
+            "diagnosed by the person it blocks. REMOVE IT and a file that "
+            "gained one trailing space DENIES a faithful edit, with nothing on "
+            "screen to explain the refusal. WITHDRAW IT when a WRITE path "
+            "normalises trailing whitespace in the managed region, so the "
+            "character cannot survive a write. CHECK THE WRITE PATH AND NOT "
+            "THE PARSER: several readers strip on parse, and a parse-side "
+            "strip does not stop the character reaching the file."
         ),
         "### 2026-08-12 04:50  ": (
-            "The same trailing run with two spaces."
+            "THE SAME TRAILING NODE AT TWO SPACES, and the second sample is "
+            "why this entry is here at all. ONE SAMPLE CANNOT WITNESS A CHANGE "
+            "OF BOUND: one trailing space satisfies a zero-or-more run and a "
+            "zero-or-one run alike, so a single sample renders identical text "
+            "under the two and the comparison cannot move. Two samples "
+            "separate them. ADMITTED and WITHDRAWN with the entry above, whose "
+            "node it shares."
         ),
     }
 
