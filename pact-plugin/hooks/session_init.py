@@ -336,9 +336,18 @@ def check_pin_stale_block_directive() -> Optional[str]:
 
     if signal is None:
         return None
+    # 🔴 NAME THE COMMAND THAT ARCHIVES. This directive named
+    # `/PACT:pin-memory`, which does NOT archive: it ADDS a pin and it sends
+    # the user to `/PACT:prune-memory` for removal. THIS IS THE PRIMARY
+    # enforcement surface for the stale-pin condition, and the PreToolUse gate
+    # is the backstop, so an incorrect command here reaches a user who has not
+    # been refused anything yet. The gate carried the same incorrect name and
+    # the two were corrected together.
+    # BEFORE YOU EDIT THIS STRING, OPEN THE COMMAND FILE AND CONFIRM THE
+    # COMMAND ARCHIVES. This text is not evidence about its own subject.
     return (
         f"Pinned context: {signal.detail}. "
-        f"You MUST run /PACT:pin-memory to archive stale pins before adding new ones."
+        f"You MUST run /PACT:prune-memory to archive stale pins before adding new ones."
     )
 
 

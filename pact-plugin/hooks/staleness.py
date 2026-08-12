@@ -578,7 +578,9 @@ def _find_declared_end_offset(content: str, start: int, literal: str) -> Optiona
     return None
 
 
-def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
+def _parse_pinned_section(
+    content: str, *, allow_empty_section: bool = False
+) -> Optional[Tuple[int, int, str]]:
     """
     Extract the Pinned Context section from CLAUDE.md content.
 
@@ -640,13 +642,45 @@ def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
     it -- its whitespace policy is deliberately stricter than the certificate's,
     and the two must not be unified.
 
+    AN EMPTY SECTION IS AN INSTRUMENT LIMIT, NOT AN ABSENT ONE, AND
+    `allow_empty_section` IS THE OPT-IN THAT SAYS SO. A heading with a body of
+    whitespace has a COMPUTABLE span, and the decline below returns None for it
+    anyway, so a caller cannot tell "no section" from "an empty section". That
+    conflation costs one caller a cardinal over-block: a gate that compares two
+    documents falls back to a wider slice on the empty side, counts memory
+    entries as pins, and denies a faithful edit.
+
+    THE DEFAULT PRESERVES TODAY, AND THAT IS THE WHOLE SAFETY ARGUMENT. Passing
+    nothing gives the decline that every caller was written against. MEASURED
+    across the seven non-test callers at the time of writing: FOUR change
+    behaviour if the RETURN changes (the warning pass below gets a pass for an
+    empty section, the pin read below continues with zero pins,
+    `scripts/archive_pin` stops raising `_Unevaluable`, `scripts/check_pin_caps`
+    loses its reason string), and NONE of the four asked for that. So the return
+    does not change. An opt-in argument moves zero of them, because no caller
+    passes an argument that did not exist.
+
+    THE PARAMETER IS KEYWORD-ONLY ON PURPOSE. A positional second argument could
+    be bound by accident by a caller, or by a test double whose signature drifts
+    from this one, and that binding would be silent. A keyword makes the opt-in
+    unreachable unless it is named.
+
+    WHAT IT DOES NOT SUPPLY. A document with NO `## Pinned Context` heading has
+    no span to return, so this parameter changes nothing for it: the position is
+    UNDEFINED rather than declined, and no flag here can invent one.
+
     Args:
         content: Full CLAUDE.md file content.
+        allow_empty_section: When True, a resolved heading whose body is empty
+            or whitespace returns its span with an empty body instead of None.
+            Default False preserves the behaviour every caller was written
+            against. A MISSING heading returns None either way.
 
     Returns:
         Tuple of (pinned_start, pinned_end, pinned_content) or None if
-        no Pinned Context section exists or it is empty. Offsets are
-        absolute positions in the original `content` string.
+        no Pinned Context section exists, or it is empty and
+        `allow_empty_section` is False. Offsets are absolute positions in
+        the original `content` string.
     """
     # Bound to managed region if available (round 10). Offset adjustment
     # converts managed-region-relative positions back to full-file positions.
@@ -715,7 +749,12 @@ def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
         pinned_end = min(pinned_end, declared_end)
 
     pinned_content = scan_text[pinned_start:pinned_end]
-    if not pinned_content.strip():
+    # THE DECLINE IS OPT-OUT-ABLE AND THE HEADING CHECK ABOVE IS NOT. Reaching
+    # this line means `## Pinned Context` RESOLVED, so the span is computable
+    # and the only question is whether the caller wants an empty one. A caller
+    # that passes the flag has said it can tell an empty section from an absent
+    # one and needs the difference.
+    if not pinned_content.strip() and not allow_empty_section:
         return None
 
     return pinned_start + offset, pinned_end + offset, pinned_content
@@ -1066,6 +1105,31 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
                 # callers, so a restore here would run the substitution two
                 # times. Every measurement above continues to run on the
                 # LF-normalised `content`, exactly as it always did.
+                # AN INSTRUCTION FOR A LATER EDITOR, NOT A STATEMENT ABOUT
+                # TODAY. A statement about today goes stale in silence. An
+                # instruction about what to do continues to apply.
+                #
+                # `project_root` is typed `Path | None` and this parameter
+                # takes a `Path`. A type checker reports that. No None reaches
+                # this line at this time, and the reason spans THREE HOPS:
+                #   1. `_resolve_project_claude_md_with_base` returns a path
+                #      and a base together, or returns None for the two.
+                #   2. `_lexical_base_of` returns a `Path` and returns no None.
+                #   3. The `claude_md_path is None` test above returns first.
+                # A CHAIN OF THREE HOPS CAN BREAK WITH NO LOCAL SIGNAL. Each
+                # hop is correct on its own, and one edit to one of them opens
+                # this line while the other two continue to read as correct.
+                #
+                # IF YOU ADD A CALLER THAT CAN PASS None HERE, ADD A GUARD AND
+                # CHOOSE ITS DIRECTION ON PURPOSE. THE CHOICE IS NOT FREE.
+                # This function writes the project CLAUDE.md, and this
+                # repository does not track that file, so an incorrect refusal
+                # has no commit behind it to recover from. A guard that refuses
+                # protects the write and can lose the update. A guard that
+                # continues keeps the update and can write outside the base the
+                # resolver trusted. Do not add a guard as a cleanup step: a
+                # guard with an unchosen direction moves the fault instead of
+                # removing it.
                 _atomic_write_text(claude_md_path, new_content, project_root)
         except ContainmentError:
             return "Pinned staleness skipped: path precondition not met."

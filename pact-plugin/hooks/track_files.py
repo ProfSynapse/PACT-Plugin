@@ -184,6 +184,98 @@ def track_file(file_path: str, tool_name: str):
         save_tracked_files(data)
 
 
+# The token that identifies the archive command inside a Bash payload. The
+# archive runs as `python3 ".../scripts/archive_pin.py" --index N`, so the
+# script filename is the cheapest thing that separates it from every other
+# shell call.
+_ARCHIVE_SCRIPT_TOKEN = "archive_pin.py"
+
+
+def clear_pin_staleness_marker_if_resolved(
+    tool_name: str, tool_input: dict
+) -> None:
+    """Drop the stale-pins marker once the staleness signal has cleared.
+
+    WHY THIS LIVES HERE AND NOT IN THE GATE. `pin_staleness_gate.py` is a
+    PreToolUse REFUSAL and it is READ ONLY on that marker, which the design
+    holds SACROSANCT. A refusal that removed its own trigger would make the
+    trap vanish by deleting the evidence of it rather than by repair, and the
+    suite would go green while that happened. The clear belongs on the
+    PostToolUse side, which is here.
+
+    THE TRAP IT CLOSES. The marker is written and removed at SessionStart only.
+    The deny text tells a user to archive stale pins BEFORE editing, so a user
+    who obeys inside a session stays denied until the next session. That is a
+    cardinal over-block on the user's own file, and it is reached by OBEYING
+    the message.
+
+    THE TRIGGER SET IS A UNION, AND BINDING ONE MEMBER IS THE FAILURE THAT
+    READS AS A REPAIR. The pinned region changes across two routes:
+      ROUTE 1, a hand edit, which arrives as `Edit` or `Write`.
+      ROUTE 2, THE ARCHIVE ITSELF, which arrives as `Bash`. The archive command
+        runs a script that writes the file directly, so it emits NO `Edit` or
+        `Write` event. A clear bound to route 1 alone misses the very route the
+        deny text recommends, which is the worst of the outcomes available
+        here.
+    ROUTE 2 IS `Bash` AND NOT `Skill`. An earlier reading bound it to `Skill`
+    on the belief that the pin command archives. It does not: the archiving
+    command runs the script through a shell, so `Bash` is the event that
+    carries the write.
+
+    THE COST OF THE WIDENED MATCHER, STATED RATHER THAN HIDDEN. This hook is
+    registered for `Bash` as well now, so it runs one subprocess for EACH shell
+    call in each consumer session. That is the same per-event cost a new
+    registration would carry, so cost is NOT what chose this shape. OWNERSHIP
+    chose it: one hook owning one concern across the two routes, rather than
+    two hooks owning one concern between them. THE `Bash` LEG TESTS THE COMMAND
+    STRING FIRST, so an ordinary shell call costs one substring test and no
+    file read.
+
+    Fail-safe: this never raises and never reports. File tracking is the
+    caller's job and a fault here must not disturb it.
+    """
+    try:
+        if tool_name == "Bash":
+            command = tool_input.get("command", "")
+            if not isinstance(command, str):
+                return
+            if _ARCHIVE_SCRIPT_TOKEN not in command:
+                return
+        else:
+            # Route 1. Gate on the edited path resolving to the managed
+            # CLAUDE.md, so an edit to any other file costs one resolve.
+            from shared import match_project_claude_md
+
+            file_path = tool_input.get("file_path", "")
+            if not file_path or match_project_claude_md(file_path) is None:
+                return
+
+        from pin_staleness_gate import PIN_STALENESS_MARKER_NAME
+        from shared.pact_context import get_session_dir
+        from staleness import check_pinned_block_signal
+
+        session_dir = get_session_dir()
+        if not session_dir:
+            return
+        marker = Path(session_dir) / PIN_STALENESS_MARKER_NAME
+        if not marker.exists():
+            return
+
+        # RE-READ THE SIGNAL RATHER THAN ASSUME THE EDIT RESOLVED IT. An edit
+        # to the managed file, and an archive run, are both REASONS TO LOOK.
+        # Neither is proof that the condition cleared. A clear that skipped
+        # this read would drop the marker while stale pins remain.
+        if check_pinned_block_signal() is not None:
+            return
+
+        try:
+            marker.unlink()
+        except OSError:
+            pass
+    except Exception:  # noqa: BLE001 — marker management is best-effort
+        return
+
+
 def main():
     """Main entry point for the PostToolUse hook."""
     try:
@@ -196,6 +288,10 @@ def main():
         pact_context.init(input_data)
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input", {})
+
+        # THE CLEAR RUNS BEFORE THE TRACKING GATE, because it serves `Bash`
+        # too and the gate below drops every tool that is not Edit or Write.
+        clear_pin_staleness_marker_if_resolved(tool_name, tool_input)
 
         # Only track Edit and Write tools
         if tool_name not in ("Edit", "Write"):

@@ -194,12 +194,17 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|Bash",
         "hooks": [
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/track_files.py\""
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/file_tracker.py\"",
