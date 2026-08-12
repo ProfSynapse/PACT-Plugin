@@ -5682,6 +5682,50 @@ class TestSymlinkRefreshRouting:
 
         assert SYMLINKS_VERIFIED_MESSAGE in additional
 
+    def test_the_router_compares_the_constant_and_not_the_wording(
+        self, monkeypatch, tmp_path
+    ):
+        """THE ROUTER READS THE VALUE OF THE NAME, NOT A PHRASE INSIDE IT.
+
+        WHY THE ARMS ABOVE CANNOT CATCH THIS, AND IT IS WHY THIS ARM EXISTS.
+        Each of them feeds the SHIPPED text, so a caller that sniffs for a
+        substring of that text ("verified", say) routes it identically and
+        every one of them stays green. The coder that added the constant
+        reported this gap and could not close it from its own side.
+
+        THE DISCRIMINATOR IS A CHANGED CONSTANT. Rebind the name to wording
+        that shares no phrase with the shipped text, and return that same
+        value from the symlink pass. An EQUALITY comparison against the name
+        still recognises it, so the no-change route is taken and no caveat is
+        added. A substring sniff does NOT recognise it, so the result falls
+        through to the moved-link branch and the caveat appears. The caveat is
+        therefore the tell, and it is asserted below.
+
+        WHAT A FUTURE EDITOR BREAKS IF THEY REVERT TO A SNIFF. Any repoint
+        message that happens to contain the sniffed word is then read as "no
+        change", so a session that DID move the links reports nothing and the
+        user is not told their agent bodies are stale.
+        """
+        import session_init
+
+        rebound = "PACT links are current"
+        monkeypatch.setattr(session_init, "SYMLINKS_VERIFIED_MESSAGE", rebound)
+
+        additional, system_msg = self._run(
+            monkeypatch, tmp_path, "startup", rebound
+        )
+
+        assert rebound in additional, (
+            "the rebound no-change message was not routed to the user at all"
+        )
+        assert "keeps the body it got at spawn" not in additional, (
+            "the caveat was added, so the router did NOT recognise the "
+            "rebound constant as the no-change message. It is comparing "
+            "against a phrase rather than against the value of "
+            "SYMLINKS_VERIFIED_MESSAGE, so the constant is decorative"
+        )
+        assert "keeps the body it got at spawn" not in system_msg
+
     def test_a_repoint_is_reported_on_a_context_reset_with_its_caveat(
         self, monkeypatch, tmp_path
     ):
