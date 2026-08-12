@@ -236,7 +236,7 @@ correct `hookEventName`.
 1. Run the existing CI test outside-of-session as the structural
    counter-test:
    ```
-   cd pact-plugin && python -m pytest tests/test_dispatch_gate_smoke.py::test_f21_fail_closed_module_load -v
+   cd pact-plugin && python -m pytest tests/test_dispatch_gate_smoke.py::test_fail_closed_module_load -v
    ```
 2. Expect: test passes. The fixture sabotages
    `shared/dispatch_helpers.py` via `shutil.copytree` + overwrite under
