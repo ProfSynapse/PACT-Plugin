@@ -36,6 +36,7 @@ from __future__ import annotations
 
 # ─── stdlib first (used by _emit_load_failure_deny BEFORE wrapped imports) ─
 import json
+import re
 import sys
 from pathlib import Path
 from typing import NoReturn
@@ -93,6 +94,62 @@ _DENY_REASON = (
 _GATED_TOOLS = frozenset({"Edit", "Write"})
 
 
+# A heading a memory writer emits. `working_memory.py` builds each one as
+# `f"### {date_str}"` with `date_str = now.strftime("%Y-%m-%d %H:%M")`, so the
+# shipped shape is a date and a time. The time is optional here so a
+# hand-written date-only entry is covered too.
+#
+# THE PATTERN IS DERIVED FROM THE WRITERS AND NOT FROM A READING OF THIS FILE.
+# A pattern written against a guess passes a test written against the same
+# guess. `tests/test_working_memory.py` pins the emitted format, and that arm
+# lives with the WRITERS, because a person who edits a writer does not read the
+# tests of this gate.
+_DATE_LED_HEADING_RE = re.compile(
+    r"^###\s+\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?\s*$"
+)
+
+
+def _is_memory_entry(pin) -> bool:
+    """Report whether a parsed entry is a memory entry rather than a pin.
+
+    THE PREDICATE IS A CONJUNCTION AND EACH HALF IS LOAD-BEARING. An entry is a
+    memory entry when its heading is DATE-LED and it carries NO
+    `<!-- pinned: -->` marker. The date alone does not decide: a curator can
+    title a pin with a date, and that pin carries a marker.
+
+    WHY THE DATE ALONE CANNOT DECIDE, WHICH IS A PROOF RATHER THAN A PREFERENCE.
+    A hand-written date-only memory entry and a pin titled a bare date are THE
+    SAME STRING, and the two want opposite verdicts. So no function of the
+    heading alone returns two answers, whatever it is spelled as. The marker is
+    the second signal that makes the two separable.
+
+    THE RESIDUAL THIS CARRIES, RECORDED RATHER THAN HIDDEN.
+      R1, an add of a date-titled pin with NO marker, is not counted, so the
+      gate stays quiet. That direction is an under-block.
+      R2, an edit that ADDS a missing marker to a date-titled pin, moves no
+      pin, and this predicate counts 0 then 1, so the gate FIRES. That
+      direction is a cardinal OVER-BLOCK.
+    THE TRIGGER FOR THE TWO IS ONE POPULATION: a date-titled pin with no
+    marker. A USER RULING DECLARES THAT POPULATION EMPTY, because a pin is not
+    written that way in good faith. THE RULING IS WHAT MAKES R2 ACCEPTABLE, and
+    R2 is cardinal, so the ruling carries more weight than the under-block it
+    was first priced against.
+
+    WHAT MAKES THE POPULATION NON-EMPTY AGAIN, WHICH IS THE THING TO WATCH: a
+    writer that emits a pin with a bare-date title and no marker. If one
+    appears, R1 and R2 stop being hypothetical and this predicate wants a
+    re-price rather than a patch.
+
+    A GUARD ON THE MARKER-ADDING EDIT WAS CONSIDERED AND REFUSED. See the
+    design ruling: a guard for R2 cannot separate the marker-adding edit from a
+    real add without reading the file the edit has not landed in yet, which
+    makes a string comparison race a file it does not own.
+    """
+    if not _DATE_LED_HEADING_RE.match(pin.heading.strip()):
+        return False
+    return pin.date_comment is None
+
+
 def _count_pin_comments(text: str) -> int:
     """Count pins using `parse_pins` as the canonical oracle.
 
@@ -108,17 +165,24 @@ def _count_pin_comments(text: str) -> int:
     slip past the ADD-shape gate while still landing in CLAUDE.md as a
     parse_pins-visible pin.
 
-    Opportunistic managed-region bounding (Arch-M3): if `text` contains
-    PACT_MANAGED_START/END markers (full CLAUDE.md or Write payload),
-    count only within the managed region. This closes the decoy-bypass
-    where pin-shaped tokens in user-authored prose or code blocks
-    outside the managed region would inflate the count and either
-    falsely block (add-shape) or falsely allow (archival).
+    THIS FUNCTION DOES NOT CHOOSE A SLICE, AND IT USED TO. It counted the
+    managed region when the markers were present and the whole text when they
+    were not, so the branch was decided PER STRING. The two sides of one
+    decision could then reach different branches, and a difference taken across
+    two different slices is not a comparison. That is the STRADDLE, and it bit
+    in the two directions: a straddle over-blocked when no pin moved, and a
+    straddle MISSED a true add of four pins to five.
 
-    If no managed markers are present (fragment from Edit.old_string /
-    Edit.new_string), count on the full input — Edit fragments are
-    structurally inside the section being mutated, so bounding is
-    unnecessary and would miss legitimate pins.
+    THE SLICE NOW BELONGS TO THE DECISION, in `_is_add_shaped_edit`, which is
+    the only place that can see the two sides at one time. This function counts
+    across the body its caller supplies and nothing else.
+
+    THE COUNT PREDICATE, WHICH IS THE OTHER HALF OF THE PAIR. `parse_pins`
+    stays the oracle, so the symmetric-oracle invariant above holds. One class
+    is then dropped from the result: a heading that is date-led AND carries no
+    `<!-- pinned: -->` marker is a memory entry rather than a pin. See
+    `_is_memory_entry` for the residual this predicate carries and for the
+    population a user ruling declares empty.
 
     Fail-open: non-str input returns 0. Any parse_pins failure (should
     not raise by its own contract, but defense-in-depth) returns 0.
@@ -126,23 +190,57 @@ def _count_pin_comments(text: str) -> int:
     if not isinstance(text, str):
         return 0
     try:
-        from shared.claude_md_manager import extract_managed_region
-        region_result = extract_managed_region(text)
-        if region_result is not None:
-            region_text, _ = region_result
-            try:
-                return len(parse_pins(region_text))
-            except Exception:  # noqa: BLE001 — fail-open
-                return 0
-    except Exception:  # noqa: BLE001 — fail-open to full-text count
-        pass
-    try:
-        return len(parse_pins(text))
+        return sum(1 for pin in parse_pins(text) if not _is_memory_entry(pin))
     except Exception:  # noqa: BLE001 — fail-open
         return 0
 
 
-def _is_add_shaped_edit(tool_input: dict, claude_md_path: Path) -> bool:
+def _counts_show_an_add(old_text: str, new_text: str) -> bool:
+    """Compare the two sides of ONE decision across ONE slice.
+
+    RULE 1, AND IT IS THE WHOLE REASON THIS FUNCTION EXISTS. A difference taken
+    across two DIFFERENT slices is not a comparison. The counter used to pick
+    its own slice per string, so the two sides of one decision could reach
+    different branches. That is the STRADDLE and it bit in the two directions:
+    one straddle over-blocked when no pin moved, and one MISSED a true add of
+    four pins to five.
+
+    THE SELECTION, and it is a TOTAL function with no decline arm:
+      1. Ask each side whether it carries the managed markers.
+      2. If the two agree, use that branch for the two.
+      3. If the two disagree, use the WHOLE TEXT for the two.
+    The whole text is a slice each side can always carry, so there is no
+    failure direction to choose here and no exception arm to add.
+
+    🔴 THE WHOLE-TEXT FALLBACK KEEPS THE MEMORY ENTRIES. `_is_memory_entry` IS
+    WHAT DROPS THEM. DO NOT REMOVE THE DATE-LED EXCLUSION AND KEEP THIS
+    FALLBACK: the pair is correct and each one alone is worse than the pair.
+    Measured, the wider slice alone re-introduces the over-count this repair
+    exists to remove.
+
+    THE EXCEPTION BEHAVIOUR IS UNCHANGED. This selects a slice. The fail-open
+    arms that the caller declares SACROSANCT stay where they are.
+    """
+    from shared.claude_md_manager import extract_managed_region
+
+    old_is_managed = extract_managed_region(old_text) is not None
+    new_is_managed = extract_managed_region(new_text) is not None
+
+    if old_is_managed and new_is_managed:
+        old_slice = extract_managed_region(old_text)[0]
+        new_slice = extract_managed_region(new_text)[0]
+    else:
+        # Either the two sides agree that no managed region is present, or they
+        # DISAGREE and the whole text is the slice the two can always carry.
+        old_slice = old_text
+        new_slice = new_text
+
+    return _count_pin_comments(new_slice) > _count_pin_comments(old_slice)
+
+
+def _is_add_shaped_edit(
+    tool_input: dict, claude_md_path: Path, tool_name: str = ""
+) -> bool:
     """Return True if the Edit/Write adds a net-new pin comment.
 
     The marker-gate fires only on ADD-shaped edits so the user can still
@@ -173,7 +271,20 @@ def _is_add_shaped_edit(tool_input: dict, claude_md_path: Path) -> bool:
     # them. A strict count increase is asymmetric by construction: ADD
     # raises the count, ARCHIVE lowers it, REFACTOR leaves it unchanged.
     try:
-        if "content" in tool_input:
+        # RULE 4, THE TOOL NAME. The caller knows the tool, because it checked
+        # it against `_GATED_TOOLS`, so this branch asks the tool rather than
+        # guessing from a payload key. A non-Write tool carrying a `content`
+        # key took the whole-document branch before this.
+        #
+        # 🔴 THIS DOES NOT REACH THE STRADDLE, and a reader must not take it
+        # for a straddle repair. It selects WHICH COMPARISON runs. The straddle
+        # lives inside the comparison, in the slice each side reached, and
+        # `_counts_show_an_add` is what closes that.
+        if tool_name:
+            is_write = tool_name == "Write"
+        else:
+            is_write = "content" in tool_input
+        if is_write:
             # Write tool — diff against current file content.
             new_content = tool_input.get("content", "")
             if not isinstance(new_content, str):
@@ -183,12 +294,12 @@ def _is_add_shaped_edit(tool_input: dict, claude_md_path: Path) -> bool:
             except (IOError, OSError, UnicodeDecodeError):
                 # Cannot compare → fail-open.
                 return False
-            return _count_pin_comments(new_content) > _count_pin_comments(current)
+            return _counts_show_an_add(current, new_content)
 
         # Edit tool — compare old_string vs new_string pin counts.
         old_string = tool_input.get("old_string", "")
         new_string = tool_input.get("new_string", "")
-        return _count_pin_comments(new_string) > _count_pin_comments(old_string)
+        return _counts_show_an_add(old_string, new_string)
     except Exception:  # noqa: BLE001 — SACROSANCT fail-open
         return False
 
@@ -238,7 +349,7 @@ def _check_tool_allowed(input_data: dict) -> str | None:
     # are allowed so the user can resolve the stale-pins condition by
     # running /PACT:pin-memory within the same session. Fix for #492
     # F1 marker livelock.
-    if not _is_add_shaped_edit(tool_input, claude_md_path):
+    if not _is_add_shaped_edit(tool_input, claude_md_path, tool_name):
         return None
 
     return _DENY_REASON
