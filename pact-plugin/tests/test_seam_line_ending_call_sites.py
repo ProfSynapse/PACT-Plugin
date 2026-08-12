@@ -27,7 +27,9 @@ SITES THIS FILE DOES NOT DRIVE ARE NAMED WITH THEIR REASON, in
 `test_the_undriven_sites_are_named_with_a_reason` below. A coverage report
 that names its misses is worth more than a higher count that does not.
 """
+import ast
 import sys
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
@@ -245,6 +247,22 @@ class TestTheCoverageReportNamesItsMisses:
     arms rather than in a hand-off nobody reopens.
     """
 
+    # SITE KEYS ARE `relative/path.py::enclosing_function`, NOT line numbers.
+    # A line number moves whenever anybody edits above it, so a line-keyed
+    # table goes stale on an unrelated edit and reports a defect that is not
+    # there. A function name moves only when somebody renames it, which is the
+    # event this table SHOULD notice.
+    #
+    # THE VALUE IS A COUNT, because one function can hold more than one call.
+    # `update_session_info` holds three. A set of names would collapse those
+    # three into one and lose the cardinality this table exists to hold.
+    DRIVEN = {
+        "skills/pact-memory/scripts/working_memory.py::sync_to_claude_md": 1,
+        "skills/pact-memory/scripts/working_memory.py::sync_retrieved_to_claude_md": 1,
+        "hooks/shared/claude_md_manager.py::migrate_to_managed_structure": 1,
+        "hooks/staleness.py::check_pinned_staleness": 1,
+    }
+
     # site -> the reason it carries no end-to-end CRLF arm in this file.
     UNDRIVEN = {
         "claude_md_manager.py:1171 ensure_project_memory_md": (
@@ -285,17 +303,168 @@ class TestTheCoverageReportNamesItsMisses:
         for site, reason in self.UNDRIVEN.items():
             assert reason.strip(), f"{site} is recorded with no reason"
 
-    def test_the_site_total_is_ten(self):
-        """THE DENOMINATOR IS PART OF THE CLAIM.
+    # Keys of UNDRIVEN carry their own count, because one of them holds three
+    # calls in one function.
+    UNDRIVEN_COUNTS = {
+        "hooks/shared/claude_md_manager.py::ensure_project_memory_md": 1,
+        "hooks/shared/claude_md_manager.py::strip_orphan_kernel_block": 1,
+        "hooks/pin_marker_writer.py::_plan_and_write": 1,
+        "hooks/shared/session_resume.py::update_session_info": 3,
+    }
 
-        Driven arms plus undriven sites must equal the population the walk
-        found. If the seam gains an eleventh call site, this arm reddens and
-        the new site must be driven or named.
+    _SEARCH_ROOTS = ("hooks", "skills")
+    _SEAM = "_atomic_write_text"
+
+    @classmethod
+    def _walk_the_tree(cls):
+        """DISCOVER the seam call sites. Return (Counter, files_parsed, spellings).
+
+        COUNTING RULE, STATED BESIDE THE NUMBER: one entry for each CALL
+        EXPRESSION of `_atomic_write_text` in a `.py` file below `hooks/` and
+        `skills/`, attributed to its INNERMOST enclosing function. `tests/` is
+        below neither root, so tests are excluded by the roots rather than by a
+        filter. A `def`, an `import` and a mention inside a comment are not
+        calls.
+
+        THE SPELLING BREAKDOWN IS RETURNED RATHER THAN ASSUMED. A walk that
+        reached only the bare-name form would under-report, and the
+        under-report would read as a small clean number. The caller asserts on
+        the breakdown, so a narrow walk is visible rather than silent.
         """
-        driven = 4  # 1613, 1901, 1254, 1069
-        undriven = 1 + 1 + 1 + 3  # 1171, 960, 311, and the three resume sites
-        assert driven + undriven == 10, (
-            f"the site table accounts for {driven + undriven} sites, and the "
-            f"AST walk of hooks/ and skills/ finds 10. Re-derive the "
-            f"population before trusting any coverage claim in this file"
+        plugin_root = Path(__file__).parent.parent
+        found = Counter()
+        spellings = Counter()
+        parsed = 0
+
+        def visit(node, enclosing, rel):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    visit(child, child.name, rel)
+                    continue
+                if isinstance(child, ast.Call):
+                    f = child.func
+                    if isinstance(f, ast.Name):
+                        name, spelling = f.id, "Name"
+                    elif isinstance(f, ast.Attribute):
+                        name, spelling = f.attr, "Attribute"
+                    else:
+                        name, spelling = None, None
+                    if name == cls._SEAM:
+                        found[f"{rel}::{enclosing}"] += 1
+                        spellings[spelling] += 1
+                visit(child, enclosing, rel)
+
+        for root in cls._SEARCH_ROOTS:
+            for path in sorted((plugin_root / root).rglob("*.py")):
+                parsed += 1
+                rel = path.relative_to(plugin_root).as_posix()
+                visit(ast.parse(path.read_text(encoding="utf-8")), None, rel)
+        return found, parsed, spellings
+
+    def test_the_walk_finds_a_population_at_all(self):
+        """NON-VACUITY, AND IT RUNS FIRST.
+
+        A walk that parsed nothing, or that found no call, satisfies a set
+        comparison against an empty expectation perfectly. The comparison below
+        is evidence only once the walk is known to have read files and found
+        calls. A broken root path lands here rather than in a confident green.
+        """
+        found, parsed, spellings = self._walk_the_tree()
+
+        assert parsed > 0, "the walk parsed no Python file at all"
+        assert found, (
+            f"the walk found no call of {self._SEAM!r} across {parsed} files. "
+            f"Either the seam was renamed, or the roots are wrong, and either "
+            f"way the coverage claim in this file is measuring nothing"
+        )
+        assert spellings["Name"] + spellings["Attribute"] == sum(found.values())
+
+    def test_every_seam_call_site_is_driven_or_named(self):
+        """THE DENOMINATOR, DERIVED FROM THE TREE AND NOT FROM TYPED LITERALS.
+
+        WHAT THIS REPLACES, AND WHY THE OLD SHAPE PROVED NOTHING. The arm here
+        before compared two integers typed in this file against a third integer
+        typed in this file. It could not see the tree at all. Peer review
+        measured that in three legs: a dead eleventh call site left it green, a
+        LIVE reachable eleventh call site left it green, and deleting one
+        driven arm left it green with the literal now incorrect.
+
+        THE TWO SIDES COME FROM TWO INDEPENDENT SOURCES, WHICH IS THE WHOLE
+        REPAIR. The left side is a walk of `hooks/` and `skills/`. The right
+        side is the two tables above, which a person maintains. If the two came
+        from the same walk the comparison would be n against n, a tautology
+        with a derivation in place of a literal, and it would pass this same
+        re-run while holding nothing.
+
+        IT COMPARES MAPPINGS RATHER THAN TOTALS. Two totals can agree while the
+        sites behind them differ, so an added site and a removed site in one
+        change would cancel. A mapping comparison names the site that moved.
+        """
+        found, _, _ = self._walk_the_tree()
+
+        accounted = Counter(self.DRIVEN)
+        accounted.update(self.UNDRIVEN_COUNTS)
+
+        missing = {k: v for k, v in found.items() if accounted.get(k) != v}
+        stale = {k: v for k, v in accounted.items() if found.get(k) != v}
+
+        assert not missing and not stale, (
+            f"THE SEAM CALL-SITE TABLES IN THIS FILE NO LONGER AGREE WITH THE "
+            f"TREE.\n"
+            f"  in the tree, not accounted for: {sorted(missing.items())}\n"
+            f"  accounted for, not in the tree: {sorted(stale.items())}\n"
+            f"\n"
+            f"A site in the FIRST list is a seam caller with NO end-to-end arm "
+            f"and NO recorded reason, so the coverage report in this file is "
+            f"now incorrect. DRIVE it with an arm, or add it to UNDRIVEN_COUNTS "
+            f"with the reason it cannot be driven.\n"
+            f"A site in the SECOND list was renamed or removed, so a table "
+            f"entry points at a function that is gone."
+        )
+
+    def test_the_undriven_table_and_its_count_table_hold_the_same_sites(self):
+        """The reason table and the count table are two halves of one record.
+
+        UNDRIVEN carries the prose and UNDRIVEN_COUNTS carries the cardinality.
+        A site added to one and not the other gives a coverage report whose
+        reasons and whose numbers disagree, and the comparison above would then
+        pass while the prose says something else.
+        """
+        assert len(self.UNDRIVEN) == len(self.UNDRIVEN_COUNTS), (
+            f"UNDRIVEN records {len(self.UNDRIVEN)} sites and UNDRIVEN_COUNTS "
+            f"records {len(self.UNDRIVEN_COUNTS)}. The two tables describe the "
+            f"same sites and must gain and lose entries together"
+        )
+
+    def test_each_driven_site_has_an_arm_collected_in_this_module(self):
+        """THE LEG THE MAPPING COMPARISON CANNOT REACH.
+
+        A driven site stays in DRIVEN when its arm is renamed out of
+        collection, so the comparison above keeps passing while the arm no
+        longer runs. Peer review measured exactly that: one driven arm renamed
+        out gave 6 passed and nothing reported it.
+
+        This counts the arms that ACTUALLY COLLECT in the three driving classes
+        and requires one for each driven call site. The rule is one arm for one
+        driven site, which is the shape this file has.
+        """
+        driving_classes = (
+            TestWorkingMemoryTwinCallSites,
+            TestCanonicalTwinCallSites,
+            TestStalenessCallSite,
+        )
+        collected = [
+            f"{cls.__name__}::{name}"
+            for cls in driving_classes
+            for name in dir(cls)
+            if name.startswith("test_")
+        ]
+
+        assert len(collected) == sum(self.DRIVEN.values()), (
+            f"this file collects {len(collected)} driving arm(s) "
+            f"{sorted(collected)} and DRIVEN records "
+            f"{sum(self.DRIVEN.values())} driven call site(s). An arm was "
+            f"renamed out of collection, deleted, or added without its site. "
+            f"A driven site with no collected arm is an UNDRIVEN site wearing "
+            f"a driven label"
         )

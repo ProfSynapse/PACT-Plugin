@@ -129,6 +129,62 @@ class TestTheGateAcceptsWhatTheWritersEmit:
             "acceptance arm above proves nothing"
         )
 
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "### 2026-08-05 Draft notes",
+            "### 2026-08-05 12:30 Draft notes",
+            "### 2026-08-05  Merge guard purpose",
+        ],
+    )
+    def test_the_gate_predicate_refuses_a_date_followed_by_a_title(self, title):
+        """CONTROL THREE, ON THE DATE SIDE OF THE ALPHABET.
+
+        WHY CONTROL TWO ABOVE IS NOT ENOUGH, AND THIS IS A GAP I LEFT MYSELF.
+        Control two feeds a title with NO DATE in it, so it bounds the
+        NON-DATE direction only. The exclusion cannot grow in that direction.
+        IT CAN GROW IN THE DATE DIRECTION, and nothing bounded that. Peer
+        review widened the trailing anchor of `_DATE_LED_HEADING_RE` so the
+        pattern accepts a date FOLLOWED BY A TITLE, and 47 of 47 arms stayed
+        green. The alphabet of a control must come from the GUARDED THING, and
+        mine came from the case I expected to fail.
+
+        THE WIDENED PATTERN HAS TWO FAILURE DIRECTIONS AND THE SECOND IS
+        CARDINAL.
+          1. QUIET. A true pin add titled with a date prefix stops counting as
+             a pin, so the gate says nothing where it should speak. That is an
+             under-block.
+          2. DENY, AND THIS ONE IS THE CARDINAL DIRECTION. A user RENAMES a pin
+             from `### 2026-08-05 Draft notes` to `### Draft notes`, with no
+             marker on either side. The widened pattern drops the OLD title
+             from the count, the old count falls, the new count is then the
+             greater, and the gate FIRES where the shipped tree stayed quiet.
+             A faithful rename is DENIED.
+
+        AND THE WIDENED POPULATION SITS OUTSIDE THE USER RULING. The ruling
+        declares empty the population of a pin titled a BARE date with no
+        marker. `### 2026-08-05 Draft notes` is not a bare date, so the ruling
+        does not cover the class the widening opens, while the shipped
+        docstring of `_is_memory_entry` continues to assert that ruling.
+        """
+        from pin_staleness_gate import _DATE_LED_HEADING_RE
+
+        assert not _DATE_LED_HEADING_RE.match(title), (
+            f"_DATE_LED_HEADING_RE ACCEPTS {title!r}, A DATE FOLLOWED BY A "
+            f"TITLE.\n"
+            f"That is a CURATED PIN, not a memory entry, so the gate now "
+            f"excludes it from the pin count.\n"
+            f"  DIRECTION 1, quiet: a true pin add stops counting, and the "
+            f"gate says nothing where it should speak.\n"
+            f"  DIRECTION 2, deny, and this is the CARDINAL one: a user who "
+            f"renames such a pin and drops the date loses a title from the OLD "
+            f"count, so the new count becomes the greater and the gate FIRES. "
+            f"A faithful rename is DENIED.\n"
+            f"The trailing anchor of the pattern is what holds this. Do not "
+            f"widen it. If the exclusion must grow, price the two directions "
+            f"first, and note that the user ruling covers a BARE date only."
+        )
+
 
 class TestTheOptionalTimeGroupIsUnexercised:
     """A MEASURED OBSERVATION, NOT A GUARD. Recorded so a later reader meets it.
@@ -140,9 +196,27 @@ class TestTheOptionalTimeGroupIsUnexercised:
 
     WHY THAT IS WORTH RECORDING. It is the surface where drift can happen
     unobserved. A writer that later emits a date-only heading would be accepted
-    with no arm reporting the change of shape, and a later editor who removes
-    the optional group would break nothing that runs today. This class states
-    the position rather than defends it.
+    with no arm reporting the change of shape. This class states the position
+    rather than defends it.
+
+    🔴 A CORRECTION TO THIS DOCSTRING, MEASURED BY PEER REVIEW. It said before
+    that a later editor who removes the optional group "would break nothing
+    that runs today". THAT IS INCORRECT AND ITS OWN FILE REFUTES IT. A mutant
+    that makes the hour-and-minute group REQUIRED gives 2 failed and 19 passed
+    against a control of 21 passed. One of the two failures is
+    `test_the_pattern_accepts_a_date_only_heading`, which sits a few lines
+    below this sentence in this class. The other is
+    `test_r2_an_edit_that_adds_a_missing_marker_fires` in the gate file.
+
+    AND THE OPTIONAL GROUP IS CORRECT AS SHIPPED, so this class records a
+    position rather than a defect. The consumer alphabet is WIDER than the
+    producer alphabet, because the gate reads a file a HUMAN also edits, and
+    the two failure directions are not symmetric. KEEP the group, and a pin
+    titled a bare date with no marker drops out of the count, which is an
+    under-block on a population a user ruling declares empty. REMOVE the group,
+    and a hand-written date-only entry counts as a PIN, the count rises, and a
+    faithful edit to Pinned Context is DENIED. That second one is an
+    over-block, which this repository treats as the cardinal direction.
     """
 
     def test_the_pattern_accepts_a_date_only_heading(self):
