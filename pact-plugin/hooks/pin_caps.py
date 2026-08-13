@@ -414,12 +414,14 @@ def check_stale_block(
     """
     stale_count = sum(1 for p in pins if p.is_stale)
     if stale_count >= threshold:
+        # STATE THE CONDITION HERE AND DO NOT NAME A COMMAND. The consumer
+        # that shows this detail to a user appends the command that archives,
+        # so a command named here becomes a second instruction that can
+        # disagree with it. This text named the command that ADDS a pin, which
+        # cannot clear a stale pin, and a user read that one first.
         return CapViolation(
             kind="stale",
-            detail=(
-                f"{stale_count} stale pin(s) detected (threshold: {threshold}); "
-                f"run /PACT:pin-memory review"
-            ),
+            detail=f"{stale_count} stale pin(s) detected (threshold: {threshold})",
             offending_pin_chars=None,
             current_count=len(pins),
         )
