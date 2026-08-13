@@ -5728,6 +5728,20 @@ class TestSymlinkRefreshRouting:
         )
         assert "keeps the body it got at spawn" not in system_msg
 
+        # THE SECOND HALF OF THE COMPARISON CLAIM. The asserts above hold that
+        # the router RECOGNISES the constant. A comparison must also REFUSE a
+        # value that is not the constant, and no assert above can hold that:
+        # the fixture feeds a value EQUAL to the constant, and each reflexive
+        # operator accepts an equal value.
+        moved, _ = self._run(
+            monkeypatch, tmp_path, "startup", rebound + ": 13 agents updated"
+        )
+        assert "keeps the body it got at spawn" in moved, (
+            "a message that merely STARTS WITH the constant was routed as the "
+            "no-change message, so the comparison accepts more than the value "
+            "of SYMLINKS_VERIFIED_MESSAGE and a repoint reports nothing"
+        )
+
     def test_a_repoint_is_reported_on_a_context_reset_with_its_caveat(
         self, monkeypatch, tmp_path
     ):
