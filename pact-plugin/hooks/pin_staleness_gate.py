@@ -23,8 +23,8 @@ Gate triggers only when ALL hold:
        THERE IS NO LOCUS, NO ANCHOR AND NO BOUNDARY IN THIS CONDITION,
        and that is the repair rather than an omission. An earlier
        revision tested where an Edit fragment sat against the pinned
-       span. Two edits one byte apart produced the SAME document and
-       got OPPOSITE verdicts, because an anchor is not the object the
+       span. Two edits that put THE SAME PIN IN THE SAME PLACE got
+       OPPOSITE verdicts, because an anchor is not the object the
        decision is about.
        THE SLICE THE COUNT USES IS A DIFFERENT MATTER and it survives:
        `_counts_show_an_add` bounds the COUNT to the pinned section,
@@ -525,9 +525,9 @@ def _simulate_post_edit_document(
 
     THE GATE ASKS WHAT THE FILE BECOMES, NOT WHERE THE EDIT ANCHORED. An
     earlier revision compared the two Edit FRAGMENTS and tested where the
-    fragment sat. Two edits one byte apart produced the SAME resulting
-    document and got OPPOSITE verdicts, because the anchor is not the object
-    the decision is about. Four bound repairs each moved that boundary and
+    fragment sat. Two edits that put THE SAME PIN IN THE SAME PLACE got
+    OPPOSITE verdicts, because the anchor is not the object the decision is
+    about. Four bound repairs each moved that boundary and
     each was superseded. THE SIMULATION REMOVES THE BOUNDARY RATHER THAN
     MOVES IT: with a post-edit document there is no fragment, no anchor and
     no locus to bound.

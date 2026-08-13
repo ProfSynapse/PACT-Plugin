@@ -4501,7 +4501,7 @@ class TestBuildSafetyNetContext:
 class TestM2TeammateAdvisoryGating:
     """#806 cycle-3 m2: a separate-process teammate's SessionStart
     additionalContext must NOT carry lead-only pin advisories — step 4
-    stale-pin info, step 4a pin-slot status, step 4b '/PACT:pin-memory'
+    stale-pin info, step 4a pin-slot status, step 4b '/PACT:prune-memory'
     directive — while a LEAD frame still receives all three. Pins live in the
     project CLAUDE.md, a lead/orchestrator memory surface a teammate has no
     authority over; #877 gated lead WRITES on is_lead but left these advisory
@@ -4514,7 +4514,9 @@ class TestM2TeammateAdvisoryGating:
 
     _STALE_SENTINEL = "SENTINEL_STALE_PINS_STEP4"
     _SLOT_SENTINEL = "SENTINEL_PIN_SLOT_4A"
-    # 4b's real text carries the lead-only "/PACT:pin-memory" directive.
+    # 4b's real text carries the lead-only "/PACT:prune-memory" directive.
+    # The sentinel below stands in for that text. Its wording is arbitrary,
+    # so read it as a marker rather than as a copy of what 4b emits.
     _PINMEM_SENTINEL = "SENTINEL_4B You MUST run /PACT:pin-memory to archive"
 
     def _run_main_additional_context(self, monkeypatch, tmp_path, agent_type):

@@ -1056,7 +1056,7 @@ def main():
 
         # 4b. Emit unconditional stale-block directive when stale pin
         # count meets threshold (#492). Never exit-2 — breaks /clear and
-        # /resume per plan key-decisions row 6. m2: the "/PACT:pin-memory"
+        # /resume per plan key-decisions row 6. m2: the "/PACT:prune-memory"
         # directive is a lead/orchestrator memory action — not surfaced to a
         # teammate frame (the helper's marker side-effect is unchanged).
         stale_block_msg = check_pin_stale_block_directive()
