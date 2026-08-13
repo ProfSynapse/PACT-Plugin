@@ -342,12 +342,13 @@ def _is_memory_entry(pin) -> bool:
 
     🔴 THE RECIPROCAL HALF OF A COUPLING, PLACED AT THE SITE OF THE EDIT THAT
     WOULD REMOVE IT. This exclusion and the whole-text fallback in
-    `_counts_show_an_add` ARE A PAIR. The fallback keeps the memory entries in
-    the slice, and THIS function is what drops them. Delete this predicate and
-    the fallback alone re-introduces the over-count that the pair exists to
-    remove. Do not remove one without the other, and read the matching sentence
-    at the fallback arm before you change either. Each one alone is worse than
-    the pair.
+    `_counts_show_an_add` ARE A PAIR WHERE THE COUNT BOUND DECLINES. Where the
+    two sides resolve a `## Pinned Context` span, that bound alone holds a
+    memory write quiet and this predicate decides nothing. Where they do not,
+    the fallback keeps the memory entries in the slice and THIS function is
+    what drops them, so a deletion here re-introduces the over-count. DO NOT
+    REMOVE ONE WITHOUT THE OTHER, and read the matching sentence at the
+    fallback arm before you change either.
     """
     if not _DATE_LED_HEADING_RE.match(pin.heading.strip()):
         return False
@@ -469,11 +470,12 @@ def _counts_show_an_add(old_text: str, new_text: str) -> bool:
     predicate with its own failure direction, so it is recorded as a route and
     not taken here.
 
-    🔴 THE WHOLE-TEXT FALLBACK KEEPS THE MEMORY ENTRIES. `_is_memory_entry` IS
-    WHAT DROPS THEM. DO NOT REMOVE THE DATE-LED EXCLUSION AND KEEP THIS
-    FALLBACK: the pair is correct and each one alone is worse than the pair.
-    Measured, the wider slice alone re-introduces the over-count this repair
-    exists to remove.
+    🔴 THE WHOLE-TEXT FALLBACK KEEPS THE MEMORY ENTRIES AND `_is_memory_entry`
+    DROPS THEM, AND THE TWO ARE A PAIR WHERE STEP 0 DECLINES. Where the two
+    sides resolve a pinned span, step 0 alone holds a memory write quiet. Where
+    they do not, this fallback is the wider slice and the exclusion is what
+    keeps the count correct. DO NOT REMOVE THE DATE-LED EXCLUSION AND KEEP THIS
+    FALLBACK.
 
     THE EXCEPTION BEHAVIOUR IS UNCHANGED. This selects a slice. The fail-open
     arms that the caller declares SACROSANCT stay where they are.

@@ -7,10 +7,12 @@ WHAT THE TWO RULES ARE.
   RULE 2, the conjunction predicate. A heading that is date-led AND carries no
   `<!-- pinned: -->` marker is a memory entry rather than a pin.
 
-🔴 THE TWO ARE COUPLED AND THE ARMS BELOW MEASURE THE COUPLING. The whole-text
-fallback of Rule 1 KEEPS the memory entries, and Rule 2 is what drops them. The
-ablation class at the end is what shows each rule earns its place IN THE
-PRESENCE OF the other, which a mutation of one rule alone cannot show.
+🔴 THE TWO ARE COUPLED WHERE THE COUNT BOUND DECLINES, AND THE ARMS BELOW
+MEASURE THE COUPLING. The whole-text fallback of Rule 1 KEEPS the memory
+entries, and Rule 2 is what drops them. Where the two sides resolve a
+pinned span, the count bound alone holds a memory write quiet. The ablation
+class at the end is what shows each rule earns its place IN THE PRESENCE OF
+the other, which a mutation of one rule alone cannot show.
 """
 import re
 import sys
