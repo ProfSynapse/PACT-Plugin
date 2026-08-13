@@ -327,13 +327,71 @@ def clear_pin_staleness_marker_if_resolved(
         # the conservative route costs a reminder that stays armed rather than
         # an edit that gets refused.
         #
-        # WHAT THESE TWO CHECKS DO NOT COVER, so the bound is not read as the
-        # whole of it: `check_pinned_block_signal` also returns None when the
-        # document carries no pinned section, and when the pin parse declines.
-        # Those two stay routed to CLEARED. To separate them here needs a
-        # SECOND PARSE at this site, which is a second spelling of an oracle
-        # this project deliberately keeps single, so it is recorded rather than
-        # taken.
+        # WHAT THESE TWO CHECKS DO NOT COVER, AND THE REMAINING CASES ARE NOT
+        # ALIKE. An earlier note here grouped them as one recorded residual.
+        # That grouping was incorrect: it put a CORRECT BEHAVIOUR beside a
+        # RESIDUAL DEFECT, and a reader takes a grouping as one reasoned
+        # decision and stops.
+        #
+        # CASE A, CORRECT BY DETERMINACY, AT TWO RETURN POINTS RATHER THAN ONE.
+        # `_parse_pinned_section` returns None when no `## Pinned Context` title
+        # resolves in the scan text, and again when a title resolves with EMPTY
+        # content, because this caller takes the default
+        # `allow_empty_section=False`. EACH GIVES ZERO PINS, SO ZERO STALE PINS.
+        # CLEARED is a reading of the document at those two points rather than a
+        # fallback from ambiguity, so the routing is correct and no repair
+        # applies.
+        #
+        # CASE B, THE PIN PARSE DECLINES, IS A RESIDUAL OF THE CANNOT-TELL
+        # CLASS. The section resolved, `parse_pins` raised, its own handler
+        # returned None, and the stale count is unknown. The marker then drops
+        # on an unknown state, with the session-long durability described above.
+        #
+        # WHAT WAS MEASURED FOR CASE B, 2026-08-13, PATH BY PATH, because one
+        # label hides which path earned which evidence. The raise surface came
+        # from an AST walk over `parse_pins` and its in-module callee
+        # `_extract_body_chars`, rather than from a grep for `raise`, which
+        # returns three hits in this module and misses each operation that
+        # raises without the keyword.
+        #   GUARDED OR STRUCTURALLY INCAPABLE, the STRONG result:
+        #     `_PIN_HEADING_RE.finditer` sits under `except re.error: return []`.
+        #     `override_match.group(1)` cannot fail on input, because group 1 is
+        #       present in the pattern by construction.
+        #     `rationale.translate` takes a `str.maketrans("", "", ...)` table,
+        #       which is delete-only and cannot raise on a `str`.
+        #     `Pin(...)` is a NamedTuple with no validator.
+        #     The rest are `len`, `bool`, `enumerate`, and `str` and `list`
+        #       methods, none of which raises on a `str`.
+        #   OPEN AND UNREACHED, the WEAKER result: the compiled patterns applied
+        #     at match time, `OVERRIDE_COMMENT_RE.fullmatch`,
+        #     `_DATE_COMMENT_RE.fullmatch` and `.sub`, and `_STALE_MARKER_RE`
+        #     `.search` and `.sub`. `re.error` belongs to COMPILE time and these
+        #     patterns compile at import, so a document does not produce it
+        #     here. The residual is resource exhaustion, which is a property of
+        #     input SIZE against available memory rather than of document SHAPE.
+        #   THE CORPUS: 18 documents, 8 of them shapes only a machine writer
+        #     produces, aimed at those paths. COUNTING RULE: one document for
+        #     each shape, driven straight into `parse_pins`, one alarm of five
+        #     seconds for each. RESULT: 0 raised, 0 timed out.
+        #   THREE CONTROLS, FOR THREE WAYS TO BE WRONG: 16 shapes returned a
+        #     non-zero pin count, so the parse ran; an injected raise was
+        #     reported by the same harness, so the detector is not blind; and
+        #     the corpus gave 4 distinct results, so it is not one shape
+        #     repeated.
+        #
+        # TWO THINGS THE MEASUREMENT DOES NOT COVER, each a hole a later reader
+        # falls into. A LATER EDIT that adds a raise path to `parse_pins`
+        # retires this whole result. AND A HANG IS NOT A RAISE: a catastrophic
+        # backtrack spins rather than raises, and the probe reports it as
+        # neither outcome. The alarm bounds that hazard for these 18 shapes and
+        # for no others.
+        #
+        # AND ONE SHAPE STAYS UNMEASURED, WITH TWO OPEN TERMS RATHER THAN ONE.
+        # A document that lacks the title TRANSIENTLY, mid-write from a
+        # non-atomic outside editor, reaches case A by a route that is not
+        # determinate. TERM ONE: is that shape reachable. TERM TWO: is an
+        # outside editor in the writer population this project guards. Neither
+        # term is measured, and one answer does not settle the other.
         claude_md_path = get_project_claude_md_path()
         if claude_md_path is None:
             return
