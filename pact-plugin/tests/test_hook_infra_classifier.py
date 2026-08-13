@@ -173,17 +173,47 @@ class TestClosureMatchesLiveImportGraph:
         assert SEAM_READING_HELPERS == union
 
 
+# The TOP-LEVEL helpers (hooks/*.py, NOT hooks/shared/*.py) that session_init
+# reaches transitively. TWO ARMS BELOW READ THIS ONE TUPLE, because when the
+# same list was written out at two sites, a change reached one site and left
+# the other asserting a module that had gone.
+#
+# `pin_staleness_gate` WAS a member and is NOT one now. session_init used to
+# reach it for the marker-name constant; that constant moved to
+# `shared/constants.py`, so the edge is gone and the closure is correct
+# without it. This is a recorded REMOVAL rather than a silent shrink.
+_SESSION_INIT_TOPLEVEL_HELPERS = ("pin_caps", "staleness")
+
+
 class TestTwoHopEdgesPinnedByName:
     """Pin BOTH transitive 2-hop classes by name so a future direct-only OR
     shared-only OR absolute-only regression is caught with a named failure, not
     a silent under-derivation."""
 
+    def test_the_toplevel_helper_tuple_is_not_empty(self):
+        """NON-VACUITY FOR THE TWO ARMS THAT LOOP OVER THAT TUPLE.
+
+        `for top in ():` passes PERFECTLY and asserts nothing. So an editor who
+        removes members one at a time, as the marker-constant move removed one,
+        can reach an empty tuple and leave two green arms that hold nothing.
+        This arm makes the population explicit, so the shrink stops here rather
+        than at zero.
+        """
+        assert len(_SESSION_INIT_TOPLEVEL_HELPERS) >= 2, (
+            f"_SESSION_INIT_TOPLEVEL_HELPERS holds "
+            f"{len(_SESSION_INIT_TOPLEVEL_HELPERS)} member(s): "
+            f"{_SESSION_INIT_TOPLEVEL_HELPERS}. The two arms below LOOP over "
+            f"it, so a tuple with fewer than two members stops discriminating. "
+            f"If an edge genuinely went, record why here rather than shrink "
+            f"the tuple in silence"
+        )
+
     def test_toplevel_helpers_present_and_are_top_level(self):
-        # The 3 TOP-LEVEL helpers (hooks/pin_caps.py etc., NOT hooks/shared/)
-        # reached from session_init must be in its closure — a shared-only
+        # The TOP-LEVEL helpers (hooks/pin_caps.py etc., NOT hooks/shared/)
+        # reached from session_init must be in its closure. A shared-only
         # derivation (the architect-caught bug) would miss them entirely.
         idx = _module_index()
-        for top in ("pin_caps", "staleness", "pin_staleness_gate"):
+        for top in _SESSION_INIT_TOPLEVEL_HELPERS:
             assert top in _SEAM_HOOK_HELPER_CLOSURE["session_init"]
             assert not _is_shared(top, idx), f"{top} must be a top-level hooks/ module"
 
@@ -214,13 +244,13 @@ class TestClosureOracleIsNonVacuous:
     def test_shared_only_derivation_misses_toplevel_helpers(self):
         # The architect-caught bug: a shared-only walk never traverses the
         # top-level `from staleness import` / `from pin_caps import` edges, so
-        # session_init's closure LOSES the 3 top-level helpers. Proves the
-        # oracle's FULL hooks/ traversal (not shared-only) is load-bearing — a
+        # session_init's closure LOSES the top-level helpers. Proves the
+        # oracle's FULL hooks/ traversal (not shared-only) is load-bearing. A
         # shared-only oracle would FALSELY pass on this sub-graph.
         idx = _module_index()
         full = derive_closure("session_init", idx)
         shared_only = derive_closure("session_init", idx, shared_only=True)
-        for top in ("pin_caps", "staleness", "pin_staleness_gate"):
+        for top in _SESSION_INIT_TOPLEVEL_HELPERS:
             assert top in full
             assert top not in shared_only
         # And the equality test would FAIL if the oracle were shared-only:

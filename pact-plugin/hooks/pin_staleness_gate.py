@@ -31,7 +31,7 @@ Gate triggers only when ALL hold:
        which answers which bytes belong to the pins. Do not read that
        bound as a locus and do not remove it with one.
   4. Stale-pins-pending marker exists in session_dir
-  5. Not a teammate session (teammates bypass; CLAUDE.md edits are scoped to the team-lead session)
+  5. The session role is LEAD. The predicate is `pact_context.is_lead`, so a teammate frame and an `unknown` frame alike do not reach this gate.
 
 SACROSANCT (post-load runtime): every raisable path after module load is
 wrapped in try/except that defaults to allow (exit 0 with suppressOutput).
@@ -123,13 +123,21 @@ def _report_fail_open(stage: str, error: BaseException) -> None:
 try:
     import shared.pact_context as pact_context
     from shared import match_project_claude_md
+    from shared.constants import PIN_STALENESS_MARKER_NAME
     from pin_caps import parse_pins
 except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catch-all
     _emit_load_failure_deny("module imports", _module_load_error)
 
-# Marker file name written when stale-pins-pending state is detected.
-# Placed in session_dir so it is per-session scoped — clears on new
-# session, cannot persist across /clear (session_dir is rebuilt per session).
+# THE MARKER NAME IS DEFINED IN `shared.constants` AND IT IS IMPORTED ABOVE,
+# INSIDE THE FAIL-CLOSED WRAPPER. Three modules in three different frames read
+# that name, and a module with no exit path is the only safe home for a name
+# that a PostToolUse hook and a SessionStart hook also read. The per-session
+# scoping, the two-surface lifecycle, and the `pin_marker_writer.py`
+# name-collision trap are recorded at that definition. Read it before you
+# touch this marker.
+#
+# THE IMPORT IS A RE-EXPORT AS WELL AS A READ. Other modules and the arms take
+# this name from `pin_staleness_gate`, so the binding must stay available here.
 #
 # 🔴 THIS MODULE IS READ ONLY ON THIS MARKER, AND THAT IS A CONSTRAINT RATHER
 # THAN A PREFERENCE. The gate tests whether the marker is present. It must
@@ -139,18 +147,6 @@ except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catc
 # over this gate would go green while that happened. A coder can close the trap
 # by accident that way, which is why the prohibition is written at the name
 # rather than left implied.
-#
-# WHERE THE LIFECYCLE LIVES TODAY: `session_init.check_pin_stale_block_directive`
-# writes it and removes it, at SessionStart only.
-#
-# A NAME COLLISION THAT TRAPS A SEARCH, RECORDED BECAUSE IT WAS CHECKED RATHER
-# THAN ASSUMED. `pin_marker_writer.py` is registered on `UserPromptSubmit` AND
-# on `PostToolUse` with the matcher `Skill`, so it READS like a mid-session
-# manager of this signal. IT IS NOT ONE. It carries zero references to this
-# constant and it serves the pin command, whose `## Pinned Context` marker pair
-# is a different object that shares a naming family. A reader who greps for the
-# hook that manages this marker finds that file first, and it is the wrong file.
-PIN_STALENESS_MARKER_NAME = "pin-staleness-pending"
 
 # 🔴 THE COMMAND NAMED HERE MUST BE THE COMMAND THAT ARCHIVES, AND FOR A TIME
 # IT WAS NOT. This text named `/PACT:pin-memory`, which does not archive: it
@@ -340,6 +336,18 @@ def _is_memory_entry(pin) -> bool:
     one to re-open first, and the project rule then decides it the other way,
     because a live cardinal over-block outranks a missed staleness reminder.
 
+    AND THE POPULATION IS RE-MEASURABLE, WHICH IS THE DURABLE HALF OF THIS
+    REASON: a ruling is a claim that a reader must go and find, and a
+    measurement with its counting rule is one that anybody can re-derive.
+    MEASURED 2026-08-13 over the live pinned region: 12 headings, 12 markers,
+    and 0 that are date-led AND unmarked, so the R2 trigger population is
+    EMPTY. COUNTING RULE: bound the region with
+    `staleness._parse_pinned_section`, count `^### ` and `^<!-- pinned:` at
+    column 0, and judge with `_is_memory_entry` over `parse_pins`, the oracle
+    of this guard. CONTROLS: an impossible pattern returned 0, and
+    `_is_memory_entry` returned True on a synthetic bare-date unmarked
+    heading, so the 0 means EMPTY rather than an inert predicate. RE-RUN IT.
+
     🔴 THE RECIPROCAL HALF OF A COUPLING, PLACED AT THE SITE OF THE EDIT THAT
     WOULD REMOVE IT. This exclusion and the whole-text fallback in
     `_counts_show_an_add` ARE A PAIR WHERE THE COUNT BOUND DECLINES. Where the
@@ -470,6 +478,23 @@ def _counts_show_an_add(old_text: str, new_text: str) -> bool:
     predicate with its own failure direction, so it is recorded as a route and
     not taken here.
 
+    THE SCOPE OF THE ENUMERATION ABOVE, STATED SO IT IS NOT READ AS THE WHOLE
+    SET. It covers the shapes step 0 cannot REACH, which are the documents
+    where no pinned span resolves. It does NOT cover the shapes INSIDE the
+    bounded slice. Measured example: a `### ` line added to a PIN BODY, fenced
+    or bare, sits within the span, and `parse_pins` counts it, so the two sides
+    differ by one and the verdict is an add. That verdict is the same before
+    and after this bound, so the bound neither opened it nor closed it.
+
+    AND THIS CASE IS RULED. A residual on this gate sits in one of THREE
+    states, and not two. (1) DECLARED empty by a user ruling: that is R2, at
+    `_is_memory_entry`. (2) MEASURED at zero, with the shape treated as REAL
+    and the refusal to close it ruled: that is THIS case. (3) UNRULED, with
+    neither a declaration nor a measurement. THE WARRANT HERE BEGAN AS AN
+    ARCHITECT DECISION AND A USER RULING NOW CARRIES IT. Re-open it on a
+    measurement above zero rather than on preference. The counting rule for
+    that measurement is recorded at `_is_memory_entry`.
+
     🔴 THE WHOLE-TEXT FALLBACK KEEPS THE MEMORY ENTRIES AND `_is_memory_entry`
     DROPS THEM, AND THE TWO ARE A PAIR WHERE STEP 0 DECLINES. Where the two
     sides resolve a pinned span, step 0 alone holds a memory write quiet. Where
@@ -593,16 +618,21 @@ def _is_add_shaped_edit(
     not, or count strictly decreases) and refactor edits (pin count
     unchanged) are allowed.
 
-    For Edit tool:
-      - ADD: new_count > old_count in the replacement strings
-      - ARCHIVE: new_count < old_count  → allow
-      - REFACTOR: new_count == old_count → allow (pin body rewrite,
-        STALE marker injection, etc.)
+    THERE IS ONE COMPARISON AND IT IS OVER TWO DOCUMENTS. The tool name selects
+    WHICH SIMULATION builds the post-edit document. It does not select a
+    comparison. `_simulate_post_edit_document` builds the document the tool call
+    will produce, and `_counts_show_an_add` then compares the current document
+    against that one. Edit and Write differ in the simulation alone.
+      - ADD: the post-edit document holds MORE pins than the current one. Deny.
+      - ARCHIVE: it holds fewer. Allow.
+      - REFACTOR: the count is equal. Allow. A pin body rewrite and a STALE
+        marker injection are of this shape.
 
-    For Write tool (full-file replacement):
-      - Compare pin count in new content vs. current on-disk content.
-      - ADD: new file has MORE pin comments than current → block
-      - Otherwise → allow
+    AN EDIT FRAGMENT IS NOT THE OBJECT COMPARED, AND IT WAS ONCE. An earlier
+    revision counted the replacement strings of an Edit against each other,
+    which is a different kind of object from the whole-file content of a Write,
+    so the two tools reached two different comparisons. Do not put a fragment
+    count back here.
 
     Fail-open: any shape-detection error returns False (allow). This
     preserves the SACROSANCT gate invariant.

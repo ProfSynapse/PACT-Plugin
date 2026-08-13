@@ -300,14 +300,22 @@ def check_pin_stale_block_directive() -> Optional[str]:
         return None
 
     try:
-        # Arch M3: do NOT hoist these imports to module top. pin_staleness_gate
-        # itself imports `from pin_caps import parse_pins` at its module top,
-        # and session_init already eagerly imports pin_caps. Hoisting here
-        # would force pin_staleness_gate to load on every SessionStart even
-        # when no stale-block signal fires — wasted work on the hot path.
-        # Keeping the import lazy scopes the cost to the post-signal branch.
+        # THE MARKER NAME COMES FROM `shared.constants`, AND NOT FROM
+        # `pin_staleness_gate`. The gate is a fail-CLOSED PreToolUse module: its
+        # load wrapper prints a PreToolUse deny and calls `sys.exit(2)`. That
+        # posture is correct for a PreToolUse frame and incorrect for this
+        # SessionStart one, where a deny payload answers an event that nobody
+        # can deny. `shared.constants` has no exit path, and session_init loads
+        # `shared` at its module top in any case.
+        #
+        # THE HOT-PATH ARGUMENT THAT USED TO SIT HERE IS SPENT, AND THE REASON
+        # IS RECORDED SO THAT NOBODY RESTORES IT. It said to keep the import
+        # lazy so that `pin_staleness_gate` does not load on each SessionStart.
+        # This import no longer reaches that module at all, so the cost it
+        # named is gone. These imports stay function-local, which keeps them
+        # in the post-signal branch.
         from shared.pact_context import get_session_dir
-        from pin_staleness_gate import PIN_STALENESS_MARKER_NAME
+        from shared.constants import PIN_STALENESS_MARKER_NAME
         session_dir = get_session_dir()
         if session_dir:
             marker = Path(session_dir) / PIN_STALENESS_MARKER_NAME
@@ -339,10 +347,18 @@ def check_pin_stale_block_directive() -> Optional[str]:
     # 🔴 NAME THE COMMAND THAT ARCHIVES. This directive named
     # `/PACT:pin-memory`, which does NOT archive: it ADDS a pin and it sends
     # the user to `/PACT:prune-memory` for removal. THIS IS THE PRIMARY
-    # enforcement surface for the stale-pin condition, and the PreToolUse gate
-    # is the backstop, so an incorrect command here reaches a user who has not
-    # been refused anything yet. The gate carried the same incorrect name and
-    # the two were corrected together.
+    # enforcement surface for the stale-pin condition, AND IN AN UNKNOWN FRAME
+    # IT IS THE ONLY ONE. This directive is appended when the frame role is not
+    # `teammate`, so a lead frame and an unknown frame alike receive it, while
+    # `pin_staleness_gate` returns early unless `pact_context.is_lead` holds.
+    # THE GATE BACKSTOPS THE LEAD FRAME AND IT DOES NOT REACH AN UNKNOWN ONE,
+    # so an incorrect command here reaches a user that nothing refuses later.
+    # DO NOT WRITE THAT A BACKSTOP COVERS THIS TEXT. The exclusion of the
+    # unknown frame is INCIDENTAL rather than intended, and the repair for it
+    # is tracked on its own, because a DENY widened to a population it does not
+    # cover needs its own over-block check.
+    # The gate carried the same incorrect name and the two were corrected
+    # together.
     # BEFORE YOU EDIT THIS STRING, OPEN THE COMMAND FILE AND CONFIRM THE
     # COMMAND ARCHIVES. This text is not evidence about its own subject.
     return (

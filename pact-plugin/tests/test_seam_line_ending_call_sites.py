@@ -263,6 +263,35 @@ class TestTheCoverageReportNamesItsMisses:
         "hooks/staleness.py::check_pinned_staleness": 1,
     }
 
+    # site -> the arm(s) that DRIVE that site, as `ClassName::test_name`.
+    #
+    # WHY A MAPPING AND NOT A TOTAL. A cardinality over the driving classes
+    # answers "are there four arms" and never "is there one arm for each
+    # site". Two arms for one site plus zero for another satisfies a total
+    # PERFECTLY, so the total cannot see an arm that was re-aimed away from
+    # its site while its neighbour gained a second. That is the same class of
+    # defect the mapping comparison above closes, one level down: an added
+    # entry and a removed entry cancel in a sum and are named in a mapping.
+    DRIVEN_SITE_TO_ARMS = {
+        "skills/pact-memory/scripts/working_memory.py::sync_to_claude_md": [
+            "TestWorkingMemoryTwinCallSites::"
+            "test_sync_to_claude_md_keeps_the_crlf_of_the_target",
+        ],
+        "skills/pact-memory/scripts/working_memory.py::"
+        "sync_retrieved_to_claude_md": [
+            "TestWorkingMemoryTwinCallSites::"
+            "test_sync_retrieved_to_claude_md_keeps_the_crlf_of_the_target",
+        ],
+        "hooks/shared/claude_md_manager.py::migrate_to_managed_structure": [
+            "TestCanonicalTwinCallSites::"
+            "test_migrate_to_managed_structure_keeps_the_crlf_of_the_target",
+        ],
+        "hooks/staleness.py::check_pinned_staleness": [
+            "TestStalenessCallSite::"
+            "test_check_pinned_staleness_keeps_the_crlf_of_the_target",
+        ],
+    }
+
     # site -> the reason it carries no end-to-end CRLF arm in this file.
     UNDRIVEN = {
         "claude_md_manager.py:1171 ensure_project_memory_md": (
@@ -444,27 +473,71 @@ class TestTheCoverageReportNamesItsMisses:
         longer runs. Peer review measured exactly that: one driven arm renamed
         out gave 6 passed and nothing reported it.
 
-        This counts the arms that ACTUALLY COLLECT in the three driving classes
-        and requires one for each driven call site. The rule is one arm for one
-        driven site, which is the shape this file has.
+        IT BINDS EACH SITE TO ITS OWN ARM BY NAME, rather than counting arms.
+        A total answers "are there four arms" and never "is there one arm for
+        each site", so two arms for one site plus zero for another satisfies a
+        total while one site is silently undriven. `DRIVEN_SITE_TO_ARMS` is
+        that binding, and the three checks below hold it from three sides: the
+        two tables describe the same sites, each named arm COLLECTS, and no arm
+        in the driving classes is left unclaimed by any site.
         """
         driving_classes = (
             TestWorkingMemoryTwinCallSites,
             TestCanonicalTwinCallSites,
             TestStalenessCallSite,
         )
-        collected = [
+        collected = {
             f"{cls.__name__}::{name}"
             for cls in driving_classes
             for name in dir(cls)
             if name.startswith("test_")
-        ]
+        }
 
-        assert len(collected) == sum(self.DRIVEN.values()), (
-            f"this file collects {len(collected)} driving arm(s) "
-            f"{sorted(collected)} and DRIVEN records "
-            f"{sum(self.DRIVEN.values())} driven call site(s). An arm was "
-            f"renamed out of collection, deleted, or added without its site. "
-            f"A driven site with no collected arm is an UNDRIVEN site wearing "
-            f"a driven label"
+        # NON-VACUITY: an empty collection would satisfy the per-site loop
+        # below only by way of an empty table, and would satisfy the unclaimed
+        # check trivially. Assert the population is real before reading it.
+        assert collected, (
+            "the three driving classes collect NO test at all, so every check "
+            "below reads an empty set and reports nothing"
+        )
+
+        assert set(self.DRIVEN_SITE_TO_ARMS) == set(self.DRIVEN), (
+            f"the site-to-arm table and the DRIVEN table describe different "
+            f"sites.\n"
+            f"  driven with no arm recorded: "
+            f"{sorted(set(self.DRIVEN) - set(self.DRIVEN_SITE_TO_ARMS))}\n"
+            f"  arm recorded for a site that is not driven: "
+            f"{sorted(set(self.DRIVEN_SITE_TO_ARMS) - set(self.DRIVEN))}"
+        )
+
+        # LEG ONE: each site's named arm exists and collects, and the count of
+        # arms bound to that site agrees with the count DRIVEN records for it.
+        for site, arms in sorted(self.DRIVEN_SITE_TO_ARMS.items()):
+            missing = [arm for arm in arms if arm not in collected]
+            assert not missing, (
+                f"the site {site} records the arm(s) {missing}, and this file "
+                f"does not collect them. An arm was RENAMED, deleted, or moved "
+                f"out of a driving class, so that site is now UNDRIVEN while "
+                f"it keeps a driven label. Peer review measured this exact "
+                f"shape: one driven arm renamed out gave 6 passed and nothing "
+                f"reported it.\n"
+                f"  collected here: {sorted(collected)}"
+            )
+            assert len(arms) == self.DRIVEN[site], (
+                f"the site {site} is bound to {len(arms)} arm(s) and DRIVEN "
+                f"records {self.DRIVEN[site]} call site(s) there. The two "
+                f"numbers describe the same thing and must move together"
+            )
+
+        # LEG TWO: no arm drifts free of a site. Without this an arm re-aimed
+        # at another site's behaviour keeps collecting, keeps its name, and
+        # every check above continues to pass.
+        claimed = {arm for arms in self.DRIVEN_SITE_TO_ARMS.values()
+                   for arm in arms}
+        assert collected == claimed, (
+            f"a driving class holds arm(s) that no site claims: "
+            f"{sorted(collected - claimed)}. Bind each to its site in "
+            f"DRIVEN_SITE_TO_ARMS, or move it out of the driving classes. An "
+            f"unclaimed arm inflates the appearance of coverage while it "
+            f"guards a site the table does not name"
         )

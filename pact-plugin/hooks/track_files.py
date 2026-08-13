@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
 Location: pact-plugin/hooks/track_files.py
-Summary: PostToolUse hook that tracks files modified during the session.
-Used by: Claude Code settings.json PostToolUse hook (Edit, Write tools)
+Summary: PostToolUse hook with TWO jobs. It records the files that an Edit or a
+         Write modified, and it clears the pin-staleness marker once the
+         condition that raised that marker is clear.
+Used by: pact-plugin/hooks/hooks.json, PostToolUse, matcher `Edit|Write|Bash`.
+         The registration lives in that file and not in settings.json.
 
-Extracts file paths from Edit/Write tool usage and records them
-for the memory system's graph network.
+Extracts file paths from Edit and Write tool usage and records them
+for the memory system's graph network. The `Bash` leg serves the marker
+clear alone: the archive command writes the managed file through a script,
+so it emits no Edit and no Write event.
 
 Input: JSON from stdin with tool_name, tool_input, tool_response
 Output: None (writes to tracking file for later memory association)
@@ -203,9 +208,10 @@ def clear_pin_staleness_marker_if_resolved(
     suite would go green while that happened. The clear belongs on the
     PostToolUse side, which is here.
 
-    THE TRAP IT CLOSES. The marker is written and removed at SessionStart only.
+    THE TRAP IT CLOSES. BEFORE THIS FUNCTION, the marker was written and removed
+    at SessionStart only.
     The deny text tells a user to archive stale pins BEFORE editing, so a user
-    who obeys inside a session stays denied until the next session. That is a
+    who obeys inside a session stayed denied until the next session. That is a
     cardinal over-block on the user's own file, and it is reached by OBEYING
     the message.
 
@@ -229,7 +235,27 @@ def clear_pin_staleness_marker_if_resolved(
     chose it: one hook owning one concern across the two routes, rather than
     two hooks owning one concern between them. THE `Bash` LEG TESTS THE COMMAND
     STRING FIRST, so an ordinary shell call costs one substring test and no
-    file read.
+    file read INSIDE THIS FUNCTION.
+
+    THE PROCESS AROUND THE FUNCTION IS THE COST, AND THE SENTENCE ABOVE DOES
+    NOT PRICE IT. A shell call pays a whole interpreter start. MEASURED TWICE,
+    on two developer machines, 20 sequential runs each, with an ordinary shell
+    command that carries no archive token: median 48.9 ms against a bare
+    interpreter control of 13.8 ms in one run, and 100.8 ms against 38.9 ms in
+    the other. THE ABSOLUTE DOES NOT CROSS MACHINES, and these two runs differ
+    by roughly a factor of two, so do not quote one of them as the cost. What
+    holds across the two is the SHAPE: this hook costs about three times a bare
+    interpreter start.
+    READ THAT AGAINST THE LOAD THAT WAS THERE BEFORE, because a cost with no
+    baseline reads as a new category. A shell call fired 5 hook processes
+    before this change and fires 6 after.
+    COUNTING RULE FOR THAT PAIR, AND THE POPULATION IS THE PARAMETER THAT
+    MATTERS: one process for each command entry in a `PreToolUse` or a
+    `PostToolUse` group of hooks.json whose matcher admits `Bash`, with an
+    absent matcher key read as match-all. A SHELL CALL RAISES THOSE TWO EVENTS
+    AND NO OTHERS. A count taken over every event type instead reaches 18,
+    because it sweeps in SessionStart, UserPromptSubmit and the rest, which do
+    not fire on a tool call. That is a different population, not a correction.
 
     Fail-safe: this never raises and never reports. File tracking is the
     caller's job and a fault here must not disturb it.
@@ -250,9 +276,19 @@ def clear_pin_staleness_marker_if_resolved(
             if not file_path or match_project_claude_md(file_path) is None:
                 return
 
-        from pin_staleness_gate import PIN_STALENESS_MARKER_NAME
+        # THE MARKER NAME COMES FROM `shared.constants`, AND NOT FROM
+        # `pin_staleness_gate`. That gate is a fail-CLOSED PreToolUse module:
+        # its load wrapper prints a PreToolUse deny and calls `sys.exit(2)`.
+        # `SystemExit` derives from `BaseException`, so the `except Exception`
+        # below does NOT contain it. This hook then exits 2, emits a deny for
+        # an event that nobody can deny, and drops the file tracking that
+        # `main()` runs after this call. `shared.constants` has no exit path.
+        # DO NOT take this name from the gate again, and do not repair a
+        # recurrence by a wider handler: a wider handler catches the symptom
+        # and leaves the dependency in place.
+        from shared.constants import PIN_STALENESS_MARKER_NAME
         from shared.pact_context import get_session_dir
-        from staleness import check_pinned_block_signal
+        from staleness import check_pinned_block_signal, get_project_claude_md_path
 
         session_dir = get_session_dir()
         if not session_dir:
@@ -265,7 +301,47 @@ def clear_pin_staleness_marker_if_resolved(
         # to the managed file, and an archive run, are both REASONS TO LOOK.
         # Neither is proof that the condition cleared. A clear that skipped
         # this read would drop the marker while stale pins remain.
-        if check_pinned_block_signal() is not None:
+        #
+        # CANNOT-TELL ROUTES TO NOT-CLEARED, AND THAT IS WHAT THE TWO CHECKS
+        # BELOW BUY. `check_pinned_block_signal` returns None for a condition
+        # that CLEARED and for a document it could not resolve or read, and its
+        # own contract calls that fail-open. FAIL-OPEN IS CORRECT AT
+        # SessionStart, where None means DO NOT BLOCK and ambiguity is safe.
+        # HERE THE SAME None MEANS DROP THE MARKER AND DISARM THE GATE, which
+        # is the opposite direction, so one value carries opposite safety for
+        # its two callers and the ambiguity must not reach the unlink.
+        #
+        # AND THE DROP IS DURABLE, WHICH IS WHY THE AMBIGUITY COSTS MORE THAN
+        # ONE CALL. This function REMOVES the marker and it never writes one,
+        # so a marker dropped here stays dropped. A later call with the file
+        # readable does NOT restore it, the gate then ALLOWS an add-shaped
+        # edit, and only a new SessionStart re-creates the marker. ONE
+        # TRANSIENT READ FAULT THEREFORE DISARMS THE GATE FOR THE REST OF THE
+        # SESSION. The fail-open posture is declared and SACROSANCT elsewhere
+        # in this family. Its DURABILITY is declared here, because this is
+        # where a reader meets the mechanism that makes it permanent.
+        #
+        # THE TRADE, STATED BECAUSE IT IS A DENY WIDENING. This arms the marker
+        # strictly longer. It opens NO over-block under the fault that triggers
+        # it: with the document unreadable the gate allows the edit anyway, so
+        # the conservative route costs a reminder that stays armed rather than
+        # an edit that gets refused.
+        #
+        # WHAT THESE TWO CHECKS DO NOT COVER, so the bound is not read as the
+        # whole of it: `check_pinned_block_signal` also returns None when the
+        # document carries no pinned section, and when the pin parse declines.
+        # Those two stay routed to CLEARED. To separate them here needs a
+        # SECOND PARSE at this site, which is a second spelling of an oracle
+        # this project deliberately keeps single, so it is recorded rather than
+        # taken.
+        claude_md_path = get_project_claude_md_path()
+        if claude_md_path is None:
+            return
+        try:
+            claude_md_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return
+        if check_pinned_block_signal(claude_md_path=claude_md_path) is not None:
             return
 
         try:

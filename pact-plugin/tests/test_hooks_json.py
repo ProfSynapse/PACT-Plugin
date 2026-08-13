@@ -243,6 +243,80 @@ class TestNewSDKOptimizationEntries:
                     )
 
 
+class TestTrackFilesPostToolUseMatcher:
+    """THE REGISTRATION IS PART OF THE MECHANISM, AND IT IS A SEPARATE FAILURE.
+
+    `track_files.py` carries the pin-staleness marker clear, and that clear
+    serves TWO routes. A hand edit of the managed file arrives as `Edit` or
+    `Write`. THE ARCHIVE ITSELF arrives as `Bash`, because the archiving
+    command runs a script through a shell and emits no edit event.
+
+    So a matcher of `Edit|Write` is not a smaller version of the mechanism. It
+    silently drops the route the shipped deny text RECOMMENDS to the user,
+    which is the worst of the outcomes available here. The behaviour tests for
+    the clear all call the function directly, so every one of them stays green
+    while the hook is registered for the wrong events and never fires.
+    """
+
+    def _track_files_entries(self, hooks_config):
+        """Every PostToolUse group whose commands mention track_files.py."""
+        return [
+            entry
+            for entry in hooks_config["hooks"].get("PostToolUse", [])
+            if any(
+                "track_files.py" in hook.get("command", "")
+                for hook in entry.get("hooks", [])
+            )
+        ]
+
+    def test_track_files_is_registered_exactly_once_for_post_tool_use(
+        self, hooks_config
+    ):
+        """NON-VACUITY FOR THE ARM BELOW, WHICH READS ONE ENTRY.
+
+        A matcher assertion written as a loop over matched entries passes
+        PERFECTLY when the loop finds nothing, and a rename of the command
+        string is enough to empty it. This arm makes the population explicit,
+        so an empty result is a failure here rather than a silent green there.
+        """
+        entries = self._track_files_entries(hooks_config)
+        assert len(entries) == 1, (
+            f"expected exactly 1 PostToolUse group invoking track_files.py "
+            f"and found {len(entries)}. A count of 0 means the command string "
+            f"moved and the matcher arm below now reads nothing. A count "
+            f"above 1 means the registration was split, and the two halves "
+            f"can carry different matchers"
+        )
+
+    def test_the_track_files_matcher_carries_the_bash_archive_route(
+        self, hooks_config
+    ):
+        """The matcher is pinned as a SET, so a drop and a widening both fire.
+
+        `Bash` is the route the archive takes. `Edit` and `Write` are the hand
+        edit. The set is compared rather than the string, because the segment
+        order carries no meaning and a reorder is not a defect.
+        """
+        entries = self._track_files_entries(hooks_config)
+        assert entries, "no PostToolUse group invokes track_files.py"
+
+        matcher = entries[0].get("matcher", "")
+        segments = set(matcher.split("|"))
+
+        assert segments == {"Edit", "Write", "Bash"}, (
+            f"the track_files PostToolUse matcher is {matcher!r}, and it must "
+            f"cover Edit, Write and Bash.\n"
+            f"  missing: {sorted({'Edit', 'Write', 'Bash'} - segments)}\n"
+            f"  unexpected: {sorted(segments - {'Edit', 'Write', 'Bash'})}\n"
+            f"WITHOUT `Bash` the pin-staleness marker clear never sees the "
+            f"archive run, because the archive writes the file through a "
+            f"script and emits no edit event. A user who obeys the refusal "
+            f"then stays denied for the rest of the session. Every behaviour "
+            f"test for the clear calls the function directly and stays green "
+            f"while this happens"
+        )
+
+
 AGENTS_DIR = Path(__file__).parent.parent / "agents"
 
 

@@ -310,13 +310,15 @@ PACT registers hooks across 11 Claude Code event surfaces, including `SessionSta
 | `session_init.py` | SessionStart | Initialize PACT environment, generate team, restore prior session |
 | `bootstrap_gate.py` | PreToolUse | Inject session-start ritual directive on first turn |
 | `validate_handoff.py` | SubagentStop | Verify HANDOFF output quality |
-| `track_files.py` | PostToolUse (Edit/Write) | Track files for memory graph |
+| `track_files.py` | PostToolUse (Edit/Write/Bash) | Track files for memory graph, and clear the pin-staleness marker when the condition clears |
 | `agent_handoff_emitter.py` | TaskCompleted | Write `agent_handoff` event to session journal |
 | `dispatch_gate.py` | PreToolUse (Agent) | Catch malformed teammate spawns at dispatch time |
 | `pin_caps_gate.py` | PreToolUse (Edit/Write) | Enforce caps on CLAUDE.md pinned-memory section |
 | `postcompact_archive.py` | PostCompact | Archive pre-compaction state for recovery |
 
-See [`pact-plugin/hooks/hooks.json`](pact-plugin/hooks/hooks.json) for the full registration matrix, which registers 22 distinct hook scripts; the [`hooks/`](pact-plugin/hooks/) directory holds those plus 2 co-located helper modules (`pin_caps.py`, `staleness.py`) — 24 top-level `.py` files in all — alongside `shared/` utilities and a `refresh/` subsystem for transcript replay and checkpoint reconstruction.
+**What the hooks cost you per shell call.** `track_files.py` is registered for `Bash` as well as for Edit and Write, because the pin archive command writes through a script and emits no Edit or Write event. So this hook starts one process on each shell call in each session. Measured twice on developer machines, 20 sequential runs each: the hook process took a median of 48.9 ms against a bare-interpreter control of 13.8 ms in one run, and 100.8 ms against 38.9 ms in the other. The absolute figures do not cross machines, and these two runs differ by roughly a factor of two. What holds across the two is the shape: the hook costs about three times a bare interpreter start. Read that against the load that was there before, because a cost with no baseline reads as a new category. A shell call started 5 hook processes before this registration and starts 6 after. Counting rule for that pair: one process for each command entry in a `PreToolUse` or `PostToolUse` group of `hooks.json` whose matcher admits `Bash`, with an absent matcher key read as match-all. A shell call raises those two events and no others, so a count over all event types is a different population and gives a larger number.
+
+See [`pact-plugin/hooks/hooks.json`](pact-plugin/hooks/hooks.json) for the full registration matrix, which registers 25 distinct hook scripts; the [`hooks/`](pact-plugin/hooks/) directory holds those plus 2 co-located helper modules (`pin_caps.py`, `staleness.py`) — 27 top-level `.py` files in all — alongside `shared/` utilities and a `refresh/` subsystem for transcript replay and checkpoint reconstruction.
 
 ### Protocols
 
@@ -686,7 +688,7 @@ PACT-Plugin/
 │   ├── agents/                 # 12 specialist agents + 1 orchestrator
 │   ├── commands/               # 15 PACT workflow commands
 │   ├── skills/                 # 20 skill modules
-│   ├── hooks/                  # Lifecycle automation (24 top-level + shared/ + refresh/)
+│   ├── hooks/                  # Lifecycle automation (27 top-level + shared/ + refresh/)
 │   ├── protocols/              # 22 coordination protocols
 │   ├── reference/              # VSM glossary
 │   ├── telegram/               # Telegram bridge MCP server

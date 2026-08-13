@@ -146,15 +146,18 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
     "session_init": frozenset({
         "claude_md_manager", "constants", "dispatch_helpers", "failure_log",
         "merge_guard_common", "pact_config", "pact_context", "paths",
-        "peer_context", "pin_caps", "pin_staleness_gate", "plugin_manifest",
+        "peer_context", "pin_caps", "plugin_manifest",
         "session_journal", "session_registry", "session_resume",
         "session_state", "staleness", "symlinks", "task_utils", "teammate_mode",
     }),  # pact_config reached via the SessionStart runtime-config injection
          # (session_init -> shared.pact_config.llm_options); stdlib-only, so it
          # adds no further transitive shared edges.
-         # top-level helpers (pin_caps, staleness, pin_staleness_gate) reached
-         # here: session_init -> staleness -> pin_caps; session_init ->
-         # pin_staleness_gate -> pin_caps.
+         # top-level helpers (pin_caps, staleness) reached here:
+         # session_init -> staleness -> pin_caps.
+         # `pin_staleness_gate` LEFT this closure when the pin-staleness marker
+         # name moved to `shared.constants`. session_init takes that name from
+         # there, so a SessionStart no longer loads a fail-closed PreToolUse
+         # gate to read one string.
     "session_end": frozenset({
         "constants", "error_output", "pact_context", "paths", "session_journal",
         "session_registry", "session_state", "task_utils",

@@ -944,3 +944,149 @@ class TestAblationEachRuleEarnsItsPlace:
             "removing the same-slice rule changed NOTHING on S2, so either it "
             "earns nothing, or this fixture cannot exhibit a straddle"
         )
+
+
+class TestStep0TheCountBoundHoldsOnItsOwn:
+    """STEP 0 ABLATED ALONE, WHICH IS THE WHOLE POINT OF THIS CLASS.
+
+    THE ARM THAT NAMES RULE 1 DOES NOT HOLD STEP 0. The ablation arm in
+    `TestAblationEachRuleEarnsItsPlace` replaces `_counts_show_an_add`
+    WHOLESALE with a per-side function. A wholesale replacement cannot tell
+    step 0 from the branch selection beneath it, so it reports on the pair and
+    says nothing about either one. That is the structural reason step 0 was
+    unarmed while an arm carrying Rule 1 in its name passed.
+
+    WHAT STEP 0 IS. It asks each side for its `## Pinned Context` span. Where
+    the two sides resolve one, that section is the slice for the two. So a
+    change below `## Working Memory`, inside the managed region, is OUTSIDE
+    the counted slice and the gate stays quiet.
+
+    THE FAILURE DIRECTION, and it is the cardinal one. Remove step 0 and the
+    slice widens to the managed region, the added heading enters the count,
+    and a faithful memory write turns from quiet to DENY on the user's own
+    file. The module docstring claims step 0 `cannot be worse on the cardinal
+    axis, for any document, including shapes nobody has enumerated`. That
+    claim is load-bearing and this class is what holds it.
+    """
+
+    # A heading a memory writer can put below `## Working Memory`. It carries
+    # NO `<!-- pinned: -->` marker and it is NOT date-led, so the Rule 2
+    # conjunction does not reach it. Step 0 is the only thing that keeps it
+    # out of the count, which is what makes this fixture separate the two.
+    ADDED_BELOW_WORKING_MEMORY = "### Some prose title\nbody\n"
+
+    def _pair(self):
+        """The two sides of one faithful memory write."""
+        old = managed([PIN_A])
+        new = managed([PIN_A], mems=[self.ADDED_BELOW_WORKING_MEMORY])
+        return old, new
+
+    def test_a_heading_below_working_memory_stays_quiet_while_the_bound_holds(
+        self,
+    ):
+        """The shipped verdict, and its own positive control in one arm.
+
+        THE SECOND HALF IS THE CONTROL AND IT IS NOT DECORATION. A lone
+        assertion of `False` here is satisfied by any document where nothing
+        changed at all, so it would pass for a fixture that cannot exhibit the
+        defect. The control strips the `## Pinned Context` heading from the two
+        sides, which makes step 0 DECLINE for a reason that has nothing to do
+        with the code, and the same edit then reads as an ADD.
+
+        So the pair says: this edit IS visible to the wider slice, and step 0
+        is what keeps it out. One half alone says neither.
+        """
+        import pin_staleness_gate as gate
+
+        old, new = self._pair()
+
+        assert gate._counts_show_an_add(old, new) is False, (
+            "A HEADING ADDED BELOW `## Working Memory` READ AS A PIN ADD. "
+            "The gate now DENIES a faithful memory write on the user's own "
+            "file, which is the cardinal over-block. Step 0 bounds the count "
+            "to the `## Pinned Context` span, and it is gone or bypassed"
+        )
+
+        # POSITIVE CONTROL: with no pinned heading on either side, step 0
+        # declines and the fallback counts the same edit as an add.
+        old_wide = old.replace("## Pinned Context\n", "")
+        new_wide = new.replace("## Pinned Context\n", "")
+        assert gate._counts_show_an_add(old_wide, new_wide) is True, (
+            "THE CONTROL HALF FAILED, so the quiet verdict above proves "
+            "nothing. With step 0 unavailable this same edit must read as an "
+            "ADD. If it does not, this fixture cannot exhibit the over-block "
+            "and the arm above is passing for the wrong reason"
+        )
+
+
+class TestTheEmptySectionResolvesRatherThanDeclines:
+    """`allow_empty_section=True`, held by the one document shape that moves.
+
+    WHY THE PARAMETER IS THERE, in the words of its own site: without it `an
+    empty section is indistinguishable from an absent one, this step declines,
+    and the empty side falls back to a wider slice while the other side does
+    not. That is the straddle again, in a new place.`
+
+    THE SHAPE THAT SEPARATES, AND THE ONE THAT LOOKS RIGHT AND DOES NOT.
+    MEASURED on this branch, with the parameter forced to each value:
+
+      OLD empty section, NEW one pin, nothing else moves
+          True with the parameter, True without it.   <- NO SEPARATION
+      OLD empty section plus a pin down in Working Memory,
+      NEW one pin in the section and that entry gone
+          True with the parameter, False without it.  <- SEPARATES
+
+    The first shape is the trap: it reads as the obvious test for an empty
+    section and it holds nothing, because the wider fallback slice happens to
+    give the same answer. The second forces the fallback to CANCEL the add
+    against an unrelated removal, which is the straddle the parameter exists
+    to stop, and the direction it fails in is a MISSED ADD.
+    """
+
+    def test_an_add_into_an_empty_section_is_seen_when_the_fallback_cancels_it(
+        self,
+    ):
+        """OLD carries an empty pinned section. NEW adds one pin to it.
+
+        The pin comment down in Working Memory on the OLD side is what makes
+        the wider slice count 1 against 1 and report no add. Only the bounded
+        slice, which needs the empty section to RESOLVE, sees 0 against 1.
+        """
+        import pin_staleness_gate as gate
+
+        old = managed([], mems=[PIN_B])
+        new = managed([PIN_A])
+
+        assert gate._counts_show_an_add(old, new) is True, (
+            "A PIN ADDED INTO AN EMPTY PINNED SECTION WAS NOT SEEN. "
+            "`allow_empty_section=True` is what makes an empty section "
+            "RESOLVE rather than decline. Without it the empty side falls "
+            "back to a wider slice, an unrelated removal elsewhere cancels "
+            "the add, and the gate stays quiet on a true add. That is the "
+            "straddle, and it is a MISSED ADD"
+        )
+
+    def test_the_shape_that_cannot_separate_is_recorded_as_unusable(self):
+        """A NEGATIVE RESULT, KEPT SO THE NEXT AUTHOR DOES NOT REACH FOR IT.
+
+        This is the obvious empty-section fixture: OLD empty, NEW one pin, and
+        nothing else moves. It gives True under the shipped parameter AND True
+        with the parameter removed, so it cannot tell the two apart.
+
+        The assertion below is deliberately about the SHIPPED verdict only. It
+        exists to keep the fixture in the file with its measurement attached,
+        so that a later reader who reaches for this shape finds the note rather
+        than repeats the measurement.
+        """
+        import pin_staleness_gate as gate
+
+        old = managed([])
+        new = managed([PIN_A])
+
+        assert gate._counts_show_an_add(old, new) is True, (
+            "the plain empty-section add stopped reading as an add, which is "
+            "a change this file did not predict. NOTE: this fixture is NOT a "
+            "guard for `allow_empty_section`. It gives the same answer with "
+            "and without the parameter. The arm above is the one that "
+            "separates"
+        )

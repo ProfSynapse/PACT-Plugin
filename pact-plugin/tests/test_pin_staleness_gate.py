@@ -628,9 +628,18 @@ class TestPinStalenessGate_Archival:
 class TestPinStalenessGate_DecoyBypass:
     """Arch-M3 managed-region bounding of `_count_pin_comments`.
 
-    Load-bearing coverage for the bounded-count defense at
-    `pin_staleness_gate.py:128-138` (extract_managed_region import
-    block). Before this defense, a `<!-- pinned:` token appearing in
+    Load-bearing coverage for the bounded-count defense, which lives in
+    `_counts_show_an_add`: it asks `extract_managed_region` for a slice and
+    counts inside it when the two sides agree that the markers are present.
+
+    CITED BY SYMBOL RATHER THAN BY LINE NUMBER, and that is deliberate. This
+    docstring named `pin_staleness_gate.py:128-138` and that range now holds
+    the fail-closed import wrapper, while `extract_managed_region` is imported
+    function-local inside `_counts_show_an_add`. A line number moves whenever
+    somebody edits above it, so it goes stale on an unrelated change and sends
+    the next reader to the wrong mechanism. A symbol moves only on a rename.
+
+    Before this defense, a `<!-- pinned:` token appearing in
     user-authored prose or a fenced code block OUTSIDE the managed
     region would inflate the gate's count and either:
       - falsely BLOCK a legitimate pin edit (add-shape), or
@@ -638,10 +647,11 @@ class TestPinStalenessGate_DecoyBypass:
         simultaneously archived (same full-text count, different
         structural reality).
 
-    Counter-test-by-revert: commenting out the try-block at
-    `pin_staleness_gate.py:128-138` (so `_count_pin_comments` always
-    falls through to `text.count(...)`) MUST cause at least one test
-    here to fail. Without that proof, the defense is phantom-green.
+    Counter-test-by-revert, STATED AS AN ABLATION OF A NAMED BRANCH so it
+    survives an edit: make `_counts_show_an_add` skip its managed-region
+    branch, so the two sides fall through to the whole-text slice. That MUST
+    cause at least one test here to fail. Without that proof, the defense is
+    phantom-green.
     """
 
     def test_decoy_outside_region_does_not_inflate_count(self, gate_env):
@@ -741,10 +751,10 @@ class TestPinStalenessGate_DecoyBypass:
             },
         })
         assert result is not None, (
-            "In-region ADD masked by outside decoy removal — Arch-M3 bounding "
-            "bypassed. If you see this failure after reverting "
-            "pin_staleness_gate.py lines 128-138, that is the counter-test "
-            "proof the defense is load-bearing."
+            "In-region ADD masked by outside decoy removal. The managed-region "
+            "bounding was bypassed. If you see this failure after ablating the "
+            "managed-region branch of `_counts_show_an_add`, that is the "
+            "counter-test proof the defense is load-bearing."
         )
         assert "stale pins" in result
 
@@ -1188,4 +1198,137 @@ class TestPinStalenessGate_FailOpenIsReported:
         assert "RuntimeError" in captured.err
         assert "suppressOutput" in captured.out, (
             "the hook protocol line must stay on stdout"
+        )
+
+
+class TestPinStalenessGate_SimulationEditEdges:
+    """THE THREE DECLARED EDIT EDGES OF `_simulate_post_edit_document`.
+
+    Its docstring enumerates exactly three edges ported from
+    `pin_caps.build_simulated_pins`:
+      `replace_all` TRUE  -> replace each occurrence.
+      `replace_all` FALSE -> replace the first occurrence.
+      an EMPTY `old_string` -> return the PRE-state.
+    The middle one was armed. The other two were not.
+
+    WHY THESE ARMS READ THE SIMULATION DIRECTLY RATHER THAN THE VERDICT.
+    Driven through the whole decision, an empty-`old_string` arm can pass
+    because the insertion landed OUTSIDE the counted slice rather than because
+    the guard refused it. The reviewer that found this gap paid for that
+    lesson on its own first probe. A slice bound and a payload guard are two
+    mechanisms, and an arm that cannot say which one answered is holding
+    neither. The simulation is the unit that owns these three edges, so it is
+    the unit these arms drive.
+    """
+
+    def test_an_empty_old_string_returns_the_pre_state_unchanged(self):
+        """The malformed-payload guard, held by identity against the input.
+
+        `str.replace` with an empty needle puts the replacement BETWEEN each
+        character, which is a document the tool never produces. The guard
+        returns the pre-state so the caller compares pre against pre and the
+        normal contract applies.
+
+        NON-VACUITY: identity with `current` is a strong oracle here, because
+        the mutated form produces a document that is longer than the input by
+        one copy of `new_string` for each character position. There is no
+        quiet answer that satisfies this by accident.
+        """
+        import pin_staleness_gate
+
+        current = "# P\n\n## Pinned Context\n\n<!-- pinned: 2026-01-01 -->\n"
+        simulated = pin_staleness_gate._simulate_post_edit_document(
+            {"old_string": "", "new_string": "<!-- pinned: 2026-02-02 -->\n"},
+            current,
+            "Edit",
+        )
+
+        assert simulated == current, (
+            "AN EMPTY `old_string` DID NOT RETURN THE PRE-STATE. "
+            "`str.replace` with an empty needle interleaves the replacement "
+            "between every character, so the gate would then compare the "
+            "pre-state against a document the tool cannot produce. The stated "
+            "reason for this edge is that a malformed payload must not become "
+            "a silent bypass, and that reason is now unheld.\n"
+            f"  length in: {len(current)}   length out: {len(simulated or '')}"
+        )
+
+    def test_the_replace_all_flag_selects_between_each_and_the_first(self):
+        """The flag is READ, proven by the two answers it selects between.
+
+        ONE CALL CANNOT HOLD THIS EDGE. An arm that asserts only the
+        `replace_all=True` output passes when the flag is ignored and the
+        document happens to carry one occurrence. So the fixture carries TWO
+        occurrences and the arm asserts that the two flag values give
+        DIFFERENT documents, then pins each one.
+        """
+        import pin_staleness_gate
+
+        current = "MARK\nMARK\n"
+        payload = {"old_string": "MARK", "new_string": "DONE"}
+
+        each = pin_staleness_gate._simulate_post_edit_document(
+            {**payload, "replace_all": True}, current, "Edit")
+        first = pin_staleness_gate._simulate_post_edit_document(
+            {**payload, "replace_all": False}, current, "Edit")
+
+        assert each != first, (
+            "THE `replace_all` FLAG SELECTED NOTHING. The two flag values "
+            "produced the identical document on a fixture carrying two "
+            "occurrences, so the flag is ignored and the simulation no longer "
+            "models what the Edit tool will do"
+        )
+        assert each == "DONE\nDONE\n", (
+            f"`replace_all` TRUE must replace each occurrence, and it gave "
+            f"{each!r}"
+        )
+        assert first == "DONE\nMARK\n", (
+            f"`replace_all` FALSE must replace the first occurrence only, and "
+            f"it gave {first!r}"
+        )
+
+    def test_the_caller_reads_the_simulated_document_and_not_the_payload(
+        self, tmp_path
+    ):
+        """THE LEG THE TWO ARMS ABOVE CANNOT REACH.
+
+        Those two drive `_simulate_post_edit_document` DIRECTLY, which takes
+        the slice bound out of the circuit and is why they hold the guard
+        rather than the bound. THE COST OF THAT CHOICE, NAMED BY THE REVIEWER
+        THAT FOUND THE ORIGINAL GAP: neither arm can see whether
+        `_is_add_shaped_edit` CALLS the simulation at all. A change that
+        bypasses the call, or that counts the payload rather than the
+        simulated document, leaves the two of them green.
+
+        This arm closes that leg WITHOUT giving back the slice-bound exposure,
+        because the document is chosen so the bound cannot answer for the
+        guard.
+
+        THE DOCUMENT MATTERS AND HERE IS WHY. It carries NO `## Pinned
+        Context` heading and NO managed markers, so the counted slice is the
+        WHOLE TEXT and an insertion at position 0 falls INSIDE it. On a
+        document that HAS a pinned heading, the empty `old_string` inserts
+        above the pinned span, the bound excludes it, and shipped and mutated
+        agree. That shape reports a no-op and hides a true gap. It cost the
+        reviewer one probe, and it is recorded here so the next author does
+        not reach for it.
+        """
+        import pin_staleness_gate
+
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text("# Project Memory\n\n## Working Memory\n\n")
+
+        verdict = pin_staleness_gate._is_add_shaped_edit(
+            {"old_string": "",
+             "new_string": "<!-- pinned: 2026-02-02 -->\n### B\ny\n"},
+            claude_md,
+            "Edit",
+        )
+
+        assert verdict is False, (
+            "A MALFORMED EDIT PAYLOAD READ AS AN ADD. The empty `old_string` "
+            "guard returns the PRE-state, so the gate compares pre against "
+            "pre and must stay quiet. A True here means the caller counted "
+            "something other than the simulated document, which is the "
+            "silent bypass the guard exists to stop"
         )
