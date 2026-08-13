@@ -615,9 +615,9 @@ Tests asserting on `count_active_tasks` boundary conditions (`count == 0`, `coun
 
 ### Sibling-file convention for parametrized noise-budget regression
 
-Parametrized noise-budget regression tests — N×M matrices counting events across simulated scenarios — MUST live in a sibling test file that cross-references the primary file in its docstring, never packed into the primary phase-specific test files.
+Parametrized noise-budget regression tests are N×M matrices that count events across simulated scenarios. Each one MUST live in a sibling test file. That sibling file MUST cross-reference the primary file in its docstring. Do not pack such a test into a primary phase-specific test file.
 
-Primary phase-specific test files count specific event types and require clean fire-counts to assert on Tier-N cardinality. Mixing them with parametrized N×M matrix tests reduces **signal-to-noise** on the cardinality assertions because the parametrized matrix's setup/teardown noise drowns out the primary file's tight fire-count assertions. **Fire-count cleanliness** is the property that lets a primary test file's `assert events.count == N` reliably localize a regression — once a parametrized matrix sits alongside, the same assertion has to defend against matrix-induced cross-contamination.
+Primary phase-specific test files count specific event types and require clean fire-counts to assert on Tier-N cardinality. Mixing them with parametrized N×M matrix tests reduces **signal-to-noise** on the cardinality assertions. The reason is that the setup and teardown noise of the parametrized matrix masks the tight fire-count assertions of the primary file. **Fire-count cleanliness** is the property that lets `assert events.count == N` in a primary test file localize a regression reliably. Once a parametrized matrix sits beside it, the same assertion must defend against matrix-induced cross-contamination.
 
 #### Worked example — sibling-file split
 
@@ -625,7 +625,7 @@ The sibling test file `pact-plugin/tests/test_pin_marker_writer_adversarial.py` 
 
 #### Canonical mitigation
 
-**Sibling-file split** — default discipline: when adding a parametrized noise-budget regression test for a phase-specific test family, create a sibling file rather than appending to the primary file. Cross-reference the primary phase-specific file in the sibling's docstring so a future reader can find the family. When 3+ instances of HANDOFF-cardinality-matrix patterns cluster in a single review cycle, the cluster suggests a HANDOFF-shape risk-factor specific to phase-lull tests with N-cell parametrized cardinality matrices — pair these tests with cross-stream-verifier review (see Author-blindness above) at elevated priority.
+**Sibling-file split** is the default discipline. If you add a parametrized noise-budget regression test for a phase-specific test family, create a sibling file. Do not append the test to the primary file. Cross-reference the primary phase-specific file in the docstring of the sibling, so a later reader can find the family. If three or more HANDOFF-cardinality-matrix patterns cluster in one review cycle, the cluster is a signal of a HANDOFF-shape risk factor. That factor is specific to phase-lull tests with N-cell parametrized cardinality matrices. Pair those tests with cross-stream-verifier review at elevated priority. See Author-blindness above.
 
 #### Detection signature
 

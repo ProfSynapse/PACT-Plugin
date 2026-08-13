@@ -42,7 +42,7 @@ Implementation references:
    registrations are stale.
 3. Confirm hooks are loaded:
    ```
-   python -c "import json; d=json.load(open('$HOME/.claude/plugins/cache/pact-plugin/PACT/$(ls ~/.claude/plugins/cache/pact-plugin/PACT/ | tail -1)/pact-plugin/hooks/hooks.json')); \
+   python3 -c "import json; d=json.load(open('$HOME/.claude/plugins/cache/pact-plugin/PACT/$(ls ~/.claude/plugins/cache/pact-plugin/PACT/ | tail -1)/pact-plugin/hooks/hooks.json')); \
      print([m['matcher'] for m in d['hooks']['PreToolUse']])"
    ```
    Expected: list contains both `"Agent"` and `"TaskCreate|TaskUpdate"`
@@ -71,7 +71,7 @@ processes an `Agent()` tool call.
 3. Inspect the session journal:
    ```
    tail -20 ~/.claude/pact-sessions/<project>/<sid>/session-journal.jsonl \
-     | python -c 'import sys,json; \
+     | python3 -c 'import sys,json; \
        [print(json.dumps(json.loads(l), indent=2)) for l in sys.stdin if "dispatch_decision" in l]'
    ```
 4. Expect: at least one event with `type="dispatch_decision"`,
@@ -119,7 +119,7 @@ rejected by `is_marker_set`'s SHA256 content-fingerprint check.
 1. In a fresh session, BEFORE invoking `/PACT:bootstrap`, inspect the
    session-dir path that the bootstrap_gate would consult:
    ```
-   python -c "import shared.pact_context as p; p.init({}); print(p.get_session_dir())"
+   python3 -c "import shared.pact_context as p; p.init({}); print(p.get_session_dir())"
    ```
    (Run from `pact-plugin/hooks/` with `PYTHONPATH` set; or just note
    the path emitted in the bootstrap_gate's deny message.)
