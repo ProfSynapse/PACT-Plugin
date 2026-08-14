@@ -42,12 +42,12 @@ Implementation references:
    registrations are stale.
 3. Confirm hooks are loaded:
    ```
-   python3 -c "import json; d=json.load(open('$HOME/.claude/plugins/cache/pact-plugin/PACT/$(ls ~/.claude/plugins/cache/pact-plugin/PACT/ | tail -1)/pact-plugin/hooks/hooks.json')); \
-     print([m['matcher'] for m in d['hooks']['PreToolUse']])"
+   python3 -c "import json; d=json.load(open('$HOME/.claude/plugins/cache/pact-plugin/PACT/$(ls ~/.claude/plugins/cache/pact-plugin/PACT/ | tail -1)/hooks/hooks.json')); \
+     print([m.get('matcher') for m in d['hooks']['PreToolUse']])"
    ```
-   Expected: list contains both `"Agent"` and `"TaskCreate|TaskUpdate"`
-   (the latter under PostToolUse, but the parse confirms structural
-   integrity).
+   Expected: the list contains `"Agent"`. A `None` entry also appears,
+   because one PreToolUse group registers without a matcher, and
+   `m.get('matcher')` reports that group instead of raising `KeyError`.
 4. Confirm session journal is writable:
    ```
    ls -la ~/.claude/pact-sessions/<project>/<session-id>/session-journal.jsonl
