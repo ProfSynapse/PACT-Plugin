@@ -1041,6 +1041,34 @@ class TestTheEmptySectionResolvesRatherThanDeclines:
     give the same answer. The second forces the fallback to CANCEL the add
     against an unrelated removal, which is the straddle the parameter exists
     to stop, and the direction it fails in is a MISSED ADD.
+
+    WHICH POPULATION THE ROW-TWO SHAPE COVERS. Its Working Memory item is a
+    MARKED pin, and a marked entry is a pin to the counter, so its removal
+    can cancel the add. THE ENTRIES THE WRITERS EMIT THERE ARE NOT THAT
+    SHAPE: their heading is a bare date and time with NO marker, so the
+    memory-entry exclusion drops them.
+
+    AND THE EXCLUSION IS WHY THIS IS A LIMIT OF THE SHAPE RATHER THAN A
+    DEFECT IN THE GATE. Where step 0 declines, that exclusion is what keeps
+    the memory entries out of the wider slice, which is the PAIR recorded at
+    `_is_memory_entry`. For the live shape that cell is True, so the
+    parameter separates nothing THERE, and the exclusion is what holds that
+    population.
+
+    MEASURED, WITH THE COUNTING RULE ADJACENT TO THE NUMBER. Bound the region
+    from the `## Working Memory` heading to the managed end marker. A heading
+    is a `### ` line at column 0 inside that region. A marker is a
+    `<!-- pinned: ... -->` comment inside the same region. Judge each entry
+    with `_is_memory_entry` on the `parse_pins` output, the oracle of this
+    guard, and not by a substring count, because the two disagree. Across the
+    three managed files available at the time: 3 headings, 0 markers, 3
+    memory entries, and 0 counted as pins. CONTROLS: a heading pattern that
+    is not possible returned 0, the `### ` token returned non-zero, and
+    `_is_memory_entry`
+    returned True on a bare-date unmarked entry built for the check and
+    False on the same entry with a marker. So the 0 is a measurement and not
+    an instrument fault. THAT IS THREE FILES AT ONE MOMENT, and not a claim
+    about all consumer files. RE-RUN IT.
     """
 
     def test_an_add_into_an_empty_section_is_seen_when_the_fallback_cancels_it(
