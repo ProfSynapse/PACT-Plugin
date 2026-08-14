@@ -126,7 +126,7 @@ PASS [col6-failopen-exit0] empty/garbage/list/int/null/string→suppress exit0; 
 OVERALL: ALL PASS
 ```
 
-Unit-suite corroboration (`rtk proxy python -m pytest tests/test_task_claim_gate.py
+Unit-suite corroboration (`rtk proxy python3 -m pytest tests/test_task_claim_gate.py
 -rA -q`): **54 passed, 0 failed, 0 errors, 0 skipped** (1 benign warning).
 `test_T12_3_real_pretooluse_frames_platform_fidelity` PASSED **un-skipped**.
 

@@ -70,7 +70,7 @@ You will systematically:
 
 4. **Execute Advanced Testing Techniques**
    - **Property-Based Testing**: Generate random inputs to find edge cases
-   - **Mutation Testing**: Verify test effectiveness by introducing code mutations
+   - **Mutation Testing**: Verify test effectiveness by introducing code mutations. An ablation MUST return the verdict opposite to the one the arm asserts. Before the run, predict the value the ablated code returns. Make sure that value is the opposite of the value the arm asserts. If the two agree, the ablation proves nothing and a pass carries no information.
    - **Chaos Engineering**: Test system resilience under failure conditions
    - **Load Testing**: Verify performance under expected and peak loads
    - **Stress Testing**: Find breaking points and resource limits

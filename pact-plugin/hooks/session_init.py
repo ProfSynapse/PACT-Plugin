@@ -105,7 +105,7 @@ from shared.session_registry import resolve as _registry_resolve
 from shared.paths import get_claude_config_dir
 
 # Import extracted modules (decomposed for maintainability per M5 audit finding).
-from shared.symlinks import setup_plugin_symlinks
+from shared.symlinks import SYMLINKS_VERIFIED_MESSAGE, setup_plugin_symlinks
 from shared.claude_md_manager import (
     ensure_project_memory_md,
     file_lock,
@@ -153,6 +153,24 @@ _UNKNOWN_ROLE_NOTICE = (
     "unrecognized agent_type), so lead-only session setup was skipped. If you "
     "meant to drive PACT as the orchestrator, relaunch with "
     "`--agent PACT:pact-orchestrator`."
+)
+
+
+# Caveat appended to the symlink refresh status when the refresh MOVED
+# something. It names the subject of the repair and the one thing the repair
+# does NOT reach.
+#
+# EMITTED ONLY WHEN A LINK MOVED, and that is a correctness property rather
+# than a matter of taste. The refresh makes the resolution SURFACE current and
+# it does NOT make a LOADED body current, because an agent keeps the body it
+# got at spawn. A notice that spoke on a quiet session start would report
+# "surface current" almost always, and a reader would take that as "the bodies
+# are fresh". ONE-DIRECTIONAL EMISSION removes that reading: the notice emits
+# no green, so no green can be misread.
+_SYMLINK_REPOINT_NOTICE = (
+    "The PACT agent and protocol links now point at the current plugin root. "
+    "This does NOT refresh an agent that is live: an agent keeps the body it "
+    "got at spawn, and a new spawn gets the current body."
 )
 
 
@@ -282,14 +300,22 @@ def check_pin_stale_block_directive() -> Optional[str]:
         return None
 
     try:
-        # Arch M3: do NOT hoist these imports to module top. pin_staleness_gate
-        # itself imports `from pin_caps import parse_pins` at its module top,
-        # and session_init already eagerly imports pin_caps. Hoisting here
-        # would force pin_staleness_gate to load on every SessionStart even
-        # when no stale-block signal fires — wasted work on the hot path.
-        # Keeping the import lazy scopes the cost to the post-signal branch.
+        # THE MARKER NAME COMES FROM `shared.constants`, AND NOT FROM
+        # `pin_staleness_gate`. The gate is a fail-CLOSED PreToolUse module: its
+        # load wrapper prints a PreToolUse deny and calls `sys.exit(2)`. That
+        # posture is correct for a PreToolUse frame and incorrect for this
+        # SessionStart one, where a deny payload answers an event that nobody
+        # can deny. `shared.constants` has no exit path, and session_init loads
+        # `shared` at its module top in any case.
+        #
+        # THE HOT-PATH ARGUMENT THAT USED TO SIT HERE IS SPENT, AND THE REASON
+        # IS RECORDED SO THAT NOBODY RESTORES IT. It said to keep the import
+        # lazy so that `pin_staleness_gate` does not load on each SessionStart.
+        # This import no longer reaches that module at all, so the cost it
+        # named is gone. These imports stay function-local, which keeps them
+        # in the post-signal branch.
         from shared.pact_context import get_session_dir
-        from pin_staleness_gate import PIN_STALENESS_MARKER_NAME
+        from shared.constants import PIN_STALENESS_MARKER_NAME
         session_dir = get_session_dir()
         if session_dir:
             marker = Path(session_dir) / PIN_STALENESS_MARKER_NAME
@@ -318,9 +344,26 @@ def check_pin_stale_block_directive() -> Optional[str]:
 
     if signal is None:
         return None
+    # 🔴 NAME THE COMMAND THAT ARCHIVES. This directive named
+    # `/PACT:pin-memory`, which does NOT archive: it ADDS a pin and it sends
+    # the user to `/PACT:prune-memory` for removal. THIS IS THE PRIMARY
+    # enforcement surface for the stale-pin condition, AND IN AN UNKNOWN FRAME
+    # IT IS THE ONLY ONE. This directive is appended when the frame role is not
+    # `teammate`, so a lead frame and an unknown frame alike receive it, while
+    # `pin_staleness_gate` returns early unless `pact_context.is_lead` holds.
+    # THE GATE BACKSTOPS THE LEAD FRAME AND IT DOES NOT REACH AN UNKNOWN ONE,
+    # so an incorrect command here reaches a user that nothing refuses later.
+    # DO NOT WRITE THAT A BACKSTOP COVERS THIS TEXT. The exclusion of the
+    # unknown frame is INCIDENTAL rather than intended, and the repair for it
+    # is tracked on its own, because a DENY widened to a population it does not
+    # cover needs its own over-block check.
+    # The gate carried the same incorrect name and the two were corrected
+    # together.
+    # BEFORE YOU EDIT THIS STRING, OPEN THE COMMAND FILE AND CONFIRM THE
+    # COMMAND ARCHIVES. This text is not evidence about its own subject.
     return (
         f"Pinned context: {signal.detail}. "
-        f"You MUST run /PACT:pin-memory to archive stale pins before adding new ones."
+        f"You MUST run /PACT:prune-memory to archive stale pins before adding new ones."
     )
 
 
@@ -931,14 +974,30 @@ def main():
         if source in ("startup", "resume") and _should_warn_unknown_role(input_data):
             system_messages.append(_UNKNOWN_ROLE_NOTICE)
 
-        # 1. Set up plugin symlinks (enables @~/.claude/protocols/pact-plugin/ references)
-        # Context resets (compact/clear): symlinks are already set up from original session
-        if not is_context_reset:
-            symlink_result = setup_plugin_symlinks()
-            if symlink_result and "failed" in symlink_result.lower():
-                system_messages.append(symlink_result)
-            elif symlink_result:
+        # 1. Refresh the plugin symlinks (enables @~/.claude/protocols/pact-plugin/
+        # references, and resolves an unprefixed agent name to the CURRENT root).
+        #
+        # NO SOURCE GATE ON THE CALL. It ran behind `if not is_context_reset:` on
+        # the assumption that a context reset inherits the links of the original
+        # session. THAT PREDICATE ANSWERS EXISTENCE AND THE CALLER ASKS CURRENCY:
+        # a link can be present and out of date at one moment. An install that
+        # landed mid-launch left each link at the prior root until the next
+        # launch, so a compact or a clear now repairs them.
+        #
+        # THE GATE MOVES TO THE NO-CHANGE MESSAGE, where it is the correct
+        # predicate. That message answers "did the user see this before", a
+        # repetition question, and the gate answers repetition correctly.
+        symlink_result = setup_plugin_symlinks()
+        if symlink_result and "failed" in symlink_result.lower():
+            system_messages.append(symlink_result)
+        elif symlink_result == SYMLINKS_VERIFIED_MESSAGE:
+            # Nothing moved. Suppress on a context reset, so a quiet compact
+            # gains no new output.
+            if not is_context_reset:
                 context_parts.append(symlink_result)
+        elif symlink_result:
+            # A LINK MOVED. Report it on each source, with the caveat beside it.
+            context_parts.append(f"{symlink_result}. {_SYMLINK_REPOINT_NOTICE}")
 
         # 3. Ensure project has CLAUDE.md with memory sections
         project_md_msg = ensure_project_memory_md()
@@ -1013,7 +1072,7 @@ def main():
 
         # 4b. Emit unconditional stale-block directive when stale pin
         # count meets threshold (#492). Never exit-2 — breaks /clear and
-        # /resume per plan key-decisions row 6. m2: the "/PACT:pin-memory"
+        # /resume per plan key-decisions row 6. m2: the "/PACT:prune-memory"
         # directive is a lead/orchestrator memory action — not surfaced to a
         # teammate frame (the helper's marker side-effect is unchanged).
         stale_block_msg = check_pin_stale_block_directive()

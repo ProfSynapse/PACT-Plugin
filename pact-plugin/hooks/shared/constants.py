@@ -4,7 +4,10 @@ Summary: Canonical constants shared across PACT hooks and tests.
 Used by: test_patterns.py (cross-list consistency checks),
          verify-scope-integrity.sh (baseline checks),
          postcompact_archive.py (get_compact_summary_path),
-         session_init.py (get_compact_summary_path).
+         session_init.py (get_compact_summary_path,
+                          PIN_STALENESS_MARKER_NAME),
+         pin_staleness_gate.py (PIN_STALENESS_MARKER_NAME),
+         track_files.py (PIN_STALENESS_MARKER_NAME).
 """
 
 from __future__ import annotations
@@ -84,3 +87,40 @@ COMPACT_SUMMARY_ORPHAN_NAME = "compact-summary.orphan.txt"
 # find_feature_task / find_current_phase. The two tuples have
 # different semantics and should not be unified.
 SYSTEM_TASK_PREFIXES = ("Phase:", "BLOCKER:", "ALERT:", "HALT:")
+
+
+# Marker file name written when the stale-pins-pending state is detected.
+# Placed in session_dir so that it is per-session scoped. It clears on a new
+# session, and it cannot persist across /clear, because session_dir is rebuilt
+# for each session.
+#
+# WHY THE NAME LIVES HERE AND NOT IN THE GATE THAT ENFORCES IT. Three modules
+# read this name and they run in three different frames: pin_staleness_gate.py
+# (PreToolUse), track_files.py (PostToolUse) and session_init.py (SessionStart).
+# The gate wraps its own cross-package imports in a FAIL-CLOSED handler that
+# prints a PreToolUse deny and calls `sys.exit(2)`. That posture is correct for
+# a PreToolUse frame and incorrect for the other two. `SystemExit` derives from
+# `BaseException`, so an `except Exception` in a caller does NOT contain it, and
+# a PostToolUse hook that reads the name through the gate inherits an exit that
+# emits a deny for an event nobody can deny, and drops the work that the hook
+# was registered to do. THIS MODULE HAS NO EXIT PATH, so a reader takes the
+# name without taking that risk. DO NOT move this constant into a gate module,
+# and do not repair a future instance of this coupling by widening an exception
+# handler: the handler catches the symptom and leaves the dependency in place.
+#
+# WHERE THE LIFECYCLE LIVES, AND IT IS TWO SURFACES RATHER THAN ONE.
+# `session_init.check_pin_stale_block_directive` writes the marker and removes
+# it, at SessionStart. `track_files.clear_pin_staleness_marker_if_resolved`
+# removes it MID-SESSION as well, on a hand edit to the managed file and on the
+# archive command, and only after it re-reads the signal and finds the
+# condition clear.
+#
+# A NAME COLLISION THAT TRAPS A SEARCH, RECORDED BECAUSE SOMEBODY CHECKED IT
+# RATHER THAN ASSUMED IT. `pin_marker_writer.py` is registered on
+# `UserPromptSubmit` AND on `PostToolUse` with the matcher `Skill`, so it READS
+# like a mid-session manager of this signal. IT IS NOT ONE. It carries zero
+# references to this constant, and it serves the pin command, whose
+# `## Pinned Context` marker pair is a different object that shares a naming
+# family. A reader who greps for the hook that manages this marker finds that
+# file first, and it is the incorrect file.
+PIN_STALENESS_MARKER_NAME = "pin-staleness-pending"

@@ -3636,6 +3636,61 @@ def test_intentional_wait_silent_when_top_level_sibling(
     )
 
 
+def test_intentional_wait_advisory_text_names_the_reader_of_the_field(
+    tmp_path, monkeypatch, pact_context,
+):
+    """The advisory TEXT must name the hook that reads metadata.intentional_wait.
+
+    The two arms above assert the RULE NAME only, so a reworded message keeps
+    them green while its citation goes bad. This arm reads the message itself.
+
+    The predicate `is_self_complete_exempt` is INSENSITIVE to this field: it
+    returns the same value whether the wait is absent, top-level or nested,
+    so the field gates it in neither direction. `missed_wake_scan` is the
+    hook whose result changes with the placement.
+    """
+    pact_context(team_name="test-team", session_id="test-session")
+    _setup_blocks_pair(
+        tmp_path, monkeypatch, "test-team", "1", "2", variety_total=8,
+    )
+    tb = _well_formed_teachback_submit()
+    tb["intentional_wait"] = {
+        "reason": "awaiting_lead_completion",
+        "expected_resolver": "lead",
+        "since": "2026-05-26T19:45:40+00:00",
+    }
+    payload = {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+            "taskId": "1",
+            "metadata": {"teachback_submit": tb},
+        },
+        "tool_response": {},
+    }
+    messages = [
+        msg for rule, msg in tlg.evaluate_lifecycle(payload)
+        if rule == "intentional_wait_nested_in_teachback_submit"
+    ]
+    # NON-VACUITY FIRST. If the advisory does not fire, the two checks below
+    # pass over an empty population and this arm reports green while testing
+    # nothing.
+    assert messages, "the cross-key advisory did not fire; this arm is vacuous"
+    text = messages[0]
+    # POSITIVE, the durable half: fails whenever the citation is dropped or
+    # replaced, whatever wording surrounds it. Pins the module NAME rather
+    # than a sentence, so an innocent rewording does not redden it.
+    assert "missed_wake_scan" in text, (
+        "the advisory must name the hook whose result changes with the "
+        f"placement of the wait; got: {text}"
+    )
+    # NEGATIVE, red before the citation repair and green after. Its value is
+    # the demonstration; once the phrase is gone it can fire again only if
+    # somebody re-types it.
+    assert "is_self_complete_exempt reads metadata.intentional_wait" not in text, (
+        f"the advisory carries the refuted citation; got: {text}"
+    )
+
+
 # =============================================================================
 # Multi-rule concurrent emission — a single TaskUpdate that violates several
 # canonical-schema rules at once must emit ALL applicable advisories, not

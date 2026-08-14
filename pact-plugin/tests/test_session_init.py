@@ -3860,13 +3860,24 @@ class TestSourceAwareness:
         # Checkpoint block not fired (get_task_list returns None in helper).
         assert "[POST-COMPACTION CHECKPOINT]" not in additional
 
-    def test_compact_skips_symlinks(self, monkeypatch, tmp_path):
-        """compact should skip symlink setup (already done)."""
+    def test_compact_refreshes_symlinks(self, monkeypatch, tmp_path):
+        """compact MUST run the symlink refresh.
+
+        RETARGET OF test_compact_skips_symlinks, which asserted the opposite and
+        pinned a defect. Its docstring gave the refuted assumption word for
+        word: "compact should skip symlink setup (already done)".
+
+        THE GATE ANSWERED EXISTENCE AND THE CALLER ASKS CURRENCY. A link set up
+        by the original session is PRESENT, and an install that lands mid-launch
+        makes it out of date at the same moment. So a context reset is precisely
+        the event that must re-check, and the prior gate made a compact the one
+        event that could not repair anything.
+        """
         _, symlinks_called, _ = self._run_main_with_source(
             monkeypatch, tmp_path, source="compact", team_exists=True
         )
 
-        assert not symlinks_called
+        assert symlinks_called
 
     # --- Path 4: clear + team exists (context intentionally cleared) ---
 
@@ -3884,13 +3895,22 @@ class TestSourceAwareness:
         # Should NOT reference compact-summary (no file created on /clear)
         assert "compact-summary.txt" not in additional
 
-    def test_clear_skips_symlinks(self, monkeypatch, tmp_path):
-        """clear should skip symlink setup (already done)."""
+    def test_clear_refreshes_symlinks(self, monkeypatch, tmp_path):
+        """clear MUST run the symlink refresh.
+
+        RETARGET OF test_clear_skips_symlinks, the second arm that pinned the
+        defect. Its docstring gave the refuted assumption word for word: "clear
+        should skip symlink setup (already done)".
+
+        PAIRS WITH test_compact_refreshes_symlinks. The two of them cover the
+        two sources the prior gate suppressed, so a return of the gate for one
+        source alone cannot stay green.
+        """
         _, symlinks_called, _ = self._run_main_with_source(
             monkeypatch, tmp_path, source="clear", team_exists=True
         )
 
-        assert not symlinks_called
+        assert symlinks_called
 
     # --- Path 5: anomalous combinations ---
 
@@ -4481,7 +4501,7 @@ class TestBuildSafetyNetContext:
 class TestM2TeammateAdvisoryGating:
     """#806 cycle-3 m2: a separate-process teammate's SessionStart
     additionalContext must NOT carry lead-only pin advisories — step 4
-    stale-pin info, step 4a pin-slot status, step 4b '/PACT:pin-memory'
+    stale-pin info, step 4a pin-slot status, step 4b '/PACT:prune-memory'
     directive — while a LEAD frame still receives all three. Pins live in the
     project CLAUDE.md, a lead/orchestrator memory surface a teammate has no
     authority over; #877 gated lead WRITES on is_lead but left these advisory
@@ -4494,7 +4514,9 @@ class TestM2TeammateAdvisoryGating:
 
     _STALE_SENTINEL = "SENTINEL_STALE_PINS_STEP4"
     _SLOT_SENTINEL = "SENTINEL_PIN_SLOT_4A"
-    # 4b's real text carries the lead-only "/PACT:pin-memory" directive.
+    # 4b's real text carries the lead-only "/PACT:prune-memory" directive.
+    # The sentinel below stands in for that text. Its wording is arbitrary,
+    # so read it as a marker rather than as a copy of what 4b emits.
     _PINMEM_SENTINEL = "SENTINEL_4B You MUST run /PACT:pin-memory to archive"
 
     def _run_main_additional_context(self, monkeypatch, tmp_path, agent_type):
@@ -5583,3 +5605,180 @@ class TestClearBootstrapMarker:
 
         # Must not raise.
         _clear_bootstrap_marker(session_dir)
+
+
+class TestSymlinkRefreshRouting:
+    """The refresh runs on EACH source, and its three results route apart.
+
+    THE CALL LOST ITS SOURCE GATE, because the gate answered EXISTENCE and the
+    caller asks CURRENCY. THE GATE MOVED to the no-change message alone, where
+    the question IS repetition ("did the user see this before").
+
+    | Result of the call | Launch start   | Context reset  |
+    |--------------------|----------------|----------------|
+    | A failure report   | system_messages| system_messages|
+    | A repoint report   | context_parts  | context_parts  |
+    | The no-change text | context_parts  | SUPPRESSED     |
+    | None               | nothing        | nothing        |
+
+    SO A QUIET COMPACT GAINS NO NEW OUTPUT, a compact that repairs something
+    says so, and a compact that fails says so.
+    """
+
+    @staticmethod
+    def _run(monkeypatch, tmp_path, source, symlink_result):
+        """Run main() with a chosen source and a chosen refresh result."""
+        from session_init import main
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/example/Sites/test-project")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        stdin_data = json.dumps({
+            "session_id": "aabb1122-0000-0000-0000-000000000000",
+            "source": source,
+        })
+
+        with patch("session_init.setup_plugin_symlinks", return_value=symlink_result), \
+             patch("session_init.ensure_project_memory_md", return_value=None), \
+             patch("session_init.check_pinned_staleness", return_value=None), \
+             patch("session_init.update_session_info", return_value=None), \
+             patch("session_init.get_task_list", return_value=None), \
+             patch("session_init.restore_last_session", return_value=None), \
+             patch("session_init.check_resume_state", return_value=None), \
+             patch("sys.stdin", io.StringIO(stdin_data)), \
+             patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 0
+        output = json.loads(mock_stdout.getvalue())
+        return (
+            output["hookSpecificOutput"]["additionalContext"],
+            output.get("systemMessage", ""),
+        )
+
+    def test_no_change_message_is_suppressed_on_a_context_reset(
+        self, monkeypatch, tmp_path
+    ):
+        """A quiet compact gains NO new output."""
+        from shared.symlinks import SYMLINKS_VERIFIED_MESSAGE
+
+        additional, system_msg = self._run(
+            monkeypatch, tmp_path, "compact", SYMLINKS_VERIFIED_MESSAGE
+        )
+
+        assert SYMLINKS_VERIFIED_MESSAGE not in additional
+        assert SYMLINKS_VERIFIED_MESSAGE not in system_msg
+
+    def test_no_change_message_is_emitted_on_a_launch(self, monkeypatch, tmp_path):
+        """POSITIVE CONTROL for the arm above.
+
+        Without this row, a change that dropped the no-change message on EVERY
+        source would keep the suppression arm green.
+        """
+        from shared.symlinks import SYMLINKS_VERIFIED_MESSAGE
+
+        additional, _ = self._run(
+            monkeypatch, tmp_path, "startup", SYMLINKS_VERIFIED_MESSAGE
+        )
+
+        assert SYMLINKS_VERIFIED_MESSAGE in additional
+
+    def test_the_router_compares_the_constant_and_not_the_wording(
+        self, monkeypatch, tmp_path
+    ):
+        """THE ROUTER READS THE VALUE OF THE NAME, NOT A PHRASE INSIDE IT.
+
+        WHY THE ARMS ABOVE CANNOT CATCH THIS, AND IT IS WHY THIS ARM EXISTS.
+        Each of them feeds the SHIPPED text, so a caller that sniffs for a
+        substring of that text ("verified", say) routes it identically and
+        every one of them stays green. The coder that added the constant
+        reported this gap and could not close it from its own side.
+
+        THE DISCRIMINATOR IS A CHANGED CONSTANT. Rebind the name to wording
+        that shares no phrase with the shipped text, and return that same
+        value from the symlink pass. An EQUALITY comparison against the name
+        still recognises it, so the no-change route is taken and no caveat is
+        added. A substring sniff does NOT recognise it, so the result falls
+        through to the moved-link branch and the caveat appears. The caveat is
+        therefore the tell, and it is asserted below.
+
+        WHAT A FUTURE EDITOR BREAKS IF THEY REVERT TO A SNIFF. Any repoint
+        message that happens to contain the sniffed word is then read as "no
+        change", so a session that DID move the links reports nothing and the
+        user is not told their agent bodies are stale.
+        """
+        import session_init
+
+        rebound = "PACT links are current"
+        monkeypatch.setattr(session_init, "SYMLINKS_VERIFIED_MESSAGE", rebound)
+
+        additional, system_msg = self._run(
+            monkeypatch, tmp_path, "startup", rebound
+        )
+
+        assert rebound in additional, (
+            "the rebound no-change message was not routed to the user at all"
+        )
+        assert "keeps the body it got at spawn" not in additional, (
+            "the caveat was added, so the router did NOT recognise the "
+            "rebound constant as the no-change message. It is comparing "
+            "against a phrase rather than against the value of "
+            "SYMLINKS_VERIFIED_MESSAGE, so the constant is decorative"
+        )
+        assert "keeps the body it got at spawn" not in system_msg
+
+        # THE SECOND HALF OF THE COMPARISON CLAIM. The asserts above hold that
+        # the router RECOGNISES the constant. A comparison must also REFUSE a
+        # value that is not the constant, and no assert above can hold that:
+        # the fixture feeds a value EQUAL to the constant, and each reflexive
+        # operator accepts an equal value.
+        moved, _ = self._run(
+            monkeypatch, tmp_path, "startup", rebound + ": 13 agents updated"
+        )
+        assert "keeps the body it got at spawn" in moved, (
+            "a message that merely STARTS WITH the constant was routed as the "
+            "no-change message, so the comparison accepts more than the value "
+            "of SYMLINKS_VERIFIED_MESSAGE and a repoint reports nothing"
+        )
+
+    def test_a_repoint_is_reported_on_a_context_reset_with_its_caveat(
+        self, monkeypatch, tmp_path
+    ):
+        """A compact that repairs something says so, and names what it did NOT
+        repair."""
+        additional, _ = self._run(
+            monkeypatch, tmp_path, "compact", "PACT: 13 agents updated"
+        )
+
+        assert "13 agents updated" in additional
+        assert "keeps the body it got at spawn" in additional
+
+    def test_a_failure_is_reported_on_a_context_reset(self, monkeypatch, tmp_path):
+        """A compact that fails says so, through the user-facing channel."""
+        additional, system_msg = self._run(
+            monkeypatch, tmp_path, "compact", "PACT: 13 agents failed"
+        )
+
+        assert "13 agents failed" in system_msg
+        assert "13 agents failed" not in additional
+
+    def test_the_caveat_is_silent_when_nothing_moved(self, monkeypatch, tmp_path):
+        """ONE-DIRECTIONAL EMISSION, and it is the load-bearing defence of this
+        design rather than a matter of taste.
+
+        The refresh makes the resolution SURFACE current and does NOT make a
+        LOADED body current. A caveat that spoke on a quiet session start would
+        report "surface current" almost always, and a reader would take that as
+        "the bodies are fresh". THE CAVEAT EMITS NO GREEN, so no green can be
+        misread. A change that makes it speak here rebuilds the risk this
+        design exists to remove.
+        """
+        from shared.symlinks import SYMLINKS_VERIFIED_MESSAGE
+
+        additional, system_msg = self._run(
+            monkeypatch, tmp_path, "startup", SYMLINKS_VERIFIED_MESSAGE
+        )
+
+        assert "keeps the body it got at spawn" not in additional
+        assert "keeps the body it got at spawn" not in system_msg

@@ -2340,6 +2340,307 @@ class TestAtomicWriteTwinCopyDrift:
         )
 
 
+class TestLineEndingHelperTwinCopyDrift:
+    """Drift detection for the two line-ending helpers.
+
+    THIS GATE ESTABLISHES THE IDENTITY RATHER THAN PRESERVING IT, AND THAT IS
+    WHY IT IS NOT OPTIONAL. Its siblings guard functions that were COPIED, so
+    the two sides started identical and the gate reports a later divergence.
+    `_detect_line_ending` was REWRITTEN when the restore moved into the write
+    seam: it takes a directory descriptor and a leaf name now, because a read by
+    NAME inside `_atomic_write_text` would reintroduce the race that function's
+    descriptor design removes. A rewrite has no shared ancestor, so nothing
+    except this gate makes the two copies agree at all.
+
+    WHY THE TWO COPIES ARE THERE. `skills/pact-memory/scripts/` cannot import
+    from `hooks/shared/`, the same package boundary that produced the `file_lock`
+    and `_atomic_write_text` twins.
+
+    WHAT DIVERGENCE COSTS. The two helpers decide the BYTES that land in a
+    user's CLAUDE.md. A hook copy and a skill copy that disagree write the same
+    document with different line endings, so two writers fight over the file and
+    each one reports a whole-file change to the user. The docstrings may differ,
+    because each copy points at the other. The logic may not.
+    """
+
+    @staticmethod
+    def _extract_body(source: str) -> str:
+        """Return the executable body: skip leading decorators + the def line,
+        strip a leading docstring, dedent, normalize. Same extractor as
+        TestAtomicWriteTwinCopyDrift (docstring-tolerant, logic-pinning)."""
+        lines = source.split("\n")
+        idx = 0
+        while idx < len(lines) and lines[idx].lstrip().startswith("@"):
+            idx += 1
+        body_lines = lines[idx + 1:]
+        body_text = textwrap.dedent("\n".join(body_lines)).strip()
+        for quote in ['"""', "'''"]:
+            if body_text.startswith(quote):
+                end_idx = body_text.find(quote, len(quote))
+                if end_idx != -1:
+                    body_text = body_text[end_idx + len(quote):].strip()
+                break
+        return body_text
+
+    @pytest.mark.parametrize(
+        "helper", ["_detect_line_ending", "_restore_line_ending"]
+    )
+    def test_line_ending_helper_bodies_are_identical(self, helper):
+        """Each helper's body MUST be byte-identical across the twins."""
+        import shared.claude_md_manager as canonical_mod
+        import working_memory as twin_mod
+
+        canonical_body = self._extract_body(
+            inspect.getsource(getattr(canonical_mod, helper))
+        )
+        twin_body = self._extract_body(
+            inspect.getsource(getattr(twin_mod, helper))
+        )
+
+        assert canonical_body == twin_body, (
+            f"{helper} twin drift between "
+            f"hooks/shared/claude_md_manager.py and "
+            f"skills/pact-memory/scripts/working_memory.py. The two decide the "
+            f"bytes that land in a user's CLAUDE.md, so a divergence makes the "
+            f"hook and the skill write one file with different line endings. "
+            f"Update both in the SAME commit.\n"
+            f"canonical body:\n{canonical_body}\n\n"
+            f"twin body:\n{twin_body}"
+        )
+
+    def test_the_gate_can_tell_the_two_helpers_apart(self):
+        """NON-VACUITY. An extractor that returned the same text for everything
+        would satisfy the assertion above forever, and it would satisfy it
+        LOUDEST in the state this gate exists to catch: two copies that share
+        nothing. Prove the extractor separates two functions that genuinely
+        differ before trusting it to report that two agree."""
+        import working_memory as twin_mod
+
+        detect = self._extract_body(
+            inspect.getsource(twin_mod._detect_line_ending)
+        )
+        restore = self._extract_body(
+            inspect.getsource(twin_mod._restore_line_ending)
+        )
+
+        assert detect and restore, "the extractor returned an EMPTY body"
+        assert detect != restore, (
+            "the extractor cannot distinguish two different helpers, so the "
+            "drift assertions above prove nothing"
+        )
+
+
+class TestRestoreHasOneOwnerPerTwin:
+    """The line-ending restore has ONE owner for each twin, and it is the seam.
+
+    WHAT THIS CONVERTS. Before the restore moved into `_atomic_write_text`, one
+    call site did it for itself and the other nine did not. A branch written
+    against that shape carries its own call-site restore, so a later merge can
+    land the seam restore AND a call-site restore in one tree. The substitution
+    then runs two times.
+
+    WHY THAT IS A CORRUPTION AND NOT AN INEFFICIENCY. `_restore_line_ending`
+    normalises before it applies, so a second application is a no-op TODAY. That
+    makes the two-owner state SILENT, which is the reason it wants a mechanical
+    gate rather than a note: nothing in the output reports it, and the next
+    editor of the helper can remove the normalise step without knowing a second
+    owner is relying on it.
+
+    FAILURE DIRECTION, and it is fail-safe. This arm reddens when a SECOND owner
+    appears anywhere in the shipped tree. A future writer with a legitimate
+    reason to restore for itself turns it red and must state the reason in the
+    same commit. That is the intended cost.
+    """
+
+    # COUNT RULE, STATED BESIDE THE NUMBER: one entry for each CALL EXPRESSION
+    # of the restore helper found by an AST walk of every `.py` file under
+    # `pact-plugin/hooks/` and `pact-plugin/skills/`. Tests are not in that
+    # population, and a mention inside a comment or a string is not a call.
+    _SEARCH_ROOTS = ("hooks", "skills")
+    _RESTORE = "_restore_line_ending"
+
+    @staticmethod
+    def _calls_with_enclosing_function(tree, name):
+        """Return the enclosing function name for each call of `name`.
+
+        Attributes a call to its INNERMOST enclosing function, and to None at
+        module level, so a restore moved out of a function reddens rather than
+        being credited to whatever function sits above it.
+        """
+        found = []
+
+        def visit(node, enclosing):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    visit(child, child.name)
+                    continue
+                if (
+                    isinstance(child, ast.Call)
+                    and isinstance(child.func, ast.Name)
+                    and child.func.id == name
+                ):
+                    found.append(enclosing)
+                visit(child, enclosing)
+
+        visit(tree, None)
+        return found
+
+    def _sites(self):
+        """DISCOVER the call sites. Do NOT enumerate them.
+
+        A guard whose target list is written by hand passes green for anything
+        it forgot to name, which is the failure this walk exists to avoid.
+        """
+        plugin_root = Path(__file__).parent.parent
+        sites = {}
+        scanned = 0
+        for root in self._SEARCH_ROOTS:
+            for path in sorted((plugin_root / root).rglob("*.py")):
+                scanned += 1
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                enclosing = self._calls_with_enclosing_function(
+                    tree, self._RESTORE
+                )
+                if enclosing:
+                    sites[path.relative_to(plugin_root).as_posix()] = enclosing
+        return sites, scanned
+
+    def test_the_only_owner_of_the_restore_is_the_write_seam(self):
+        sites, scanned = self._sites()
+
+        # NON-VACUITY FIRST, AND IT IS REQUIRED. A walk that found no call at
+        # all satisfies an "every call is in the seam" assertion perfectly, so
+        # the assertion below is evidence only once the population is known to
+        # be non-empty. A broken path or a renamed helper lands here.
+        assert scanned > 0, "the walk found no Python file at all"
+        assert sites, (
+            f"no call of {self._RESTORE!r} was found in "
+            f"{list(self._SEARCH_ROOTS)} across {scanned} files. Either the "
+            f"seam no longer restores the line ending, or the helper was "
+            f"renamed and this guard is now measuring nothing"
+        )
+
+        owners = {name for names in sites.values() for name in names}
+        assert owners == {"_atomic_write_text"}, (
+            f"the line-ending restore has more than one owner: {sorted(sites.items())}. "
+            f"The seam applies the ending for every caller, so a second site "
+            f"runs the substitution twice on the same document. Remove the "
+            f"call-site restore, or state in this commit why this caller must "
+            f"own the ending itself"
+        )
+
+    def test_each_twin_carries_exactly_one_restore(self):
+        """ONE owner for each twin, not one owner across the two.
+
+        A single seam restore with the OTHER twin left unrepaired satisfies the
+        arm above, because the surviving owner is still named
+        `_atomic_write_text`. This is the half that catches a one-twin repair.
+        """
+        sites, _ = self._sites()
+        twins = (
+            "hooks/shared/claude_md_manager.py",
+            "skills/pact-memory/scripts/working_memory.py",
+        )
+
+        for twin in twins:
+            assert sites.get(twin) == ["_atomic_write_text"], (
+                f"{twin} carries {sites.get(twin)!r} restore call sites inside "
+                f"{self._RESTORE!r}'s owner. Each twin must restore exactly "
+                f"once, inside its own seam: one repaired twin and one "
+                f"unrepaired twin makes the hook and the skill write the same "
+                f"file with different line endings"
+            )
+
+
+class TestRestoreNormalisesBeforeItApplies:
+    """`_restore_line_ending` converts CRLF to LF BEFORE it applies the ending.
+
+    WHY THE TWO GATES ABOVE CANNOT REACH THIS, AND IT IS THE WHOLE REASON THIS
+    CLASS IS HERE. A removal of the normalise step applied to the TWO twins
+    alike is invisible to each of them, for a different reason:
+      - TestLineEndingHelperTwinCopyDrift compares the two twins AGAINST EACH
+        OTHER, so a symmetric removal keeps them identical and that gate stays
+        silent BY CONSTRUCTION.
+      - TestRestoreHasOneOwnerPerTwin counts CALL SITES, and a step removed
+        INSIDE the helper changes no count, so that gate stays silent too.
+    A symmetric removal sits in the blind spot of the two. The merge-guard
+    docstring above names this hazard in prose. Prose that names a hazard is
+    not a guard against it.
+
+    WHAT A REMOVAL COSTS, MEASURED RATHER THAN FEARED. Content that already
+    carries CRLF meets a plain `.replace("\\n", line_ending)` and each ending
+    becomes "\\r\\r\\n". That is corruption of the user's own text, and
+    CLAUDE.md is frequently gitignored, so no commit brings the original back.
+
+    THE STEP IS REACHABLE IN THE SHIPPED TREE, AND THE TRIGGER IS A
+    CONJUNCTION. The target must be CRLF-dominant, AND the content must carry a
+    carriage return. The content does NOT get one from the document: each of
+    the seam call sites reads the target with `read_text(encoding="utf-8")`,
+    which translates. It gets one by COMPOSITION, because a caller interpolates
+    an external payload into the text it hands the seam. So this arm guards a
+    live path rather than a hypothetical future one.
+    """
+
+    # THE TWO TWINS, as import targets. Parametrized rather than looped so a
+    # failure names WHICH copy broke.
+    _TWINS = ("shared.claude_md_manager", "working_memory")
+
+    @staticmethod
+    def _restore(module_name):
+        import importlib
+
+        return importlib.import_module(module_name)._restore_line_ending
+
+    @pytest.mark.parametrize("twin", _TWINS)
+    def test_crlf_content_does_not_gain_a_doubled_carriage_return(self, twin):
+        """THIS IS THE DISCRIMINATING ARM. Remove the normalise step and it
+        reddens in EACH twin.
+
+        Input carries CRLF and the target ending is CRLF, so the correct output
+        is the input unchanged. Without the normalise step each "\\n" is
+        rewritten while its leading "\\r" survives, giving "\\r\\r\\n".
+        """
+        restore = self._restore(twin)
+
+        result = restore("a\r\nb\r\n", "\r\n")
+
+        assert "\r\r\n" not in result, (
+            f"{twin}: the restore produced a DOUBLED carriage return "
+            f"{result!r}. It applied the ending without normalising first, so "
+            f"content that already carries CRLF is corrupted. Restore the "
+            f'.replace("\\r\\n", "\\n") step before the ending is applied'
+        )
+        assert result == "a\r\nb\r\n", (
+            f"{twin}: expected the CRLF input back unchanged, got {result!r}"
+        )
+
+    @pytest.mark.parametrize("twin", _TWINS)
+    def test_lf_content_still_converts_to_the_target_ending(self, twin):
+        """NON-VACUITY FOR THE ARM ABOVE. A `_restore_line_ending` that
+        returned its input unchanged would satisfy the doubling assertion
+        PERFECTLY and convert nothing, so that arm is evidence only once the
+        function is known to convert at all."""
+        restore = self._restore(twin)
+
+        assert restore("a\nb\n", "\r\n") == "a\r\nb\r\n", (
+            f"{twin}: the restore did not convert LF to the CRLF target, so "
+            f"the doubling arm above is passing on a function that does "
+            f"nothing"
+        )
+
+    @pytest.mark.parametrize("twin", _TWINS)
+    def test_an_lf_target_returns_the_content_untouched(self, twin):
+        """PINS A DIFFERENT PROPERTY, AND IT IS NAMED SO NOBODY COUNTS IT AS
+        COVERAGE OF THE NORMALISE STEP. The LF branch returns early, ABOVE the
+        normalise step, so this arm stays green when that step is removed. It
+        pins that an LF file is byte-identical to what the seam wrote before
+        the restore moved here."""
+        restore = self._restore(twin)
+
+        assert restore("a\r\nb\r\n", "\n") == "a\r\nb\r\n"
+        assert restore("a\nb\n", "\n") == "a\nb\n"
+
+
 class TestContainmentErrorTwinCopyDrift:
     """Drift detection for the ContainmentError twin.
 
@@ -2613,38 +2914,65 @@ class TestBudgetWarningInteractions:
         assert self._count_warnings(claude_md.read_text(encoding="utf-8")) == 0
         assert result is None
 
-    def test_stranded_copies_can_cause_the_breach_they_report(self, tmp_path):
-        """A stranded warning is measured, so the module's own residue can trip it.
+    def test_a_stranded_copy_cannot_cause_the_breach_it_reports(self, tmp_path):
+        """The residue of the module is excluded from the COUNT, and it is KEPT.
 
-        THE PRECONDITION THAT MAKES THE LAW CONDITIONAL. The strip is anchored
-        at the head, so a warning a user has moved below it stays in the body --
-        and the body is what gets measured. With the user's own pins sitting
-        exactly at the budget, ONE stranded line is enough to push the
-        measurement over, and the hook then reports a breach the user's own text
-        did not cause.
+        THE SUBJECT HAS TWO HALVES AND THE SECOND IS THE ONE A LATER
+        SIMPLIFICATION WILL TRY TO REMOVE.
+          1. A warning line the anchored strip cannot reach contributes NO token
+             to the measurement, so the pins of the user decide the breach and
+             the residue of this module does not. With those pins sitting
+             exactly at the budget, the pass reports nothing.
+          2. THE MODULE DOES NOT DELETE THAT LINE TO ACHIEVE IT. The exclusion
+             runs on a throwaway copy at the measurement site. An in-place
+             exclusion scores the same on the count and takes a line out of a
+             file that is frequently gitignored.
 
-        This is not a defect to repair here. It is the accepted residual seen
-        from its sharp end, pinned so that a later change to the strip's anchor,
-        or to the length of the warning text itself, cannot move it unnoticed.
+        THIS ARM REPLACES ONE THAT PINNED THE DEFECT. The arm it replaces held
+        the opposite subject, that a stranded copy CAN cause the breach it
+        reports, and it asserted a count of 2 with a budget status string. That
+        was the accepted residual of the day. The measurement no longer counts
+        the output of this module, so the residual is closed rather than
+        accepted, and the arm wanted a retarget rather than a repair.
+
+        WHY THE FILE BYTES ARE ASSERTED. MEASURED on this fixture: the correct
+        fix gives 1 warning, `None`, and UNCHANGED bytes. An in-place exclusion
+        gives 0 warnings, `None`, and the stranded line DELETED. The return
+        value is `None` in the two arms, so an arm built on it alone is blind to
+        the corrupting variant. The count and the bytes are what separate them.
         """
         from staleness import PINNED_CONTEXT_TOKEN_BUDGET, check_pinned_staleness
         from staleness import estimate_tokens
 
         user_text = at_budget_body(prefix="### Big\n")
         words_only = user_text.split("\n", 1)[1]
+        stranded = self._warning_line(tokens=9999)
         claude_md = self._create_project_claude_md(
             tmp_path,
-            self._doc("### Big\n" + self._warning_line(tokens=9999) + words_only),
+            self._doc("### Big\n" + stranded + words_only),
         )
+        before = claude_md.read_bytes()
 
         result = check_pinned_staleness(claude_md_path=claude_md)
 
         content = claude_md.read_text(encoding="utf-8")
-        # One line the hook wrote at the head, plus the one it could not reach.
-        assert self._count_warnings(content) == 2
-        # The user's own text was never over budget. The residue crossed it.
+        # The pins of the user were never over budget, and the residue no longer
+        # pushes them over.
         assert estimate_tokens(user_text) <= PINNED_CONTEXT_TOKEN_BUDGET
-        assert result is not None and "budget" in result.lower()
+        assert result is None, (
+            f"the hook reported {result!r}. It is counting its own output "
+            f"again, so a line this module wrote is causing the breach it "
+            f"reports"
+        )
+        # The line the strip cannot reach is the only one left, and it is where
+        # the user left it.
+        assert self._count_warnings(content) == 1
+        assert stranded in content, "the strip reached below the head"
+        assert claude_md.read_bytes() == before, (
+            "the pass rewrote the file. The exclusion is running IN PLACE, so "
+            "it deletes a line the user positioned from a file that is "
+            "frequently gitignored and has no commit to recover from"
+        )
 
     @pytest.mark.parametrize("stranded", [0, 1, 3])
     def test_stranded_warnings_never_compound(self, tmp_path, stranded):

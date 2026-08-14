@@ -131,24 +131,51 @@ _BUDGET_WARNING_SHAPE = (
 # to a predicate that looks like it.
 #
 # THE SYMPTOM THAT WILL MAKE SOMEBODY WANT TO LOOSEN THIS, AND WHY TO REFUSE.
-# A user who moves a warning line below the head keeps it, because this
-# predicate is anchored and cannot reach it. The report arrives as "the hook
-# shows two warnings", or as "the hook reports a breach my own pins did not
-# cause", because that line is measured with the rest of the body. Both are
-# real, and both are accepted. The law is CONDITIONAL, not a constant:
+# A warning line that is not at the head of the body keeps its place, because
+# this predicate is anchored and cannot reach it. The report arrives as "the
+# hook shows two warnings". That one is real and it is accepted. The law is
+# CONDITIONAL, not a constant:
+#     count = N + (1 if estimate_tokens(user_text) > BUDGET else 0)
+# where N is the number of lines of this shape that the anchored strip cannot
+# reach. No pass raises the count.
+#
+# THE CONDITION USED TO CARRY THE STRANDED LINES, AND THIS REPLACES THAT LAW:
 #     count = N + (1 if estimate_tokens(user_text + stranded) > BUDGET else 0)
-# where N is the number of lines the user moved below the head. No pass raises
-# the count.
+# The replaced form was correct while the measurement counted the whole body.
+# The measurement site now calls `_body_without_warnings`, so a line of this
+# shape contributes no token wherever it sits. That closes the second symptom,
+# "the hook reports a breach my own pins did not cause", which the replaced
+# form recorded as accepted.
+#
+# N IS NOT A COUNT OF WHAT A USER DID, AND THE EARLIER WORDING SAID IT WAS. It
+# read "the number of lines the user moved below the head". A pin written ABOVE
+# an existing warning takes that warning off offset 0 and raises N with no user
+# action at all, and `commands/pin-memory.md` instructs the tail placement
+# rather than enforcing it.
 #
 # DO NOT WIDEN THIS PATTERN TO REACH THEM. It DELETES, so a wider anchor reaches
 # text a user wrote inside a pin body, and this file is frequently gitignored.
 # The correct repair separates the two questions: EXCLUDE lines of this shape
 # from the COUNT wherever they sit, and keep the DELETE on the contiguous head
-# run. Apply that exclusion to a THROWAWAY COPY at the measurement site. Never
-# modify `pinned_content` itself -- `entry_starts` holds offsets into that
-# string and the stale-marker loop writes at those offsets, so an in-place
-# exclusion puts markers in wrong positions. The exclusion looks like a pure
-# read, which is what makes that easy to miss.
+# run. `_body_without_warnings` is that exclusion. Apply it to a THROWAWAY COPY
+# at the measurement site. Never modify `pinned_content` itself.
+#
+# TWO HAZARDS STAND BEHIND THAT RULE AND THEY BIND AT DIFFERENT PLACES.
+#   1. THE WRITE-BACK, and this is the one that binds AT THE MEASUREMENT SITE.
+#      `apply_staleness_markings` writes `pinned_content` back into the
+#      document, so an in-place exclusion there DELETES the stranded line from
+#      the user's file. Measured against a control: the warning count drops
+#      from 1 to 0, the file bytes change, and a line the user positioned is
+#      gone from a file that is frequently gitignored.
+#   2. THE OFFSETS, and this one binds ABOVE the marker loop. `entry_starts`
+#      holds offsets into that string and the stale-marker loop writes at those
+#      offsets, so an in-place exclusion applied before the loop puts markers in
+#      wrong positions. Measured: the second pin loses its marker, 2 becomes 1.
+# `entry_starts` is last read above the measurement, so hazard 2 is spent by
+# the time the measurement runs. DO NOT READ THAT AS PERMISSION: hazard 1 holds
+# there, and a later editor can put an exclusion higher up, where hazard 2 is
+# live again. The exclusion looks like a pure read, which is what makes each of
+# the two easy to miss.
 #
 # THIS REFUSAL IS ENFORCED AND NOT ONLY STATED. A test drives this compiled
 # object over a body whose only warning sits below the head and requires it to
@@ -158,10 +185,19 @@ _BUDGET_WARNING_SHAPE = (
 # anchor gives byte-identical output today.
 _LEADING_BUDGET_WARNING_RE = re.compile(rf"\A{_BUDGET_WARNING_SHAPE}")
 
-# RECOGNITION ONLY. NEVER GIVE THIS PATTERN TO CODE THAT DELETES. `(?m)^`
-# reports a match at ANY line start, which is what lets `_has_budget_warning`
-# see a warning a user has moved below the head. The deleting anchor stays
-# inside the compiled object above, so this wider reach cannot travel to it.
+# RECOGNITION AND MEASUREMENT ONLY. DO NOT GIVE THIS PATTERN TO CODE THAT
+# DELETES FROM THE DOCUMENT. `(?m)^` reports a match at ANY line start, which is
+# what lets `_has_budget_warning` see a warning that is not at the head, and what
+# lets `_body_without_warnings` take each one out of a MEASUREMENT COPY.
+#
+# THE SUBJECT OF THE BAR IS THE DOCUMENT, NOT THE PATTERN, and the earlier
+# wording said "code that deletes" without naming what gets deleted. The hazard
+# is a wide pattern that removes bytes from a user's file, which is frequently
+# gitignored, so an over-match has no commit to recover from. A copy that no
+# caller writes back removes no byte from the document, so the two callers above
+# are sanctioned. A caller that assigns the result over `pinned_content` is not.
+# The deleting anchor stays inside the compiled object above, so this wider reach
+# cannot travel to it.
 _ANY_BUDGET_WARNING_RE = re.compile(rf"(?m)^{_BUDGET_WARNING_SHAPE}")
 
 
@@ -310,76 +346,21 @@ def estimate_tokens(text: str) -> int:
 _estimate_tokens = estimate_tokens
 
 
-def _detect_line_ending(claude_md_path: Path) -> str:
-    """
-    Report the line ending this file predominantly uses, as raw bytes see it.
-
-    READ THE BYTES, BECAUSE EVERY TEXT READ IN THIS MODULE HAS ALREADY LOST THE
-    ANSWER. `Path.read_text` applies universal-newline translation, so a CRLF
-    file arrives as LF and the original ending is unrecoverable from the string
-    every other function here holds. This is the only place that looks.
-
-    DOMINANT WINS, AND A TIE GOES TO LF. The write this feeds is unrecoverable,
-    because CLAUDE.md is gitignored, so the correct rule is the one that changes
-    the fewest lines. Dominant-wins minimises that count by construction. A file
-    with no CRLF at all has a dominant of LF, so no file can gain an ending it
-    did not have.
-
-    A file written only with bare carriage returns reports LF. That matches what
-    this module does with such a file today, so the rule adds no new conversion.
-
-    Args:
-        claude_md_path: The file about to be read and possibly rewritten.
-
-    Returns:
-        Either the two-character CRLF sequence or a single newline.
-    """
-    try:
-        raw = claude_md_path.read_bytes()
-    except OSError:
-        return "\n"
-    crlf_count = raw.count(b"\r\n")
-    lf_count = raw.count(b"\n") - crlf_count
-    return "\r\n" if crlf_count > lf_count else "\n"
-
-
-def _restore_line_ending(content: str, line_ending: str) -> str:
-    """
-    Re-apply `line_ending` to a string that carries LF endings.
-
-    THIS IS THE LAST STEP BEFORE THE WRITE AND IT MUST STAY THERE. Everything
-    upstream measures an LF-normalised string: `estimate_tokens` counts it, the
-    offsets in `entry_starts` index it, and the strip consumes a span of it. Move
-    this earlier and every one of those measurements changes meaning.
-
-    `content` reaches here with no carriage return in it, because it descends
-    from a `read_text` that removed them and this module writes only newlines.
-    That is what makes the substitution safe and repeatable: a second pass over
-    an unchanged file produces the same bytes.
-
-    Args:
-        content: Full file content, with LF endings.
-        line_ending: The ending to write, from `_detect_line_ending`.
-
-    Returns:
-        `content` with its endings replaced, or unchanged when the target is LF.
-    """
-    if line_ending == "\n":
-        return content
-    return content.replace("\n", line_ending)
-
-
 def _strip_budget_warnings(pinned_content: str) -> str:
     """
     Remove the run of budget-warning comment lines at the head of a pinned body.
 
     Returns the body a user would have written, with this module's own earlier
-    reports taken back out. Callers measure the RESULT, never the input, so the
-    reported count never includes the warning this module wrote at the HEAD. It
-    is NOT a pure function of the user's own text: a warning a user has moved
-    below the head survives this strip and is measured with the body. The note
-    at `_LEADING_BUDGET_WARNING_RE` says why the repair for that is not a wider
-    strip.
+    reports taken back out. THIS IS THE DELETING HALF and it is anchored: a
+    warning line that is not at the head SURVIVES this strip and keeps its place
+    in the document. The note at `_LEADING_BUDGET_WARNING_RE` says why the repair
+    for that is not a wider strip.
+
+    IT IS NOT THE MEASURING HALF, AND THE TWO ARE NOW SEPARATE.
+    `_body_without_warnings` takes the surviving lines out of a copy at the
+    measurement site, so a line this strip cannot reach contributes no token.
+    Do not read that as a reason to widen this one. The count and the delete
+    answer different questions, and only this one removes bytes a user can lose.
 
     A run, not a single line, because taking back N lines is the exact inverse
     of writing one -- so the function stays correct if a document somehow
@@ -444,6 +425,39 @@ def _has_budget_warning(pinned_content: str) -> bool:
         True when a budget warning this module wrote sits at any line start.
     """
     return _ANY_BUDGET_WARNING_RE.search(pinned_content) is not None
+
+
+def _body_without_warnings(pinned_content: str) -> str:
+    """
+    Return a MEASUREMENT COPY of the pinned body with each warning line gone.
+
+    THE RESULT IS FOR MEASURING AND FOR NOTHING ELSE. A caller that assigns it
+    back over `pinned_content` turns this strip into a DELETING pass:
+    `apply_staleness_markings` writes that name into the document, so the lines
+    removed here leave the user's file. Those lines sit where a user positioned
+    them, and CLAUDE.md is frequently gitignored, so no commit brings them back.
+    Measured against a control: an in-place exclusion at the measurement site
+    takes the warning count from 1 to 0 and changes the file bytes, while the
+    copy keeps the line and the pass reports no modification.
+
+    WHY A NAMED FUNCTION AND NOT AN INLINE `.sub` AT THE CALL SITE. The inline
+    form reads as a pure expression, which is the appearance that makes the
+    hazard above easy to miss. The name carries the contract, and this docstring
+    has somewhere to live.
+
+    IT REACHES A WARNING WHEREVER IT SITS, which is the point: the COUNT stops
+    depending on POSITION. A line stranded below the head and a line pushed off
+    the head by a new pin above it are then treated alike.
+    `_strip_budget_warnings` keeps the narrow anchor, because that one deletes.
+
+    Args:
+        pinned_content: The pinned section body. It is NOT modified.
+
+    Returns:
+        A new string with each budget-warning line of this module's own shape
+        removed. Measure it. Do not write it back.
+    """
+    return _ANY_BUDGET_WARNING_RE.sub("", pinned_content)
 
 
 def _find_terminator_offset(
@@ -564,7 +578,9 @@ def _find_declared_end_offset(content: str, start: int, literal: str) -> Optiona
     return None
 
 
-def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
+def _parse_pinned_section(
+    content: str, *, allow_empty_section: bool = False
+) -> Optional[Tuple[int, int, str]]:
     """
     Extract the Pinned Context section from CLAUDE.md content.
 
@@ -626,13 +642,45 @@ def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
     it -- its whitespace policy is deliberately stricter than the certificate's,
     and the two must not be unified.
 
+    AN EMPTY SECTION IS AN INSTRUMENT LIMIT, NOT AN ABSENT ONE, AND
+    `allow_empty_section` IS THE OPT-IN THAT SAYS SO. A heading with a body of
+    whitespace has a COMPUTABLE span, and the decline below returns None for it
+    anyway, so a caller cannot tell "no section" from "an empty section". That
+    conflation costs one caller a cardinal over-block: a gate that compares two
+    documents falls back to a wider slice on the empty side, counts memory
+    entries as pins, and denies a faithful edit.
+
+    THE DEFAULT PRESERVES TODAY, AND THAT IS THE WHOLE SAFETY ARGUMENT. Passing
+    nothing gives the decline that every caller was written against. MEASURED
+    across the seven non-test callers at the time of writing: FOUR change
+    behaviour if the RETURN changes (the warning pass below gets a pass for an
+    empty section, the pin read below continues with zero pins,
+    `scripts/archive_pin` stops raising `_Unevaluable`, `scripts/check_pin_caps`
+    loses its reason string), and NONE of the four asked for that. So the return
+    does not change. An opt-in argument moves zero of them, because no caller
+    passes an argument that did not exist.
+
+    THE PARAMETER IS KEYWORD-ONLY ON PURPOSE. A positional second argument could
+    be bound by accident by a caller, or by a test double whose signature drifts
+    from this one, and that binding would be silent. A keyword makes the opt-in
+    unreachable unless it is named.
+
+    WHAT IT DOES NOT SUPPLY. A document with NO `## Pinned Context` heading has
+    no span to return, so this parameter changes nothing for it: the position is
+    UNDEFINED rather than declined, and no flag here can invent one.
+
     Args:
         content: Full CLAUDE.md file content.
+        allow_empty_section: When True, a resolved heading whose body is empty
+            or whitespace returns its span with an empty body instead of None.
+            Default False preserves the behaviour every caller was written
+            against. A MISSING heading returns None either way.
 
     Returns:
         Tuple of (pinned_start, pinned_end, pinned_content) or None if
-        no Pinned Context section exists or it is empty. Offsets are
-        absolute positions in the original `content` string.
+        no Pinned Context section exists, or it is empty and
+        `allow_empty_section` is False. Offsets are absolute positions in
+        the original `content` string.
     """
     # Bound to managed region if available (round 10). Offset adjustment
     # converts managed-region-relative positions back to full-file positions.
@@ -701,7 +749,12 @@ def _parse_pinned_section(content: str) -> Optional[Tuple[int, int, str]]:
         pinned_end = min(pinned_end, declared_end)
 
     pinned_content = scan_text[pinned_start:pinned_end]
-    if not pinned_content.strip():
+    # THE DECLINE IS OPT-OUT-ABLE AND THE HEADING CHECK ABOVE IS NOT. Reaching
+    # this line means `## Pinned Context` RESOLVED, so the span is computable
+    # and the only question is whether the caller wants an empty one. A caller
+    # that passes the flag has said it can tell an empty section from an absent
+    # one and needs the difference.
+    if not pinned_content.strip() and not allow_empty_section:
         return None
 
     return pinned_start + offset, pinned_end + offset, pinned_content
@@ -808,12 +861,13 @@ def apply_staleness_markings(
 
       - THE NUMBER CANNOT GO STALE. It is recomputed against whatever the body
         holds now, so it tracks a growing or shrinking pinned section.
-      - THE WARNING CANNOT INFLATE ITS OWN COUNT. The measured body never
-        contains the warning at the HEAD, on pass 1 or pass 500, so the number
-        does not creep upward as the report of it is re-read. A warning a user
-        has moved below the head IS measured, and it is a FIXED contribution:
-        this module writes only at the head, and the head is taken back before
-        each measurement, so no pass can add a second one.
+      - THE WARNING CANNOT INFLATE ITS OWN COUNT. The measured body contains NO
+        line of this module's own shape, on pass 1 or pass 500, so the number
+        does not creep upward as the report of it is re-read. The head run is
+        taken back from the document, and `_body_without_warnings` takes the
+        rest out of the measurement copy, so the figure reports the pins of the
+        user and nothing this module wrote. A stranded line stays visible in the
+        document and no longer counts against the budget.
       - THE PASS IS IDEMPOTENT BY CONSTRUCTION, not by a guard. The emitted line
         is a pure function of the user's pinned body, so a second pass over
         unchanged pins produces identical bytes and writes nothing.
@@ -876,12 +930,17 @@ def apply_staleness_markings(
 
     total_stale = already_stale + len(stale_entries)
 
-    # Measure the body with the HEAD warning taken back. Step 1 removes the
-    # leading run on every pass and not only on the first one, which is the
-    # hazard the old presence guard reached for and missed. A warning a user has
-    # moved below the head is NOT removed and IS measured. That is the accepted
-    # residual.
-    pinned_tokens = estimate_tokens(pinned_content)
+    # Measure the body with EVERY warning of this module's own shape taken out,
+    # wherever it sits. Step 1 removed the leading run FROM THE DOCUMENT, on
+    # every pass and not only on the first one, which is the hazard the old
+    # presence guard reached for and missed. This takes the rest out of a
+    # THROWAWAY COPY, so the count stops depending on POSITION while the DELETE
+    # stays on the contiguous head run.
+    #
+    # THE RESULT IS NOT ASSIGNED BACK, AND THAT IS THE WHOLE SAFETY PROPERTY.
+    # `pinned_content` is written into the document below, so an in-place
+    # exclusion here would take a line the user positioned out of their file.
+    pinned_tokens = estimate_tokens(_body_without_warnings(pinned_content))
     budget_warning = ""
     if pinned_tokens > PINNED_CONTEXT_TOKEN_BUDGET:
         pinned_content = (
@@ -948,12 +1007,6 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
     except (OSError, UnicodeDecodeError):
         return None
 
-    # CAPTURE THE ENDING BEFORE ANYTHING MEASURES THE TEXT. The read above has
-    # already normalised it away, so this asks the bytes instead. Nothing
-    # between here and the write sees the answer: every step below operates on
-    # the LF-normalised `content`, exactly as it did before this was added.
-    line_ending = _detect_line_ending(claude_md_path)
-
     parsed = _parse_pinned_section(content)
     if parsed is None:
         return None
@@ -970,10 +1023,22 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
     # THE PROBE READS ANY LINE START, THE STRIP READS OFFSET 0. That gap is
     # deliberate. A warning a user has moved below the head is still this
     # module's own report, so the section HAS been reported on and the pass may
-    # run. The strip cannot reach that line, so this pass does not repair it: it
-    # adds one current warning above it and the old line stays. That is the
-    # ratified cost of the residual, one extra line, and it is what a section
-    # WITH entries already does in the same state.
+    # run. The strip cannot reach that line, so this pass does not repair it and
+    # the old line stays.
+    #
+    # WHETHER A CURRENT WARNING GOES ABOVE IT TURNS ON THE MEASURED BODY ALONE,
+    # AND THAT CONDITION IS NEW. `_body_without_warnings` takes lines of this
+    # shape out of the measurement wherever they sit, so the stranded line adds
+    # no token to the decision.
+    #   - If the pins of the user exceed the budget, this pass adds one warning
+    #     and the section carries two lines, which is what a section WITH
+    #     entries does in the same state.
+    #   - If the pins of the user are within the budget, this pass adds NOTHING,
+    #     writes nothing, and the stranded line is the only one left.
+    # THE EARLIER WORDING ASSERTED THE ADDITION WITH NO CONDITION ON IT, and it
+    # called the extra line a ratified cost of the residual. That was correct
+    # while the count included the stranded line. The exclusion at the
+    # measurement site retired it for the COUNT, and the line itself stays.
     #
     # THE FORBIDDEN DIRECTION IS UNCHANGED AND MUST STAY SO. A section carrying
     # NO line of this module's own shape never reaches the pass, whatever its
@@ -1033,15 +1098,39 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
                 # the file's existing permissions alone; the helper normalises
                 # it to 0o600, matching every other writer in the plugin.
                 #
-                # RESTORE THE ENDING HERE AND NOWHERE EARLIER. This is the last
-                # point before the bytes leave, so every measurement above ran
-                # on the same LF text it always ran on. `_atomic_write_text`
-                # translates nothing, so what this passes is what lands.
-                _atomic_write_text(
-                    claude_md_path,
-                    _restore_line_ending(new_content, line_ending),
-                    project_root,
-                )
+                # THE LINE ENDING IS NOT THIS SITE'S BUSINESS ANY MORE, AND DO
+                # NOT RESTORE ONE HERE. This module used to detect the ending
+                # above and re-apply it on this line. `_atomic_write_text` now
+                # reads the ending off the target and applies it for each of its
+                # callers, so a restore here would run the substitution two
+                # times. Every measurement above continues to run on the
+                # LF-normalised `content`, exactly as it always did.
+                # AN INSTRUCTION FOR A LATER EDITOR, NOT A STATEMENT ABOUT
+                # TODAY. A statement about today goes stale in silence. An
+                # instruction about what to do continues to apply.
+                #
+                # `project_root` is typed `Path | None` and this parameter
+                # takes a `Path`. A type checker reports that. No None reaches
+                # this line at this time, and the reason spans THREE HOPS:
+                #   1. `_resolve_project_claude_md_with_base` returns a path
+                #      and a base together, or returns None for the two.
+                #   2. `_lexical_base_of` returns a `Path` and returns no None.
+                #   3. The `claude_md_path is None` test above returns first.
+                # A CHAIN OF THREE HOPS CAN BREAK WITH NO LOCAL SIGNAL. Each
+                # hop is correct on its own, and one edit to one of them opens
+                # this line while the other two continue to read as correct.
+                #
+                # IF YOU ADD A CALLER THAT CAN PASS None HERE, ADD A GUARD AND
+                # CHOOSE ITS DIRECTION ON PURPOSE. THE CHOICE IS NOT FREE.
+                # This function writes the project CLAUDE.md, and this
+                # repository does not track that file, so an incorrect refusal
+                # has no commit behind it to recover from. A guard that refuses
+                # protects the write and can lose the update. A guard that
+                # continues keeps the update and can write outside the base the
+                # resolver trusted. Do not add a guard as a cleanup step: a
+                # guard with an unchosen direction moves the fault instead of
+                # removing it.
+                _atomic_write_text(claude_md_path, new_content, project_root)
         except ContainmentError:
             return "Pinned staleness skipped: path precondition not met."
         except TimeoutError:

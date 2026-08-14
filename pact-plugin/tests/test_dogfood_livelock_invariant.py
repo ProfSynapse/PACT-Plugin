@@ -428,14 +428,16 @@ class TestLayer3_HooksJsonInvariants:
     MUST bind to agent_handoff_emitter.py, TeammateIdle MUST bind only
     to teammate_idle.py."""
 
-    def test_userpromptsubmit_binds_missed_wake_scan(self):
-        """#903 missed-wake SURFACER: the lead-side stale-wait scan surfaces via
-        UserPromptSubmit additionalContext (turn-START, lead-injectable) — the B1
-        remediation that replaced the record-only Stop carrier (Stop fired at
-        turn-END and could only suppressOutput, so it recorded but never
-        surfaced). missed_wake_scan.py MUST be among the UserPromptSubmit hooks;
-        Stop MUST NOT be registered (the record-only Stop path was dropped, which
-        also dissolved the Stop empirical-grounding row).
+    def test_stop_event_key_absent(self):
+        """The record-only Stop carrier was dropped: no Stop key may be bound.
+
+        IT HOLDS ONE ASSERTION AND THAT IS THE POINT OF ITS OWN NAME. This
+        assertion used to sit inside the UserPromptSubmit arm below. A
+        counter-test that named that arm as its target declared a target whose
+        failure can arrive from a DIFFERENT assertion in the same body, so a
+        red told the reader nothing about the Stop key. One assertion under one
+        name makes a raise attributable, and the counter-test that drives this
+        arm depends on that.
         """
         hooks_config = _load_hooks_json()
         assert "Stop" not in hooks_config.get("hooks", {}), (
@@ -443,6 +445,19 @@ class TestLayer3_HooksJsonInvariants:
             "dropped in the B1 surfacing remediation; UserPromptSubmit + "
             "SessionStart now carry the surfacer."
         )
+
+    def test_userpromptsubmit_binds_missed_wake_scan(self):
+        """#903 missed-wake SURFACER: the lead-side stale-wait scan surfaces via
+        UserPromptSubmit additionalContext (turn-START, lead-injectable) — the B1
+        remediation that replaced the record-only Stop carrier (Stop fired at
+        turn-END and could only suppressOutput, so it recorded but never
+        surfaced). missed_wake_scan.py MUST be among the UserPromptSubmit hooks.
+
+        THE STOP-ABSENCE HALF LEFT THIS BODY and now runs as
+        `test_stop_event_key_absent` above. This arm asserts the UserPromptSubmit
+        binding and nothing else.
+        """
+        hooks_config = _load_hooks_json()
         ups_basenames = {
             p.name
             for p in _hook_script_paths_for_event(hooks_config, "UserPromptSubmit")
@@ -515,6 +530,26 @@ def _scan_for_removed_hook(raw: str) -> list[str]:
     return [h for h in _REMOVED_HOOK_BASENAMES if h in raw]
 
 
+_STOP_ASSERTION_FRAGMENT = "Stop must NOT be registered"
+
+
+def _assert_target_fails_on(target, fragment):
+    """Run a named target and require it to FAIL on the assertion `fragment` names.
+
+    THE FRAGMENT IS THE WHOLE POINT AND NOT DECORATION. A counter-test that
+    accepts ANY AssertionError declares a target whose failure can arrive from a
+    DIFFERENT line of the same body, so it stops being a statement about the
+    thing it names. That is the defect this file met once already, where a
+    counter-test named a host test and the host held two assertions.
+
+    THE BINDING IS ITSELF GUARDED, which the earlier shape was not:
+    `test_the_attribution_binding_refuses_a_raise_from_another_line` below
+    reddens if this function drops the fragment.
+    """
+    with pytest.raises(AssertionError, match=fragment):
+        target()
+
+
 class TestLayer4_CounterTestByRevert:
     """Each test names the SPECIFIC Layer 1/2/3 invariant it targets and
     proves, by in-memory mutation, that reverting the fix flips that
@@ -564,12 +599,43 @@ class TestLayer4_CounterTestByRevert:
             "counter-test is NOT discriminative. Test is phantom-green."
         )
 
-    def test_reverting_stop_key_flips_layer3_stop_key_test(self):
+    def test_reverting_stop_key_flips_layer3_stop_key_test(self, monkeypatch):
         """Target: TestLayer3_HooksJsonInvariants::test_stop_event_key_absent.
 
         Revert shape: re-add `Stop` key with all 3 Tier-2 hooks (mirrors
         pre-C2b hooks.json shape).
+
+        🔴 IT RUNS THE TARGET. THE EARLIER SHAPE RESTATED ITS OWN SETUP. That
+        shape wrote a Stop key into a dict and then asserted the key was in the
+        dict, two times. The Layer 3 invariant never ran, so the counter-test
+        passed for whatever Layer 3 asserted, and it named a target that was
+        defined nowhere. A counter-test that cannot fail certifies the arm it
+        was built to hold.
+
+        THE TWO LEGS TOGETHER ARE THE EVIDENCE, AND ONE LEG ALONE IS NOT.
+          CONTROL: the target passes against the config the repository ships.
+          REVERT : the same target RAISES with the Stop key put back.
+        Without the control a raise is ambiguous, because a target that fails
+        for every input raises here too and reads as a discriminative result.
+
+        THE MATCH IS DELIBERATE. It binds the raise to the Stop assertion, so a
+        second assertion added to the target later cannot supply the red in its
+        place. That is the defect this repair exists to close.
+
+        🔴 THE LIMIT OF THE CONTROL LEG, STATED BECAUSE NOTHING HOLDS IT THERE.
+        The control leg reads the SHIPPED configuration today, through
+        `_load_hooks_json`. NO ARM KEEPS IT ON THAT DOCUMENT. An edit that
+        swaps the input for a small inline mapping, to make the leg faster or
+        to share a fixture with the revert leg below, PASSES WITH NOTHING GOING
+        RED, and the leg then certifies the target against a document nobody
+        ships. THE PASS WOULD BE TRUE AND ABOUT THE WRONG POPULATION.
         """
+        target = TestLayer3_HooksJsonInvariants().test_stop_event_key_absent
+
+        # CONTROL LEG, and it runs FIRST so the revert cannot mask a broken
+        # target: against the shipped config the target must pass.
+        target()
+
         raw = _HOOKS_JSON.read_text(encoding="utf-8")
         config = json.loads(raw)
         # In-memory revert: re-inject Stop block with the 3 removed hooks.
@@ -585,14 +651,72 @@ class TestLayer4_CounterTestByRevert:
                 ],
             }
         ]
-        # Discriminative assertion: Layer 3 `test_stop_event_key_absent`
-        # would fail here.
         assert "Stop" in config.get("hooks", {}), (
             "counter-test setup failed — Stop key not re-injected"
         )
-        assert "Stop" in config["hooks"], (
-            "Layer 3 Stop-absence invariant did not flip on revert — "
-            "counter-test is NOT discriminative."
+
+        # Put the reverted config where the target reads its input from. The
+        # target calls `_load_hooks_json`, so this is what makes the target run
+        # against the revert rather than against the file on disk.
+        monkeypatch.setattr(f"{__name__}._load_hooks_json", lambda: config)
+        assert _load_hooks_json() is config, (
+            "counter-test setup failed — the reverted config did not reach the "
+            "loader the target reads, so the revert leg below would run "
+            "against the shipped file and prove nothing"
+        )
+
+        # REVERT LEG: the named target must FAIL, and it must fail on the Stop
+        # assertion rather than on some other line of its body. The binding
+        # that holds that lives in `_assert_target_fails_on`, and the arm below
+        # is what keeps the binding from being dropped in silence.
+        _assert_target_fails_on(target, _STOP_ASSERTION_FRAGMENT)
+
+    def test_the_attribution_binding_refuses_a_raise_from_another_line(self):
+        """THE GUARD ON THE COUNTER-TEST ABOVE, WHICH HELD NOTHING BEFORE THIS.
+
+        THE HOLE THIS CLOSES WAS MEASURED AGAINST MY OWN INSTRUMENT. The
+        counter-test above binds its expected failure to the Stop assertion by
+        a message fragment. Remove that binding and the whole file stayed
+        green, so the guard that makes a raise ATTRIBUTABLE could be deleted
+        with nothing reporting it.
+
+        THE TWO LEGS ARE THE ARM, AND ONE LEG ALONE IS NOT.
+          REFUSE: a raise carrying a DIFFERENT message must not satisfy the
+          binding. A binding that dropped its fragment accepts that raise and
+          this leg reddens.
+          ACCEPT: a raise carrying the fragment must satisfy it. Without this
+          leg, a binding that refused everything would pass the leg above.
+
+        WHY IT CATCHES A BaseException RATHER THAN A NAMED CLASS. The failure
+        of a message binding is raised by the test framework, and its class is
+        framework-internal. The property under test is that the call did NOT
+        return normally, so the arm asserts on THAT and imports nothing
+        private.
+        """
+        def raises_from_another_line():
+            raise AssertionError("a different assertion in the same body failed")
+
+        def raises_from_the_stop_assertion():
+            raise AssertionError(f"{_STOP_ASSERTION_FRAGMENT}, and a detail")
+
+        refused = False
+        try:
+            _assert_target_fails_on(
+                raises_from_another_line, _STOP_ASSERTION_FRAGMENT
+            )
+        except BaseException:
+            refused = True
+        assert refused, (
+            "the counter-test binding ACCEPTED a raise from another line, so a "
+            "counter-test built on it declares a target whose failure can "
+            "arrive from an assertion it does not name. Restore the message "
+            "binding in _assert_target_fails_on."
+        )
+
+        # ACCEPT LEG, and it is what stops the leg above passing for a binding
+        # that refuses every raise.
+        _assert_target_fails_on(
+            raises_from_the_stop_assertion, _STOP_ASSERTION_FRAGMENT
         )
 
     @pytest.mark.parametrize("removed_hook", _REMOVED_HOOK_BASENAMES)

@@ -311,6 +311,99 @@ class ContainmentError(OSError):
     """
 
 
+def _detect_line_ending(name: str, parent_fd: int) -> str:
+    """
+    Report the line ending `name` uses today, read THROUGH `parent_fd`.
+
+    READ THE BYTES, BECAUSE EVERY TEXT READ HAS ALREADY LOST THE ANSWER.
+    `Path.read_text` applies universal-newline translation, so a CRLF file
+    arrives as LF and the original ending is unrecoverable from the string a
+    caller holds. This is the only place that looks.
+
+    IT TAKES A DESCRIPTOR AND A NAME RATHER THAN A PATH, AND THAT IS THE WHOLE
+    POINT OF THE SIGNATURE. `_atomic_write_text` pins the parent directory open
+    and binds the write through that descriptor. A read by name inside it would
+    reintroduce the name-based race the descriptor design removes, so this
+    samples the same kernel object the containment walk approved.
+
+    DOMINANT WINS, AND A TIE GOES TO LF. The write this feeds is unrecoverable,
+    because CLAUDE.md is gitignored, so the correct rule is the one that changes
+    the fewest lines. Dominant-wins minimises that count by construction. A file
+    with no CRLF at all has a dominant of LF, so no file can gain an ending it
+    did not have. A file written only with bare carriage returns reports LF.
+
+    A TARGET THAT IS NOT ON DISK REPORTS LF, and that arm is load-bearing rather
+    than defensive: it is why file creation is not a gap. A create-only caller
+    writes its LF template to a name that is not there, so nothing converts.
+    A read failure reports LF for the same reason, which is what this code did
+    before the detection moved here.
+
+    Twin copy: `skills/pact-memory/scripts/working_memory.py` carries this
+    function because that package cannot import from `hooks/shared/`. The two
+    bodies are gated identical by TestLineEndingHelperTwinCopyDrift.
+
+    Args:
+        name: The leaf name of the target, resolved against `parent_fd`.
+        parent_fd: An open descriptor for the directory the write binds into.
+
+    Returns:
+        Either the two-character CRLF sequence or a single newline.
+    """
+    try:
+        fd = os.open(name, os.O_RDONLY, dir_fd=parent_fd)
+    except (OSError, NotImplementedError):
+        return "\n"
+    try:
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError:
+        return "\n"
+    finally:
+        os.close(fd)
+    raw = b"".join(chunks)
+    crlf_count = raw.count(b"\r\n")
+    lf_count = raw.count(b"\n") - crlf_count
+    return "\r\n" if crlf_count > lf_count else "\n"
+
+
+def _restore_line_ending(content: str, line_ending: str) -> str:
+    """
+    Apply `line_ending` to `content`, whatever endings `content` arrives with.
+
+    IT NORMALISES FIRST, AND IT IS NOT SAFE WITHOUT THAT. An earlier form
+    recorded a PRECONDITION that content reaches it with no carriage return in
+    it, and applied a plain replace. That held while one caller fed it. At this
+    seam the callers are ten and the seam cannot see where their content came
+    from, so the precondition is a claim about callers rather than a property of
+    this function. A plain replace on a string that carries CRLF gives a doubled
+    carriage return, which is corruption of the user's own file.
+
+    SO CRLF GOES BACK TO LF FIRST, AND THEN THE ENDING GOES ON. A caller that
+    restores for itself is then a no-op rather than a corruption, which is a
+    defect this function makes harmless rather than one it hides. The LF branch
+    keeps its early return, so an LF file is byte-identical to what this wrote
+    before.
+
+    Twin copy: `skills/pact-memory/scripts/working_memory.py` carries this
+    function because that package cannot import from `hooks/shared/`. The two
+    bodies are gated identical by TestLineEndingHelperTwinCopyDrift.
+
+    Args:
+        content: Full file contents, with any line endings.
+        line_ending: The ending to write, from `_detect_line_ending`.
+
+    Returns:
+        `content` with its endings replaced, or unchanged when the target is LF.
+    """
+    if line_ending == "\n":
+        return content
+    return content.replace("\r\n", "\n").replace("\n", line_ending)
+
+
 def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
     """Replace `target`'s contents with `content` atomically, iff the directory
     the write will bind into is contained within `project_root` (#1247).
@@ -541,6 +634,22 @@ def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
             os.close(extra)
 
     try:
+        # THE SEAM KEEPS THE LINE ENDING OF THE TARGET, FOR EVERY CALLER.
+        # A caller reads the file with universal-newline translation, changes a
+        # region, and hands the whole document back, so a CRLF file would be
+        # written as LF and the user sees a whole-file rewrite they did not
+        # make. Repairing that at the call sites is what produced one defect for
+        # each site, so the seam owns it and a new write site inherits it.
+        #
+        # THE DETECTION RUNS HERE FOR TWO REASONS, AND THE POSITION IS PART OF
+        # THE GUARANTEE. It is AFTER the containment walk, so it never reads a
+        # path the walk has not blessed, and it goes THROUGH `parent_fd`, so the
+        # bytes it samples come from the same kernel object the walk approved. A
+        # read by name here would reintroduce the race this descriptor design
+        # exists to remove, exactly as a chmod by name would.
+        content = _restore_line_ending(
+            content, _detect_line_ending(target.name, parent_fd)
+        )
         tmp_name = f".{target.name}.{uuid.uuid4().hex}.tmp"
         try:
             fd = os.open(
@@ -560,9 +669,17 @@ def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
             try:
                 # newline="" so this handle performs NO line-ending translation.
                 # With newline=None, Python rewrites each "\n" to os.linesep,
-                # which is "\n" here and "\r\n" on Windows, so a caller that
-                # restored CRLF emits "\r\r\n" there. The caller chooses the
-                # line ending. This primitive writes the bytes it is given.
+                # which is "\n" here and "\r\n" on Windows, so the restore above
+                # would emit "\r\r\n" there.
+                #
+                # THIS PRIMITIVE CHOOSES THE LINE ENDING AND THE CALLER MUST
+                # NOT. That inverts what this comment said before the restore
+                # moved here, and the inversion is the point: one property, one
+                # owner. A caller that restores for itself makes the
+                # substitution run two times. `_restore_line_ending` normalises
+                # first, so that mistake is a no-op rather than a doubled
+                # carriage return, and it is a defect either way. A source-level
+                # arm reports a second owner.
                 handle = os.fdopen(fd, "w", encoding="utf-8", newline="")
             except BaseException:
                 os.close(fd)

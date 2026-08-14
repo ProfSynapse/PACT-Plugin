@@ -222,7 +222,11 @@ class TestCheckPinStaleBlockDirective_MarkerLifecycle:
         result = check_pin_stale_block_directive()
         assert result is not None
         assert "MUST" in result
-        assert "/PACT:pin-memory" in result
+        # NAME THE COMMAND THAT ARCHIVES. This arm read `/PACT:pin-memory`,
+        # and the one source of that substring was an incorrect clause in the
+        # detail, so the arm held the defect in place. The directive must name
+        # the command that can clear a stale pin.
+        assert "/PACT:prune-memory" in result
         assert (session_dir / PIN_STALENESS_MARKER_NAME).exists()
 
     def test_negative_detection_clears_marker(
