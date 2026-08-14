@@ -432,3 +432,161 @@ class TestTheClearIsConservativeWhenItCannotTell:
             "argument for conservative routing changes and the reasoning at "
             "this class must be re-read"
         )
+
+
+# A path that the managed-file predicate admits, and one it refuses. The two
+# are sentinels rather than files on disk: route 1 tests the PATH through
+# `match_project_claude_md` before it opens anything.
+MANAGED_EDIT_PATH = "/tmp/project/.claude/CLAUDE.md"
+UNRELATED_EDIT_PATH = "/tmp/project/docs/notes.txt"
+
+
+@pytest.fixture
+def edit_route_bed(tmp_path, monkeypatch):
+    """A bed that drives ROUTE 1, the `Edit` and `Write` leg of the clear.
+
+    THE FOUR ARMS ABOVE DRIVE ROUTE 2, THE `Bash` LEG. Route 1 is the other
+    member of the trigger union, and it carries its own gate:
+    `match_project_claude_md` on the edited path. That gate has no arm, so a
+    later edit that breaks path resolution, or that returns early from this
+    leg, ships green.
+
+    WHICH NAME THIS PATCHES, AND WHY ONE NAME IS SUFFICIENT HERE. Route 1 runs
+    `from shared import match_project_claude_md` inside the function, so it
+    reads the name in the `shared` package namespace at call time. A PATCH
+    BINDS TO A NAME RATHER THAN TO A FUNCTION, so the correct name is the one
+    THE CALLER IMPORTS. An AST walk of module-level `name = name` bindings
+    across `hooks/` finds ONE alias in the tree, `_get_project_claude_md_path`
+    in `staleness`, and NONE for this predicate. The walk reports that known
+    alias, which is the control that the walk is live. If a second binding
+    appears later, this fixture wants the same treatment
+    `_patch_the_resolver` gives the other resolver.
+
+    THE PREDICATE IS A FUNCTION OF THE PATH rather than a constant, because
+    the two cases below differ ONLY in the path they supply. A stub that
+    answered the same way for each path would make the refusal case pass for
+    a fixture reason.
+    """
+    import shared
+    import shared.pact_context
+    import staleness
+    from shared.constants import PIN_STALENESS_MARKER_NAME
+
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    marker = session_dir / PIN_STALENESS_MARKER_NAME
+
+    monkeypatch.setattr(
+        shared.pact_context, "get_session_dir",
+        lambda *a, **k: str(session_dir),
+    )
+
+    # The managed file the clear reads after route 1 admits the edit. It must
+    # be READABLE, because the conservative repair returns on a read fault and
+    # case (d) requires a REMOVAL. An unreadable target would fail case (d)
+    # for a fixture reason rather than for a behaviour reason.
+    readable = tmp_path / "CLAUDE.md"
+    readable.write_text("# Project Memory\n\n## Working Memory\n")
+    _patch_the_resolver(monkeypatch, staleness, lambda *a, **k: readable)
+
+    def _predicate(file_path, *a, **k):
+        return readable if file_path == MANAGED_EDIT_PATH else None
+
+    monkeypatch.setattr(shared, "match_project_claude_md", _predicate)
+
+    def drive(tool_name, file_path, signal_answer):
+        """Re-arm the marker, run one tool call, report the state after."""
+        import track_files
+
+        marker.write_text("")
+        recorder = _SignalRecorder(signal_answer)
+        monkeypatch.setattr(staleness, "check_pinned_block_signal", recorder)
+        track_files.clear_pin_staleness_marker_if_resolved(
+            tool_name, {"file_path": file_path})
+        return marker.exists(), recorder
+
+    return drive
+
+
+class TestTheEditRouteReachesTheClear:
+    """CASE (d). ROUTE 1 CARRIES A HAND EDIT TO THE MANAGED FILE.
+
+    A user who repairs the pinned region by hand arrives as `Edit` or `Write`
+    rather than as `Bash`. If route 1 declines, that user stays denied for the
+    rest of the session while the condition has cleared, which is the cardinal
+    over-block this mechanism exists to remove.
+
+    NON-VACUITY: the removal of a file is a POSITIVE state change, so this
+    assertion cannot be satisfied by a function that did nothing.
+    """
+
+    @pytest.mark.parametrize("tool_name", ["Edit", "Write"])
+    def test_an_edit_to_the_managed_file_removes_the_marker_once_it_clears(
+        self, edit_route_bed, tool_name
+    ):
+        """The two tools take one leg, so each one drives the same assertion."""
+        present, recorder = edit_route_bed(
+            tool_name, MANAGED_EDIT_PATH, None)
+
+        assert recorder.calls == 1, (
+            f"a {tool_name} of the managed file reached the staleness re-read "
+            f"{recorder.calls} time(s), and it must reach it one time. A count "
+            "of zero means route 1 returned before the re-read, so the marker "
+            "state below says nothing about the route"
+        )
+        assert not present, (
+            f"THE MARKER SURVIVED A {tool_name} OF THE MANAGED FILE THAT "
+            "CLEARED THE CONDITION. Route 1 is one of the two members of the "
+            "trigger union. A clear bound to the Bash leg alone leaves a user "
+            "who repairs the pins by hand denied for the rest of the session"
+        )
+
+
+class TestTheEditRouteRefusesAnUnrelatedFile:
+    """CASE (e). THE PATH GATE ON ROUTE 1, HELD BY A TWO-PATH DISCRIMINATION.
+
+    THE MARKER ALONE CANNOT HOLD THIS CASE. Under an unrelated path the marker
+    is untouched, which is what a broken function produces too. So the oracle
+    is the RECORDER: an unrelated path must not reach the staleness re-read at
+    all, and the managed path under the identical fixture must reach it. The
+    pair separates "the path gate refused this edit" from "nothing ran".
+
+    The signal answers None on the two halves on purpose. If the path gate is
+    removed, the unrelated edit proceeds to the re-read, finds the condition
+    clear, and unlinks a marker that no repair of the pinned region earned.
+    """
+
+    @pytest.mark.parametrize("tool_name", ["Edit", "Write"])
+    def test_an_edit_of_another_file_does_not_reach_the_clear(
+        self, edit_route_bed, tool_name
+    ):
+        """One fixture, two paths, opposite answers."""
+        present_other, recorder_other = edit_route_bed(
+            tool_name, UNRELATED_EDIT_PATH, None)
+        present_managed, recorder_managed = edit_route_bed(
+            tool_name, MANAGED_EDIT_PATH, None)
+
+        assert recorder_managed.calls == 1, (
+            "CONTROL HALF FAILED: the managed path did not reach the staleness "
+            "re-read, so this fixture cannot tell a refused path from a "
+            "function that does not run. Repair this half before you read the "
+            "assertion below"
+        )
+        assert not present_managed, (
+            "CONTROL HALF FAILED: the managed path left the marker in place "
+            "under a cleared signal"
+        )
+
+        assert recorder_other.calls == 0, (
+            f"a {tool_name} of {UNRELATED_EDIT_PATH!r} reached the staleness "
+            f"re-read {recorder_other.calls} time(s). Route 1 must test the "
+            "edited path against the managed file FIRST, so an edit of one "
+            "other file costs one resolve and no signal read. The path gate "
+            "is gone"
+        )
+        assert present_other, (
+            f"A {tool_name} OF AN UNRELATED FILE CLEARED THE PIN STALENESS "
+            f"MARKER. The path was {UNRELATED_EDIT_PATH!r}, which is not the "
+            "managed CLAUDE.md. The gate that admits only the managed file "
+            "has been removed, so an edit of one other file retires the marker"
+        )
