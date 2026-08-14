@@ -362,21 +362,48 @@ def clear_pin_staleness_marker_if_resolved(
         #     `Pin(...)` is a NamedTuple with no validator.
         #     The rest are `len`, `bool`, `enumerate`, and `str` and `list`
         #       methods, none of which raises on a `str`.
-        #   OPEN AND UNREACHED, the WEAKER result: the compiled patterns applied
-        #     at match time, `OVERRIDE_COMMENT_RE.fullmatch`,
+        #   CLOSED AGAINST `re.error` BY MODULE-SCOPE COMPILE. The premise sits
+        #     IN this label rather than below it, because a label travels where
+        #     its body does not. AN EARLIER REVISION FILED THESE FIVE PATHS AS
+        #     `OPEN AND UNREACHED, the WEAKER result`, and that label undersold
+        #     the argument in its own body. The five are the compiled patterns
+        #     applied at match time: `OVERRIDE_COMMENT_RE.fullmatch`,
         #     `_DATE_COMMENT_RE.fullmatch` and `.sub`, and `_STALE_MARKER_RE`
-        #     `.search` and `.sub`. `re.error` belongs to COMPILE time and these
-        #     patterns compile at import, so a document does not produce it
-        #     here. The residual is resource exhaustion, which is a property of
-        #     input SIZE against available memory rather than of document SHAPE.
-        #   THE CORPUS: 18 documents, 8 of them shapes only a machine writer
-        #     produces, aimed at those paths. COUNTING RULE: one document for
-        #     each shape, driven straight into `parse_pins`, one alarm of five
-        #     seconds for each. RESULT: 0 raised, 0 timed out.
-        #   THREE CONTROLS, FOR THREE WAYS TO BE WRONG: 16 shapes returned a
-        #     non-zero pin count, so the parse ran; an injected raise was
-        #     reported by the same harness, so the detector is not blind; and
-        #     the corpus gave 4 distinct results, so it is not one shape
+        #     `.search` and `.sub`. `re.error` belongs to COMPILE time, and the
+        #     four patterns in `pin_caps` compile at MODULE scope, so a document
+        #     does not produce that raise here.
+        #     THE LABEL IS SCOPED TO THE RAISE TYPE AND NOT TO ALL RAISES. The
+        #     residual is resource exhaustion, which is a property of input SIZE
+        #     against available memory rather than of document SHAPE.
+        #     THE EDIT THAT INVERTS THIS LABEL, NAMED BECAUSE A CLOSED LABEL
+        #     STOPS A READER AND NOTHING DOWNSTREAM RE-OPENS IT: a `re.compile`
+        #     MOVED INSIDE A FUNCTION in `pin_caps`. That converts `re.error`
+        #     from an import-time event into a per-document one, and this label
+        #     goes false with no test red and no reader alerted. Two more edits
+        #     reach the same place: a pattern built from document-derived text,
+        #     and a new in-module callee with no handler of its own.
+        #     WHY THAT HAZARD IS LIVE RATHER THAN CAUTION, and this figure is
+        #     what makes the premise falsifiable. MEASURED 2026-08-14: 4 of 4
+        #     `re.compile` calls in `pin_caps.py` sit at MODULE scope, and 10 of
+        #     91 `re.compile` calls across `hooks/` sit INSIDE a function.
+        #     COUNTING RULE: an AST walk over each `hooks/**/*.py`, one count
+        #     for each `re.compile` call, with scope taken from the innermost
+        #     enclosing function. THE 10 IS THE CONTROL. A zero from a detector
+        #     that cannot see a function scope reads the same as a zero from one
+        #     that can, so the 10 is what makes the 4 of 4 a measurement. The
+        #     property VARIES in this codebase, so a refactor can take it away.
+        #     It is not a law.
+        #   SO NOTHING IS GENUINELY OPEN ON DOCUMENT SHAPE.
+        #   THE CORPUS CORROBORATES AND DOES NOT CARRY THE RESULT: 18 documents,
+        #     8 of them shapes only a machine writer produces, aimed at those
+        #     paths. COUNTING RULE: one document for each shape, driven straight
+        #     into `parse_pins`, one alarm of five seconds for each. RESULT: 0
+        #     raised, 0 timed out. The structural argument above is what closes
+        #     the five paths. These shapes agree with it.
+        #   THREE CONTROLS ON THE CORPUS, FOR THREE WAYS TO BE WRONG: 16 shapes
+        #     returned a non-zero pin count, so the parse ran; an injected raise
+        #     was reported by the same harness, so the detector is not blind;
+        #     and the corpus gave 4 distinct results, so it is not one shape
         #     repeated.
         #
         # TWO THINGS THE MEASUREMENT DOES NOT COVER, each a hole a later reader
