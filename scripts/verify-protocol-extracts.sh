@@ -107,7 +107,7 @@ verify "pact-scope-detection.md"  "Scope Detection"         "Scope Detection"   
 verify "pact-scope-contract.md"   "Scope Contract"          "Scope Contract"                         "Scoped Phases (ATOMIZE and CONSOLIDATE)"
 verify "pact-scope-phases.md"     "Scoped Phases"           "Scoped Phases (ATOMIZE and CONSOLIDATE)" "Concurrent Audit Protocol"
 verify "pact-audit.md"            "Concurrent Audit"        "Concurrent Audit Protocol"              "Completion Authority"
-verify "pact-state-recovery.md"   "State Recovery"          "State Recovery Protocol"                "Session Continuity"
+verify "pact-state-recovery.md"   "State Recovery"          "State Recovery Protocol"                "Related"
 
 # Combined-section extracts: two heading-pairs concatenated in order.
 verify "pact-s2-coordination.md"  "S2 Coordination" \

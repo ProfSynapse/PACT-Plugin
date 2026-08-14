@@ -2490,15 +2490,6 @@ When `session_init.py` receives malformed or incomplete stdin (invalid JSON, mis
 
 ---
 
-## Session Continuity
-
-If work spans sessions, update CLAUDE.md with:
-- Current phase and task
-- Blockers or open questions
-- Next steps
-
----
-
 ## Related
 
 - Agent definitions: `agents/`
