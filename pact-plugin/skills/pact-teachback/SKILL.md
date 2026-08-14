@@ -132,10 +132,11 @@ SendMessage(
 
 > # ANTI-PATTERN: Step 1 and Step 3 are SEPARATE TaskUpdate calls writing
 > SEPARATE top-level metadata keys. Nesting `intentional_wait` INSIDE
-> `teachback_submit` (one combined TaskUpdate) is invisible to the
-> `is_self_complete_exempt` predicate at `shared/intentional_wait.py`, which
-> reads `metadata.intentional_wait` directly and does not descend into
-> nested objects. Your idle is unprotected. The runtime advisory
+> `teachback_submit` (one combined TaskUpdate) hides it from
+> `missed_wake_scan.py`, which reads `metadata.intentional_wait` and does
+> not descend into nested objects, so no missed-wake alarm is emitted.
+> `is_self_complete_exempt` governs self-completion exemption instead and
+> does not read the field in either placement. The runtime advisory
 > `intentional_wait_nested_in_teachback_submit` fires at write time. See
 > pact-teachback skill Common mistakes row 4.
 

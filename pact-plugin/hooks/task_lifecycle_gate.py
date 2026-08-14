@@ -2036,10 +2036,13 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
                 # Cross-key check: intentional_wait is a sibling
                 # top-level metadata key (Step 3 of the canonical 3-step
                 # shape), NOT nested inside teachback_submit. Nested
-                # placement is invisible to is_self_complete_exempt
-                # (shared/intentional_wait.py reads metadata.intentional_wait,
-                # not nested locations) — the teammate's idle is
-                # unprotected.
+                # placement hides it from hooks/missed_wake_scan.py, which
+                # runs on UserPromptSubmit and SessionStart, reads
+                # metadata.intentional_wait, and does not descend into
+                # nested objects, so no missed-wake alarm is emitted.
+                # is_self_complete_exempt governs self-completion
+                # exemption instead and does not read the field in
+                # either placement.
                 if "intentional_wait" in incoming_teachback:
                     advisories.append((
                         "intentional_wait_nested_in_teachback_submit",
@@ -2047,11 +2050,14 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
                         f"{task_id} placed intentional_wait inside "
                         "teachback_submit. It must be a top-level "
                         "metadata key (separate TaskUpdate call per "
-                        "the canonical Step 1 / Step 3 ordering). Your "
-                        "idle is unprotected — is_self_complete_exempt "
-                        "reads metadata.intentional_wait, not the "
-                        "nested location. See pact-teachback skill "
-                        "Common mistakes row 4.",
+                        "the canonical Step 1 / Step 3 ordering). No "
+                        "missed-wake alarm will fire for your idle: "
+                        "missed_wake_scan.py reads "
+                        "metadata.intentional_wait and does not descend "
+                        "into nested objects. is_self_complete_exempt "
+                        "governs self-completion exemption, not the "
+                        "wait. See pact-teachback skill Common "
+                        "mistakes row 4.",
                     ))
 
                 # R3: reasoning_reconstruction required at >= 11 band.
