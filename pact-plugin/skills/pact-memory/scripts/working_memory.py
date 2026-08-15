@@ -1074,15 +1074,18 @@ def _compress_memory_entry(entry: str) -> str:
     for line in lines[1:]:
         if line.startswith("**Context**:"):
             context_value = line.split("**Context**:", 1)[1].strip()
-            # Take first sentence (up to first ". " boundary, or first 120 chars).
-            # Uses ". " instead of "." to avoid truncating at version numbers
-            # like v2.3.1 or decimal values.
+            # Take the first sentence, up to the first ". " boundary, or the
+            # first COMPRESSED_SUMMARY_CHAR_CAP characters. Uses ". " instead
+            # of "." to avoid truncating at version numbers like v2.3.1 or
+            # decimal values. THE BOUNDARY TEST TAKES THE SAME CONSTANT AS THE
+            # CUT, and it takes it for the same reason: a sentence longer than
+            # the cap cannot be the summary, so the cut applies instead.
             period_idx = context_value.find(". ")
-            if period_idx > 0 and period_idx < 120:
+            if period_idx > 0 and period_idx < COMPRESSED_SUMMARY_CHAR_CAP:
                 summary_text = context_value[:period_idx + 1]
             else:
-                summary_text = context_value[:120]
-                if len(context_value) > 120:
+                summary_text = context_value[:COMPRESSED_SUMMARY_CHAR_CAP]
+                if len(context_value) > COMPRESSED_SUMMARY_CHAR_CAP:
                     summary_text += "..."
             break
 
@@ -1092,8 +1095,10 @@ def _compress_memory_entry(entry: str) -> str:
             stripped = line.strip()
             if stripped and stripped.startswith("**") and "**:" in stripped:
                 # Extract value from any bold field
-                summary_text = stripped.split("**:", 1)[1].strip()[:120]
-                if len(stripped.split("**:", 1)[1].strip()) > 120:
+                summary_text = (
+                    stripped.split("**:", 1)[1].strip()[:COMPRESSED_SUMMARY_CHAR_CAP]
+                )
+                if len(stripped.split("**:", 1)[1].strip()) > COMPRESSED_SUMMARY_CHAR_CAP:
                     summary_text += "..."
                 break
 
