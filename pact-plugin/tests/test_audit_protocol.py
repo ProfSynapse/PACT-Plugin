@@ -495,6 +495,153 @@ class TestStructuralVerificationDiscipline:
             f"stderr:\n{result.stderr}"
         )
 
+    # -- The corpus of the extracts gate --------------------------------
+    #
+    # THE GATE ABOVE ASSERTS AN EXIT CODE AND READS NOTHING ELSE. The script
+    # exits 0 when its FAILED count is 0, and an EMPTY corpus satisfies that.
+    # MEASURED: with all nineteen `verify` calls removed the script prints
+    # `Passed: 0, Failed: 0, VERIFICATION PASSED`, exits 0, and the gate above
+    # stays GREEN. With ONE call removed it prints `Passed: 18, Failed: 0` and
+    # the gate stays GREEN, so the extract that call covered goes unverified.
+    #
+    # A COUNT DERIVED FROM THE SCRIPT CANNOT CLOSE THAT. Remove one call and
+    # the counted invocations and the reported PASS both read 18, so the two
+    # agree and the arm passes. Two sides derived from ONE source cannot
+    # disagree. THE INDEPENDENT ORACLE IS THE FILESYSTEM, so the arms below
+    # derive the population from the extract FILES and compare that against
+    # what the script names.
+
+    @staticmethod
+    def _is_extract(text, ssot_text):
+        """An extract begins with an H2 heading that the SSOT also carries.
+
+        COUNTING RULE, so a later reader reproduces the population rather than
+        trusts it. A standalone protocol document in this directory begins with
+        an H1 `# `. An extract is a verbatim slice of the SSOT starting at an
+        H2, so its first line is that H2. A combined extract concatenates two
+        slices, so its first line is the H2 of the first slice, and the rule
+        holds for it too.
+        """
+        first = text.strip().split("\n")[0] if text.strip() else ""
+        return first.startswith("## ") and ("\n" + first + "\n") in ssot_text
+
+    def _extract_population(self):
+        repo_root = Path(__file__).parent.parent.parent
+        protocols = repo_root / "pact-plugin" / "protocols"
+        ssot_name = "pact-protocols.md"
+        # THE SSOT SITS AMONG ITS OWN EXTRACTS, so a glob of this directory
+        # selects it too. Subtract it by name before the classifier runs, or
+        # the SSOT is compared against itself.
+        ssot_text = (protocols / ssot_name).read_text(encoding="utf-8")
+        return {
+            path.name
+            for path in protocols.glob("*.md")
+            if path.name != ssot_name
+            and self._is_extract(path.read_text(encoding="utf-8"), ssot_text)
+        }, ssot_text
+
+    def test_control_the_extract_classifier_separates_the_two_shapes(self):
+        """CONTROL, asserted BEFORE the population arms below run.
+
+        A classifier that answers the same for a standalone document and for
+        an extract reports a population that is not evidence. This drives the
+        SAME predicate across one of each shape and requires it to separate.
+        """
+        ssot = "# Title\n\nintro\n\n## A Real Section\n\nbody\n\n## Another\n\nmore\n"
+        assert self._is_extract("## A Real Section\n\nbody\n", ssot) is True
+        # A standalone document leads with an H1.
+        assert self._is_extract("# Standalone Protocol\n\nbody\n", ssot) is False
+        # An H2 the SSOT does not carry is not a slice of it.
+        assert self._is_extract("## Not In The Ssot\n\nbody\n", ssot) is False
+        assert self._is_extract("", ssot) is False
+
+    def test_the_gate_verifies_every_extract_file_that_exists(self):
+        """The script must name each extract in the protocols directory.
+
+        THE TWO SIDES COME FROM DIFFERENT SOURCES ON PURPOSE. The population
+        is derived from the FILES. The verified set is parsed from the SCRIPT.
+        A call removed from the script leaves a file in the population and out
+        of the verified set, so this reddens where a count derived from the
+        script alone would agree with itself.
+
+        A NEW EXTRACT FILE ALSO REDDENS THIS, with no edit here, which is what
+        keeps the arm from needing maintenance every time the surface grows.
+
+        THE AXIS THIS ARM CANNOT SEE, NAMED RATHER THAN LEFT IMPLICIT: it
+        checks that each extract IS verified. It does not check that the
+        heading pair each `verify` call passes is the correct pair. The
+        byte-comparison inside the script is what checks that, and the
+        exit-code arm above is what reports it.
+        """
+        import re
+
+        repo_root = Path(__file__).parent.parent.parent
+        script = repo_root / "scripts" / "verify-protocol-extracts.sh"
+        if not script.exists():
+            pytest.skip("verify-protocol-extracts.sh not present")
+
+        population, _ssot = self._extract_population()
+        verified = set(
+            re.findall(r'^verify\s+"([^"]+)"', script.read_text(encoding="utf-8"),
+                       re.MULTILINE)
+        )
+
+        # NON-VACUITY, BOTH SIDES. An empty population makes the comparison
+        # pass for the wrong cause, and so does an empty parse of the script.
+        assert population, "no extract file classified in pact-plugin/protocols/"
+        assert verified, "no verify call parsed from verify-protocol-extracts.sh"
+
+        assert population == verified, (
+            "the set of extract FILES and the set the gate script VERIFIES "
+            "have diverged.\n"
+            f"  files not verified: {sorted(population - verified)}\n"
+            f"  verified but not a file: {sorted(verified - population)}\n"
+            "A file in the first list is an extract that can drift from its "
+            "SSOT region with nothing to report it."
+        )
+
+    def test_the_gate_reports_a_pass_for_every_extract_and_no_failure(self):
+        """The reported counts must account for the whole population.
+
+        THIS IS THE ARM THAT REFUSES AN EMPTY CORPUS. `Passed: 0, Failed: 0`
+        with exit 0 satisfies the exit-code gate above and means nothing was
+        compared. Here the PASS count must equal the number of extract files.
+        """
+        import re
+        import subprocess
+
+        repo_root = Path(__file__).parent.parent.parent
+        script = repo_root / "scripts" / "verify-protocol-extracts.sh"
+        if not script.exists():
+            pytest.skip("verify-protocol-extracts.sh not present")
+
+        population, _ssot = self._extract_population()
+        assert population, "no extract file classified in pact-plugin/protocols/"
+
+        result = subprocess.run(
+            ["bash", str(script)], cwd=str(repo_root),
+            capture_output=True, text=True,
+        )
+        passed = re.search(r"^Passed:\s*(\d+)$", result.stdout, re.MULTILINE)
+        failed = re.search(r"^Failed:\s*(\d+)$", result.stdout, re.MULTILINE)
+
+        # NON-VACUITY: a summary the script did not print would make the two
+        # reads below `None`, and a comparison against `None` is not a count.
+        assert passed and failed, (
+            "the script printed no Passed/Failed summary, so this arm has no "
+            f"number to check.\nstdout:\n{result.stdout}"
+        )
+
+        assert int(passed.group(1)) == len(population), (
+            f"the gate reported {passed.group(1)} passing comparisons against "
+            f"{len(population)} extract files. A shortfall means an extract "
+            f"was not compared at all, which the exit code cannot report."
+        )
+        assert int(failed.group(1)) == 0, (
+            f"the gate reported {failed.group(1)} failing comparisons.\n"
+            f"stdout:\n{result.stdout}"
+        )
+
     def test_verify_protocol_extracts_script_is_present(self):
         """The extracts-sync gate must not silently no-op.
 

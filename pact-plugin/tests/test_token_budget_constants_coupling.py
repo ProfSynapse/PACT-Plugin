@@ -458,8 +458,24 @@ class TestAfterSectionSurvivesTheSync:
 
     THE POPULATION IS SIX ASSIGNMENTS TO `new_content`, and it was re-derived
     from the file rather than copied from the brief. An earlier enumeration
-    named four and called them all of them. The two sync entry points below
-    reach the branches that carry an after-section value.
+    named four and called them all of them.
+
+    THE CLAIM THAT THE TWO ENTRY POINTS REACH THE BRANCHES THAT CARRY AN
+    AFTER-SECTION VALUE WAS INCORRECT, AND IT IS CORRECTED HERE RATHER THAN
+    REMOVED. It was written from a reading of the branch conditions and not
+    from a measurement of which branch each document reaches. MEASURED: the
+    fixtures reached two of the four assignments that carry an after term.
+    One of the two it missed is now driven by
+    `test_the_insert_above_branch_keeps_the_tail` below. The other cannot be
+    driven at all, and `test_the_excluded_branch_cannot_carry_a_value` proves
+    that rather than asserts it.
+
+    SO THE REACH IS NO LONGER A CLAIM IN PROSE. It is
+    `test_every_after_carrying_assignment_is_driven_or_excluded`, which
+    DERIVES the population from the module source with `ast` and derives the
+    driven set from a line trace of the drivers below. A branch added later
+    joins the population with no edit to this class, and it reddens until
+    somebody drives it or excludes it with a cause.
 
     BUILT SO IT CAN DISAGREE. This is a CONFIRMATION against a weak prior and
     not a discovery, and the two want different evidence. A confirmation arm
@@ -529,6 +545,237 @@ class TestAfterSectionSurvivesTheSync:
         assert "found" in out, "the sync did not run, so the arm is vacuous"
         assert self.MARKER in out, (
             "the after-section value was DROPPED by the retrieved-context sync."
+        )
+
+    def _doc_without_the_retrieved_section(self):
+        """A document with a Working Memory heading and NO Retrieved Context.
+
+        THIS IS THE SHAPE THAT REACHES THE INSERT-ABOVE BRANCH, and it is an
+        ordinary one: the first retrieved sync on a project that has saved a
+        memory before. That branch keeps `content[insert_pos:]`, which is the
+        Working Memory section AND everything below it.
+        """
+        from working_memory import WORKING_MEMORY_COMMENT
+
+        return (
+            "# Project\n\n"
+            f"## Working Memory\n{WORKING_MEMORY_COMMENT}\n\n"
+            "### 2026-01-14 10:00\n**Context**: old one\n"
+            f"\n## Later Section\n\n{self.MARKER}\n"
+        )
+
+    def test_the_insert_above_branch_keeps_the_tail(self, tmp_path):
+        """The insert-above-Working-Memory branch preserves everything below.
+
+        NO ARM DROVE THIS BRANCH BEFORE. Removing its tail term took a
+        full-suite mutation with zero failures, while the same mutant at the
+        two driven siblings killed 8 and 10 tests.
+        """
+        doc = self._doc_without_the_retrieved_section()
+        assert self.MARKER in doc  # NON-VACUITY: the marker is present before.
+        assert "## Retrieved Context" not in doc, (
+            "the fixture must have NO retrieved section, or it reaches the "
+            "replace branch instead of the insert-above one"
+        )
+
+        out = self._sync_retrieved(tmp_path, doc)
+
+        assert "found" in out, "the sync did not run, so the arm is vacuous"
+        assert self.MARKER in out, (
+            "the insert-above branch DROPPED the content below the insertion "
+            "point. That content is the Working Memory section and everything "
+            "after it."
+        )
+        # And the section it inserted sits ABOVE the Working Memory heading,
+        # which is what makes the tail the thing at risk.
+        assert out.index("## Retrieved Context") < out.index("## Working Memory")
+
+    # THE DRIVERS, IN ONE PLACE. The completeness arm below runs THIS list, so
+    # a shape added for one arm is a shape the completeness arm also counts.
+    # Two lists would let the two drift, which is the defect this class had.
+    def _drivers(self):
+        from working_memory import RETRIEVED_CONTEXT_COMMENT, WORKING_MEMORY_COMMENT
+
+        return [
+            ("working_sync_with_tail", self._sync_working,
+             self._doc("## Working Memory", WORKING_MEMORY_COMMENT, with_tail=True)),
+            ("working_sync_no_tail", self._sync_working,
+             self._doc("## Working Memory", WORKING_MEMORY_COMMENT, with_tail=False)),
+            ("retrieved_sync_with_tail", self._sync_retrieved,
+             self._doc("## Retrieved Context", RETRIEVED_CONTEXT_COMMENT, with_tail=True)),
+            ("retrieved_sync_insert_above", self._sync_retrieved,
+             self._doc_without_the_retrieved_section()),
+        ]
+
+    @staticmethod
+    def _after_carrying_sites():
+        """Module-level derivation of the assignments that carry an after term.
+
+        COUNTING RULE, so a later reader can reproduce the population rather
+        than trust it: every `ast.Assign` in `working_memory.py` with the
+        single target name `new_content`, of which the value expression either
+        names `after_section`, or subscripts `content` with a slice that has a
+        LOWER bound. The lower-bound slice is the tail-preserving shape
+        `content[insert_pos:]`. `content[:insert_pos]` has an UPPER bound and
+        keeps the head, so it is not an after term.
+        """
+        import ast
+
+        source = (
+            Path(__file__).resolve().parent.parent
+            / "skills/pact-memory/scripts/working_memory.py"
+        ).read_text(encoding="utf-8")
+
+        sites = {}
+        for node in ast.walk(ast.parse(source)):
+            if not (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "new_content"
+            ):
+                continue
+            carries = False
+            for sub in ast.walk(node.value):
+                if isinstance(sub, ast.Name) and sub.id == "after_section":
+                    carries = True
+                if (
+                    isinstance(sub, ast.Subscript)
+                    and isinstance(sub.value, ast.Name)
+                    and sub.value.id == "content"
+                    and isinstance(sub.slice, ast.Slice)
+                    and sub.slice.lower is not None
+                ):
+                    carries = True
+            if carries:
+                sites[node.lineno] = ast.unparse(node.value)
+        return sites
+
+    # THE EXCLUSION NAMES ONE LINE AND CARRIES ITS CAUSE. A blanket accept
+    # would return this gate to a promise somebody must remember to keep.
+    EXCLUDED_SITE_CAUSE = (
+        "the else arm of the retrieved-sync reconstruction. It is reached ONLY "
+        "when after_section is EMPTY, so its after term is a no-op and no "
+        "mutation of it can be detected by any test. "
+        "test_the_excluded_branch_cannot_carry_a_value proves that cause."
+    )
+
+    def test_every_after_carrying_assignment_is_driven_or_excluded(self, tmp_path):
+        """Each assignment that carries an after term is driven, or excluded.
+
+        THE POPULATION IS DERIVED FROM THE SOURCE AND THE DRIVEN SET FROM A
+        TRACE, so neither side is a list somebody maintains. A NEW branch that
+        carries an after term joins the population with no edit here, and this
+        arm reddens until a person drives it or excludes it with a cause.
+
+        WHEN THIS GOES RED, DECIDE WHICH KIND OF SITE APPEARED.
+        1. IT CAN CARRY A VALUE. Add a driver to `_drivers`, in the commit
+           that introduces it.
+        2. IT CANNOT CARRY A VALUE, as the excluded site cannot. Exclude it
+           AND prove the cause with an arm, rather than state the cause here.
+        """
+        import sys
+        import threading
+
+        wm_file = str(
+            (
+                Path(__file__).resolve().parent.parent
+                / "skills/pact-memory/scripts/working_memory.py"
+            ).resolve()
+        )
+        population = self._after_carrying_sites()
+
+        # NON-VACUITY: an empty population makes the comparison below pass for
+        # the wrong cause, and an ast parse that found nothing looks identical
+        # to a module with no such assignment.
+        assert population, "no after-carrying assignment parsed from working_memory.py"
+
+        executed = set()
+
+        def tracer(frame, event, arg):
+            if frame.f_code.co_filename != wm_file:
+                return None
+            if event == "line":
+                executed.add(frame.f_lineno)
+            return tracer
+
+        previous = sys.gettrace()
+        threading.settrace(tracer)
+        sys.settrace(tracer)
+        try:
+            for index, (_label, driver, doc) in enumerate(self._drivers()):
+                target_dir = tmp_path / f"drive{index}"
+                target_dir.mkdir()
+                driver(target_dir, doc)
+        finally:
+            sys.settrace(previous)
+            threading.settrace(previous)
+
+        # NON-VACUITY: a tracer that records nothing gives the identical
+        # verdict as one that records everything, and both leave the set
+        # comparison below meaningless. Require the trace to have run.
+        assert executed, "the line trace recorded nothing, so the driven set is not evidence"
+
+        driven = set(population) & executed
+        excluded = set(population) - driven
+
+        assert len(excluded) <= 1, (
+            "more than one after-carrying assignment is undriven:\n"
+            + "\n".join(f"  line {line}: {population[line]}" for line in sorted(excluded))
+            + "\nDrive it, or exclude it with a cause that an arm proves."
+        )
+        assert driven, "no after-carrying assignment was reached by any driver"
+
+    def test_the_excluded_branch_cannot_carry_a_value(self):
+        """PROOF OF THE EXCLUSION CAUSE, so the exclusion is not a promise.
+
+        The excluded assignment sits in the arm taken when `after_section` is
+        empty OR begins with a newline. `_find_terminator_offset` returns the
+        offset of the START of the terminator LINE, so the after-section either
+        begins at a terminator character or is empty. IT CANNOT BEGIN WITH A
+        NEWLINE, so the arm is reached only with an empty value.
+
+        THIS IS THE ARM THAT RETURNS THE DECISION TO A PERSON. If a later edit
+        to the parser makes a newline-leading after-section reachable, this
+        goes red and the exclusion above stops being safe.
+        """
+        from working_memory import (
+            RETRIEVED_CONTEXT_COMMENT,
+            _MANAGED_END_MARKER,
+            _MANAGED_START_MARKER,
+            _parse_retrieved_context_section,
+        )
+
+        section = (
+            f"## Retrieved Context\n{RETRIEVED_CONTEXT_COMMENT}\n\n"
+            "### 2026-01-14 10:00\n**Context**: old\n"
+        )
+        tails = [
+            "\n## Later\n\nX\n", "\n\n\n## Later\n", "\nX\n", "\n---\n\nX\n",
+            "\n\nX\n", "X\n", "", "\n", "\r\n## Later\r\n\r\nX\r\n",
+        ]
+        seen_non_empty = 0
+        for tail in tails:
+            for wrapped in (False, True):
+                if wrapped:
+                    doc = (
+                        f"# P\n\n{_MANAGED_START_MARKER}\n{section}"
+                        f"{_MANAGED_END_MARKER}\n{tail}"
+                    )
+                else:
+                    doc = f"# P\n\n{section}{tail}"
+                _before, _header, after, _entries = _parse_retrieved_context_section(doc)
+                seen_non_empty += 1 if after else 0
+                assert not after.startswith("\n"), (
+                    f"a newline-leading after-section is now reachable with "
+                    f"tail {tail!r} and managed region {wrapped}. The exclusion "
+                    f"in this class rests on that being impossible."
+                )
+        # NON-VACUITY: the sweep must produce non-empty after-sections, or it
+        # proves the property over the empty string alone.
+        assert seen_non_empty >= 2, (
+            f"the sweep produced {seen_non_empty} non-empty after-sections, so "
+            f"it does not exercise the property it asserts"
         )
 
     def test_negative_control_no_after_section_gives_no_survivor(self, tmp_path):
