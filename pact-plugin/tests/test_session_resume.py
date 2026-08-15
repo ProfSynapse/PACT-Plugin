@@ -46,6 +46,8 @@ _build_journal_resume() -- truncation boundary:
 """
 
 import datetime as _dt
+import errno
+import os
 import sys
 from pathlib import Path
 
@@ -538,7 +540,10 @@ class TestUpdateSessionInfoErrorPaths:
     """Tests for update_session_info() exception handling."""
 
     def test_returns_error_message_on_exception(self, tmp_path, monkeypatch):
-        """Should return truncated error message when file operations fail."""
+        """Should return the `Session info failed:` message when file
+        operations fail. The message names its cause from a closed
+        vocabulary and carries no fragment of the caller's error text.
+        """
         from shared.session_resume import update_session_info
         from unittest.mock import patch as mock_patch
 
@@ -551,6 +556,287 @@ class TestUpdateSessionInfoErrorPaths:
 
         assert result is not None
         assert "Session info failed:" in result
+
+
+def _unreadable_project(tmp_path):
+    """Build a project whose CLAUDE.md exists and cannot be read.
+
+    The parent directory stays SEARCHABLE, which is what makes this a
+    natural product case: `ensure_dot_claude_parent` succeeds, the
+    `file_lock` sidecar opens, `Path.exists` returns True, and the failure
+    lands on `read_text` with the absolute path attached to the exception.
+    """
+    project_dir = tmp_path / "project"
+    (project_dir / ".claude").mkdir(parents=True)
+    target = project_dir / ".claude" / "CLAUDE.md"
+    target.write_text(
+        "<!-- SESSION_START -->\n"
+        "## Current Session\n"
+        "<!-- SESSION_END -->\n",
+        encoding="utf-8",
+    )
+    target.chmod(0o000)
+    return project_dir, target
+
+
+class TestUpdateSessionInfoFailureSignal:
+    """Arms for the inner `except Exception` failure signal.
+
+    The signal is `Session info failed: <TypeName>[ (<ERRNO_SYMBOL>)]. The
+    Current Session block in CLAUDE.md is now stale.` It replaced
+    `f"Session info failed: {str(e)[:50]}"`, which leaked the absolute
+    path an OSError attaches to its message. A length bound does not
+    repair that: it keeps the LEADING characters, and the path sits there.
+
+    FIVE PRODUCT ARMS AND ONE HARNESS ARM. Each arm labels itself in its
+    own docstring. Reachability differs between the two kinds and a
+    mislabelled arm overstates what the suite covers.
+    """
+
+    @pytest.mark.skipif(
+        os.geteuid() == 0,
+        reason="root reads a chmod 000 file, so the read never fails",
+    )
+    def test_p1_natural_read_failure_emits_no_path_fragment(
+        self, tmp_path, monkeypatch
+    ):
+        """P1, PRODUCT ARM. A filename-carrying NATURAL failure emits no
+        path fragment.
+
+        REACHABILITY: reached with no injection. A `chmod 000` CLAUDE.md in
+        a searchable parent passes lock acquisition and `Path.exists`, then
+        fails at `read_text` with the absolute path attached.
+
+        THE POSITIVE CAUSE ASSERTION IS LOAD-BEARING, and not decoration.
+        The outer `OSError` arm returns `Could not acquire lock ... (path
+        precondition not met); session info update skipped.`, which carries
+        no "/" either. So an absence-only arm would pass while measuring a
+        DIFFERENT handler. Only the cause token separates the two.
+
+        MUTANT: restore `f"Session info failed: {str(e)[:50]}"`.
+        """
+        from shared.session_resume import update_session_info
+
+        project_dir, target = _unreadable_project(tmp_path)
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+        try:
+            result = update_session_info("sess-123", "pact-sess123")
+        finally:
+            target.chmod(0o600)
+
+        assert result is not None
+        assert result.startswith(
+            "Session info failed: PermissionError (EACCES)"
+        ), f"Arm measured a different handler: {result!r}"
+        assert "/" not in result
+        assert str(tmp_path) not in result
+        assert os.path.expanduser("~") not in result
+
+    def test_p2_decode_failure_emits_no_file_content(
+        self, tmp_path, monkeypatch
+    ):
+        """P2, PRODUCT ARM. A decode failure emits no fragment of the
+        file's content.
+
+        REACHABILITY: reached with no injection. A CLAUDE.md that is not
+        valid UTF-8 fails inside `read_text`.
+
+        MUTANT: restore `str(e)[:50]`, which emits
+        `'utf-8' codec can't decode byte 0xff in position 0`.
+        """
+        from shared.session_resume import update_session_info
+
+        project_dir = tmp_path / "project"
+        (project_dir / ".claude").mkdir(parents=True)
+        target = project_dir / ".claude" / "CLAUDE.md"
+        target.write_bytes(b"\xff\xfe bad bytes")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+
+        result = update_session_info("sess-123", "pact-sess123")
+
+        assert result is not None
+        assert "UnicodeDecodeError" in result
+        assert "codec" not in result
+        assert "0xff" not in result
+        assert "/" not in result
+
+    @pytest.mark.skipif(
+        os.geteuid() == 0,
+        reason="root reads a chmod 000 file, so the read never fails",
+    )
+    def test_p3_presence_control_signal_is_emitted_at_all(
+        self, tmp_path, monkeypatch
+    ):
+        """P3, PRODUCT ARM, PRESENCE CONTROL.
+
+        THE HAZARD IT NAMES: an ABSENCE assertion ("no path fragment is
+        emitted") is satisfied by a DELETED message, so a leak arm that
+        asserts only an absence goes green when the signal disappears.
+
+        WHAT IT ADDS TODAY, STATED HONESTLY BECAUSE IT WAS MEASURED. Both
+        deletion mutants (return `None`, return `""`) redden P1, P2, P4 and
+        H1 as well, because those arms each open with a not-None or a
+        positive-content assertion. SO THIS ARM CONTRIBUTES NO UNIQUE KILL
+        AGAINST THE CURRENT ARMS. It is kept because it is the only arm
+        whose SUBJECT is presence: if a later seat weakens P1 or P2 to an
+        absence-only check, deletion coverage survives here instead of
+        vanishing with nothing red to show for it.
+
+        MUTANTS RUN: return `None` -> RED. return `""` -> RED.
+
+        Deliberately weak on wording: a reworded prefix leaves this arm
+        GREEN (measured against the `Session info error:` mutant) while P4
+        reddens. That separation is why P3 and P4 are two arms.
+        """
+        from shared.session_resume import update_session_info
+
+        project_dir, target = _unreadable_project(tmp_path)
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+        try:
+            result = update_session_info("sess-123", "pact-sess123")
+        finally:
+            target.chmod(0o600)
+
+        assert isinstance(result, str)
+        assert result != ""
+
+    @pytest.mark.skipif(
+        os.geteuid() == 0,
+        reason="root reads a chmod 000 file, so the read never fails",
+    )
+    def test_p4_routing_contract_the_word_failed_survives(
+        self, tmp_path, monkeypatch
+    ):
+        """P4, PRODUCT ARM, ROUTING CONTRACT.
+
+        THE WORD `failed` IS A MACHINE CONTRACT, not prose. The consumer is
+        session_init.py step 5b, line 1589:
+        `if "failed" in session_msg.lower() or "skipped" in
+        session_msg.lower():` routes the return into `system_messages`, the
+        user-visible error surface; otherwise into `context_parts`. A
+        REWORDED MESSAGE KEEPS THE HUMAN SIGNAL AND SILENTLY DOWNGRADES
+        THE ROUTING, and no test drives that branch.
+
+        THE PREDICATE FAMILY HAS SIX MEMBERS (session_init.py lines 991,
+        1005, 1018, 1032, 1060 and 1589). FIVE OF THEM SERVE OTHER
+        PRODUCERS and are outside this arm. Only 1589 consumes
+        update_session_info. A later reader must not read "the routing
+        site" as "the only routing site".
+
+        REACHABILITY BOUND: line 1586 gates the consumer on
+        `frame_is_lead and not _is_unknown_or_missing_session(session_id)`,
+        so the routing fires on a lead frame with a known session id. That
+        narrows WHEN the contract is exercised. It does not weaken it.
+
+        MUTANT: reword the prefix to `Session info error:`. This arm
+        reddens and P3 STAYS GREEN. That separation is why P3 and P4 are
+        two arms and are not merged.
+        """
+        from shared.session_resume import update_session_info
+
+        project_dir, target = _unreadable_project(tmp_path)
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+        try:
+            result = update_session_info("sess-123", "pact-sess123")
+        finally:
+            target.chmod(0o600)
+
+        assert result is not None
+        assert "failed" in result.lower(), (
+            "session_init.py:1589 routes on this substring; without it the "
+            "message lands in ordinary context, not system_messages"
+        )
+
+    def test_p5_failure_cause_is_a_closed_vocabulary(self):
+        """P5, PRODUCT ARM. Unit arm on `_failure_cause`.
+
+        THE CLOSED VOCABULARY IS THE REPAIR. A filename filter does NOT
+        close the leak: row 4 below carries `filename=None` and
+        `errno=None` while its `str()` carries a path, so no
+        attribute-keyed filter reaches it.
+
+        MUTANT: add a `str(exc)` fallback when the symbol is absent. ROWS 4
+        AND 6 REDDEN. That fallback is the most likely shortcut, because
+        the two Unicode members and the unmapped code carry no errno.
+
+        Row 6 builds its code from `max(errno.errorcode) + 1` and NOT from
+        a literal: 122 is unmapped on darwin and maps to EDQUOT on linux,
+        so a hardcoded row would be platform-dependent.
+        """
+        from shared.session_resume import _failure_cause
+
+        unmapped_code = max(errno.errorcode) + 1
+        try:
+            b"\xff".decode("utf-8")
+        except UnicodeDecodeError as decode_error:
+            unicode_exc = decode_error
+
+        rows = [
+            (
+                PermissionError(
+                    13, "Permission denied", "/Users/x/secret/CLAUDE.md"
+                ),
+                "PermissionError (EACCES)",
+            ),
+            (
+                IsADirectoryError(21, "Is a directory", "/Users/x/secret"),
+                "IsADirectoryError (EISDIR)",
+            ),
+            (
+                OSError(errno.ENOSPC, "No space left on device"),
+                "OSError (ENOSPC)",
+            ),
+            (
+                OSError("bare message with /Users/x/secret in it"),
+                "OSError",
+            ),
+            (unicode_exc, "UnicodeDecodeError"),
+            (OSError(unmapped_code, "unmapped"), "OSError"),
+        ]
+
+        for exc, expected in rows:
+            rendered = _failure_cause(exc)
+            assert rendered == expected, f"{exc!r} rendered {rendered!r}"
+            assert "/" not in rendered
+
+    def test_h1_write_path_failure_by_injection(self, tmp_path, monkeypatch):
+        """H1, HARNESS ARM. The write path, reached BY INJECTION ONLY.
+
+        THIS IS NOT A PRODUCT ARM AND MUST NOT BE READ AS ONE. No natural
+        write failure reaches this handler: a read-only parent directory
+        fails LOCK ACQUISITION first and lands in the outer `OSError` arm,
+        which is opaque. The patch below drives the handler; it does not
+        reproduce a production sequence. A later reader must not cite H1 as
+        evidence that a natural write failure occurs here.
+
+        MUTANT: restore `str(e)[:50]`.
+        """
+        from unittest.mock import patch as mock_patch
+
+        from shared import session_resume
+
+        project_dir = tmp_path / "project"
+        (project_dir / ".claude").mkdir(parents=True)
+        (project_dir / ".claude" / "CLAUDE.md").write_text(
+            "# Project\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+
+        injected = OSError(
+            errno.ENOSPC,
+            "No space left on device",
+            "/Users/x/secret/CLAUDE.md",
+        )
+        with mock_patch.object(
+            session_resume, "_atomic_write_text", side_effect=injected
+        ):
+            result = session_resume.update_session_info(
+                "sess-123", "pact-sess123"
+            )
+
+        assert result is not None
+        assert "OSError (ENOSPC)" in result
+        assert "/" not in result
 
 
 class TestUpdateSessionInfoLocking:
