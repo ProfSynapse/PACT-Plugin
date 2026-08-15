@@ -1170,7 +1170,12 @@ def _apply_entry_token_ceiling(entry: str, ceiling: int) -> str:
     # NO NEWLINE, so it can open no line. The forbidden class is wider than
     # the cause that motivates it, and this is the part outside the cause.
     #
-    # Uses the same `[:limit - 3] + "..."` convention as the field sanitize.
+    # THE CODE BELOW APPENDS THE MARKER. IT DOES NOT WRITE THE MARKER ON TOP
+    # OF THE KEPT TEXT. The field sanitize uses `[:limit - 3] + "..."` because
+    # it bounds CHARACTERS, so the marker must sit within that bound. This
+    # function bounds WORDS, so no character bound applies to the marker, and
+    # a marker written on top of the kept text breaks the field name. See
+    # the two bounds below.
     last = droppable[-1]
     line = lines[last]
     fitted = list(kept)
@@ -1179,23 +1184,35 @@ def _apply_entry_token_ceiling(entry: str, ceiling: int) -> str:
     )
     budget_words = max(0, int((ceiling - overhead) / 1.3))
 
-    # DEGENERATE EDGE: DROP THE LINE RATHER THAN EMIT A MANGLED LABEL.
-    # The `**Field**: ` label is ONE word, and the ellipsis step cuts 3
-    # characters off the END of what it keeps. At a word budget of 1 the
-    # only kept word IS the label, so the cut lands INSIDE it and emits
-    # `**Context...`. At a budget of 0 the line becomes a bare `...`.
-    # BOTH ARE THE PARTIAL `**Field**: ` FRAGMENT that the cut rule exists
-    # to prevent, so this edge would defeat the guard at its own boundary.
-    # MEASURED by a ceiling sweep: the label survives whole at a budget of
-    # 2 or more, because the cut then lands in a VALUE word.
-    if budget_words < 2:
+    # DEGENERATE EDGE: DROP THE LINE RATHER THAN EMIT A BARE MARKER.
+    # At a word budget of 0 the cut keeps no word of the line, so the
+    # appended marker IS the line and the output is a bare `...`. That is
+    # the partial-fragment shape the cut rule prevents, so the line goes.
+    #
+    # THE BOUND OF 1 COMES FROM THE FIELD NAME RATHER THAN FROM A GUESS. The
+    # `**Field**: ` field name is ONE word, so a budget of 1 keeps that name
+    # complete and elides only the value. A HIGHER bound has no support from
+    # the field name, because the append below cannot reach into the words
+    # that it keeps.
+    #
+    # AN EARLIER BOUND OF 2 CAME FROM A CUT THAT WROTE THE MARKER ON TOP OF
+    # THE KEPT TEXT, and that bound was one too low for its own rule: at a
+    # budget of 2 with a one-character second word, the cut went into the
+    # field name and emitted `**Context**...`. The append below removes the
+    # class rather than moves the bound.
+    if budget_words < 1:
         fitted.remove(last)
         return "\n".join(lines[i] for i in fitted)
 
     words = line.split()
     truncated = " ".join(words[:budget_words])
     if len(truncated) < len(line):
-        truncated = truncated[:max(0, len(truncated) - 3)] + "..."
+        # APPEND, DO NOT WRITE ON TOP. `" ".join` of one or more words does
+        # not end with a space, so the marker attaches to the last kept word
+        # and adds NO word to `str.split()`. The line therefore costs
+        # `budget_words` tokens with the marker and without it, which is why
+        # this repair moves no constant.
+        truncated += "..."
     lines[last] = truncated
     return "\n".join(lines[i] for i in fitted)
 
