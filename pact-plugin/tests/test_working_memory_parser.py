@@ -378,7 +378,11 @@ class TestMigrationSyncPipeline:
             scores=[0.95],
             memory_ids=["ret-1"],
         )
-        assert result is True
+        # FLOOR, and it is a floor on purpose: this test asserts the MARKER
+        # pairing below, and it requires only that the write happened. It does
+        # not name a cause for a decline, so there is no reason to assert.
+        # `wrote` is a real bool, so `is True` keeps the identity strictness.
+        assert result.wrote is True
 
         final = claude_md.read_text(encoding="utf-8")
         self._assert_markers_paired(final)

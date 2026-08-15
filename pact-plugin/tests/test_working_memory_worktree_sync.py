@@ -352,7 +352,11 @@ class TestRetrievedSyncAbsentTarget:
             memory_ids=["c" * 32],
         )
 
-        assert ok is False
+        # `missing` is the subject here, not mere falsiness. This test names its
+        # cause in its own name: the destination was ABSENT. `unresolved` would
+        # mean the resolver found nothing, which is a different defect and would
+        # make this arm pass for the wrong cause.
+        assert ok.reason == SyncResult.MISSING
         assert not missing.exists(), "the sync CREATED a CLAUDE.md"
         leftovers = sorted(p.name for p in project.iterdir())
         assert leftovers == [], (
@@ -381,7 +385,9 @@ class TestRetrievedSyncAbsentTarget:
             memory_ids=["d" * 32],
         )
 
-        assert ok is False
+        # `missing` is the subject, not mere falsiness: the resolved path was
+        # absent, which is what makes the mkdir side effect reachable at all.
+        assert ok.reason == SyncResult.MISSING
         created = sorted(str(p.relative_to(root)) for p in root.rglob("*"))
         assert created == [], (
             f"the sync created filesystem entries under a path it only had to "
@@ -411,7 +417,15 @@ class TestRetrievedSyncAbsentTarget:
             memory_ids=["e" * 32],
         )
 
-        assert ok is True, "the control did not write — the harness is broken"
+        # THE REASON TRAVELS IN THE MESSAGE. This is the harness CONTROL, so a
+        # failure here tells a later investigator the harness is broken. A bare
+        # falsiness report would name the wrong cause: `missing` means the
+        # fixture never resolved, `refused` means the guard declined, and the
+        # two demand different repairs. Print the reason the sync gave.
+        assert ok.reason == SyncResult.WROTE, (
+            f"the control did not write (reason={ok.reason}); "
+            f"the harness is broken"
+        )
         assert "live control writes" in present.read_text(encoding="utf-8")
 
     def test_absent_destination_warns_naming_both_causes(
@@ -496,15 +510,17 @@ class TestBothWriteCallersAgreeOnAbsentDestinations:
             # tuple, not list: these are compared as a set below to detect
             # divergence between callers, and a list is unhashable.
             #
-            # NORMALISED TO A BOOL ON PURPOSE. The two callers no longer share a
-            # return TYPE -- `sync_to_claude_md` reports a `SyncResult` and
-            # `sync_retrieved_to_claude_md` still returns a plain bool -- so a
-            # raw comparison would report divergence for a difference in
-            # richness rather than in behaviour. The invariant this class states
-            # is about BEHAVIOUR: did it write, and did it touch the filesystem.
-            # Both survive the normalisation. The reason a given caller declined
-            # is asserted in that caller's own class, not here, because a
-            # differential arm can only compare what every driver has.
+            # NORMALISED TO A BOOL ON PURPOSE, AND THE CAUSE CHANGED WHEN THE
+            # TWO RETURN TYPES CONVERGED. Both callers now report a
+            # `SyncResult`, so the normalisation is no longer bridging two
+            # different types. It is still correct and still deliberate: the
+            # invariant this class states is about BEHAVIOUR, being did it
+            # write and did it touch the filesystem, and comparing the two
+            # `reason` values here would report divergence whenever two callers
+            # decline for different but equally correct causes. The reason a
+            # given caller declined is asserted in that caller's own class,
+            # not here, because a differential arm can only compare what every
+            # driver has.
             created = tuple(sorted(str(p.relative_to(root)) for p in root.rglob("*")))
             observations[name] = (bool(returned), created)
 

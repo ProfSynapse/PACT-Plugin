@@ -465,16 +465,26 @@ class TestSyncRetrievedBudgetEnforcement:
                 memory_ids=["mem1"]
             )
 
-        assert result is True
+        # FLOOR, and it is a floor on purpose: this test does not name a CAUSE
+        # for its expected outcome, it only requires that the write happened.
+        # `wrote` is a real bool, so `is True` keeps the identity strictness
+        # the assertion had before the return type became a `SyncResult`.
+        assert result.wrote is True
         new_content = claude_md.read_text(encoding="utf-8")
         assert "test search" in new_content
         assert "## Working Memory" in new_content
+        # LIMIT, PRE-EXISTING AND NOT INTRODUCED HERE: the name of this test
+        # promises entries are REDUCED, and no assertion below counts them.
+        # Do not read the name as a guarantee of the drop behaviour.
 
     def test_no_memories_returns_false(self):
-        """sync_retrieved_to_claude_md with empty list should return False."""
-        from working_memory import sync_retrieved_to_claude_md
+        """sync_retrieved_to_claude_md with an empty list reports `empty`."""
+        from working_memory import sync_retrieved_to_claude_md, SyncResult
         result = sync_retrieved_to_claude_md([], query="test")
-        assert result is False
+        # `empty` is the subject, not mere falsiness. This test NAMES its cause
+        # in its own name: there was nothing to write. `unresolved` or `failed`
+        # would make this arm pass while the guard it checks never ran.
+        assert result.reason == SyncResult.EMPTY
 
 
 class TestFormatMemoryEntry:

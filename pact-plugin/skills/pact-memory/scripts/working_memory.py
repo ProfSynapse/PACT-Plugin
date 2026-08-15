@@ -1592,12 +1592,21 @@ class SyncResult:
     here would make a truthiness read report success on a refusal.
 
     THE ARGUMENT IS THE PRESERVED MEANING, NOT A COUNT OF CALL SITES.
-    `__bool__ == wrote` returns exactly what this function returned before, so
-    NO caller changes behaviour -- neither the callers that exist now, nor one
-    written later by an author who never reads this class. Do not restate that
-    argument as a tally of reads in the suite. A tally rots the next time a
-    test lands, and it invites a future editor to re-derive the decision from a
-    population instead of from the property. State the property.
+    `__bool__ == wrote` returns exactly what a bare bool returned, so NO
+    TRUTHINESS READER changes behaviour -- neither the truthiness readers that
+    exist now, nor one written later by an author who never reads this class.
+    Do not restate that argument as a tally of reads in the suite. A tally rots
+    the next time a test lands, and it invites a future editor to re-derive the
+    decision from a population instead of from the property. State the property.
+
+    THE PROPERTY IS ABOUT TRUTHINESS READERS AND NOT ABOUT ALL CALLERS, AND
+    THAT WIDTH IS THE CORRECTION RATHER THAN A QUALIFICATION. This paragraph
+    said "no caller changes behaviour" and that was too wide: `__bool__`
+    cannot rescue an IDENTITY comparison. For an instance of this class,
+    `bool(s)` is True while `s is True` and `s == True` are both False, so
+    `assert x is True` breaks where `assert x` does not. Seven assertions in
+    the suite were identity comparisons and each one had to change. A reader
+    who takes the wider claim will predict no breakage and be incorrect.
 
     Do not "fix" the inconsistency with `_store_embedding`; it is load-bearing.
     """
@@ -1611,6 +1620,7 @@ class SyncResult:
     UNRESOLVED = "unresolved"    # no CLAUDE.md resolved
     MISSING = "missing"          # resolved a path that does not exist
     FAILED = "failed"            # the write itself raised
+    EMPTY = "empty"              # nothing to write; caller passed no entries
 
     def __init__(self, reason: str) -> None:
         self.reason = reason
@@ -2100,7 +2110,7 @@ def sync_retrieved_to_claude_md(
     scores: Optional[List[float]] = None,
     memory_ids: Optional[List[str]] = None,
     claude_md_root: Optional[Path] = None
-) -> bool:
+) -> SyncResult:
     """
     Sync retrieved memories to the Retrieved Context section of CLAUDE.md.
 
@@ -2117,7 +2127,8 @@ def sync_retrieved_to_claude_md(
             `sync_to_claude_md`. Omit it for today's behaviour.
 
     Returns:
-        True if sync succeeded, False otherwise.
+        `SyncResult`. `bool()` of it is the value this function returned
+        before the conversion below, and `.reason` says WHY when it is false.
 
     THIS IS THE SECOND AMBIENT WRITER AND IT HAD NO REFUSAL AT ALL. The save
     path at least had the `target` escape hatch; this one takes no target, so
@@ -2126,13 +2137,43 @@ def sync_retrieved_to_claude_md(
     whenever `sync_to_claude` is true, WHICH IS THE DEFAULT -- so an ordinary
     search was a write.
 
-    ITS SIGNATURE STAYS `bool` DELIBERATELY. The reason channel belongs to
-    `sync_to_claude_md`, whose callers read `True` as success; this function is
-    not being converted, and an annotation promising `SyncResult` here would
-    describe code that returns `False`.
+    ITS SIGNATURE WAS `bool` DELIBERATELY, AND THIS CONVERSION ANSWERS THAT
+    DECISION RATHER THAN IGNORES IT. THE RECORDED PARAGRAPH CARRIED THREE
+    CLAIMS AND TWO OF THEM NEED AN ANSWER HERE. The third, "this function
+    is not being converted", was a statement of intent at the time, and the
+    conversion settles it by being the act it describes, so it needs no
+    separate answer. A reader who counts three and finds two answered has
+    not met a claim that went missing.
+
+    THE CONTINGENT ONE: "an annotation promising `SyncResult` here would
+    describe code that returns `False`". That held only while the return
+    sites stayed bare bools. ALL FIVE OF THEM ARE CONVERTED, so the
+    annotation now describes the code and the cause is spent.
+
+    THE OWNERSHIP ONE, WHICH THE CONVERSION DOES NOT TOUCH AND WHICH IS
+    SUPERSEDED RATHER THAN DISCHARGED: the paragraph said the reason
+    channel BELONGS to `sync_to_claude_md`. That was a true statement of
+    the arrangement at the time and it is not contingent on this function.
+    The architect superseded it: the channel is shared by both writers,
+    because a caller of either one has the same need to separate a refusal
+    from a no-op.
+
+    WHY IT WAS WORTH CONVERTING, STATED WITHOUT OVERCLAIM. A REFUSED write and
+    a DID-NOT-WRITE were one observation for every caller. THIS DOES NOT REPAIR
+    A LIVE PRODUCTION OBSERVATION: the one production caller discards the
+    return value, so no shipped code reads the bool today. What the conversion
+    buys is CONSISTENCY with the sibling and a DIAGNOSTIC channel for a future
+    caller and for the suite.
+
+    NO TRUTHINESS READER CHANGES BEHAVIOUR, AND THAT IS NARROWER THAN "no
+    caller". `SyncResult.__bool__` is `wrote`, so a truthiness read gets the
+    value the bare bool gave. AN IDENTITY COMPARISON IS A DIFFERENT MATTER and
+    `__bool__` cannot rescue it: `x is True` is False for an instance of this
+    class however `bool(x)` reads. The suite held seven such comparisons and
+    each one changed with this conversion.
     """
     if not memories:
-        return False
+        return SyncResult(SyncResult.EMPTY)
 
     # Same refusal as the save path, and the same exemptions: a declared anchor
     # is checked, so it is a stronger warrant than a named target. There is no
@@ -2151,7 +2192,7 @@ def sync_retrieved_to_claude_md(
 
     if claude_md_path is None or project_root is None:
         logger.debug("CLAUDE.md not found, skipping retrieved context sync")
-        return False
+        return SyncResult(SyncResult.UNRESOLVED)
 
     # EXISTENCE GUARD. The `is None` check above is not sufficient: it covers a
     # resolver that finds NOTHING, not a resolver that returns a path to a file
@@ -2181,7 +2222,7 @@ def sync_retrieved_to_claude_md(
             "resolver stopped returning only existing paths, or the file was "
             "removed after it resolved.", claude_md_path
         )
-        return False
+        return SyncResult(SyncResult.MISSING)
 
     try:
         # Serialize the FULL read-modify-write window under the shared sidecar
@@ -2272,8 +2313,8 @@ def sync_retrieved_to_claude_md(
             _atomic_write_text(claude_md_path, new_content, project_root)
 
         logger.info("Synced retrieved memories to CLAUDE.md Retrieved Context section")
-        return True
+        return SyncResult(SyncResult.WROTE)
 
     except Exception as e:
         logger.warning(f"Failed to sync retrieved memories to CLAUDE.md: {e}")
-        return False
+        return SyncResult(SyncResult.FAILED)
