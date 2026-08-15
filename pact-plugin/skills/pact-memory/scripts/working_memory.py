@@ -125,6 +125,25 @@ COMPRESSED_SUMMARY_CHAR_CAP = 120
 # neighbours it compresses; see `_apply_token_budget`.
 COMPRESSED_ENTRY_TOKEN_CEILING = 128
 
+# The line prefix that carries the pointer to the durable record.
+#
+# NAMED BECAUSE FOUR EXECUTABLE SITES MUST AGREE, AND A RENAME AT SOME OF
+# THEM IS A SILENT DEFECT. Two sites WRITE the line
+# (`_format_memory_entry` and `_format_retrieved_entry`). Two sites READ it
+# by prefix: `_compress_memory_entry` keeps it, and
+# `_apply_entry_token_ceiling` holds it out of the cut.
+#
+# THAT EXCLUSION FROM THE CUT IS THE PROPERTY THE CUT RULE RESTS ON. This
+# design accepts truncation rather than refusal ONLY WHILE the recovery
+# pointer survives the cut. So a rename at the two writers without the two
+# readers, or the opposite, makes the id line droppable again: THE
+# RECOVERY ROUTE GOES, nothing raises and nothing reddens. One name for
+# the four sites makes that silent rename not possible.
+#
+# THE VALUE CARRIES NO COLON, because the readers test a PREFIX and the
+# writers append `: ` and the value.
+_MEMORY_ID_LABEL = "**Memory ID**"
+
 # Pin caps constants (twin copy of hooks/pin_caps.py — cannot import across
 # the skills-to-hooks package boundary). Drift-detection test in
 # tests/test_staleness.py guards against divergence; if you change these,
@@ -1046,7 +1065,7 @@ def _compress_memory_entry(entry: str) -> str:
     # ceiling is conservative for the entries that lack it.
     id_line = ""
     for line in lines[1:]:
-        if line.startswith("**Memory ID**"):
+        if line.startswith(_MEMORY_ID_LABEL):
             id_line = line
             break
 
@@ -1135,7 +1154,7 @@ def _apply_entry_token_ceiling(entry: str, ceiling: int) -> str:
     # does not depend on it staying last.
     exempt = {0}
     for index, line in enumerate(lines):
-        if line.startswith("**Memory ID**"):
+        if line.startswith(_MEMORY_ID_LABEL):
             exempt.add(index)
 
     # DROP WHOLE LINES FIRST, from the end, and stop at ONE remaining
@@ -1184,22 +1203,30 @@ def _apply_entry_token_ceiling(entry: str, ceiling: int) -> str:
     )
     budget_words = max(0, int((ceiling - overhead) / 1.3))
 
-    # DEGENERATE EDGE: DROP THE LINE RATHER THAN EMIT A BARE MARKER.
-    # At a word budget of 0 the cut keeps no word of the line, so the
-    # appended marker IS the line and the output is a bare `...`. That is
-    # the partial-fragment shape the cut rule prevents, so the line goes.
+    # THE PROPERTY A READER CAN CHECK, AND IT IS A PROPERTY RATHER THAN A
+    # NUMBER: THE EMITTED FIELD LINE KEEPS ITS COMPLETE `**Field**:` NAME,
+    # OR THE LINE IS ABSENT. There is no third outcome. A number cannot
+    # state that property, and a bound written as a number was incorrect
+    # two times. The append below is what makes the property hold at each
+    # input, because it cannot reach into the words that the cut keeps.
     #
-    # THE BOUND OF 1 COMES FROM THE FIELD NAME RATHER THAN FROM A GUESS. The
-    # `**Field**: ` field name is ONE word, so a budget of 1 keeps that name
-    # complete and elides only the value. A HIGHER bound has no support from
-    # the field name, because the append below cannot reach into the words
-    # that it keeps.
+    # THE VALUE CAN BE EMPTY AND THE PROPERTY HOLDS. At a budget of 1 the
+    # line reads `**Context**:...`, which keeps the complete name and
+    # elides all of the value. THAT SHAPE IS DELIBERATE. A bound of 2
+    # removes it and reopens the defect above: an entry with ONE field line
+    # then drops that line and renders as a dated heading with no content
+    # and no recovery pointer.
+    #
+    # DEGENERATE EDGE: DROP THE LINE RATHER THAN EMIT A BARE MARKER. At a
+    # word budget of 0 the cut keeps no word, so the appended marker IS the
+    # line and the output is a bare `...`. That output carries no field
+    # name, so it breaks the property above, and the line goes.
     #
     # AN EARLIER BOUND OF 2 CAME FROM A CUT THAT WROTE THE MARKER ON TOP OF
-    # THE KEPT TEXT, and that bound was one too low for its own rule: at a
+    # THE KEPT TEXT. That bound was one too low for its own rule: at a
     # budget of 2 with a one-character second word, the cut went into the
-    # field name and emitted `**Context**...`. The append below removes the
-    # class rather than moves the bound.
+    # field name and emitted `**Context**...`. A THIRD BOUND ANSWERS ONE
+    # MORE INPUT AND LEAVES THE NEXT, so the append removes the class.
     if budget_words < 1:
         fitted.remove(last)
         return "\n".join(lines[i] for i in fitted)
@@ -1446,7 +1473,7 @@ def _format_memory_entry(
             str(memory_id), _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
         )
         if cleaned_id:
-            lines.append(f"**Memory ID**: {cleaned_id}")
+            lines.append(f"{_MEMORY_ID_LABEL}: {cleaned_id}")
 
     return "\n".join(lines)
 
@@ -2116,7 +2143,7 @@ def _format_retrieved_entry(
             str(memory_id), _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
         )
         if cleaned_id:
-            lines.append(f"**Memory ID**: {cleaned_id}")
+            lines.append(f"{_MEMORY_ID_LABEL}: {cleaned_id}")
 
     return "\n".join(lines)
 
