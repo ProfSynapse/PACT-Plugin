@@ -2335,6 +2335,92 @@ class TestSanitizePromptFieldTwinCopyDrift:
             "working_memory.py — update both in the same commit"
         )
 
+    def test_the_compared_set_covers_every_shared_constant(self):
+        """The arm above must compare EACH constant the two copies share.
+
+        THE ARM ABOVE NAMES FOUR CONSTANTS, SO IT CANNOT NOTICE A FIFTH. A
+        shared value added to the two copies tomorrow leaves that arm GREEN
+        and silent about the new value, and the two write paths can then
+        bound differently through a constant nobody compares.
+
+        MEASURED WHEN THIS ARM WAS WRITTEN: shared 4, compared 4, shared
+        and not compared 0. So the arm above is COMPLETE, and it is complete
+        by the care of the author rather than by construction. This test is
+        what makes it complete by construction.
+
+        COUNTING RULE, STATED SO A LATER READER CAN REPRODUCE THE POPULATION
+        RATHER THAN TRUST IT: module-level `NAME = value` assignments, parsed
+        with `ast` from each file, intersected BY NAME. Assignments nested in
+        a function, a class or a conditional are OUT of the population,
+        because a module-level constant is the shape the twin uses.
+
+        WHEN THIS GOES RED, DECIDE WHICH KIND OF NAME APPEARED, BECAUSE THE
+        TWO KINDS TAKE OPPOSITE ACTIONS.
+
+        1. THE NEW SHARED NAME IS PART OF THE TWINNED SANITIZER SURFACE. Add
+           it to the arm above, in the commit that introduces it.
+        2. THE NEW SHARED NAME IS A COINCIDENCE OF SPELLING with no bearing
+           on `_sanitize_prompt_field`. It does NOT belong in an arm that
+           byte-compares the constants of ONE function, so exclude it here
+           and state its cause at the exclusion.
+
+        CASE 2 IS REACHABLE RATHER THAN THEORETICAL, and the population is
+        why: this arm intersects EVERY module-level name the two files
+        share, which is WIDER than the sanitizer surface. Measured when this
+        arm was written: `working_memory.py` defines `logger` at module level
+        and `session_resume.py` does not. One ordinary edit that adds a
+        module logger to the second file puts `logger` in this intersection,
+        and a reader who obeys case 1 without thought would then add it to a
+        byte-comparison arm, which starts to assert a relation nobody meant
+        to hold.
+
+        IN NO CASE WIDEN THIS TEST INTO A BLANKET ACCEPT. An exclusion names
+        ONE value and carries its cause. A blanket accept returns the gate to
+        a promise somebody must remember to keep.
+        """
+        import ast as ast_module
+        import pathlib
+
+        plugin_root = pathlib.Path(__file__).resolve().parent.parent
+
+        def module_level_names(relative_path):
+            tree = ast_module.parse((plugin_root / relative_path).read_text())
+            return {
+                node.targets[0].id
+                for node in tree.body
+                if isinstance(node, ast_module.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast_module.Name)
+            }
+
+        canonical = module_level_names("hooks/shared/session_resume.py")
+        twin = module_level_names("skills/pact-memory/scripts/working_memory.py")
+        shared = canonical & twin
+
+        # The names the arm above compares, written out rather than derived,
+        # because deriving them from the same source they guard would make
+        # this assertion true by construction and prove nothing.
+        compared = {
+            "_REFRESH_FIELD_TRUNCATION_LIMIT",
+            "_REFRESH_PATH_TRUNCATION_LIMIT",
+            "_REFRESH_IDENTIFIER_TRUNCATION_LIMIT",
+            "_PROMPT_CONTROL_CHARS_RE",
+        }
+
+        # NON-VACUITY: the parse must find the two populations. An empty set
+        # on either side makes the comparison below pass for the wrong cause.
+        assert canonical, "no module-level names parsed from session_resume.py"
+        assert twin, "no module-level names parsed from working_memory.py"
+
+        assert shared == compared, (
+            "the set of constants SHARED by the two _sanitize_prompt_field "
+            "copies no longer equals the set the drift arm compares.\n"
+            f"  shared and not compared: {sorted(shared - compared)}\n"
+            f"  compared and not shared: {sorted(compared - shared)}\n"
+            "Add each shared name to test_sanitize_prompt_field_constants_match "
+            "in the same commit that introduces it."
+        )
+
 
 class TestStalenessLexicalBaseParity:
     """#1247: the lexical base recovered from a SUPPLIED path (option D in

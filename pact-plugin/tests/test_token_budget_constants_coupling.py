@@ -735,3 +735,122 @@ class TestFieldNameSurvivesTheCut:
                 f"{worst_exempt} gives a word budget of {budget_words}. At 1 the "
                 f"cut emits a name with no value, and at 0 it drops the line."
             )
+
+
+class TestMemoryIdLabelSites:
+    """The four executable sites must REFERENCE the label constant.
+
+    THE COUPLING, AND WHY IT NEEDS A SOURCE-SHAPE ARM RATHER THAN A
+    BEHAVIOURAL ONE. Two sites WRITE the recovery-pointer line and two
+    sites READ it by prefix. The read sites are what hold that line out of
+    the cut, and the design accepts truncation rather than refusal ONLY
+    WHILE that pointer survives. A rename applied to some of the four and
+    not the rest makes the id line droppable, and the recovery route goes.
+
+    MEASURED, AND IT IS WHY THIS ARM EXISTS IN THIS FORM:
+    - A change to the label VALUE is CAUGHT TODAY. Driving the constant
+      from `**Memory ID**` to `**Record ID**` reddens 12 tests across four
+      test modules, some of them written by other authors. That direction
+      needs no new arm and this class does not add one.
+    - A site that REVERTS TO THE BARE LITERAL while the constant keeps its
+      value is CAUGHT BY NOTHING. Reverting one read site to the literal
+      and running the FULL suite gives 14413 passed, 15 skipped, 0 failed.
+      NO BEHAVIOURAL TEST CAN EVER CATCH IT, because a literal equal to the
+      constant produces identical behaviour. It is invisible until somebody
+      changes the value, and then it half-applies in silence.
+
+    SO THIS ARM READS THE SOURCE SHAPE. It is the only instrument that can
+    see the difference, and the counting rule is stated below.
+    """
+
+    LABEL_NAME = "_MEMORY_ID_LABEL"
+    FUNCTIONS = (
+        "_compress_memory_entry",       # READ, keeps the line
+        "_apply_entry_token_ceiling",   # READ, holds the line out of the cut
+        "_format_memory_entry",         # WRITE
+        "_format_retrieved_entry",      # WRITE
+    )
+
+    def _module_source(self):
+        import pathlib
+
+        return (
+            pathlib.Path(__file__).resolve().parent.parent
+            / "skills/pact-memory/scripts/working_memory.py"
+        ).read_text()
+
+    def test_the_constant_is_defined_once_at_module_level(self):
+        """COUNTING RULE: module-level `NAME = value` assignments, `ast`-parsed."""
+        import ast
+
+        tree = ast.parse(self._module_source())
+        defined = [
+            node for node in tree.body
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == self.LABEL_NAME
+        ]
+        assert len(defined) == 1, (
+            f"{self.LABEL_NAME} must have one module-level definition and no more, "
+            f"found {len(defined)}"
+        )
+
+    @pytest.mark.parametrize("function_name", FUNCTIONS)
+    def test_the_site_references_the_constant_and_spells_no_literal(
+        self, function_name
+    ):
+        """Each of the four sites uses the NAME, and none carries the value.
+
+        COUNTING RULE: the function is located by `ast` in the module source
+        by name. A REFERENCE is an `ast.Name` node that carries the constant
+        name as its id. A LITERAL is an `ast.Constant` string equal to the value the
+        constant holds. The docstring of the function is excluded, because a
+        docstring that quotes the label is prose rather than a second site.
+        """
+        import ast
+
+        from working_memory import _MEMORY_ID_LABEL
+
+        tree = ast.parse(self._module_source())
+        target = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == function_name:
+                target = node
+                break
+        # NON-VACUITY: a renamed or removed function must not pass by absence.
+        assert target is not None, (
+            f"{function_name} is not present in working_memory.py. If it moved, "
+            f"re-point this arm rather than remove it."
+        )
+
+        body = list(target.body)
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            body = body[1:]
+
+        names, literals = set(), []
+        for statement in body:
+            for node in ast.walk(statement):
+                if isinstance(node, ast.Name):
+                    names.add(node.id)
+                elif (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and node.value == _MEMORY_ID_LABEL
+                ):
+                    literals.append(node.value)
+
+        assert self.LABEL_NAME in names, (
+            f"{function_name} does not reference {self.LABEL_NAME}. The four "
+            f"sites must move together, or a rename half-applies in silence."
+        )
+        assert not literals, (
+            f"{function_name} spells the label value {_MEMORY_ID_LABEL!r} as a "
+            f"literal. Behaviour is identical today, so no other test can see "
+            f"this. It becomes a defect when the constant value changes."
+        )
