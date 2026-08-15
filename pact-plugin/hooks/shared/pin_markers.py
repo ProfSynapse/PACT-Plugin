@@ -133,11 +133,41 @@ def _narrow_to_memory_region(
     collision label answers a different question. Placement had ONE runtime
     constraint and this is now the other half of it.
 
+    BOTH BOUNDARIES ARE MARKER LINES, THROUGH THE FILE'S SINGLE DEFINITION.
+    `marker_line_span` decides what counts, so this function adds no third
+    reading of `the marker occupies a line`.
+
+    WHAT THAT GUARANTEES, AND AGAINST WHAT. The managed region holds the
+    session block ABOVE the memory markers, and the session block interpolates
+    caller-influenced values. A value carrying the marker TEXT cannot move
+    either boundary, because the value lands inside a longer line and such a
+    line does not strip to the marker.
+
+    THE CONTROL THAT GUARANTEE RESTS ON IS IN ANOTHER MODULE, AND IT IS NAMED
+    HERE BECAUSE THIS FUNCTION CANNOT SEE IT. A value that could occupy a line
+    ALONE would move the boundary, and what stops that is
+    `session_resume._sanitize_prompt_field`, which substitutes control
+    characters. MEASURED at that function: `'/tmp/x\\n<marker>\\ny'` comes back
+    as `'/tmp/x <marker> y'`, so the newline goes and THE MARKER TEXT SURVIVES.
+    That survival is why a text search was defeated and a line rule is not. If
+    that sanitize stops covering newlines, this boundary is reachable again.
+
+    WHAT THIS DOES NOT GUARANTEE: a marker line placed BY HAND in the managed
+    region above the genuine one. That is a user editing a block the file
+    labels do-not-edit, which is the same self-inflicted population as a
+    hand-deleted marker pair.
+
+    THE PREVIOUS VERSION OF THIS PARAGRAPH ARGUED THE WRONG CASE, and the error
+    is worth keeping because it is easy to repeat. It said a marker OUTSIDE the
+    managed block belongs to no boundary this writer honours, and that taking
+    the caller's already-bounded text made a forgery unrepresentable. THAT IS
+    TRUE ABOUT OUTSIDE AND THE ATTACK IS INSIDE, where a forgery was fully
+    representable and unguarded. The sentence certified a property the function
+    did not have, and it read as covering all cases because it named none.
+
     THE SEARCH IS BOUNDED TO THE MANAGED REGION IT IS GIVEN, never to the whole
-    file, and that direction is load-bearing rather than tidy. A memory marker
-    OUTSIDE the managed block belongs to no boundary this writer honours, and a
-    whole-file search would let one define the window. Taking the caller's
-    already-bounded text makes that unrepresentable instead of guarded against.
+    file. That remains correct and is now the SECOND bound rather than the only
+    one.
 
     RETURNS ABSOLUTE OFFSETS, matching `extract_managed_region`, so the caller
     substitutes the pair and every offset arithmetic below it is unchanged.
@@ -145,15 +175,30 @@ def _narrow_to_memory_region(
     THE PAIR IS REQUIRED, AND THE MISSING-PAIR CASE REFUSES rather than falls
     back to the wide window. See `SkipReason.NO_MEMORY_REGION` for why a
     fall-back is unsafe on this document shape.
+
+    THE STRIPPED COMPARISON IS INHERITED FROM `marker_line_span` AND WAS
+    RE-JUDGED FOR THIS JOB, because that docstring justifies its tolerance by a
+    REFUSAL failure direction and this site bounds a WINDOW instead. MEASURED
+    on an indented memory start marker: `marker_line_span` accepts the line and
+    `_find_terminator_offset`, which matches the RAW line, does not. THE
+    DISAGREEMENT DOES NOT REACH THE PLANNER, because the two bound DIFFERENT
+    spans -- this one sets the window, and the terminator scan runs INSIDE the
+    window it produced, so the marker line is excluded before that scan sees
+    it. A raw comparison here would refuse an indented but faithful document,
+    which is the over-block direction this repository treats as the worse
+    fault.
     """
-    start_idx = region_text.find(MEMORY_START_MARKER)
-    if start_idx == -1:
+    start_span = marker_line_span(region_text, MEMORY_START_MARKER)
+    if start_span is None:
         return None
-    inner_start = start_idx + len(MEMORY_START_MARKER)
-    end_idx = region_text.find(MEMORY_END_MARKER, inner_start)
-    if end_idx == -1:
+    # The END of the marker line, so the window begins on the NEXT line and
+    # `region_start` stays a line start for every offset computed below it.
+    inner_start = start_span[1]
+    tail = region_text[inner_start:]
+    end_span = marker_line_span(tail, MEMORY_END_MARKER)
+    if end_span is None:
         return None
-    return region_text[inner_start:end_idx], region_start + inner_start
+    return tail[:end_span[0]], region_start + inner_start
 
 
 def _body_contains_a_fence(body: str) -> bool:
@@ -290,18 +335,26 @@ def is_line_start(text: str, offset: int) -> bool:
     return text[offset - 1] == "\n"
 
 
-def marker_line_offset(text: str, literal: str) -> int | None:
-    """Offset of the first line of `text` that IS `literal`, else None.
+def marker_line_span(text: str, literal: str) -> tuple[int, int] | None:
+    """Span of the first line of `text` that IS `literal`, else None.
 
-    THE SINGLE DEFINITION OF `the marker occupies a line`. `marker_line_present`
-    below is this function's boolean shadow, and the planner's pair ladder uses
-    the offsets. Keeping one implementation is what stops a document being
+    THE SINGLE DEFINITION OF `the marker occupies a line`. `marker_line_offset`
+    below is this function's start projection and `marker_line_present` is its
+    boolean shadow. Keeping ONE implementation is what stops a document being
     marked by one reading and unmarked by another -- the exact drift that a
     second, independently-written predicate produced here once already.
 
+    RETURNS BOTH ENDS, and the second one is why this function exists rather
+    than the offset alone. A caller that needs the text AFTER the marker line
+    cannot get there from the start offset without computing the line length,
+    and computing it separately is that second predicate again. Returning the
+    span keeps the terminator rule inside the one walk that owns it.
+
     `splitlines()` is deliberate: it splits on LF, CRLF and CR alike, so the
     property is stated once and holds for every terminator rather than
-    enumerating them.
+    enumerating them. `keepends=True` is what makes the END offset carry the
+    same rule -- a `find("\\n")` beside this walk would disagree with it on a
+    bare-CR document, which is the drift this docstring exists to prevent.
 
     THE COMPARISON IS STRIPPED, AND HERE THAT IS THE SAFE DIRECTION -- unlike
     `staleness._find_declared_end_offset`, which tolerates trailing whitespace
@@ -310,13 +363,28 @@ def marker_line_offset(text: str, literal: str) -> int | None:
     fail-safe. That one decides where a cap stops counting, so over-matching
     drops a pin out of the counted span and fails OPEN. Tolerance follows the
     direction of failure, never the resemblance of the code.
+
+    ONE CALLER USES THIS TO BOUND A WINDOW RATHER THAN TO REFUSE, and the
+    tolerance was re-judged for that job rather than inherited. See
+    `_narrow_to_memory_region`, which records the measurement.
     """
     offset = 0
     for line in text.splitlines(keepends=True):
         if line.strip() == literal:
-            return offset
+            return offset, offset + len(line)
         offset += len(line)
     return None
+
+
+def marker_line_offset(text: str, literal: str) -> int | None:
+    """Offset of the first line of `text` that IS `literal`, else None.
+
+    THE START PROJECTION of `marker_line_span`, and a projection rather than a
+    second walk on purpose: two walks are the twin that drifts, which this
+    file has paid for once already at this exact predicate.
+    """
+    span = marker_line_span(text, literal)
+    return None if span is None else span[0]
 
 
 def _is_end_marked(region_text: str, body_end: int) -> bool:

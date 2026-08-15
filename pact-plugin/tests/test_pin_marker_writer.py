@@ -2060,3 +2060,176 @@ class TestAnAbsentMemoryRegionRefuses:
             SkipReason.NOT_MIGRATED.value,
             SkipReason.NO_SECTION.value,
         )
+
+
+# --------------------------------------------------------------------------
+# The window boundaries are marker LINES
+# --------------------------------------------------------------------------
+
+def doc_with_the_marker_text_in_the_session_block() -> str:
+    """A production-shaped document whose SESSION BLOCK carries the marker TEXT.
+
+    THE SHAPE IS THE ONE PRODUCTION EMITS. The session block sits inside the
+    managed region and ABOVE the memory markers, and it interpolates
+    caller-influenced values. This splices one such line in, carrying the
+    marker text inside a longer line, which is what a hostile session dir
+    produces after the writer's sanitize substitutes its newlines.
+
+    MEASURED at `session_resume._sanitize_prompt_field`: `'/tmp/x\\n<marker>\\ny'`
+    comes back as `'/tmp/x <marker> y'`. THE NEWLINE GOES AND THE MARKER TEXT
+    SURVIVES, so this fixture reproduces the value a caller can really place
+    rather than one it cannot.
+    """
+    doc = build_claude_md()
+    anchor = "## Current Session\n"
+    at = doc.index(anchor) + len(anchor)
+    hostile = f"- Session dir: `/tmp/x{MEMORY_START_MARKER}y`\n"
+    return doc[:at] + hostile + doc[at:]
+
+
+def doc_with_the_end_marker_text_in_a_pin() -> str:
+    """A production-shaped document whose PINNED BODY carries the END marker
+    text mid-line.
+
+    The memory region holds pins and Working Memory entries built from
+    memory-record field values, which are caller-influenced by a DIFFERENT
+    producer from the session block. This is the same class at the other
+    boundary.
+    """
+    return build_claude_md(
+        pinned_body=f"### A pin\nprose naming {MEMORY_END_MARKER} inline.\n\n"
+    )
+
+
+class TestACallerInfluencedValueCannotMoveTheWindow:
+    """Both window boundaries are marker LINES, so the marker TEXT does not
+    move them.
+
+    THE DEFECT THIS CLOSES, measured before the repair: with the boundaries
+    located by a bare substring search, a session dir of
+    `/tmp/x<marker>y` moved the window start INTO the session block, and the
+    window then contained `SESSION_END`. The narrowing was defeated by the
+    same class of value it exists to defend against, one layer up.
+
+    WHY THE ATTACK DOES NOT COMPLETE TODAY, stated so this class is not read as
+    more than it is: `_PINNED_HEADING` needs a line start, and the session
+    sanitize substitutes newlines, so a forged HEADING is blocked by a control
+    in another module. These arms pin the window boundary, which is this
+    module's own half.
+    """
+
+    def test_the_marker_text_in_the_session_block_does_not_move_the_start(self):
+        """FAILING INPUT: locating the boundary with `region_text.find(...)`
+        rather than a marker LINE. The window then starts inside the session
+        block and this reddens.
+        """
+        from shared.claude_md_manager import extract_managed_region
+        from shared.pin_markers import _narrow_to_memory_region
+
+        doc = doc_with_the_marker_text_in_the_session_block()
+        assert doc.count(MEMORY_START_MARKER) == 2, (
+            "FIXTURE INVALID: the document does not carry the forged marker "
+            "text beside the genuine marker"
+        )
+        assert f"`/tmp/x{MEMORY_START_MARKER}y`" in doc, (
+            "FIXTURE INVALID: the forged text is not inside a longer line, so "
+            "this fixture is not the shape a caller can produce"
+        )
+
+        region = extract_managed_region(doc)
+        assert region is not None, "FIXTURE INVALID: no managed region"
+        narrowed = _narrow_to_memory_region(region[0], region[1])
+        assert narrowed is not None, "the window was refused on a sound document"
+
+        window_text, _offset = narrowed
+        assert "SESSION_END" not in window_text, (
+            "the window starts inside the SESSION BLOCK and swallows it, "
+            "which is the region this narrowing exists to exclude"
+        )
+        assert window_text.startswith("## Retrieved Context"), (
+            "the window does not begin at the line after the genuine memory "
+            "start marker"
+        )
+
+    def test_the_planner_still_anchors_on_the_declared_heading(self):
+        """POSITIVE CONTROL AT THE PUBLIC PATH. NOT A KILL ARM, and the
+        difference is recorded so this is not counted as coverage.
+
+        MEASURED: this arm survives every mutant tried against the boundary
+        logic and against the comparator. It cannot separate them, because the
+        fixture carries a forged MARKER and not a forged HEADING, and the
+        heading half of the attack is blocked by
+        `session_resume._sanitize_prompt_field` in another module. So the
+        public path produces the same answer with the window moved or not.
+
+        WHAT IT IS FOR: the repair must not refuse a sound document, and this
+        is what would redden if the narrowing became too tight. It measures
+        the over-block direction, which is the fault this repository treats as
+        cardinal.
+        """
+        doc = doc_with_the_marker_text_in_the_session_block()
+        planned = plan_insertion(doc)
+        assert isinstance(planned, Insertion), (
+            f"the planner refused a sound document: {planned}"
+        )
+        assert doc[planned.start_offset:].startswith("## Pinned Context"), (
+            "the START offset does not begin the pinned heading line"
+        )
+        composed = apply_insertion(doc, planned)
+        above = composed[:composed.index("## Current Session")]
+        assert START_LINE not in above, (
+            "a marker line landed above the session heading"
+        )
+
+    def test_the_end_marker_text_in_a_pin_does_not_truncate_the_window(self):
+        """The same rule at the OTHER boundary, with a different producer.
+
+        FAILING INPUT: locating the end with `region_text.find(...)`. The
+        window then stops at the pin that merely names the marker, and the
+        pinned body is cut short.
+        """
+        from shared.claude_md_manager import extract_managed_region
+        from shared.pin_markers import _narrow_to_memory_region
+
+        doc = doc_with_the_end_marker_text_in_a_pin()
+        assert doc.count(MEMORY_END_MARKER) == 2, (
+            "FIXTURE INVALID: the pin does not carry the end marker text"
+        )
+        region = extract_managed_region(doc)
+        assert region is not None, "FIXTURE INVALID: no managed region"
+        narrowed = _narrow_to_memory_region(region[0], region[1])
+        assert narrowed is not None, "the window was refused on a sound document"
+
+        window_text, _offset = narrowed
+        assert "## Working Memory" in window_text, (
+            "the window was truncated at a pin that merely names the end "
+            "marker, so the memory region lost its tail"
+        )
+
+    def test_an_indented_marker_line_is_accepted(self):
+        """THE TOLERANCE, PINNED IN THE DIRECTION IT WAS CHOSEN.
+
+        `marker_line_span` compares STRIPPED, so an indented but faithful
+        marker line is still a boundary. A raw comparison would refuse this
+        document, which is the over-block direction.
+
+        MEASURED, and recorded because the two predicates genuinely differ:
+        `_find_terminator_offset` matches the RAW line and does NOT match this
+        one. The disagreement does not reach the planner, because that scan
+        runs INSIDE the window produced here, so the marker line is excluded
+        before it is ever judged.
+        """
+        from shared.claude_md_manager import extract_managed_region
+        from shared.pin_markers import _narrow_to_memory_region
+
+        doc = build_claude_md().replace(
+            MEMORY_START_MARKER + "\n", "    " + MEMORY_START_MARKER + "\n"
+        )
+        region = extract_managed_region(doc)
+        assert region is not None, "FIXTURE INVALID: no managed region"
+        narrowed = _narrow_to_memory_region(region[0], region[1])
+        assert narrowed is not None, (
+            "an indented but faithful marker line was refused, which is an "
+            "over-block on a document the plugin itself could emit"
+        )
+        assert "SESSION_END" not in narrowed[0]
