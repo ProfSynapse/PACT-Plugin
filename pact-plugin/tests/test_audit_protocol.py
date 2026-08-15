@@ -510,6 +510,30 @@ class TestStructuralVerificationDiscipline:
     # disagree. THE INDEPENDENT ORACLE IS THE FILESYSTEM, so the arms below
     # derive the population from the extract FILES and compare that against
     # what the script names.
+    #
+    # AND THE SCRIPT IS ASKED WHAT IT DID, NOT WHAT ITS SOURCE TEXT LOOKS LIKE.
+    # A rule that read the script SOURCE for `verify "<file>"` was MEASURED to
+    # over-block twice against a CORRECT script, one that exits 0 with
+    # `Passed: 19, Failed: 0`:
+    #   * an ordinary usage message, a heredoc carrying one line at column zero
+    #     of that shape, added a PHANTOM name and reddened the set comparison;
+    #   * single quotes on the first argument, which bash treats identically to
+    #     double quotes, emptied the parse and fired the NON-VACUITY assertion,
+    #     which reads as a broken harness rather than as a defect in the rule.
+    # NEITHER A TEXT LINE AT COLUMN ZERO NOR A QUOTE STYLE CAN CHANGE WHAT A
+    # SCRIPT EMITS WHEN IT RUNS, so the verified set is now parsed from the
+    # `VERIFY-CALL:` lines of a real run.
+    #
+    # THE INDEPENDENCE THIS RESTS ON, STATED SO A LATER EDIT CANNOT SPEND IT
+    # WITHOUT NOTICING. The two sides are the FILESYSTEM and the SCRIPT, and
+    # that axis is the same before and after the change: only the channel the
+    # script is read through moved, from its source bytes to its stdout. The
+    # script emits the literal first argument of each call, so its side stays
+    # derived from the call ARGUMENTS. IF A LATER EDIT MAKES THE SCRIPT NAME
+    # ITS FILES FROM A GLOB OF THE PROTOCOLS DIRECTORY, both sides come to
+    # derive from the filesystem and this comparison becomes a tautology that
+    # can no longer disagree. The same obligation is recorded at the emission
+    # site in the script.
 
     @staticmethod
     def _is_extract(text, ssot_text):
@@ -559,21 +583,33 @@ class TestStructuralVerificationDiscipline:
         """The script must name each extract in the protocols directory.
 
         THE TWO SIDES COME FROM DIFFERENT SOURCES ON PURPOSE. The population
-        is derived from the FILES. The verified set is parsed from the SCRIPT.
-        A call removed from the script leaves a file in the population and out
-        of the verified set, so this reddens where a count derived from the
-        script alone would agree with itself.
+        is derived from the FILES. The verified set is what the SCRIPT DID: it
+        announces one `VERIFY-CALL:` line for each comparison it performed, and
+        that line carries the literal file name the call was given. A call
+        removed from the script leaves a file in the population and out of the
+        verified set, so this reddens where a count derived from the script
+        alone would agree with itself.
 
         A NEW EXTRACT FILE ALSO REDDENS THIS, with no edit here, which is what
         keeps the arm from needing maintenance every time the surface grows.
 
+        WHY A RUN AND NOT THE SOURCE TEXT. Reading the script source for
+        `verify "<file>"` was measured to redden twice against a CORRECT
+        script: a usage heredoc with one line at column zero added a phantom
+        name, and a change of quote style, which bash treats identically,
+        emptied the parse. The corpus comment above this class carries the
+        detail. What a script EMITS is immune to both.
+
         THE AXIS THIS ARM CANNOT SEE, NAMED RATHER THAN LEFT IMPLICIT: it
-        checks that each extract IS verified. It does not check that the
-        heading pair each `verify` call passes is the correct pair. The
-        byte-comparison inside the script is what checks that, and the
-        exit-code arm above is what reports it.
+        checks that each extract IS compared. It does not check that the
+        heading pair each `verify` call passes is the correct pair, and it does
+        not check the OUTCOME of the comparison. The byte-comparison inside the
+        script is what checks the pair, and the exit-code arm above is what
+        reports the outcome. So an extract that genuinely differs from its
+        slice stays in this set and reddens the other two arms instead.
         """
         import re
+        import subprocess
 
         repo_root = Path(__file__).parent.parent.parent
         script = repo_root / "scripts" / "verify-protocol-extracts.sh"
@@ -581,15 +617,35 @@ class TestStructuralVerificationDiscipline:
             pytest.skip("verify-protocol-extracts.sh not present")
 
         population, _ssot = self._extract_population()
+        result = subprocess.run(
+            ["bash", str(script)], cwd=str(repo_root),
+            capture_output=True, text=True,
+        )
         verified = set(
-            re.findall(r'^verify\s+"([^"]+)"', script.read_text(encoding="utf-8"),
-                       re.MULTILINE)
+            re.findall(r"^VERIFY-CALL: (.+)$", result.stdout, re.MULTILINE)
+        )
+
+        # THE SCRIPT REACHED ITS END, CHECKED BEFORE THE SET IS READ. An empty
+        # verified set has TWO causes now, and they call for different repairs:
+        # the script ran and compared nothing, or THE SCRIPT NEVER GOT THERE.
+        # It exits 1 before the first comparison when its SSOT source file is
+        # absent. Separating the two here stops an aborted run from reading as
+        # an empty corpus.
+        assert re.search(r"^Passed:\s*\d+$", result.stdout, re.MULTILINE), (
+            "the gate script did not reach its summary, so it aborted before "
+            "it compared anything and this arm has no run to read.\n"
+            f"exit code: {result.returncode}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
         # NON-VACUITY, BOTH SIDES. An empty population makes the comparison
-        # pass for the wrong cause, and so does an empty parse of the script.
+        # pass for the wrong cause, and so does a run that announced no call.
         assert population, "no extract file classified in pact-plugin/protocols/"
-        assert verified, "no verify call parsed from verify-protocol-extracts.sh"
+        assert verified, (
+            "the gate script ran to its summary and announced no VERIFY-CALL, "
+            "so its corpus is empty and every extract goes uncompared.\n"
+            f"stdout:\n{result.stdout}"
+        )
 
         assert population == verified, (
             "the set of extract FILES and the set the gate script VERIFIES "
