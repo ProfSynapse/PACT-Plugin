@@ -236,11 +236,16 @@ fi
 echo ""
 
 # --- Agent Teams integration ---
+# These four checks named the TeamCreate tool until the platform took over team
+# provisioning. The tool is gone, and each of the four command files now carries
+# the replacement instruction: the platform provisions the session team and the
+# orchestrator does not create it. The assertion moves to that instruction,
+# which names the mechanism the commands use today.
 echo "Agent Teams integration:"
-check_pattern_file "$COMMANDS_DIR/orchestrate.md" "orchestrate TeamCreate present" "TeamCreate"
-check_pattern_file "$COMMANDS_DIR/comPACT.md" "comPACT TeamCreate present" "TeamCreate"
-check_pattern_file "$COMMANDS_DIR/peer-review.md" "peer-review TeamCreate present" "TeamCreate"
-check_pattern_file "$COMMANDS_DIR/plan-mode.md" "plan-mode TeamCreate present" "TeamCreate"
+check_pattern_file "$COMMANDS_DIR/orchestrate.md" "orchestrate session team is platform-provisioned" "provisioned automatically by the platform"
+check_pattern_file "$COMMANDS_DIR/comPACT.md" "comPACT session team is platform-provisioned" "provisioned automatically by the platform"
+check_pattern_file "$COMMANDS_DIR/peer-review.md" "peer-review session team is platform-provisioned" "provisioned automatically by the platform"
+check_pattern_file "$COMMANDS_DIR/plan-mode.md" "plan-mode session team is platform-provisioned" "provisioned automatically by the platform"
 echo ""
 
 # --- Summary ---

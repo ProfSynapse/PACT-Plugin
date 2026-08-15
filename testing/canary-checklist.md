@@ -17,7 +17,7 @@ bash scripts/verify-task-hierarchy.sh
 bash scripts/verify-worktree-protocol.sh
 ```
 
-**Expected output**: Each script prints individual check results (lines prefixed with `✓` or `✗`) followed by a summary block:
+**Expected output**: Each script prints one result line for each check, prefixed with `✓` or `✗`, then a summary block. `verify-protocol-extracts.sh` also prints a `VERIFY-CALL: <file>` line before each extract it compares. That line has no prefix and is not a result line. The other three scripts do not print it.
 
 ```
 === Summary ===
@@ -31,10 +31,12 @@ Any script exiting with `VERIFICATION FAILED` (exit code 1) means the PR has bro
 
 ### Checklist
 
-- [ ] `verify-protocol-extracts.sh` passes (19 checks) -- each SSOT extract agrees with its section, anchored by H2 heading text
-- [ ] `verify-scope-integrity.sh` passes (68 checks) -- cross-references, naming conventions, nesting limits, worktree integration, memory hooks, executor interface, agent persistent memory
-- [ ] `verify-task-hierarchy.sh` passes (28 checks) -- task lifecycle patterns in all command files
-- [ ] `verify-worktree-protocol.sh` passes (20 checks) -- worktree skill existence, command references, path propagation
+**How to read these counts.** Each number is the `Passed: N` value of a run that ends with `Failed: 0`. It is the number of checks the script runs. Three of the four counts do not change. The `verify-scope-integrity.sh` count moves with the number of files in `pact-plugin/agents/`, and its row gives the rule that makes it checkable. The four rows follow:
+
+- [ ] `verify-protocol-extracts.sh` passes (19 checks) -- each SSOT extract agrees with its section, anchored by H2 heading text. FIXED count: one check for each `verify` call in the script. `pact-plugin/tests/test_canary_checklist_count.py` reads this number and compares it against a run, so an edit to this row alone reddens that test.
+- [ ] `verify-scope-integrity.sh` passes (86 checks) -- cross-references, naming conventions, nesting limits, worktree integration, memory hooks, executor interface, agent persistent memory. THIS COUNT MOVES WITH THE AGENT DIRECTORY. It is 64 fixed checks, plus two loops across `pact-plugin/agents/`. The nesting-limit loop skips the 4 agents named in the `case` statement of the script and checks each remaining file. The `memory: user` loop checks each file. Today that directory holds 13 files, which gives 64 + 9 + 13 = 86. If you see a different number, count the agent files before you report a defect.
+- [ ] `verify-task-hierarchy.sh` passes (28 checks) -- task lifecycle patterns in all command files. FIXED count: no check comes from the contents of a directory.
+- [ ] `verify-worktree-protocol.sh` passes (20 checks) -- worktree skill existence, command references, path propagation. FIXED count: no check comes from the contents of a directory.
 
 ### What failures mean
 

@@ -269,12 +269,19 @@ check_pattern "$PROTOCOLS_DIR/pact-s1-autonomy.md" \
 check_pattern "$PROTOCOLS_DIR/pact-protocols.md" \
     "SSOT S1 extract has 1-level nesting limit" \
     "Nesting limit.*1 level"
-# Implementation agents must have "Max nesting: 1 level"
-# Review/observation-only agents don't implement code, so nesting doesn't apply
+# Implementation agents must have "Max nesting: 1 level".
+# The excluded agents do not carry a nesting limit, for two different causes:
+#  - pact-qa-engineer, pact-security-engineer, pact-auditor review and observe.
+#    They do not implement code, so the nesting limit does not apply to them.
+#  - pact-orchestrator is the lead persona, not an S1 specialist. It dispatches
+#    a nested cycle; it does not run one, so it carries no nesting limit.
+# Keep this list explicit. A new agent file fails this check until a human
+# rules it an implementation agent or not, which is the intent.
 for agent_file in "$AGENTS_DIR"/*.md; do
     agent_name=$(basename "$agent_file" .md)
     case "$agent_name" in
         pact-qa-engineer|pact-security-engineer|pact-auditor) continue ;;
+        pact-orchestrator) continue ;;
     esac
     check_pattern "$agent_file" \
         "$agent_name has 1-level nesting limit" \
@@ -416,8 +423,12 @@ echo ""
 # key governance files. Catches accidental removal of the merge authorization
 # strengthening introduced in PR #219 (issue #217).
 echo "22. AskUserQuestion merge authorization mandate:"
-check_pattern "pact-plugin/CLAUDE.md" \
-    "CLAUDE.md SACROSANCT table mandates AskUserQuestion" \
+# This check named pact-plugin/CLAUDE.md until that file was removed from the
+# repository. The rule did not go away with it: the orchestrator persona now
+# carries the SACROSANCT Non-Negotiables section and the same mandate. No other
+# check in this block covers the persona, so the check moves to it.
+check_pattern "$AGENTS_DIR/pact-orchestrator.md" \
+    "orchestrator persona SACROSANCT table mandates AskUserQuestion" \
     'Irreversible.*AskUserQuestion'
 check_pattern "$COMMANDS_DIR/peer-review.md" \
     "peer-review.md merge step uses AskUserQuestion" \
