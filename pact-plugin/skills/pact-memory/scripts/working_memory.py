@@ -173,6 +173,23 @@ _PACT_BOUNDARY_ALT = "PACT_MEMORY_|PACT_MANAGED_|PACT_ROUTING_"
 _MANAGED_START_MARKER = "<!-- PACT_MANAGED_START: Managed by pact-plugin - do not edit this block -->"
 _MANAGED_END_MARKER = "<!-- PACT_MANAGED_END -->"
 
+# The INNER memory-region boundary, nested in the managed region above.
+#
+# THESE TWO CARRY THE CANONICAL NAMES AND NOT THE LOCAL PRIVATE PREFIX, AND
+# THAT IS A DELIBERATE DEPARTURE FROM THE TWO LINES ABOVE. The prefix is a
+# choice made at some sites here and not at others: `MAX_WORKING_MEMORIES`
+# and `WORKING_MEMORY_TOKEN_BUDGET` carry none. `_narrow_to_memory_region`
+# below reads these two names IN ITS BODY, and its body is byte-compared
+# against the canonical copy by a drift gate. A prefix here puts a
+# difference in that body, and the gate would go RED ON ARRIVAL on a choice
+# somebody made rather than on divergence.
+#
+# `extract_managed_region` records the opposite call for its own twin, and
+# the difference is the GATE rather than the taste: that one is not
+# byte-compared, so its local names cost nothing.
+MEMORY_START_MARKER = "<!-- PACT_MEMORY_START -->"
+MEMORY_END_MARKER = "<!-- PACT_MEMORY_END -->"
+
 # file_lock: vendored twin of hooks/shared/claude_md_manager.file_lock —
 # skills/pact-memory/scripts/ cannot import from hooks/shared/ (separate
 # package boundary). Cross-process correctness is preserved because
@@ -800,6 +817,69 @@ def extract_managed_region(content: str) -> Optional[Tuple[str, int]]:
     if end_idx == -1:
         return None
     return content[region_start:end_idx], region_start
+
+
+def marker_line_span(text: str, literal: str) -> tuple[int, int] | None:
+    """Span of the first line of `text` that IS `literal`, else None.
+
+    TWIN OF `hooks/shared/pin_markers.marker_line_span`, kept local because
+    the production entry point does not put `hooks/` on `sys.path`. See
+    `_narrow_to_memory_region` for the measurement behind that sentence.
+
+    THE BODY IS BYTE-IDENTICAL TO THE CANONICAL COPY AND A DRIFT GATE HOLDS
+    IT THERE. Read the canonical docstring for why ONE implementation of
+    `the marker occupies a line` matters: a second, independently-written
+    predicate produced drift in this repository once, and a document marked
+    by one reading and unmarked by another is what came out of it.
+    """
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        if line.strip() == literal:
+            return offset, offset + len(line)
+        offset += len(line)
+    return None
+
+
+def _narrow_to_memory_region(
+    region_text: str, region_start: int
+) -> tuple[str, int] | None:
+    """Narrow an already-extracted managed region to the MEMORY region inside
+    it, or None when the memory marker pair is not there.
+
+    TWIN OF `hooks/shared/pin_markers._narrow_to_memory_region`. THE BODY IS
+    BYTE-IDENTICAL AND A DRIFT GATE HOLDS IT THERE. Read the canonical
+    docstring for the design: this copy states only what is local.
+
+    WHY A TWIN RATHER THAN AN IMPORT, MEASURED RATHER THAN INHERITED. The
+    comments elsewhere in this module say the two trees are a different
+    package. That cause does not hold, because `hooks/__init__.py` and
+    `hooks/shared/__init__.py` each exist. THE OPERATIVE FACT IS A PATH
+    BOOTSTRAP DIVERGENCE: the production entry `cli.py` puts ONLY the skill
+    root on `sys.path`, and `tests/conftest.py` puts `hooks/` on it. So an
+    import here RESOLVES IN PYTEST AND RAISES FROM THE CLI. The failure
+    direction of that mistake is the dangerous one: green tests and a
+    broken shipped path.
+
+    WHY THE CALLERS NEED IT. `extract_managed_region` returns the WIDE
+    region, and the session block sits inside it ABOVE the memory markers
+    while it interpolates caller-influenced values. The two write-side
+    parsers below search their heading FIRST-MATCH in the window they are
+    given, and the offset of that match rebuilds the file. MEASURED on a
+    production-shaped document with a forged `## Working Memory` line in the
+    session block: the splice landed at 234 against a memory start marker at
+    274, so the write would have gone OUTSIDE the memory region.
+    """
+    start_span = marker_line_span(region_text, MEMORY_START_MARKER)
+    if start_span is None:
+        return None
+    # The END of the marker line, so the window begins on the NEXT line and
+    # `region_start` stays a line start for every offset computed below it.
+    inner_start = start_span[1]
+    tail = region_text[inner_start:]
+    end_span = marker_line_span(tail, MEMORY_END_MARKER)
+    if end_span is None:
+        return None
+    return tail[:end_span[0]], region_start + inner_start
 
 
 def _find_existing_claude_md(base: Path) -> Optional[Path]:
@@ -1631,10 +1711,32 @@ def _parse_working_memory_section(
         Tuple of (before_section, section_header_with_comment, after_section, existing_entries)
         where existing_entries is a list of individual memory entry strings.
     """
-    # Bound to managed region if available (round 10).
+    # Bound to the MEMORY region, not to the managed region.
+    #
+    # THE WINDOW AND THE TARGET MUST BE THE SAME REGION. The managed region
+    # holds the SESSION BLOCK above the memory markers, and that block
+    # interpolates caller-influenced values. The first-match search below
+    # takes the FIRST `## Working Memory` line in the window it is given, so
+    # a forged heading in the session block wins over the genuine one, and
+    # the offset of that match rebuilds the file.
+    #
+    # MEASURED on a production-shaped document, with the boundary taken from
+    # the production emitter rather than a literal: the splice landed at 234
+    # against a memory start marker at 274, with the genuine heading at 350.
+    # THE WRITE WOULD HAVE GONE OUTSIDE THE MEMORY REGION.
     region_result = extract_managed_region(content)
     if region_result is not None:
-        scan_text, offset = region_result
+        narrowed = _narrow_to_memory_region(region_result[0], region_result[1])
+        # THE MISSING-PAIR DIRECTION IS NOT SETTLED HERE, AND THIS BRANCH
+        # KEEPS TODAY'S BEHAVIOUR ON PURPOSE. A managed document with no
+        # memory marker pair takes the wide window, which is what it took
+        # before this bound existed, so this repair changes nothing for that
+        # class. The sibling writer REFUSES at this point, and a refusal
+        # cannot be copied here: the not-found return of this function sends
+        # the caller to its append-at-end branch, which writes the section
+        # OUTSIDE every marker rather than declining. That is a caller
+        # change and it is out of scope for this bound.
+        scan_text, offset = narrowed if narrowed is not None else region_result
     else:
         scan_text, offset = content, 0
 
@@ -2119,10 +2221,17 @@ def _parse_retrieved_context_section(
         Tuple of (before_section, section_header, after_section, existing_entries)
         where existing_entries is a list of individual memory entry strings.
     """
-    # Bound to managed region if available (round 10).
+    # Bound to the MEMORY region, not to the managed region. Same bound as
+    # `_parse_working_memory_section` and for the same cause, including the
+    # missing-pair branch: read that function for both.
+    #
+    # MEASURED at THIS site, on a production-shaped document with a forged
+    # `## Retrieved Context` line in the session block: the splice landed at
+    # 234 against a memory start marker at 277.
     region_result = extract_managed_region(content)
     if region_result is not None:
-        scan_text, offset = region_result
+        narrowed = _narrow_to_memory_region(region_result[0], region_result[1])
+        scan_text, offset = narrowed if narrowed is not None else region_result
     else:
         scan_text, offset = content, 0
 
