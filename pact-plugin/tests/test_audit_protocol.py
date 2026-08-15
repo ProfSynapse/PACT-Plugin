@@ -1247,3 +1247,105 @@ class TestTeachbackBlockingSemanticGuard:
                     f"reconciliation is being reverted; update this guard "
                     f"deliberately."
                 )
+
+
+class TestLeadSidePartialVarietyWriteWarning:
+    """The lead-facing re-stamp instruction must carry its partial-write warning.
+
+    THE SUBJECT. `TaskUpdate` merges metadata at the TOP LEVEL only, so a write
+    that names `variety` REPLACES the whole object and erases each field it did
+    not carry. Three lead-facing surfaces instruct the lead to RE-STAMP
+    `metadata.variety` after it was already written, which is precisely that
+    shape. Each of the three must state the hazard beside the instruction.
+
+    WHY AN ARM AND NOT PROSE ALONE. The warning is prose that nothing executes.
+    A later editor can drop it from one carrier while the other two keep it, and
+    no run reports anything. That is the stale-twin direction, and it is the one
+    failure this arm is built to catch.
+
+    THIS ARM ASSERTS A PROPERTY, NOT A SENTENCE, AND THE DISTINCTION IS THE
+    WHOLE DESIGN. An arm that pinned the wording would redden on any rewording
+    that preserves the instruction, which is an over-block, and an arm that
+    obstructs the next contributor gets removed rather than repaired. So the
+    check requires three CONCEPTS near the instruction, each satisfied by any
+    member of a synonym group:
+      G1 REPLACEMENT: the write destroys what it did not carry.
+      G2 WHOLE-OBJECT: the correction must re-send all of it.
+      G3 READ-BACK: check the result on disk afterwards.
+    A rewriter free to choose words stays green while all three concepts
+    survive. Dropping one of the three reddens, which is correct, because each
+    one alone leaves a lead able to reason its way back to a partial write.
+
+    WHAT THIS ARM CANNOT SEE. It cannot judge whether the wording is CLEAR, and
+    it cannot see a warning that states all three concepts incorrectly. It reads
+    concept presence in a bounded window, nothing more.
+
+    A MEASURED GAP THIS ARM DOES NOT CLOSE, RECORDED SO IT IS NOT READ AS
+    COVERED. The same hazard is stated on two TEAMMATE-facing carriers, the
+    rejection-correction step of the `pact-agent-teams` skill and Step 1 of the
+    `pact-teachback` skill. NO arm reads either of those two. Their omission
+    here is deliberate: widening this arm to cover them is a decision about
+    another author's ruled scope, not a tidy-up.
+    """
+
+    # The three lead-facing carriers of the re-stamp instruction. The first two
+    # are a byte-compared extract and its SSOT region, so they must move
+    # together; the third is the persona body the lead itself loads.
+    RESTAMP_CARRIERS = [
+        PROTOCOLS_DIR / "pact-variety.md",
+        PROTOCOLS_DIR / "pact-protocols.md",
+        AGENTS_DIR / "pact-orchestrator.md",
+    ]
+
+    # The instruction this arm attaches to. Each line is lower-cased and its
+    # runs of whitespace are collapsed to one space before the comparison, so
+    # a re-cased edit and a re-wrapped line are both still found.
+    RESTAMP_TOKEN = "re-stamp `metadata.variety`"
+
+    # Lines to scan after the instruction line for its warning. Four allows a
+    # blank line, the warning, and a trailing blank, with one line of slack.
+    WINDOW = 4
+
+    # Each group is satisfied by ANY member. Substring matching against
+    # lower-cased text, so inflections that contain a listed stem also match.
+    CONCEPT_GROUPS = {
+        "G1 replacement": ("replace", "overwrite", "erase", "discard", "drop"),
+        "G2 whole object": ("full", "whole", "entire", "complete", "all of"),
+        "G3 read-back": ("read the task file back", "read back", "read-back",
+                         "re-read", "enumerate"),
+    }
+
+    def _warning_window(self, path):
+        """Return the text that follows the single re-stamp instruction."""
+        assert path.is_file(), f"re-stamp carrier missing: {path}"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        hits = [
+            i for i, line in enumerate(lines)
+            if self.RESTAMP_TOKEN in " ".join(line.split()).lower()
+        ]
+        # NON-VACUITY. Zero hits means the instruction was reworded or removed,
+        # and the window below would be empty, which would pass every concept
+        # check against nothing. That fails LOUDLY here instead.
+        assert len(hits) == 1, (
+            f"{path.name} carries {len(hits)} instruction(s) containing "
+            f"{self.RESTAMP_TOKEN!r}, and this arm attaches its warning "
+            "check to exactly one. If the instruction moved, was reworded, or "
+            "was duplicated, re-point this arm deliberately."
+        )
+        start = hits[0] + 1
+        return "\n".join(lines[start:start + self.WINDOW]).lower()
+
+    def test_each_lead_carrier_states_the_partial_write_hazard(self):
+        for path in self.RESTAMP_CARRIERS:
+            window = self._warning_window(path)
+            for group, members in self.CONCEPT_GROUPS.items():
+                assert any(member in window for member in members), (
+                    f"{path.name} instructs a re-stamp of `metadata.variety` "
+                    f"without stating {group} within {self.WINDOW} lines of "
+                    f"the instruction.\n"
+                    f"A partial write to `variety` REPLACES the whole object "
+                    f"and reports no error, so a lead reading this carrier "
+                    f"alone can lose the fields it did not re-send.\n"
+                    f"This arm accepts ANY of: {members}. It does not pin a "
+                    f"wording. Reword freely, and keep the concept."
+                )
