@@ -168,6 +168,22 @@ OVERRIDE_RATIONALE_MAX = 120
 # three prefixes rarely change; if a 4th is added, update this string.
 _PACT_BOUNDARY_ALT = "PACT_MEMORY_|PACT_MANAGED_|PACT_ROUTING_"
 
+# Session-block boundary marker prefix, and it is deliberately NOT a member of
+# PACT_BOUNDARY_PREFIXES. That set is canonical in
+# hooks/shared/claude_md_manager.py, a drift gate holds the copy above equal to
+# it, and the SESSION markers carry no PACT_ prefix. A SESSION member in a set
+# named for PACT_ prefixes makes the name incorrect about its own contents, so
+# the scans below embed this alternation WITH _PACT_BOUNDARY_ALT and not in it.
+#
+# WHAT IT DEFENDS, MEASURED. The session block sits in the managed region
+# ABOVE the memory markers. When the memory marker pair is absent, the window
+# below falls back to the wide managed region, and a forged section heading in
+# the session block wins the first-match search. The body scan then runs
+# THROUGH the session-end marker line, and the rebuild replaces that span, so
+# the marker is gone from the emitted document. CLAUDE.md is not a tracked
+# file, so no commit can restore it.
+_SESSION_BOUNDARY_ALT = "SESSION_"
+
 # Managed-region boundary markers. Twin copies of the canonical definitions
 # in hooks/shared/claude_md_manager.py (cannot import — separate package).
 _MANAGED_START_MARKER = "<!-- PACT_MANAGED_START: Managed by pact-plugin - do not edit this block -->"
@@ -826,11 +842,12 @@ def marker_line_span(text: str, literal: str) -> tuple[int, int] | None:
     the production entry point does not put `hooks/` on `sys.path`. See
     `_narrow_to_memory_region` for the measurement behind that sentence.
 
-    THE BODY IS BYTE-IDENTICAL TO THE CANONICAL COPY AND A DRIFT GATE HOLDS
-    IT THERE. Read the canonical docstring for why ONE implementation of
-    `the marker occupies a line` matters: a second, independently-written
-    predicate produced drift in this repository once, and a document marked
-    by one reading and unmarked by another is what came out of it.
+    THE EXECUTABLE BODY MUST STAY BYTE-IDENTICAL TO THE CANONICAL COPY.
+    CHANGE THE TWO TOGETHER. Read the canonical docstring for why ONE
+    implementation of `the marker occupies a line` matters: a second,
+    independently-written predicate produced drift in this repository once,
+    and a document marked by one reading and unmarked by another is what
+    came out of it.
     """
     offset = 0
     for line in text.splitlines(keepends=True):
@@ -846,9 +863,14 @@ def _narrow_to_memory_region(
     """Narrow an already-extracted managed region to the MEMORY region inside
     it, or None when the memory marker pair is not there.
 
-    TWIN OF `hooks/shared/pin_markers._narrow_to_memory_region`. THE BODY IS
-    BYTE-IDENTICAL AND A DRIFT GATE HOLDS IT THERE. Read the canonical
-    docstring for the design: this copy states only what is local.
+    TWIN OF `hooks/shared/pin_markers._narrow_to_memory_region`. THE
+    EXECUTABLE BODY MUST STAY BYTE-IDENTICAL TO THE CANONICAL COPY, AND THE
+    TWO DOCSTRINGS DIFFER ON PURPOSE: this copy states only what is local.
+    CHANGE THE BODIES TOGETHER, and compare them with an extractor that
+    PARSES rather than one that counts leading lines. The signature above
+    spans several lines, so a line-counting extractor leaves the parameter
+    lines and then the docstring inside what it calls the body, and reports
+    a difference that is not a difference in logic.
 
     WHY A TWIN RATHER THAN AN IMPORT, MEASURED RATHER THAN INHERITED. The
     comments elsewhere in this module say the two trees are a different
@@ -1747,7 +1769,8 @@ def _parse_working_memory_section(
     # would greedily swallow the marker (#404).
     section_pattern = re.compile(
         r'^(## Working Memory)\s*\n'
-        rf'(<!-- (?!(?:{_PACT_BOUNDARY_ALT}))[^>]*-->)?\s*\n?',
+        rf'(<!-- (?!(?:{_PACT_BOUNDARY_ALT}|{_SESSION_BOUNDARY_ALT}))'
+        r'[^>]*-->)?\s*\n?',
         re.MULTILINE
     )
 
@@ -1764,7 +1787,8 @@ def _parse_working_memory_section(
     # No fence-awareness needed — managed region contains only plugin-generated
     # content (round 10 structural guarantee).
     next_section_pattern = re.compile(
-        rf'(#\s|##\s(?!Working Memory)|---|<!-- (?:{_PACT_BOUNDARY_ALT}))',
+        rf'(#\s|##\s(?!Working Memory)|---|'
+        rf'<!-- (?:{_PACT_BOUNDARY_ALT}|{_SESSION_BOUNDARY_ALT}))',
     )
     section_end_rel = _find_terminator_offset(
         scan_text, section_header_end, next_section_pattern
@@ -2240,7 +2264,8 @@ def _parse_retrieved_context_section(
     # — see _parse_working_memory_section for the full rationale (#404).
     section_pattern = re.compile(
         r'^(## Retrieved Context)\s*\n'
-        rf'(<!-- (?!(?:{_PACT_BOUNDARY_ALT}))[^>]*-->)?\s*\n?',
+        rf'(<!-- (?!(?:{_PACT_BOUNDARY_ALT}|{_SESSION_BOUNDARY_ALT}))'
+        r'[^>]*-->)?\s*\n?',
         re.MULTILINE
     )
 
@@ -2257,7 +2282,8 @@ def _parse_retrieved_context_section(
     # No fence-awareness needed — managed region contains only plugin-generated
     # content (round 10 structural guarantee).
     next_section_pattern = re.compile(
-        rf'(#\s|##\s(?!Retrieved Context)|---|<!-- (?:{_PACT_BOUNDARY_ALT}))',
+        rf'(#\s|##\s(?!Retrieved Context)|---|'
+        rf'<!-- (?:{_PACT_BOUNDARY_ALT}|{_SESSION_BOUNDARY_ALT}))',
     )
     section_end_rel = _find_terminator_offset(
         scan_text, section_header_end, next_section_pattern
