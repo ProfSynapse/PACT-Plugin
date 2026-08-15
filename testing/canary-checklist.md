@@ -31,7 +31,7 @@ Any script exiting with `VERIFICATION FAILED` (exit code 1) means the PR has bro
 
 ### Checklist
 
-- [ ] `verify-protocol-extracts.sh` passes (16 checks) -- SSOT extracts match source line ranges
+- [ ] `verify-protocol-extracts.sh` passes (19 checks) -- each SSOT extract agrees with its section, anchored by H2 heading text
 - [ ] `verify-scope-integrity.sh` passes (68 checks) -- cross-references, naming conventions, nesting limits, worktree integration, memory hooks, executor interface, agent persistent memory
 - [ ] `verify-task-hierarchy.sh` passes (28 checks) -- task lifecycle patterns in all command files
 - [ ] `verify-worktree-protocol.sh` passes (20 checks) -- worktree skill existence, command references, path propagation
@@ -40,7 +40,7 @@ Any script exiting with `VERIFICATION FAILED` (exit code 1) means the PR has bro
 
 | Script | Common Failure Cause | Fix |
 |--------|---------------------|-----|
-| `verify-protocol-extracts.sh` | Protocol SSOT content shifted; line ranges in the script no longer match | Update the `sed` line ranges in the script to match the new SSOT layout |
+| `verify-protocol-extracts.sh` | An extract file does not agree with its SSOT section. Or a heading sentinel in the script does not name an H2 heading in the SSOT | Regenerate the extract from its SSOT section. Or update the H2 heading sentinels in the script |
 | `verify-scope-integrity.sh` | A cross-reference was broken, a required pattern was removed, or a new agent file is missing expected content | Trace the `✗` output to the specific check and restore the expected pattern |
 | `verify-task-hierarchy.sh` | A command file's Task Hierarchy section is missing a lifecycle keyword (`TaskCreate`, `in_progress`, `completed`) | Add the missing lifecycle pattern to the command's Task Hierarchy section |
 | `verify-worktree-protocol.sh` | A command file lost its worktree skill reference or a skill file is missing its frontmatter | Restore the worktree reference or skill frontmatter |
@@ -53,9 +53,9 @@ Human reviewers verify structural properties that automated scripts cannot fully
 
 ### Checklist
 
-- [ ] **Protocol extract line ranges are still valid** -- If the PR modifies `pact-protocols.md`, confirm that `verify-protocol-extracts.sh` line ranges (in the script itself) have been updated to match
+- [ ] **Protocol extract heading sentinels stay valid** -- If the PR modifies `pact-protocols.md`, make sure the H2 heading sentinels in `verify-protocol-extracts.sh` (in the script itself) name the headings the SSOT carries now
 - [ ] **Cross-references are intact** -- Protocol files that reference other protocols (e.g., `pact-scope-contract.md` referencing `rePACT.md`) still point to correct targets
-- [ ] **SSOT extracts match their sources** -- Extracted protocol files are verbatim copies of their SSOT sections in `pact-protocols.md` (the automated script verifies this, but reviewers should confirm the line ranges themselves are correct)
+- [ ] **SSOT extracts agree with their sources** -- Extracted protocol files are verbatim copies of their SSOT sections in `pact-protocols.md` (the automated script compares the bytes, and a reviewer must check that the heading sentinels themselves are correct)
 - [ ] **No orphaned references** -- Search for references to renamed or deleted files; confirm no dead links remain
 - [ ] **Agent definition consistency** -- All agent `.md` files under `pact-plugin/agents/` have matching frontmatter fields (`memory: user`, nesting limit, HANDOFF format)
 - [ ] **Command file structure preserved** -- Command files retain their expected section headings (Task Hierarchy, phase sections, etc.)
