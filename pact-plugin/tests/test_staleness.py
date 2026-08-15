@@ -2232,6 +2232,110 @@ class TestFileLockTwinCopyDrift:
         )
 
 
+class TestSanitizePromptFieldTwinCopyDrift:
+    """Drift detection for the _sanitize_prompt_field twin in working_memory.
+
+    _sanitize_prompt_field is twin-copied from hooks/shared/session_resume
+    into skills/pact-memory/scripts/working_memory (skills/ cannot import
+    from hooks/shared/). The function BODY must stay byte-identical so both
+    the hook write path and the skill write path collapse the SAME control
+    characters at the SAME bound; the docstring may differ.
+
+    NO OTHER TEST COVERS THIS PAIR, WHICH IS WHY THE CLASS EXISTS RATHER
+    THAN A CASE ADDED ELSEWHERE. The neighbouring twin gates import
+    _atomic_write_text and file_lock, so a divergence in the SANITIZER
+    reddens none of them: without this class a one-copy edit is green and
+    silent, and the two write paths would disagree about what a field value
+    can carry into CLAUDE.md.
+    """
+
+    @staticmethod
+    def _extract_body(func) -> str:
+        """Return the executable body, dropping the signature and docstring.
+
+        Unlike the two extractors above, this one parses rather than counts
+        lines. _sanitize_prompt_field carries a MULTI-LINE signature, so
+        dropping a fixed number of leading lines would leave parameter lines
+        in the "body" and compare the signature as if it were logic.
+        """
+        source = textwrap.dedent(inspect.getsource(func))
+        statements = ast.parse(source).body[0].body
+        first = statements[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            statements = statements[1:]
+        body_start = statements[0].lineno - 1
+        return textwrap.dedent(
+            "\n".join(source.split("\n")[body_start:])
+        ).strip()
+
+    def test_sanitize_prompt_field_bodies_are_identical(self):
+        """The _sanitize_prompt_field body MUST be byte-identical across twins.
+
+        The body decides which characters can reach a line of CLAUDE.md and
+        at what length. A divergence would let one write path admit a
+        character the other collapses — so a heading injected through the
+        skill path would be stripped through the hook path, or the reverse,
+        and the guard would hold on only one of the two writers.
+        """
+        from shared.session_resume import _sanitize_prompt_field as canonical
+        from working_memory import _sanitize_prompt_field as twin
+
+        canonical_body = self._extract_body(canonical)
+        twin_body = self._extract_body(twin)
+
+        assert canonical_body == twin_body, (
+            "_sanitize_prompt_field twin drift between "
+            "hooks/shared/session_resume.py and "
+            "skills/pact-memory/scripts/working_memory.py — update both "
+            "in the SAME commit.\n"
+            f"canonical body:\n{canonical_body}\n\n"
+            f"twin body:\n{twin_body}"
+        )
+
+    def test_sanitize_prompt_field_constants_match(self):
+        """The sanitizer constants are part of the twin and must match.
+
+        The drift gate above compares the function body only, and the body
+        names these rather than spelling their values, so a change to one
+        copy of a constant leaves both bodies identical while the two write
+        paths bound differently. This arm is what makes that visible.
+
+        THE IDENTIFIER BOUND IS HELD HERE EVEN THOUGH session_resume TAKES
+        NO IDENTIFIER VALUE TODAY. The FIELD-KIND CLASSIFICATION is shared
+        vocabulary: a field kind that lives in one copy alone lets the two
+        writers disagree about what a kind means, and the defect this bound
+        repairs was a field with NO row in the classification falling to
+        the widest default.
+        """
+        import shared.session_resume as sr
+        import working_memory as wm
+
+        assert sr._REFRESH_FIELD_TRUNCATION_LIMIT == wm._REFRESH_FIELD_TRUNCATION_LIMIT, (
+            "_REFRESH_FIELD_TRUNCATION_LIMIT drift between session_resume.py "
+            "and working_memory.py — update both in the same commit"
+        )
+        assert sr._REFRESH_PATH_TRUNCATION_LIMIT == wm._REFRESH_PATH_TRUNCATION_LIMIT, (
+            "_REFRESH_PATH_TRUNCATION_LIMIT drift between session_resume.py "
+            "and working_memory.py — update both in the same commit"
+        )
+        assert (
+            sr._REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+            == wm._REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+        ), (
+            "_REFRESH_IDENTIFIER_TRUNCATION_LIMIT drift between "
+            "session_resume.py and working_memory.py — update both in the "
+            "same commit"
+        )
+        assert sr._PROMPT_CONTROL_CHARS_RE.pattern == wm._PROMPT_CONTROL_CHARS_RE.pattern, (
+            "_PROMPT_CONTROL_CHARS_RE drift between session_resume.py and "
+            "working_memory.py — update both in the same commit"
+        )
+
+
 class TestStalenessLexicalBaseParity:
     """#1247: the lexical base recovered from a SUPPLIED path (option D in
     check_pinned_staleness, via staleness._lexical_base_of) MUST equal the base

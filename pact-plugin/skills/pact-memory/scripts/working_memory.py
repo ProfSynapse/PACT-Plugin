@@ -115,6 +115,44 @@ _MANAGED_END_MARKER = "<!-- PACT_MANAGED_END -->"
 _LOCK_TIMEOUT_SECONDS = 5.0
 _LOCK_POLL_INTERVAL = 0.1
 
+# _sanitize_prompt_field: vendored twin of
+# hooks/shared/session_resume._sanitize_prompt_field — skills/pact-memory/
+# scripts/ cannot import from hooks/shared/ (separate package boundary).
+# The drift-detection test (TestSanitizePromptFieldTwinCopyDrift in
+# tests/test_staleness.py) guards byte-alignment of the function body with
+# the canonical copy; if you change either, update both in the SAME commit.
+# The three values below are part of the twin and must match the canonical
+# ones, which is what test_sanitize_prompt_field_constants_match asserts.
+#
+# Bounds for record field values interpolated into the managed regions of
+# CLAUDE.md. The store is plain SQLite on disk and a field value is
+# caller-influenced, so a hand-crafted or corrupted record must not be able
+# to open a heading inside a PACT-managed region or flood the always-loaded
+# context. Free-text fields get the tight bound; paths get a wider one
+# because legitimate absolute paths can be long.
+_REFRESH_FIELD_TRUNCATION_LIMIT = 200
+_REFRESH_PATH_TRUNCATION_LIMIT = 512
+
+# IDENTIFIER is a THIRD field kind, and its absence was a defect rather
+# than an omission. A memory id took the FREE-TEXT bound of 200, which is
+# 3 times what the generator emits and lets one field dominate the token
+# cost of a compressed entry. The store does NOT bound this value: the
+# ingress validates the KEY SET of a record rather than the length of a
+# value, so a caller-supplied id reaches the formatter unbounded.
+# 64 covers a 32-character generated id with double the margin.
+#
+# CLASSIFY BY FIELD KIND, NOT BY DEFAULT. A field with no row in the
+# classification falls to free text, and free text is the WIDEST bound, so
+# a missing row always errs toward the loose end.
+_REFRESH_IDENTIFIER_TRUNCATION_LIMIT = 64
+
+# Control characters collapsed in interpolated field values: C0 controls
+# (includes \n, \r, \t), DEL plus the full C1 block (which includes NEL
+# U+0085 — a str.splitlines boundary), and the Unicode line/paragraph
+# separators — anything that could break a value onto a new line and
+# masquerade as a heading or a separate entry.
+_PROMPT_CONTROL_CHARS_RE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]+")
+
 
 @contextmanager
 def file_lock(target_file: Path):
@@ -1019,6 +1057,33 @@ def _apply_token_budget(
     return result
 
 
+def _sanitize_prompt_field(
+    value: str,
+    limit: int = _REFRESH_FIELD_TRUNCATION_LIMIT,
+) -> str:
+    """Sanitize a record field value for interpolation into CLAUDE.md.
+
+    Twin of hooks/shared/session_resume._sanitize_prompt_field — kept local
+    because skills/pact-memory/scripts/ cannot import from hooks/shared/.
+    Body MUST stay byte-identical to the canonical copy (drift test enforces
+    this); this docstring is allowed to differ. Change either copy and you
+    change both in the SAME commit.
+
+    Collapses control characters to single spaces, strips, and bounds the
+    length. Callers MUST sanitize BEFORE they test the value for
+    truthiness: an internal failure returns ``""`` so the caller drops that
+    field's LINE, and a test of the RAW value would emit the field label
+    with an empty value instead.
+    """
+    try:
+        cleaned = _PROMPT_CONTROL_CHARS_RE.sub(" ", value).strip()
+        if len(cleaned) > limit:
+            cleaned = cleaned[:limit - 3] + "..."
+        return cleaned
+    except Exception:
+        return ""
+
+
 def _format_memory_entry(
     memory: Dict[str, Any],
     files: Optional[List[str]] = None,
@@ -1041,13 +1106,22 @@ def _format_memory_entry(
 
     lines = [f"### {date_str}"]
 
+    # EVERY field value below is SANITIZED BEFORE IT IS TESTED FOR
+    # TRUTHINESS, and the order is load-bearing. `_sanitize_prompt_field`
+    # returns "" on an internal failure so the caller drops that field's
+    # LINE; a test of the RAW value would pass, and then emit a bare
+    # "**Context**: " with no value after it. Sanitize, test the SANITIZED
+    # value, then append.
+
     # Add context if present
-    if memory.get("context"):
-        lines.append(f"**Context**: {memory['context']}")
+    context = _sanitize_prompt_field(str(memory.get("context") or ""))
+    if context:
+        lines.append(f"**Context**: {context}")
 
     # Add goal if present
-    if memory.get("goal"):
-        lines.append(f"**Goal**: {memory['goal']}")
+    goal = _sanitize_prompt_field(str(memory.get("goal") or ""))
+    if goal:
+        lines.append(f"**Goal**: {goal}")
 
     # Add decisions if present
     decisions = memory.get("decisions")
@@ -1060,50 +1134,85 @@ def _format_memory_entry(
                     decision_texts.append(d.get("decision", str(d)))
                 else:
                     decision_texts.append(str(d))
-            if decision_texts:
-                lines.append(f"**Decisions**: {', '.join(decision_texts)}")
+            # Sanitize the JOINED value, not each item: the join is what
+            # reaches the file, and a per-item bound would let N items
+            # multiply past the line bound the sanitize exists to set.
+            joined = _sanitize_prompt_field(", ".join(str(t) for t in decision_texts))
+            if joined:
+                lines.append(f"**Decisions**: {joined}")
         elif isinstance(decisions, str):
-            lines.append(f"**Decisions**: {decisions}")
+            cleaned = _sanitize_prompt_field(decisions)
+            if cleaned:
+                lines.append(f"**Decisions**: {cleaned}")
 
     # Add lessons if present
     lessons = memory.get("lessons_learned")
     if lessons:
         if isinstance(lessons, list) and lessons:
-            lines.append(f"**Lessons**: {', '.join(str(l) for l in lessons)}")
+            joined = _sanitize_prompt_field(", ".join(str(l) for l in lessons))
+            if joined:
+                lines.append(f"**Lessons**: {joined}")
         elif isinstance(lessons, str):
-            lines.append(f"**Lessons**: {lessons}")
+            cleaned = _sanitize_prompt_field(lessons)
+            if cleaned:
+                lines.append(f"**Lessons**: {cleaned}")
 
     # Add reasoning chains if present
     reasoning = memory.get("reasoning_chains")
     if reasoning:
         if isinstance(reasoning, list) and reasoning:
-            lines.append(f"**Reasoning chains**: {', '.join(str(r) for r in reasoning)}")
+            joined = _sanitize_prompt_field(", ".join(str(r) for r in reasoning))
+            if joined:
+                lines.append(f"**Reasoning chains**: {joined}")
         elif isinstance(reasoning, str):
-            lines.append(f"**Reasoning chains**: {reasoning}")
+            cleaned = _sanitize_prompt_field(reasoning)
+            if cleaned:
+                lines.append(f"**Reasoning chains**: {cleaned}")
 
     # Add agreements if present
     agreements = memory.get("agreements_reached")
     if agreements:
         if isinstance(agreements, list) and agreements:
-            lines.append(f"**Agreements**: {', '.join(str(a) for a in agreements)}")
+            joined = _sanitize_prompt_field(", ".join(str(a) for a in agreements))
+            if joined:
+                lines.append(f"**Agreements**: {joined}")
         elif isinstance(agreements, str):
-            lines.append(f"**Agreements**: {agreements}")
+            cleaned = _sanitize_prompt_field(agreements)
+            if cleaned:
+                lines.append(f"**Agreements**: {cleaned}")
 
     # Add disagreements resolved if present
     disagreements = memory.get("disagreements_resolved")
     if disagreements:
         if isinstance(disagreements, list) and disagreements:
-            lines.append(f"**Disagreements resolved**: {', '.join(str(d) for d in disagreements)}")
+            joined = _sanitize_prompt_field(", ".join(str(d) for d in disagreements))
+            if joined:
+                lines.append(f"**Disagreements resolved**: {joined}")
         elif isinstance(disagreements, str):
-            lines.append(f"**Disagreements resolved**: {disagreements}")
+            cleaned = _sanitize_prompt_field(disagreements)
+            if cleaned:
+                lines.append(f"**Disagreements resolved**: {cleaned}")
 
     # Add files if present
     if files:
-        lines.append(f"**Files**: {', '.join(files)}")
+        # A path field, so the wider bound: legitimate absolute paths are long.
+        joined_files = _sanitize_prompt_field(
+            ", ".join(str(f) for f in files), _REFRESH_PATH_TRUNCATION_LIMIT
+        )
+        if joined_files:
+            lines.append(f"**Files**: {joined_files}")
 
     # Add memory ID if provided
     if memory_id:
-        lines.append(f"**Memory ID**: {memory_id}")
+        # AN IDENTIFIER, NOT FREE TEXT. The free-text bound of 200 is 3
+        # times what the generator emits, and the store does not bound this
+        # value at its ingress, so a caller-supplied id took the widest
+        # bound in the classification.
+        cleaned_id = _sanitize_prompt_field(
+            str(memory_id), _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+        )
+        if cleaned_id:
+            lines.append(f"**Memory ID**: {cleaned_id}")
 
     return "\n".join(lines)
 
@@ -1714,26 +1823,43 @@ def _format_retrieved_entry(
     date_str = now.strftime("%Y-%m-%d %H:%M")
 
     lines = [f"### {date_str}"]
-    lines.append(f"**Query**: \"{query}\"")
+    # The query is caller-supplied text, so it is sanitized like every other
+    # interpolated value. It is NOT guarded by a truthiness test: an empty
+    # query renders an empty pair of quotes, which is the pre-fix behaviour.
+    lines.append(f"**Query**: \"{_sanitize_prompt_field(str(query or ''))}\"")
 
     if score is not None:
         lines.append(f"**Relevance**: {score:.2f}")
 
-    # Add context if present
-    if memory.get("context"):
-        # Truncate long context for display
-        context = memory['context']
-        if len(context) > 200:
-            context = context[:197] + "..."
+    # Add context if present.
+    # THE HAND-ROLLED TRUNCATION THAT STOOD HERE IS GONE, AND ITS REMOVAL IS
+    # PART OF THE FIX RATHER THAN A TIDY-UP. It cut to `context[:197] +
+    # "..."`, and `_sanitize_prompt_field` at limit 200 cuts to
+    # `cleaned[:197] + "..."`. Leaving both in place would cut the value
+    # TWICE, to 194 characters. The helper output is byte-identical to the
+    # code removed for a control-character-free input, so the truncation
+    # behaviour at this site does not change; only the control-character
+    # collapse and the outer strip are new.
+    context = _sanitize_prompt_field(str(memory.get("context") or ""))
+    if context:
         lines.append(f"**Context**: {context}")
 
     # Add goal if present
-    if memory.get("goal"):
-        lines.append(f"**Goal**: {memory['goal']}")
+    goal = _sanitize_prompt_field(str(memory.get("goal") or ""))
+    if goal:
+        lines.append(f"**Goal**: {goal}")
 
     # Add memory ID if provided
     if memory_id:
-        lines.append(f"**Memory ID**: {memory_id}")
+        # AN IDENTIFIER, NOT FREE TEXT. The free-text bound of 200 is 3
+        # times what the generator emits, and the store does not bound this
+        # value at its ingress, so a caller-supplied id took the widest
+        # bound in the classification.
+        cleaned_id = _sanitize_prompt_field(
+            str(memory_id), _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+        )
+        if cleaned_id:
+            lines.append(f"**Memory ID**: {cleaned_id}")
 
     return "\n".join(lines)
 

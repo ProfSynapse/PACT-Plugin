@@ -61,6 +61,16 @@ _REFRESH_STALE_HOURS = 48
 _REFRESH_FIELD_TRUNCATION_LIMIT = 200
 _REFRESH_PATH_TRUNCATION_LIMIT = 512
 
+# IDENTIFIER is a THIRD field kind. No value in THIS module takes it today.
+# It is defined here because the field-kind classification is SHARED
+# vocabulary with the twin copy in
+# skills/pact-memory/scripts/working_memory.py, which bounds a memory id
+# with it, and a classification that lives in one copy alone lets the two
+# writers drift on what a field kind means. Held by the constants arm of
+# TestSanitizePromptFieldTwinCopyDrift; if you change either, update both
+# in the SAME commit.
+_REFRESH_IDENTIFIER_TRUNCATION_LIMIT = 64
+
 # Control characters stripped from interpolated refreshed-prompt fields:
 # C0 controls (includes \n, \r, \t), DEL plus the full C1 block (which
 # includes NEL U+0085 — a str.splitlines boundary), and the Unicode
@@ -123,21 +133,47 @@ def update_session_info(
     # rejects non-absolute paths via `Path(session_dir).is_absolute()`. A
     # tilde-abbreviated path would break every journal write from command
     # files (R4 regression). Mirrors `plugin_root` below.
+    #
+    # SANITIZED HERE, AT THE VALUE, AND NOT AT THE LINE BELOW. The two
+    # `*_line` variables each END WITH "\n", and that newline is the list
+    # separator. `_PROMPT_CONTROL_CHARS_RE` covers "\n", so a sanitize call
+    # wrapped around the assembled LINE would collapse its own separator and
+    # merge three bullets into one. Sanitize the VALUE, keep the separator.
+    # A newline inside the value is still stripped, because the value is
+    # what the call receives.
     session_dir_line = ""
     if session_dir:
-        session_dir_line = f"- Session dir: `{session_dir}`\n"
+        cleaned_session_dir = _sanitize_prompt_field(
+            str(session_dir), _REFRESH_PATH_TRUNCATION_LIMIT
+        )
+        session_dir_line = f"- Session dir: `{cleaned_session_dir}`\n"
 
     # Build plugin root line (no abbreviation — needs to be usable as-is in Bash)
     plugin_root_line = ""
     if plugin_root:
-        plugin_root_line = f"- Plugin root: `{plugin_root}`\n"
+        cleaned_plugin_root = _sanitize_prompt_field(
+            str(plugin_root), _REFRESH_PATH_TRUNCATION_LIMIT
+        )
+        plugin_root_line = f"- Plugin root: `{cleaned_plugin_root}`\n"
+
+    # SANITIZED AT THE VALUE, like the two path values above, and for the same
+    # cause: the newline after each bullet is the LIST SEPARATOR, so a call
+    # wrapped around an assembled line would collapse its own separator.
+    # These two are FREE TEXT by the repo classification, so they take the
+    # tight bound rather than the path bound.
+    #
+    # THE BACKTICK WRAP BELOW IS NOT A GUARD. Inline code in markdown does not
+    # span a line break, so a newline in one of these values breaks OUT of the
+    # backtick span and reaches the managed region as a line of its own.
+    cleaned_session_id = _sanitize_prompt_field(str(session_id))
+    cleaned_team_name = _sanitize_prompt_field(str(team_name))
 
     session_block = (
         f"{SESSION_START}\n"
         f"## Current Session\n"
         f"<!-- Auto-managed by session_init hook. Overwritten each session. -->\n"
-        f"- Resume: `claude --resume {session_id}`\n"
-        f"- Team: `{team_name}`\n"
+        f"- Resume: `claude --resume {cleaned_session_id}`\n"
+        f"- Team: `{cleaned_team_name}`\n"
         f"{session_dir_line}"
         f"{plugin_root_line}"
         f"- Started: {timestamp}\n"
