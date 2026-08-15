@@ -236,6 +236,8 @@ If the team-lead rejects your teachback or HANDOFF, you wake on the inbound Send
 
 3. **Revise**. For teachback rejection: rewrite `metadata.teachback_submit` per the corrections. For HANDOFF rejection: revise the deliverable (re-edit files, re-run tests, etc.) and rewrite `metadata.handoff`.
 
+   > ⚠️ To rewrite, RE-SEND THE FULL OBJECT in ONE `TaskUpdate` call, and include each field the corrections did not touch, unchanged. A write that carries part of a nested sub-object REPLACES that sub-object, and it erases each field you omit. Then read the task file back and enumerate the keys of the object you wrote. Mechanism: [pact-teachback §Action: store teachback now](../pact-teachback/SKILL.md#action-store-teachback-now).
+
 4. **Re-submit on the SAME task** (do NOT create a new task):
    - Increment `metadata.revision_number`. The team-lead writes `revision_number=1` in the rejection record. On your first revision, increment to `2`. On each subsequent revision, increment again. This count is the rejection-cycle audit trail — it feeds the imPACT META-BLOCK 3-cycle signal, not harvest routing. It does NOT gate whether your revised content is preserved: the team-lead's acceptance (the single completion) emits whatever `metadata.handoff` holds at that moment, so the revised content reaches the journal regardless of the count.
    - SendMessage the team-lead: `"[{sender}→team-lead] Revised teachback/HANDOFF on Task #{id}. See metadata.{teachback_submit|handoff} (revision {N})."`
