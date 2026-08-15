@@ -53,17 +53,31 @@ def _densest(nchars):
     return s[:nchars]
 
 
+EXEMPT_DERIVATION_CEILING = 0
+
+
 def _exempt_lines(entry):
     """Return the lines `_apply_entry_token_ceiling` refuses to drop.
 
-    Index 0 is the date header. A `**Memory ID**` line is exempt by PREFIX at
-    whatever index it sits. This mirrors the source rather than restates it,
-    so a change to the exempt SET makes the site-B arm below go red.
+    DERIVED BY RUNNING THE SHIPPED CUT, NOT BY RESTATING ITS RULE. At a
+    ceiling of 0 no line has a word budget, so what comes back is what the
+    function refused to drop, which is the exempt set BY DEFINITION rather
+    than by agreement with a copy of the rule.
+
+    WHY THIS IS NOT A STYLE PREFERENCE. The earlier version of this helper
+    selected index 0 plus each `**Memory ID**` line by hand, and its own
+    docstring claimed it mirrored the source. It did not. A change to the
+    exempt set in the source left this helper stating the OLD rule, and the
+    arms built on it kept measuring a set the shipped cut no longer used,
+    with nothing red.
+
+    THE SHAPE OF THE DERIVED SET IS NOT ASSERTED HERE. It is asserted by
+    `TestTheExemptSetIsTheHeaderAndThePointer`, which is what turns a widened
+    exemption into a red rather than into a quietly different number.
     """
-    lines = entry.split("\n")
-    return "\n".join(
-        [lines[0]] + [ln for ln in lines[1:] if ln.startswith("**Memory ID**")]
-    )
+    from working_memory import _apply_entry_token_ceiling
+
+    return _apply_entry_token_ceiling(entry, EXEMPT_DERIVATION_CEILING)
 
 
 def _worst_case_memory():
@@ -79,6 +93,83 @@ def _worst_case_memory():
         "agreements_reached": dense,
         "disagreements_resolved": dense,
     }
+
+
+class TestTheExemptSetIsTheHeaderAndThePointer:
+    """The shipped cut holds out the date header and the pointer, and no more.
+
+    THIS IS THE ARM THAT MAKES A WIDENED EXEMPTION LOUD. `_exempt_lines`
+    above DERIVES the exempt slice by running the cut, so a source change
+    that holds out a third kind of line changes that slice with no edit
+    here. The derivation alone would then feed a DIFFERENT number to the
+    margin arms and stay green, which trades a stale rule for a silent one.
+    This class asserts the SHAPE of the derived set, so the change reaches a
+    person.
+
+    THE TWO EXEMPTIONS CARRY THEIR CAUSES, taken from the source. The date
+    header is what makes the text parse as an entry. The `**Memory ID**`
+    line is the pointer to the durable record, and the design accepts
+    truncation rather than refusal only while that pointer survives the cut.
+    A third exemption is not free: each exempt line spends the per-entry
+    budget that the droppable lines compete for.
+    """
+
+    def _entry(self):
+        from working_memory import (
+            _format_retrieved_entry,
+            _REFRESH_IDENTIFIER_TRUNCATION_LIMIT,
+        )
+
+        return _format_retrieved_entry(
+            {"context": "c"}, query="q",
+            memory_id=_densest(_REFRESH_IDENTIFIER_TRUNCATION_LIMIT),
+        )
+
+    def test_the_derived_exempt_set_is_the_header_and_the_pointer(self):
+        from working_memory import _MEMORY_ID_LABEL
+
+        entry = self._entry()
+        entry_lines = entry.split("\n")
+        exempt = _exempt_lines(entry).split("\n")
+
+        # NON-VACUITY, TWO LEGS. An empty slice, or a slice equal to the whole
+        # entry, would make the membership test below pass for the wrong
+        # cause: the first has nothing to check, and the second means the cut
+        # dropped nothing and the derivation measured the identity.
+        assert exempt, "the derived exempt slice is empty"
+        assert len(exempt) < len(entry_lines), (
+            f"the derivation dropped no line: {len(entry_lines)} in, "
+            f"{len(exempt)} out. The cut did not run, so the slice is not "
+            "evidence about what is exempt."
+        )
+
+        assert exempt[0] == entry_lines[0], (
+            f"the date header is not the first exempt line: {exempt[0]!r}"
+        )
+        for line in exempt[1:]:
+            assert line.startswith(_MEMORY_ID_LABEL), (
+                f"the shipped cut now holds out a line that is neither the "
+                f"date header nor the recovery pointer: {line!r}\n"
+                "A THIRD EXEMPTION SPENDS THE PER-ENTRY BUDGET THAT THE "
+                "DROPPABLE LINES COMPETE FOR, and it narrows the word budget "
+                "the margin arms measure. Decide it here rather than let the "
+                "numbers move quietly."
+            )
+
+    def test_a_droppable_line_is_absent_from_the_derived_set(self):
+        """THE OTHER HALF. An exempt set of everything would also pass above.
+
+        The arm above checks each member of the slice. It cannot see a line
+        that SHOULD be droppable and is not, when that line happens to carry
+        the pointer prefix. This one names a specific droppable field and
+        requires its absence.
+        """
+        entry = self._entry()
+        assert "**Query**" in entry, "the fixture lost the droppable field"
+        assert "**Query**" not in _exempt_lines(entry), (
+            "a droppable field line survived the cut at a ceiling of 0, so "
+            "the derived slice is wider than the exempt set"
+        )
 
 
 class TestCompressedEntryCeilingCoupling:
@@ -140,6 +231,91 @@ class TestCompressedEntryCeilingCoupling:
             f"_REFRESH_IDENTIFIER_TRUNCATION_LIMIT="
             f"{_REFRESH_IDENTIFIER_TRUNCATION_LIMIT}; if that limit moved, "
             f"move the ceiling in the same commit."
+        )
+
+    def test_the_dense_worst_case_margin_against_the_ceiling(self):
+        """Report the MARGIN between the dense worst case and the ceiling.
+
+        THE ARM ABOVE ASSERTS THE BOUND AND HIDES THE HEADROOM. It says the
+        cost is at or below the ceiling. It does not say by how much, so a
+        reader cannot tell a bound with room to spare from one that is met
+        with nothing left. THIS ARM PUTS THE NUMBER IN THE OUTPUT so a person
+        reads it rather than infers it.
+
+        IT ASSERTS THE RELATION AND NOT THE VALUE, on purpose. A margin of
+        zero is the measured state, so an arm demanding that the ceiling
+        EXCEED the worst case would be red today against a shipped constant
+        that is correct. The relation stays meaningful when either constant
+        moves.
+
+        THREE HAND DERIVATIONS OF THIS WORST CASE DISAGREED, AND THE ARM IS
+        THE ANSWER TO THAT. Each was built from a construction that felt like
+        the production one. So THIS ARM RUNS PRODUCTION END TO END: the
+        formatter, then the compressor, then the token estimate. It does NOT
+        rebuild the slice by hand.
+
+        THE TRAP THAT PRODUCED THE INCORRECT DERIVATIONS, NAMED SO IT IS NOT
+        REPEATED. `_densest(n)` PADS so the returned string ends on a letter.
+        Production does no such thing: `_compress_memory_entry` takes a RAW
+        character slice of the field value at `COMPRESSED_SUMMARY_CHAR_CAP`,
+        and the character at that boundary can be a SPACE. When it is, the
+        appended marker becomes its OWN WORD rather than joining the last
+        kept word, which is one more word in the estimate. Using `_densest`
+        at the CAP as though it were the slice hides that word. Using it as
+        the FIELD VALUE, as below, does not: the slice still happens in
+        production.
+        """
+        from working_memory import (
+            _compress_memory_entry,
+            _estimate_tokens,
+            _format_memory_entry,
+            COMPRESSED_ENTRY_TOKEN_CEILING,
+            COMPRESSED_SUMMARY_CHAR_CAP,
+            _REFRESH_IDENTIFIER_TRUNCATION_LIMIT,
+        )
+
+        entry = _format_memory_entry(
+            _worst_case_memory(),
+            memory_id=_densest(_REFRESH_IDENTIFIER_TRUNCATION_LIMIT),
+        )
+        compressed = _compress_memory_entry(entry)
+        cost = _estimate_tokens(compressed)
+        margin = COMPRESSED_ENTRY_TOKEN_CEILING - cost
+
+        # NON-VACUITY: the compressor must have run. An input already below
+        # the cap passes the relation below without exercising it.
+        assert cost < _estimate_tokens(entry), (
+            "the fixture did not exceed the compressed form, so the margin "
+            "below describes an input the compressor left alone"
+        )
+
+        # THE CAUSE OF THE EXTRA WORD, PINNED WITH ITS REASON. The character
+        # at the slice boundary of a dense field value is a SPACE, so the
+        # marker becomes its own word. If a later edit makes this a letter,
+        # the worst case falls by one word and the margin arithmetic moves.
+        # That is a change a person should see rather than absorb.
+        dense_field = _worst_case_memory()["context"]
+        assert dense_field[COMPRESSED_SUMMARY_CHAR_CAP - 1] == " ", (
+            "the character at the slice boundary is no longer a space, so the "
+            "appended marker now joins the last kept word instead of standing "
+            "as its own. The dense worst case falls by one word, and the "
+            f"margin below moves. Boundary character: "
+            f"{dense_field[COMPRESSED_SUMMARY_CHAR_CAP - 1]!r}"
+        )
+
+        print(
+            f"dense worst case: {cost} tokens against a ceiling of "
+            f"{COMPRESSED_ENTRY_TOKEN_CEILING}, margin {margin}"
+        )
+        assert margin >= 0, (
+            f"the dense worst case costs {cost} tokens against a ceiling of "
+            f"{COMPRESSED_ENTRY_TOKEN_CEILING}, so the margin is {margin}.\n"
+            "DO NOT MOVE A CONSTANT ON A HAND DERIVATION. Three of those "
+            "disagreed with each other and with the executed value. This arm "
+            "runs production end to end and is the instrument that settles "
+            "it. If the ceiling must rise, the per-entry allowance elsewhere "
+            "falls by twice the rise, so the change is a decision and not an "
+            "adjustment."
         )
 
     def test_the_dense_shape_costs_more_than_the_friendly_one(self):
@@ -331,6 +507,20 @@ class TestRetrievedContextThinMargin:
             assert "**Memory ID**" in entry
 
 
+# THE SHAPES FOR THE LIVE-CEILING SWEEP, IN ONE PLACE. The absence arm below
+# and the reached-the-cut arm beside it both run THIS list. Two lists would
+# let the reached count describe a population the absence arm does not sweep,
+# and the count is the whole evidence that the absence means anything.
+_LIVE_CEILING_SHAPES = [
+    ("one_context_field_only", {"context": "A save with one field."}, False),
+    ("one_context_field_with_id", {"context": "A save with one field."}, True),
+    ("two_fields", {"context": "Ctx " * 40, "goal": "Goal " * 40}, True),
+    ("many_fields", {"context": "Ctx " * 200, "goal": "Goal " * 200,
+                     "decisions": ["D " * 100],
+                     "lessons_learned": ["L " * 100]}, True),
+]
+
+
 class TestDegenerateEdgeAtTheLiveCeilings:
     """The cut rule at the ceilings production reaches, on realistic entries."""
 
@@ -368,17 +558,7 @@ class TestDegenerateEdgeAtTheLiveCeilings:
         # tested at one input does not have its axis swept.
         return sorted({site_a - 1, site_a, site_a + 1, site_b - 1, site_b, site_b + 1})
 
-    @pytest.mark.parametrize(
-        "shape_label, memory, with_id",
-        [
-            ("one_context_field_only", {"context": "A save with one field."}, False),
-            ("one_context_field_with_id", {"context": "A save with one field."}, True),
-            ("two_fields", {"context": "Ctx " * 40, "goal": "Goal " * 40}, True),
-            ("many_fields", {"context": "Ctx " * 200, "goal": "Goal " * 200,
-                             "decisions": ["D " * 100],
-                             "lessons_learned": ["L " * 100]}, True),
-        ],
-    )
+    @pytest.mark.parametrize("shape_label, memory, with_id", _LIVE_CEILING_SHAPES)
     def test_no_mangled_label_at_the_live_ceilings(self, shape_label, memory, with_id):
         """A cut entry carries no partial field label at the live ceilings.
 
@@ -396,6 +576,67 @@ class TestDegenerateEdgeAtTheLiveCeilings:
                 f"shape {shape_label} at ceiling {ceiling} emitted "
                 f"{self._defects(out)}"
             )
+
+    def test_the_live_ceiling_sweep_reaches_the_cut(self):
+        """REACHED-THE-MECHANISM CONTROL for the absence arm above.
+
+        THE ARM ABOVE ASSERTS AN ABSENCE OVER A SWEEP, SO IT IS GREEN WHEN
+        NO CELL OF THAT SWEEP CUTS ANYTHING. Make the cut a no-op, by having
+        `_apply_entry_token_ceiling` return its input, and every shape comes
+        back whole, no shape carries a defect, and the sweep reports a clean
+        result about a mechanism that did not run.
+
+        THE BAR: if the mechanism made a no-op leaves the arm green, the arm
+        is not finished. So this counts the cells where the output DIFFERS
+        from the input, which is the only observable that says the cut ran.
+
+        A COUNT AND NOT A FLAG, and the count is in the message. The number
+        moves when a ceiling constant moves, and a person reading a failure
+        then sees how far the sweep is from touching the mechanism instead of
+        inferring it.
+
+        WHY THE COUNT IS HERE AND NOT FOLDED INTO THE ARM ABOVE, which is
+        where the sibling arm in `TestFieldNameSurvivesTheCut` puts it.
+        MEASURED per shape at the live ceilings 165, 166, 167, 543, 544, 545:
+        `one_context_field_only` 0 of 6, `one_context_field_with_id` 0 of 6,
+        `two_fields` 0 of 6, `many_fields` 3 of 6. THREE OF THE FOUR SHAPES
+        REACH NOTHING, so a per-shape requirement would be red today against
+        a corpus that is correct. That is an over-block, and the corpus is
+        deliberately wider than the shapes that cut: the cheap shapes are
+        there to show the ceilings do NOT touch an ordinary entry. So the
+        requirement sits at the level where the population makes it true.
+        """
+        from working_memory import _apply_entry_token_ceiling, _format_memory_entry
+
+        ceilings = self._live_ceilings()
+        cells = 0
+        reached = []
+        for shape_label, memory, with_id in _LIVE_CEILING_SHAPES:
+            entry = _format_memory_entry(
+                memory, memory_id=("0123456789abcdef" * 2) if with_id else None
+            )
+            for ceiling in ceilings:
+                cells += 1
+                if _apply_entry_token_ceiling(entry, ceiling) != entry:
+                    reached.append((shape_label, ceiling))
+
+        # NON-VACUITY OF THE COUNTER ITSELF: an empty sweep would report zero
+        # reached and zero cells, and the assertion below cannot tell those
+        # apart from a mechanism that never fires.
+        assert cells == len(_LIVE_CEILING_SHAPES) * len(ceilings), (
+            f"the sweep ran {cells} cells, not "
+            f"{len(_LIVE_CEILING_SHAPES)} shapes by {len(ceilings)} ceilings"
+        )
+
+        assert reached, (
+            f"NOT ONE of the {cells} cells in the live-ceiling sweep changed "
+            "its entry, so the absence arm beside this one asserts nothing "
+            "about the cut. Either the ceilings moved above what these shapes "
+            "cost, or the cut stopped running."
+        )
+        # The measured number, so a reader gets it from the run rather than
+        # from this comment: cells reached at the time this was written.
+        print(f"live-ceiling sweep: {len(reached)} of {cells} cells reached the cut")
 
     def test_the_probe_can_see_a_mangled_label(self):
         """POSITIVE CONTROL for the arm above.
@@ -611,6 +852,12 @@ class TestAfterSectionSurvivesTheSync:
     def _after_carrying_sites():
         """Module-level derivation of the assignments that carry an after term.
 
+        RETURNS a map of LINE NUMBER to SITE KEY. The two are different
+        things and the arms below use them for different jobs. The line
+        number is the MEASUREMENT instrument, because a line trace is what
+        the interpreter can report. The site key is the IDENTITY, and it is
+        what an assertion names.
+
         COUNTING RULE, so a later reader can reproduce the population rather
         than trust it: every `ast.Assign` in `working_memory.py` with the
         single target name `new_content`, of which the value expression either
@@ -618,6 +865,22 @@ class TestAfterSectionSurvivesTheSync:
         LOWER bound. The lower-bound slice is the tail-preserving shape
         `content[insert_pos:]`. `content[:insert_pos]` has an UPPER bound and
         keeps the head, so it is not an after term.
+
+        KEY RULE, stated beside the counting rule because a key with an
+        unstated rule cannot be reproduced either: the key is the name of the
+        INNERMOST enclosing function, with the `ast.unparse` of the value
+        expression. `ast.unparse` is a canonical rendering, so the key
+        survives a re-wrap of the statement and an insertion above it. A LINE
+        NUMBER SURVIVES NEITHER, which is why the key is not one.
+
+        THE FUNCTION NAME IS NOT DECORATION AND IT WAS NOT A PREFERENCE.
+        MEASURED at the time this was written: four sites carry an after
+        term and they render as THREE distinct expressions. The site in
+        `sync_to_claude_md` and the excluded site in
+        `sync_retrieved_to_claude_md` both unparse to
+        `before_section + section_text + after_section`. An identity keyed on
+        the expression ALONE puts a driven site and the excluded site under
+        one key, which empties the excluded set for the wrong cause.
         """
         import ast
 
@@ -626,19 +889,10 @@ class TestAfterSectionSurvivesTheSync:
             / "skills/pact-memory/scripts/working_memory.py"
         ).read_text(encoding="utf-8")
 
-        sites = {}
-        for node in ast.walk(ast.parse(source)):
-            if not (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id == "new_content"
-            ):
-                continue
-            carries = False
-            for sub in ast.walk(node.value):
+        def carries_after_term(value):
+            for sub in ast.walk(value):
                 if isinstance(sub, ast.Name) and sub.id == "after_section":
-                    carries = True
+                    return True
                 if (
                     isinstance(sub, ast.Subscript)
                     and isinstance(sub.value, ast.Name)
@@ -646,13 +900,56 @@ class TestAfterSectionSurvivesTheSync:
                     and isinstance(sub.slice, ast.Slice)
                     and sub.slice.lower is not None
                 ):
-                    carries = True
-            if carries:
-                sites[node.lineno] = ast.unparse(node.value)
+                    return True
+            return False
+
+        sites = {}
+
+        def visit(node, enclosing):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    visit(child, child.name)
+                    continue
+                if (
+                    isinstance(child, ast.Assign)
+                    and len(child.targets) == 1
+                    and isinstance(child.targets[0], ast.Name)
+                    and child.targets[0].id == "new_content"
+                    and carries_after_term(child.value)
+                ):
+                    sites[child.lineno] = (enclosing, ast.unparse(child.value))
+                visit(child, enclosing)
+
+        visit(ast.parse(source), "<module>")
         return sites
 
-    # THE EXCLUSION NAMES ONE LINE AND CARRIES ITS CAUSE. A blanket accept
+    # THE EXCLUSION NAMES ONE SITE AND CARRIES ITS CAUSE. A blanket accept
     # would return this gate to a promise somebody must remember to keep.
+    #
+    # AND IT NAMES THE SITE RATHER THAN COUNTS IT. A budget of one was
+    # earned by a proof about ONE site, and a count cannot tell which site
+    # it holds. An edit that moves the after term OFF the proven site and
+    # ONTO an undriven one keeps the count at one: the tolerance then covers
+    # a site that is no longer excluded, and the excluded site has no proof.
+    # That edit was built and MEASURED green against a count. An exclusion
+    # that names its member cannot migrate.
+    #
+    # THE LIMIT OF THIS KEY, MEASURED RATHER THAN REASONED, AND LEFT OPEN ON
+    # PURPOSE. A swap that puts the IDENTICAL expression at an undriven site
+    # in the SAME function is invisible to this key, because the two sites
+    # then carry one key and only one of them is in the population. Built and
+    # run: the arm stays green. IT IS NOT CLOSED HERE BECAUSE THE CLOSURE
+    # COSTS MORE THAN THE HOLE. Adding the enclosing branch test to the key
+    # catches it, and it also reddens when somebody inverts that test and
+    # swaps its arms, which changes no behaviour. That is an OVER-BLOCK on an
+    # ordinary edit, traded against an under-block that needs a duplicate
+    # expression placed in unreachable code. A later seat that wants the
+    # closure should price that trade again rather than assume it.
+    EXCLUDED_SITE_KEY = (
+        "sync_retrieved_to_claude_md",
+        "before_section + section_text + after_section",
+    )
+
     EXCLUDED_SITE_CAUSE = (
         "the else arm of the retrieved-sync reconstruction. It is reached ONLY "
         "when after_section is EMPTY, so its after term is a no-op and no "
@@ -668,11 +965,17 @@ class TestAfterSectionSurvivesTheSync:
         carries an after term joins the population with no edit here, and this
         arm reddens until a person drives it or excludes it with a cause.
 
+        THE ASSERTION IS AN IDENTITY AND NOT A BUDGET. It names the one site
+        it tolerates. A count of undriven sites cannot say WHICH site it
+        holds, so an edit that moves the after term off the proven site and
+        onto an undriven one keeps the count and passes.
+
         WHEN THIS GOES RED, DECIDE WHICH KIND OF SITE APPEARED.
         1. IT CAN CARRY A VALUE. Add a driver to `_drivers`, in the commit
            that introduces it.
-        2. IT CANNOT CARRY A VALUE, as the excluded site cannot. Exclude it
-           AND prove the cause with an arm, rather than state the cause here.
+        2. IT CANNOT CARRY A VALUE, as the excluded site cannot. Add its key
+           to the excluded set AND prove its cause with an arm, rather than
+           state the cause in a comment.
         """
         import sys
         import threading
@@ -716,15 +1019,40 @@ class TestAfterSectionSurvivesTheSync:
         # comparison below meaningless. Require the trace to have run.
         assert executed, "the line trace recorded nothing, so the driven set is not evidence"
 
-        driven = set(population) & executed
-        excluded = set(population) - driven
-
-        assert len(excluded) <= 1, (
-            "more than one after-carrying assignment is undriven:\n"
-            + "\n".join(f"  line {line}: {population[line]}" for line in sorted(excluded))
-            + "\nDrive it, or exclude it with a cause that an arm proves."
+        # WELL-FORMEDNESS OF THE KEY, and it is a gate rather than a note.
+        # The identity below compares SETS OF KEYS. Two sites that share one
+        # key collapse into a single member, so a real exclusion can vanish
+        # from the excluded set with no assertion raised. Measured when this
+        # was written: 4 sites, 4 keys.
+        assert len(set(population.values())) == len(population), (
+            "two after-carrying assignments share one site key, so the "
+            "identity below cannot name a single member:\n"
+            + "\n".join(f"  line {line}: {population[line]}" for line in sorted(population))
+            + "\nGive the colliding sites distinct expressions, or widen the "
+            "key rule in _after_carrying_sites and say why here."
         )
-        assert driven, "no after-carrying assignment was reached by any driver"
+
+        driven_lines = set(population) & executed
+        excluded = {population[line] for line in set(population) - driven_lines}
+
+        assert excluded == {self.EXCLUDED_SITE_KEY}, (
+            "the set of UNDRIVEN after-carrying assignments is not the one "
+            "excluded site.\n"
+            f"  expected: {self.EXCLUDED_SITE_KEY}\n"
+            "  measured:\n"
+            + "\n".join(
+                f"    line {line}: {population[line]}"
+                for line in sorted(set(population) - driven_lines)
+            )
+            + "\nDrive it, or exclude it with a cause that an arm proves.\n"
+            "IF THE EXPECTED SITE IS MISSING FROM THE MEASURED SET, a driver "
+            "now reaches it, or its after term moved. Do NOT retarget this "
+            "constant to whatever is undriven now: the cause below was proved "
+            "about the site the constant names, and the proof does not travel "
+            "with the name.\n"
+            f"EXCLUSION CAUSE: {self.EXCLUDED_SITE_CAUSE}"
+        )
+        assert driven_lines, "no after-carrying assignment was reached by any driver"
 
     def test_the_excluded_branch_cannot_carry_a_value(self):
         """PROOF OF THE EXCLUSION CAUSE, so the exclusion is not a promise.
@@ -890,15 +1218,27 @@ class TestFieldNameSurvivesTheCut:
         wrote the marker ON TOP of the kept text, so at a small word budget
         the marker consumed the field name. The repair APPENDS the marker,
         which cannot reach into the words it keeps.
+
+        THE REACHED-THE-MECHANISM COUNT IS IN THIS ARM AND NOT BESIDE IT.
+        The two assertions below are ABSENCES, and a cut that returned its
+        input emits no broken name and no orphan value at any ceiling. So
+        this arm counts the cells that changed their entry and requires the
+        count to be above zero. Both parametrizations reach the cut in the
+        hundreds, so the requirement costs no false red.
         """
         from working_memory import _apply_entry_token_ceiling, _format_memory_entry
 
+        cells = 0
+        reached = 0
         for label, memory in self._corpus():
             entry = _format_memory_entry(
                 memory, memory_id=("0123456789abcdef" * 2) if with_id else None
             )
             for ceiling in range(0, 61):
                 out = _apply_entry_token_ceiling(entry, ceiling)
+                cells += 1
+                if out != entry:
+                    reached += 1
                 for line in out.split("\n"):
                     assert not self._broken_name(line), (
                         f"{label} at ceiling {ceiling} emitted a broken field "
@@ -908,6 +1248,20 @@ class TestFieldNameSurvivesTheCut:
                         f"{label} at ceiling {ceiling} pushed a value to the "
                         f"start of a line: {line!r}"
                     )
+
+        expected_cells = len(self._corpus()) * 61
+        assert cells == expected_cells, (
+            f"the sweep ran {cells} cells, not {expected_cells}"
+        )
+        assert reached, (
+            f"NOT ONE of the {cells} cells changed its entry, so the two "
+            "absence assertions above hold over a cut that did not run. "
+            "They are green about a mechanism that is gone."
+        )
+        print(
+            f"field-name corpus with_id={with_id}: {reached} of {cells} "
+            "cells reached the cut"
+        )
 
     def test_a_name_without_its_value_is_the_ruled_rendering(self):
         """At a word budget of 1 the line keeps its name and elides the value.

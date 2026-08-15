@@ -2272,6 +2272,54 @@ class TestSanitizePromptFieldTwinCopyDrift:
             "\n".join(source.split("\n")[body_start:])
         ).strip()
 
+    @staticmethod
+    def _extract_signature(func):
+        """Return an ast-NORMALISED signature, for comparison across twins.
+
+        WHY A NORMALISED FORM AND NOT THE SOURCE LINES. The extractor above
+        DROPS the signature, on purpose, so the body comparison does not
+        compare parameter lines as if they were logic. That leaves the
+        signature compared by nobody, which is the gap this closes. Comparing
+        the raw source lines instead would go red when somebody re-wraps a
+        multi-line signature onto one line, which changes no behaviour.
+
+        THE COMPARED SURFACE, so a later reader can reproduce it: the ORDERED
+        parameter names, the `ast.unparse` of each annotation, and the
+        `ast.unparse` of each default EXPRESSION.
+
+        SOURCE FORM, NOT RESOLVED VALUE, AND THAT IS THE POINT. The default
+        `limit` reads `_REFRESH_FIELD_TRUNCATION_LIMIT` in the two copies. A
+        copy rewritten to spell the bare literal 200 has the SAME resolved
+        value today, so a value comparison stays green while the two copies
+        stop tracking one constant. The unparse of the expression separates
+        them.
+        """
+        args = ast.parse(textwrap.dedent(inspect.getsource(func))).body[0].args
+
+        positional = args.posonlyargs + args.args
+        defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+
+        rendered = [
+            (a.arg,
+             ast.unparse(a.annotation) if a.annotation else None,
+             ast.unparse(d) if d is not None else None)
+            for a, d in zip(positional, defaults)
+        ]
+        for a, d in zip(args.kwonlyargs, args.kw_defaults):
+            rendered.append(
+                ("*" + a.arg,
+                 ast.unparse(a.annotation) if a.annotation else None,
+                 ast.unparse(d) if d is not None else None)
+            )
+        for star, name in (("*", args.vararg), ("**", args.kwarg)):
+            if name is not None:
+                rendered.append(
+                    (star + name.arg,
+                     ast.unparse(name.annotation) if name.annotation else None,
+                     None)
+                )
+        return tuple(rendered)
+
     def test_sanitize_prompt_field_bodies_are_identical(self):
         """The _sanitize_prompt_field body MUST be byte-identical across twins.
 
@@ -2294,6 +2342,53 @@ class TestSanitizePromptFieldTwinCopyDrift:
             "in the SAME commit.\n"
             f"canonical body:\n{canonical_body}\n\n"
             f"twin body:\n{twin_body}"
+        )
+
+    def test_sanitize_prompt_field_signatures_are_identical(self):
+        """The twin SIGNATURE must agree, in source form, across the copies.
+
+        THE BODY ARM ABOVE CANNOT SEE THIS, BY CONSTRUCTION. `_extract_body`
+        drops the signature so it does not compare parameter lines as logic,
+        and the constants arm below compares MODULE-LEVEL names. A default
+        rewritten in ONE copy sits in neither population: the bodies stay
+        byte-identical, the four module constants stay equal, and the two
+        write paths bound a field differently with no arm red.
+
+        MEASURED: the two copies take `limit` defaulted to
+        `_REFRESH_FIELD_TRUNCATION_LIMIT`, which is 200. Rewriting one copy
+        to the bare literal 200 changes NO behaviour today and breaks the
+        coupling, so the next move of that constant bounds one writer and not
+        the other.
+
+        WHAT THIS ARM DOES NOT ASSERT, STATED SO NOBODY READS IT WIDER. It
+        compares the signature SURFACE, not the resolved default. Two copies
+        that name DIFFERENT constants of equal value agree here and are
+        caught by the constants arm below. The two arms are complementary,
+        and neither one covers the other.
+        """
+        from shared.session_resume import _sanitize_prompt_field as canonical
+        from working_memory import _sanitize_prompt_field as twin
+
+        canonical_signature = self._extract_signature(canonical)
+        twin_signature = self._extract_signature(twin)
+
+        # NON-VACUITY: an extractor that returned an empty tuple for each side
+        # would compare equal and report a clean sweep. The function takes a
+        # value and a bound, so the surface cannot be empty.
+        assert len(canonical_signature) >= 2, (
+            f"the canonical signature parsed as {canonical_signature!r}, which "
+            "is too small to be this function. The extractor is broken, and an "
+            "empty surface makes the comparison below pass for the wrong cause."
+        )
+
+        assert canonical_signature == twin_signature, (
+            "_sanitize_prompt_field SIGNATURE drift between "
+            "hooks/shared/session_resume.py and "
+            "skills/pact-memory/scripts/working_memory.py — update both "
+            "in the SAME commit.\n"
+            "Each row is (parameter, annotation, default), in source form.\n"
+            f"canonical: {canonical_signature}\n"
+            f"twin:      {twin_signature}"
         )
 
     def test_sanitize_prompt_field_constants_match(self):
