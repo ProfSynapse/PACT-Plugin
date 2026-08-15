@@ -181,11 +181,97 @@ class TestApplyTokenBudget:
             f"Expected compressed entry to contain '**Summary**', got: {result[1][:200]}"
         )
 
-    def test_way_over_budget_drops_entries(self):
-        """When compressed entries still exceed budget, should drop from end."""
-        from working_memory import _apply_token_budget
+    def test_entry_ceiling_bounds_the_newest_entry(self):
+        """The newest entry is bounded by the ceiling, not compressed, not dropped.
 
-        huge_text = "word " * 500  # ~650 tokens
+        THE FIXTURE IS DERIVED FROM THE MODULE CONSTANTS RATHER THAN FROM
+        LITERALS. One test held a literal size against a literal budget and
+        went red two times, each time because an honest move of the ceiling
+        put its input out of reach of the mechanism it names. A fixture
+        computed from the constants moves WITH them.
+        """
+        from working_memory import (
+            _apply_token_budget,
+            _estimate_tokens,
+            COMPRESSED_ENTRY_TOKEN_CEILING,
+            MAX_WORKING_MEMORIES,
+            WORKING_MEMORY_TOKEN_BUDGET,
+        )
+
+        entry_ceiling = (
+            WORKING_MEMORY_TOKEN_BUDGET
+            - (MAX_WORKING_MEMORIES - 1) * COMPRESSED_ENTRY_TOKEN_CEILING
+        )
+        # `_estimate_tokens` is `int(words * 1.3)`, so a word count equal to
+        # the ceiling gives about 1.3 times the ceiling in tokens. That puts
+        # each entry ABOVE the ceiling at any value of the constants.
+        huge_text = "word " * entry_ceiling
+        entries = [
+            f"### 2026-01-15 10:00\n**Context**: {huge_text}",
+            f"### 2026-01-14 10:00\n**Context**: {huge_text}",
+            f"### 2026-01-13 10:00\n**Context**: {huge_text}",
+        ]
+
+        # NON-VACUITY: the input must be above the ceiling, or the bound
+        # below passes without the cut ever running.
+        assert _estimate_tokens(entries[0]) > entry_ceiling
+
+        result = _apply_token_budget(entries, WORKING_MEMORY_TOKEN_BUDGET)
+
+        # The drop loop must NOT run here. This arm and the drop-loop arm
+        # below cover different mechanisms, and this assertion keeps them
+        # apart: a failure here is a fixture that reached the wrong one.
+        assert len(result) == len(entries)
+
+        # THE NEWEST ENTRY IS NEVER COMPRESSED AND NEVER DROPPED. IT CAN BE
+        # BOUNDED. This asserted `result[0] == entries[0]`, which pinned
+        # THREE properties at once: not compressed, not dropped, not
+        # modified. The per-entry ceiling BOUNDS the entry, so the third
+        # died and the first two did not. The three arms below assert the
+        # surviving properties DIRECTLY rather than through an equality
+        # that also carried the retired one.
+        #
+        # A `**Summary**` line is what `_compress_memory_entry` emits, so
+        # its ABSENCE is the not-compressed property stated positively.
+        assert "**Summary**" not in result[0]
+        # The date header identifies WHICH entry survived, so this is the
+        # not-dropped property: the newest one is still at index 0.
+        assert result[0].split("\n")[0] == entries[0].split("\n")[0]
+        # And this is the property that replaced the retired one.
+        assert _estimate_tokens(result[0]) <= entry_ceiling
+
+    def test_drop_loop_removes_entries_at_a_non_production_budget(self):
+        """The drop loop removes entries from the end when compression is not enough.
+
+        THIS ARM OPERATES THE FUNCTION AT AN INPUT PRODUCTION DOES NOT
+        REACH, AND THE NAME OF THE FUNCTION PROMISES A SECTION BEHAVIOUR.
+        At the production call site the loop CANNOT RUN: the caller slices
+        to `MAX_WORKING_MEMORIES`, and the newest entry plus the compressed
+        neighbours are bounded by the section budget by construction of the
+        ceiling. So the loop is a function property here, and a reader must
+        not conclude that the section drops entries in normal operation.
+
+        THE MECHANISM IS ALIVE RATHER THAN DEAD. It is out of reach from
+        the production fixture, and it runs at more entries or at a smaller
+        budget, which is what this arm supplies.
+
+        THE FIXTURE IS DERIVED FROM THE MODULE CONSTANTS. The budget is the
+        per-entry ceiling itself, which leaves room for the newest entry
+        and none for a neighbour, so the loop must run at any value of the
+        constants.
+        """
+        from working_memory import (
+            _apply_token_budget,
+            COMPRESSED_ENTRY_TOKEN_CEILING,
+            MAX_WORKING_MEMORIES,
+            WORKING_MEMORY_TOKEN_BUDGET,
+        )
+
+        entry_ceiling = (
+            WORKING_MEMORY_TOKEN_BUDGET
+            - (MAX_WORKING_MEMORIES - 1) * COMPRESSED_ENTRY_TOKEN_CEILING
+        )
+        huge_text = "word " * entry_ceiling
         entries = [
             f"### 2026-01-15 10:00\n**Context**: {huge_text}",
             f"### 2026-01-14 10:00\n**Context**: {huge_text}",
@@ -193,11 +279,18 @@ class TestApplyTokenBudget:
             f"### 2026-01-12 10:00\n**Context**: {huge_text}",
         ]
 
-        result = _apply_token_budget(entries, 700)
+        result = _apply_token_budget(entries, entry_ceiling)
 
+        # COMPRESSION NEVER CHANGES THE COUNT, so a smaller count is the
+        # evidence that the drop loop ran. Nothing else in this function
+        # removes an entry.
         assert len(result) < len(entries)
         assert len(result) >= 1
-        assert result[0] == entries[0]
+
+        # The newest entry survives the loop: the loop guard is
+        # `len(result) > 1`.
+        assert "**Summary**" not in result[0]
+        assert result[0].split("\n")[0] == entries[0].split("\n")[0]
 
     def test_single_entry_always_kept(self):
         """A single entry should never be dropped, even if over budget."""

@@ -41,10 +41,18 @@ WORKING_MEMORY_HEADER = "## Working Memory"
 # THE COUNT CLAUSE WAS REMOVED BECAUSE IT WAS FALSE IN THE COMMON REGIME, NOT
 # BECAUSE IT WAS UNTIDY. `_apply_token_budget` never compresses `entries[0]`
 # and its drop loop is `while len(result) > 1`, so when the newest entry ALONE
-# exceeds the whole-section budget -- as a typical full entry does -- the older
-# entries are dropped and the section shows ONE entry. This string is written
-# INTO the artifact it describes, so every agent loading a CLAUDE.md read the
-# false claim inline, beside a section that often held a single entry.
+# exceeded the whole-section budget the older entries were dropped and the
+# section showed ONE entry. This string is written INTO the artifact it
+# describes, so every agent loading a CLAUDE.md read the false claim inline,
+# beside a section that often held a single entry.
+#
+# THAT ONE-ENTRY REGIME IS NOW CLOSED, AND THE COUNT CLAUSE STAYS OUT ANYWAY.
+# `_apply_entry_token_ceiling` bounds each entry so that the newest one
+# cannot exhaust the section alone, and the per-field character bound in
+# `_format_memory_entry` puts a typical full entry far below the budget. A
+# fixed count is still the wrong thing to promise: the cap is a CAP, the
+# store can hold fewer entries than it, and a promise here would go stale the
+# next time either bound moves.
 #
 # WHAT REPLACED IT IS UNCONDITIONAL. The searchability clause is TRUE in every
 # regime and is kept: it is the clause that tells a reader where the durable
@@ -82,6 +90,40 @@ RETRIEVED_CONTEXT_TOKEN_BUDGET = 500
 # values AGREE, so nothing goes red and the mistake is invisible. The name
 # is the fix: COMPRESSED_ENTRY_TOKEN_CEILING derives from THIS constant.
 COMPRESSED_SUMMARY_CHAR_CAP = 120
+
+# Token cost of ONE compressed neighbour, at its maximum.
+#
+# THIS IS AN ESTIMATE AND IT IS LABELLED ONE DELIBERATELY. It rests on
+# THREE premises, and a change to any of them moves it: the summary cap is
+# COMPRESSED_SUMMARY_CHAR_CAP plus the 3 characters of the truncation
+# marker; a memory id is bounded at _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+# characters; and the worst-case density is 2 characters for each word
+# ROUNDED DOWN, which is one character plus one space and is the densest
+# input `str.split()` can meet. THE DIRECTION OF THE ROUND IS PART OF THE
+# RULE AND IT IS REPEATED AT EACH RESTATEMENT, because a reader who meets
+# this premise alone would otherwise hold the rule without its direction.
+#
+# COUNTING RULE, AND IT STATES ITS ROUNDING BECAUSE THE ARITHMETIC IS ODD:
+# measure the ASSEMBLED three-line compressed form, being the date header,
+# the `**Summary**` line at the cap, and the `**Memory ID**` line. At 2
+# characters for each word, ROUNDED DOWN, 123 characters gives 61 words
+# rather than 61.5. A reader who rounds UP reproduces none of the numbers
+# here, so the direction is part of the rule. MEASURED: 128.
+#
+# THE VARIABLE IS DENSITY AND NOT LENGTH, WHICH IS THE WHOLE CAUSE OF THIS
+# CONSTANT MOVING. A character bound cannot enforce a token budget, because
+# the producer of the value controls the ratio. At the 64-character
+# identifier bound, a DENSE id costs 128 and a one-token id costs 88, from
+# the same character count. The 128 is the dense case, so the bound holds
+# for the adversarial shape rather than for the friendly one.
+#
+# DO NOT DERIVE THIS BY ADDING PARTS. The estimator applies `int()` ONCE
+# to the word count of the WHOLE string, so two separately rounded parts
+# do not sum to the rounded whole.
+#
+# This is the per-entry cost the SITE A ceiling reserves for the two
+# neighbours it compresses; see `_apply_token_budget`.
+COMPRESSED_ENTRY_TOKEN_CEILING = 128
 
 # Pin caps constants (twin copy of hooks/pin_caps.py — cannot import across
 # the skills-to-hooks package boundary). Drift-detection test in
@@ -1046,6 +1088,118 @@ def _compress_memory_entry(entry: str) -> str:
     return f"{date_line}{tail}"
 
 
+def _apply_entry_token_ceiling(entry: str, ceiling: int) -> str:
+    """
+    Cut ONE entry to a token ceiling by dropping whole field LINES.
+
+    A CHARACTER BOUND CANNOT ENFORCE A TOKEN BUDGET. The per-field bound in
+    the two formatters is in CHARACTERS, the section budget is in TOKENS,
+    and the producer of a field value controls the ratio through whitespace
+    density. So the budget is enforced a second time, in its own unit, here.
+
+    THE CUT DROPS WHOLE LINES FROM THE END. It never cuts inside a line: a
+    mid-line cut can leave a partial ``**Field**: `` fragment, and a cut at
+    a line break puts the remainder at the START of a line, which is the
+    shape the whole sanitize exists to prevent.
+
+    TWO LINES ARE EXEMPT AND ALWAYS SURVIVE:
+
+    1. The ``### {date}`` header. Without it the entry stops parsing as an
+       entry, and the date-led heading is what excludes it from the pin count.
+    2. The ``**Memory ID**`` line. It is the pointer to the durable record.
+       The whole design accepts truncation rather than refusal BECAUSE a
+       loss at this rendering is recoverable from the store, and that
+       argument holds only while the pointer survives the cut.
+
+    THE MEMORY ID LINE IS THE LAST LINE OF AN ENTRY, so a drop-from-the-end
+    that did not exempt it would remove the recovery pointer FIRST, quietly
+    undoing the argument above while every test stayed green.
+
+    Args:
+        entry: One formatted markdown entry, starting with its date header.
+        ceiling: Maximum estimated tokens for this entry alone.
+
+    Returns:
+        The entry, cut to whole lines, at or below the ceiling where the
+        two exempt lines permit it.
+    """
+    if _estimate_tokens(entry) <= ceiling:
+        return entry
+
+    lines = entry.split("\n")
+    if len(lines) <= 1:
+        return entry
+
+    # Index 0 is the date header. A `**Memory ID**` line is matched by
+    # PREFIX wherever it sits, rather than by position, so the exemption
+    # does not depend on it staying last.
+    exempt = {0}
+    for index, line in enumerate(lines):
+        if line.startswith("**Memory ID**"):
+            exempt.add(index)
+
+    # DROP WHOLE LINES FIRST, from the end, and stop at ONE remaining
+    # droppable line. That last line is handled below instead of dropped.
+    kept = list(range(len(lines)))
+    droppable = [i for i in reversed(range(len(lines))) if i not in exempt]
+    for index in droppable[:-1] if droppable else []:
+        if _estimate_tokens("\n".join(lines[i] for i in kept)) <= ceiling:
+            break
+        kept.remove(index)
+
+    if _estimate_tokens("\n".join(lines[i] for i in kept)) <= ceiling:
+        return "\n".join(lines[i] for i in kept)
+
+    # LAST RESORT: TRUNCATE THE FINAL DROPPABLE LINE IN PLACE RATHER THAN
+    # DROP IT, AND THE CAUSE IS A MEASURED PRODUCTION DEFECT.
+    #
+    # A save that carries a CONTEXT and nothing else is an ORDINARY save, and
+    # it renders as TWO lines: the date header and one field line. The header
+    # is exempt, so that field line is the only droppable one. A pure
+    # whole-line rule removed it and left a DATED HEADING WITH NO CONTENT.
+    # Where such a save carries no memory id, the entry then kept NO POINTER
+    # TO THE STORE either, and the argument that makes this design prefer
+    # truncation to refusal is that the loss at this rendering is RECOVERABLE
+    # FROM THE STORE. At that shape the recovery pointer was gone too, so the
+    # cut destroyed the property the whole design rests on.
+    #
+    # THIS DOES NOT REOPEN THE MID-LINE-CUT TRAP. That trap has two causes: a
+    # cut can leave a partial `**Field**: ` fragment, and a cut at a line
+    # break can put the remainder at the START of a line. A truncation that
+    # KEEPS THE LINE PREFIX and appends "..." does neither, because it EMITS
+    # NO NEWLINE, so it can open no line. The forbidden class is wider than
+    # the cause that motivates it, and this is the part outside the cause.
+    #
+    # Uses the same `[:limit - 3] + "..."` convention as the field sanitize.
+    last = droppable[-1]
+    line = lines[last]
+    fitted = list(kept)
+    overhead = _estimate_tokens(
+        "\n".join(lines[i] if i != last else "" for i in fitted)
+    )
+    budget_words = max(0, int((ceiling - overhead) / 1.3))
+
+    # DEGENERATE EDGE: DROP THE LINE RATHER THAN EMIT A MANGLED LABEL.
+    # The `**Field**: ` label is ONE word, and the ellipsis step cuts 3
+    # characters off the END of what it keeps. At a word budget of 1 the
+    # only kept word IS the label, so the cut lands INSIDE it and emits
+    # `**Context...`. At a budget of 0 the line becomes a bare `...`.
+    # BOTH ARE THE PARTIAL `**Field**: ` FRAGMENT that the cut rule exists
+    # to prevent, so this edge would defeat the guard at its own boundary.
+    # MEASURED by a ceiling sweep: the label survives whole at a budget of
+    # 2 or more, because the cut then lands in a VALUE word.
+    if budget_words < 2:
+        fitted.remove(last)
+        return "\n".join(lines[i] for i in fitted)
+
+    words = line.split()
+    truncated = " ".join(words[:budget_words])
+    if len(truncated) < len(line):
+        truncated = truncated[:max(0, len(truncated) - 3)] + "..."
+    lines[last] = truncated
+    return "\n".join(lines[i] for i in fitted)
+
+
 def _apply_token_budget(
     entries: List[str],
     token_budget: int
@@ -1053,19 +1207,47 @@ def _apply_token_budget(
     """
     Apply a token budget to a list of memory entries.
 
-    Strategy: Keep the newest entry in full. Compress older entries to
-    single-line summaries. If still over budget, reduce the number of
-    entries shown.
+    Strategy: Cut each entry to the per-entry ceiling. Then compress older
+    entries to single-line summaries, and if the total is above budget,
+    reduce the number of entries shown.
+
+    THE NEWEST ENTRY IS NEVER COMPRESSED AND NEVER DROPPED. IT CAN BE
+    BOUNDED. This docstring said "keep the newest entry in full", which
+    conflated THREE properties: not compressed, not dropped, not modified.
+    The ceiling does not compress and it does not drop. IT BOUNDS. So the
+    first two properties survive and the third does not, and the third is
+    the product change that came with the per-entry ceiling: an entry above
+    the ceiling loses its last field lines in this rendering, and the store
+    keeps the full record.
+
+    THE PER-ENTRY CEILING IS A FIXED EXPRESSION OVER THE MODULE CONSTANTS,
+    NOT A FUNCTION OF THE `token_budget` ARGUMENT. Deriving it from the
+    argument looks safer and is not: at a SMALL argument the ceiling falls
+    below the size of an ordinary entry, so the newest entry gets cut and
+    this function stops keeping it in full, which is its stated contract.
+    The ceiling exists to stop ONE entry exhausting the SECTION, and the
+    section is what the constants describe.
 
     Args:
         entries: List of memory entry strings (newest first).
         token_budget: Maximum estimated tokens for all entries combined.
 
     Returns:
-        List of entries (some possibly compressed) fitting within budget.
+        List of entries (some possibly cut or compressed) fitting within budget.
     """
     if not entries:
         return entries
+
+    # Reserve room for the neighbours this function COMPRESSES rather than
+    # drops, then give the rest of the section budget to the newest entry.
+    # The newest entry is never compressed and the drop loop is
+    # `while len(result) > 1`, so without this ceiling one dense entry can
+    # exhaust the section on its own and evict every genuine neighbour.
+    entry_ceiling = (
+        WORKING_MEMORY_TOKEN_BUDGET
+        - (MAX_WORKING_MEMORIES - 1) * COMPRESSED_ENTRY_TOKEN_CEILING
+    )
+    entries = [_apply_entry_token_ceiling(e, entry_ceiling) for e in entries]
 
     # Check if already within budget
     total_tokens = sum(_estimate_tokens(e) for e in entries)
@@ -1529,18 +1711,31 @@ def sync_to_claude_md(
     THE COUNT IS A CAP, NOT A PROMISE, and this docstring said "the last 3"
     until the claim was measured. `_apply_token_budget` keeps the newest entry
     IN FULL and its drop loop is `while len(result) > 1`, so when that entry
-    ALONE exceeds the whole-section budget -- as a typical full entry does --
-    the older ones are dropped and the section shows ONE. Stating a fixed 3
-    here is the same false claim that was removed from the comment this
-    function WRITES INTO the file, left behind in the function that makes it
-    false.
+    ALONE exceeded the whole-section budget the older ones were dropped and the
+    section showed ONE.
 
-    Its sibling `sync_retrieved_to_claude_md` genuinely does hold the last 3,
-    and its docstring is correct as written -- `_format_retrieved_entry`
-    truncates each entry to 200 chars, so three of them cannot reach that
-    section's budget and its drop loop never runs. DO NOT "fix" the sibling to
-    match this wording: the two differ because one bounds its entries and the
-    other does not, which is the whole mechanism.
+    THAT REGIME IS CLOSED AND THE CAP IS STILL A CAP. `_apply_entry_token_ceiling`
+    now bounds each entry below the section budget, so the newest entry cannot
+    exhaust the section by itself and the older ones survive at their compressed
+    size. The count remains a cap rather than a promise for the ordinary reason:
+    the store can hold fewer entries than MAX_WORKING_MEMORIES.
+
+    ITS SIBLING `sync_retrieved_to_claude_md` HOLDS THE SAME CAP BY A DIFFERENT
+    MECHANISM, AND THE EARLIER DESCRIPTION OF THAT MECHANISM HERE WAS INCORRECT
+    IN TWO PLACES. It said `_format_retrieved_entry` truncates each ENTRY to 200
+    chars; it bounded the CONTEXT FIELD only, and the query, the goal and the
+    memory id carried no bound at all. It then said the sibling's drop loop
+    "never runs"; that loop was DRIVEN, reaching 547 tokens against its budget
+    of 500 and evicting one genuine neighbour.
+
+    WHAT IS CORRECT NOW, WITH ITS CONDITION. Each field of both formatters is
+    bounded, and each entry of both sections is bounded in TOKENS. The sibling's
+    drop loop CAN still run: three retrieved entries at the full character bound
+    cost more than its budget, so an entry at the ceiling loses lines and a
+    third entry can be dropped. A realistic retrieved entry sits far below the
+    ceiling, because a query and a memory id are short. The two functions differ
+    in POLICY and not in whether they bound: this one compresses its older
+    entries before it drops any, and the sibling drops without compressing.
 
     This function is designed for graceful degradation - if CLAUDE.md doesn't
     exist or the sync fails for any reason, it logs a warning but doesn't
@@ -2012,8 +2207,23 @@ def sync_retrieved_to_claude_md(
             all_entries = new_entries + existing_entries
             trimmed_entries = all_entries[:MAX_RETRIEVED_MEMORIES]
 
-            # Apply token budget: reduce entry count if over budget.
-            # Retrieved entries are already compact (~200 chars each), drop oldest rather than compress.
+            # Apply the PER-ENTRY token ceiling first, then the section
+            # budget. THIS IS A SECOND CEILING SITE AND IT IS DIFFERENT CODE
+            # FROM `_apply_token_budget`, which the Working Memory sync
+            # calls. A ceiling placed only in that function reaches that
+            # section alone and leaves this loop open. Each of the
+            # MAX_RETRIEVED_MEMORIES entries gets an equal share here,
+            # because this loop DROPS without compressing, so there is no
+            # compressed-neighbour saving to redistribute.
+            entry_ceiling = RETRIEVED_CONTEXT_TOKEN_BUDGET // MAX_RETRIEVED_MEMORIES
+            trimmed_entries = [
+                _apply_entry_token_ceiling(e, entry_ceiling) for e in trimmed_entries
+            ]
+
+            # Reduce entry count if over budget. Retrieved entries are
+            # bounded per FIELD by `_format_retrieved_entry`; drop oldest
+            # rather than compress. THE DROP-RATHER-THAN-COMPRESS CHOICE IS
+            # DELIBERATE and the per-entry ceiling above is derived from it.
             # Subtract the popped entry's tokens instead of recalculating the full sum.
             total_tokens = sum(_estimate_tokens(e) for e in trimmed_entries)
             while len(trimmed_entries) > 1 and total_tokens > RETRIEVED_CONTEXT_TOKEN_BUDGET:
