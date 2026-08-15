@@ -1161,6 +1161,28 @@ def _apply_entry_token_ceiling(entry: str, ceiling: int) -> str:
     # droppable line. That last line is handled below instead of dropped.
     kept = list(range(len(lines)))
     droppable = [i for i in reversed(range(len(lines))) if i not in exempt]
+
+    # FLOOR WHEN THE EXEMPT LINES ALONE COST MORE THAN THE CEILING: RETURN
+    # THE ENTRY WHOLE. This is reached when EVERY line is exempt, which is a
+    # date header plus one or more `**Memory ID**` lines and nothing else.
+    # There is then no line this function is permitted to drop and none it is
+    # permitted to cut, so the ceiling cannot be met at any input.
+    #
+    # FLOOR IS NOT A NEW POLICY HERE. It is what the last-resort branch below
+    # does at a word budget below 1: that branch removes the final droppable
+    # line and RETURNS THE EXEMPT LINES, which can sit above the ceiling. This
+    # writes the same direction into the path where it was omitted, so the two
+    # paths agree rather than one returning and one raising.
+    #
+    # WITHOUT THIS THE FUNCTION RAISED IndexError AT `droppable[-1]` BELOW, and
+    # a raise is the worst of the three directions. The ceiling exists to stop
+    # ONE entry exhausting the SECTION, and an entry of exempt lines alone is
+    # the SMALLEST entry this function can meet. Refusing on the smallest input
+    # propagates out of the formatters and takes the sync down, which loses
+    # every entry rather than bounding one.
+    if not droppable:
+        return entry
+
     for index in droppable[:-1] if droppable else []:
         if _estimate_tokens("\n".join(lines[i] for i in kept)) <= ceiling:
             break
@@ -1345,6 +1367,59 @@ def _sanitize_prompt_field(
         return ""
 
 
+def _recover_identifier(raw: str) -> str:
+    """Accept a raw identifier for the recovery-pointer fallback, or refuse it.
+
+    CALLER-SIDE COUNTERPART TO `_sanitize_prompt_field`, AND DELIBERATELY NOT A
+    SECOND SANITIZER. That helper catches bare `Exception` and returns "" on an
+    internal failure, and the two recovery-key sites gate on the truthiness of
+    its output, so A FAILURE INSIDE THE GUARD SILENTLY DROPS THE
+    `**Memory ID**` LINE. That line is the pointer to the durable record, and
+    the entry-cut design accepts truncation rather than refusal ONLY WHILE the
+    pointer survives. A failure in the guard must not be the one path that
+    spends the guarantee the cut rule rests on.
+
+    THE HELPER CANNOT SAY WHY IT RETURNED "", SO THE DISCRIMINATOR IS BUILT
+    HERE, AT THE CALLER: a NON-EMPTY input with an EMPTY output is either an
+    internal failure or a value made only of control characters. This function
+    separates the two by accepting the input or refusing it.
+
+    IT IS AN ACCEPTOR AND NOT A TRANSFORMER, WHICH IS WHAT MAKES AN EMITTED
+    POINTER RESOLVE. It returns the input UNCHANGED, or it returns "". It does
+    not cut and it does not rewrite, so an emitted value is byte-identical to
+    the id the caller received and resolves against the store by construction.
+    A fallback that cut to the bound, or that stripped the characters it does
+    not accept, would emit a pointer that is PRESENT and does NOT RESOLVE,
+    which is the shape this fallback exists to avoid.
+
+    IT HAS NO FAILURE PATH OF ITS OWN, WHICH IS WHY IT NEEDS NO FALLBACK. There
+    is no pattern engine, no encode step and no arithmetic: one length compare
+    and one character test, and both are total over `str`. A fallback that can
+    itself fail needs a fallback, and that regress is the sign of a wrong
+    design.
+
+    THE CHARACTER TEST COVERS THE INJECTION PROPERTY WITHOUT NAMING IT. Every
+    character that can open a new line (the C0 and C1 controls, NEL, and
+    U+2028 and U+2029) is a control or a separator, and NONE of them is
+    alphanumeric, so the accepted set cannot hold one.
+
+    Args:
+        raw: The identifier as the caller received it, already `str`.
+
+    Returns:
+        `raw` unchanged when it is a bounded, line-safe identifier. `""`
+        otherwise, and the caller then emits NO pointer line. That is honest:
+        where no key can be recovered, an absent line says so and a labelled
+        empty value does not.
+    """
+    if not raw or len(raw) > _REFRESH_IDENTIFIER_TRUNCATION_LIMIT:
+        return ""
+    for character in raw:
+        if not (character.isalnum() or character in "-_."):
+            return ""
+    return raw
+
+
 def _format_memory_entry(
     memory: Dict[str, Any],
     files: Optional[List[str]] = None,
@@ -1469,9 +1544,19 @@ def _format_memory_entry(
         # times what the generator emits, and the store does not bound this
         # value at its ingress, so a caller-supplied id took the widest
         # bound in the classification.
+        raw_id = str(memory_id)
         cleaned_id = _sanitize_prompt_field(
-            str(memory_id), _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+            raw_id, _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
         )
+        # THE SANITIZER IS ONE OF THE PATHS THAT CAN DROP THE RECOVERY
+        # POINTER. It returns "" on an internal failure as well as for a value
+        # made only of control characters, and the truthiness gate below cannot
+        # tell the two apart. NON-EMPTY IN AND EMPTY OUT is the discriminator.
+        # `_recover_identifier` then accepts the raw id unchanged or refuses
+        # it. See its docstring for why it is an acceptor and not a second
+        # sanitizer.
+        if raw_id and not cleaned_id:
+            cleaned_id = _recover_identifier(raw_id)
         if cleaned_id:
             lines.append(f"{_MEMORY_ID_LABEL}: {cleaned_id}")
 
@@ -2139,9 +2224,19 @@ def _format_retrieved_entry(
         # times what the generator emits, and the store does not bound this
         # value at its ingress, so a caller-supplied id took the widest
         # bound in the classification.
+        raw_id = str(memory_id)
         cleaned_id = _sanitize_prompt_field(
-            str(memory_id), _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+            raw_id, _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
         )
+        # THE SANITIZER IS ONE OF THE PATHS THAT CAN DROP THE RECOVERY
+        # POINTER. It returns "" on an internal failure as well as for a value
+        # made only of control characters, and the truthiness gate below cannot
+        # tell the two apart. NON-EMPTY IN AND EMPTY OUT is the discriminator.
+        # `_recover_identifier` then accepts the raw id unchanged or refuses
+        # it. See its docstring for why it is an acceptor and not a second
+        # sanitizer.
+        if raw_id and not cleaned_id:
+            cleaned_id = _recover_identifier(raw_id)
         if cleaned_id:
             lines.append(f"{_MEMORY_ID_LABEL}: {cleaned_id}")
 
