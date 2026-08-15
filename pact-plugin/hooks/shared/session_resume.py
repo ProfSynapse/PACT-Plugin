@@ -16,7 +16,6 @@ Manages:
 
 from __future__ import annotations
 
-import errno
 import os
 import re
 import sys
@@ -36,6 +35,7 @@ from shared.claude_md_manager import (
     file_lock,
     resolve_project_claude_md_path,
 )
+from shared.failure_cause import failure_cause
 from shared.session_journal import (
     _parse_ts,
     _ts_supersedes,
@@ -84,48 +84,6 @@ _PROMPT_CONTROL_CHARS_RE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]+")
 # consumer must defend against historical or hand-crafted events that stashed
 # a long free-form string or a non-string type in the `phase` field.
 _PHASE_TRUNCATION_LIMIT = 80
-
-# Bound for the exception class name rendered by _failure_cause. Follows
-# this module's convention of bounding every interpolated value. It is NOT
-# a security control -- a class name in this population is a stdlib
-# constant, not caller data.
-_CAUSE_NAME_LIMIT = 40
-
-
-def _failure_cause(exc: BaseException) -> str:
-    """Render a file-layer failure as a CLOSED-VOCABULARY cause token.
-
-    Returns the exception class name, plus the symbolic errno name in
-    parentheses when the exception carries a mapped integer errno:
-    `PermissionError (EACCES)`, `OSError (ENOSPC)`, or a bare
-    `UnicodeDecodeError`. No rendering in this population contains "/".
-
-    BUILD THIS STRING FROM A CLOSED VOCABULARY. Do NOT interpolate
-    `str(exc)` or `exc.args`. MEASURED: an exception message can carry a
-    path with NO filename attribute behind it --
-    `OSError("bare message with a path in it")` has `filename is None` and
-    `errno is None` while its `str()` carries the path. So stripping the
-    filename attribute, or filtering the message for that attribute's
-    value, leaves the leak open. The repair is to read the caller's
-    message NOT AT ALL, which is why this helper takes nothing from it.
-    A `str(exc)` fallback for the members that carry no errno re-opens the
-    leak on exactly the population the errno branch does not cover.
-
-    THE CLASS NAME IS THE TOTAL PART, THE ERRNO SYMBOL IS OPTIONAL.
-    UnicodeDecodeError and UnicodeEncodeError carry no errno, and a
-    platform can leave a code unmapped in `errno.errorcode`.
-
-    TOTAL BY CONSTRUCTION, AND THAT IS LOAD-BEARING. This runs INSIDE
-    update_session_info's inner handler arm, so a raise here would escape
-    to the outer TimeoutError/OSError arms and reach the caller.
-    `type(exc).__name__` cannot fail, `getattr` with a default cannot
-    raise, and `dict.get` on an int cannot raise.
-    """
-    name = type(exc).__name__[:_CAUSE_NAME_LIMIT]
-    code = getattr(exc, "errno", None)
-    symbol = errno.errorcode.get(code) if isinstance(code, int) else None
-    return f"{name} ({symbol})" if symbol else name
-
 
 def update_session_info(
     session_id: str,
@@ -420,7 +378,8 @@ def update_session_info(
                 # sites for other producers; this handler feeds only 1589.
                 #
                 # THE CAUSE TOKEN IS A CLOSED VOCABULARY (see
-                # _failure_cause). The caller's message is not read: it can
+                # shared/failure_cause.py, which the five sibling routed
+                # producers share). The caller's message is not read: it can
                 # carry a path with no filename attribute behind it, so a
                 # filename filter or a length bound does not remove the
                 # path. A length bound is worse than it looks -- it keeps
@@ -432,7 +391,7 @@ def update_session_info(
                 # Session block stopped updating, which is the failure a
                 # later session inherits when it reads the stale pointer.
                 return (
-                    f"Session info failed: {_failure_cause(e)}. "
+                    f"Session info failed: {failure_cause(e)}. "
                     "The Current Session block in CLAUDE.md is now stale."
                 )
     except TimeoutError:

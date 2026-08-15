@@ -31,6 +31,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from .failure_cause import failure_cause
 from .paths import get_claude_config_dir
 
 # Project-level CLAUDE.md is preferred at .claude/CLAUDE.md (the new default)
@@ -972,8 +973,13 @@ def strip_orphan_kernel_block() -> str | None:
                     "precondition not met."
                 )
             except OSError as e:
+                # `Failed` IS THE ROUTING TOKEN. session_init step 3c routes
+                # this return into system_messages on a substring test. The
+                # prefix stays byte-identical; only the cause token changed,
+                # from a cut of the caller's message (which carries the
+                # absolute path an OSError attaches) to a closed vocabulary.
                 return (
-                    f"Failed to remove stale kernel block: {str(e)[:50]}"
+                    f"Failed to remove stale kernel block: {failure_cause(e)}"
                 )
     except TimeoutError:
         return (
@@ -1175,7 +1181,9 @@ def ensure_project_memory_md() -> str | None:
             except ContainmentError:
                 return "Project CLAUDE.md skipped: path precondition not met."
             except OSError as e:
-                return f"Project CLAUDE.md failed: {str(e)[:50]}"
+                # `failed` IS THE ROUTING TOKEN (session_init step 3). The
+                # prefix stays byte-identical. Only the cause token changed.
+                return f"Project CLAUDE.md failed: {failure_cause(e)}"
     except TimeoutError:
         return (
             "Failed to acquire lock on project CLAUDE.md within 5s "
@@ -1183,7 +1191,9 @@ def ensure_project_memory_md() -> str | None:
             "Project CLAUDE.md creation skipped; will retry on next session start."
         )
     except OSError as e:
-        return f"Project CLAUDE.md failed: {str(e)[:50]}"
+        # Lock-acquisition failure. Same routing token, same closed
+        # vocabulary as the inner arm above.
+        return f"Project CLAUDE.md failed: {failure_cause(e)}"
 
 
 def migrate_to_managed_structure() -> str | None:
@@ -1258,7 +1268,9 @@ def migrate_to_managed_structure() -> str | None:
             except ContainmentError:
                 return "Migration skipped: project CLAUDE.md path precondition not met."
             except OSError as e:
-                return f"Migration failed: {str(e)[:50]}"
+                # `failed` IS THE ROUTING TOKEN (session_init step 3b). The
+                # prefix stays byte-identical. Only the cause token changed.
+                return f"Migration failed: {failure_cause(e)}"
     except TimeoutError:
         return (
             "Failed to acquire lock on project CLAUDE.md within 5s "

@@ -872,7 +872,63 @@ class TestStalenessErrorPaths:
         # Should return an error message string (not None)
         assert result is not None
         assert "Failed to update pinned staleness" in result
-        assert "read-only fs" in result
+        # THE CAUSE TOKEN COMES FROM A CLOSED VOCABULARY, so the caller's own
+        # message ("read-only fs") is NOT echoed. This assertion used to
+        # require that echo, which is the behaviour that leaked the absolute
+        # CLAUDE.md path: an OSError renders as `[Errno NN] <strerror>: path`
+        # and a cut of it keeps the leading characters, path included.
+        assert "OSError" in result
+        assert "read-only fs" not in result
+        assert "/" not in result
+
+    def test_write_failure_names_its_cause_when_the_error_carries_an_errno(
+        self, tmp_path
+    ):
+        """The cause REACHES THE USER, which the arm above cannot show.
+
+        WHY THIS ARM IS SEPARATE. The arm above injects
+        `IOError("read-only fs")`, a SYNTHETIC exception with `errno = None`,
+        so it renders as a bare `OSError`. THAT IS A PROPERTY OF THE TEST
+        INPUT AND NOT OF THE CONVENTION, and reading only that arm makes the
+        message look uninformative. A real read-only filesystem raises with
+        `errno = EROFS`.
+
+        SO THIS ARM DRIVES THE PRODUCTION SHAPE: the user reads
+        `Failed to update pinned staleness: OSError (EROFS)`, which names the
+        cause and selects the repair (remount, or move the project), while
+        carrying no path.
+        """
+        import errno as errno_mod
+        from datetime import datetime, timedelta
+
+        from staleness import PINNED_STALENESS_DAYS, check_pinned_staleness
+
+        old_date = (
+            datetime.now() - timedelta(days=PINNED_STALENESS_DAYS + 10)
+        ).strftime("%Y-%m-%d")
+        claude_md = self._create_claude_md(tmp_path, (
+            "# Project Memory\n\n"
+            "## Pinned Context\n\n"
+            f"### Old Feature (PR #50, merged {old_date})\n"
+            "- Details\n\n"
+        ))
+
+        import shared.claude_md_manager as cmm
+        injected = OSError(
+            errno_mod.EROFS,
+            "Read-only file system",
+            "/Users/probe-user/secret-dir/CLAUDE.md",
+        )
+        with patch.object(cmm, "_atomic_write_text", side_effect=injected):
+            result = check_pinned_staleness(claude_md_path=claude_md)
+
+        assert result is not None
+        assert result.startswith("Failed to update pinned staleness:")
+        assert "OSError (EROFS)" in result, (
+            f"the cause did not reach the user: {result!r}"
+        )
+        assert "/" not in result
+        assert "Read-only file system" not in result
 
     def test_write_text_os_error_returns_error_message(self, tmp_path):
         """OSError on write_text() should also return an error message string."""

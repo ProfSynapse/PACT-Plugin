@@ -29,6 +29,7 @@ from shared.claude_md_manager import (
     PINNED_END_MARKER,
     extract_managed_region,
 )
+from shared.failure_cause import failure_cause
 from pin_caps import (
     PIN_STALE_BLOCK_THRESHOLD,
     CapViolation,
@@ -1136,10 +1137,18 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
         except TimeoutError:
             return "Pinned staleness update skipped: lock contention."
         except OSError as e:
-            # Truncate like the sibling write sites (session_resume, cli): the
-            # raw exception embeds the absolute CLAUDE.md path, which should not
-            # leak into a status string.
-            logger_msg = f"Failed to update pinned staleness: {str(e)[:50]}"
+            # `Failed` IS THE ROUTING TOKEN. session_init step 3d routes this
+            # return into system_messages on a substring test, so the prefix
+            # stays byte-identical.
+            #
+            # THE CAUSE TOKEN COMES FROM A CLOSED VOCABULARY. The former
+            # comment here said a truncation kept the absolute CLAUDE.md path
+            # out of the status string. MEASURED, THAT IS INCORRECT: a cut
+            # keeps the LEADING characters and an OSError renders as
+            # `[Errno NN] <strerror>: '<path>'`, so a 50-character cut of a
+            # PermissionError still emits the home directory and the user
+            # name. A cut narrows the leak and does not close it.
+            logger_msg = f"Failed to update pinned staleness: {failure_cause(e)}"
             return logger_msg
 
     if stale_count > 0:

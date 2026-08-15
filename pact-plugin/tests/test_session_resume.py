@@ -763,7 +763,7 @@ class TestUpdateSessionInfoFailureSignal:
         a literal: 122 is unmapped on darwin and maps to EDQUOT on linux,
         so a hardcoded row would be platform-dependent.
         """
-        from shared.session_resume import _failure_cause
+        from shared.failure_cause import failure_cause as _failure_cause
 
         unmapped_code = max(errno.errorcode) + 1
         try:
