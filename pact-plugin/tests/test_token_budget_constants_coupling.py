@@ -1080,17 +1080,21 @@ class TestMemoryIdLabelSites:
         ):
             body = body[1:]
 
+        # THE FOLDING PASS IS WHY A SPLIT SPELLING CANNOT WALK PAST. A bare
+        # `ast.Constant` test sees `"**Memory ID" + "**"` as two constants,
+        # NEITHER of which equals the label, so the site reads as clean while
+        # it spells the value. `_fold_constant` resolves the `BinOp` first.
+        # Its own separation is asserted by the control in
+        # `TestCompressedSummaryCapIsReferencedNotSpelled`.
         names, literals = set(), []
         for statement in body:
             for node in ast.walk(statement):
                 if isinstance(node, ast.Name):
                     names.add(node.id)
-                elif (
-                    isinstance(node, ast.Constant)
-                    and isinstance(node.value, str)
-                    and node.value == _MEMORY_ID_LABEL
-                ):
-                    literals.append(node.value)
+                    continue
+                folded = _fold_constant(node)
+                if folded is not None and folded == _MEMORY_ID_LABEL:
+                    literals.append(ast.unparse(node))
 
         assert self.LABEL_NAME in names, (
             f"{function_name} does not reference {self.LABEL_NAME}. The four "
@@ -1101,3 +1105,222 @@ class TestMemoryIdLabelSites:
             f"literal. Behaviour is identical today, so no other test can see "
             f"this. It becomes a defect when the constant value changes."
         )
+
+
+class TestTheFloorWhenEveryLineIsExempt:
+    """The cut returns the entry whole where it may drop nothing.
+
+    THE PAIR IS THE POINT, AND THE NEGATIVE ALONE IS NOT THE ARM. A guard
+    placed too early disables the cut for every input, and a negative arm
+    that asserts "the entry came back whole" passes for that too. So the
+    positive arm below drives an entry that HAS droppable lines at the same
+    low ceiling and requires the cut to still run.
+
+    WRITTEN AGAINST THE LANDED CODE, NOT AGAINST THE RULING TEXT. The guard
+    reads `if not droppable: return entry` and sits immediately after the
+    droppable list is built. That placement is what makes the two arms below
+    reach the same branch point from opposite sides.
+
+    THE AXIS THIS PAIR CANNOT SEE: it drives the guard through the ONE cause
+    the source names, an entry of which each line is exempt. If a later edit
+    makes `droppable` empty for a second cause, this pair reaches the guard
+    through the first cause alone and says nothing about the second.
+    """
+
+    LOW_CEILING = 3
+
+    def _exempt_only_entry(self):
+        from working_memory import _format_memory_entry
+
+        return _format_memory_entry({}, memory_id="0123456789abcdef" * 2)
+
+    def test_an_entry_of_exempt_lines_alone_comes_back_whole(self):
+        """No line is droppable, so the ceiling cannot be met. Return it."""
+        from working_memory import (
+            _MEMORY_ID_LABEL,
+            _apply_entry_token_ceiling,
+            _estimate_tokens,
+        )
+
+        entry = self._exempt_only_entry()
+        lines = entry.split("\n")
+
+        # NON-VACUITY, THREE PARTS. The fixture must reach the guard, and a
+        # fixture that misses it passes this arm for an unrelated cause.
+        assert len(lines) == 2, f"the fixture must be two lines, got {lines!r}"
+        assert lines[1].startswith(_MEMORY_ID_LABEL), (
+            "line 1 must be the recovery pointer, or it is droppable and the "
+            "guard is not reached"
+        )
+        assert _estimate_tokens(entry) > self.LOW_CEILING, (
+            "the entry must cost more than the ceiling, or the function "
+            "returns early at the top and the guard is not reached"
+        )
+
+        out = _apply_entry_token_ceiling(entry, self.LOW_CEILING)
+
+        assert out == entry, (
+            "an entry of which each line is exempt must come back UNCHANGED. "
+            f"Got {out!r}"
+        )
+
+    def test_the_guard_did_not_disable_the_cut(self):
+        """POSITIVE HALF. With a droppable line present the cut still runs.
+
+        Without this, a guard that returned the entry for EVERY input would
+        pass the negative arm above and no arm here would see it.
+        """
+        from working_memory import (
+            _MEMORY_ID_LABEL,
+            _apply_entry_token_ceiling,
+            _format_memory_entry,
+        )
+
+        entry = _format_memory_entry(
+            {"context": "A save that carries one context field and no more."},
+            memory_id="0123456789abcdef" * 2,
+        )
+        # NON-VACUITY: the entry must carry a droppable line to begin with.
+        assert "**Context**" in entry
+
+        out = _apply_entry_token_ceiling(entry, self.LOW_CEILING)
+
+        assert out != entry, (
+            "the cut did NOT run on an entry that has a droppable line. The "
+            "floor guard has disabled the cut for every input."
+        )
+        assert _MEMORY_ID_LABEL in out, (
+            "the cut ran and dropped the recovery pointer. The design accepts "
+            "truncation rather than refusal ONLY while that pointer survives."
+        )
+
+
+class TestCompressedSummaryCapIsReferencedNotSpelled:
+    """`_compress_memory_entry` must NAME the cap, not spell its value.
+
+    BEHAVIOUR IS IDENTICAL BY CONSTRUCTION, SO NO BEHAVIOURAL TEST CAN SEE
+    THIS. A literal equal to the constant produces the same output today and
+    half-applies in silence the moment the constant moves.
+
+    THE SCOPE IS ONE FUNCTION AND THAT IS A MEASURED CHOICE, NOT A
+    PREFERENCE. A module-wide ban on the bare literal is NOT available here:
+    `OVERRIDE_RATIONALE_MAX` holds the SAME value 120 for an unrelated
+    purpose, so a module-wide rule would go red on a legitimate use of the
+    other constant. THE AXIS THIS ARM CANNOT SEE follows from that: a sixth
+    site added OUTSIDE this function is outside the population, and the
+    collision on the value is why the population cannot simply be widened.
+    """
+
+    FUNCTION_NAME = "_compress_memory_entry"
+    CONSTANT_NAME = "COMPRESSED_SUMMARY_CHAR_CAP"
+
+    @staticmethod
+    def _module_source():
+        return (
+            Path(__file__).resolve().parent.parent
+            / "skills/pact-memory/scripts/working_memory.py"
+        ).read_text(encoding="utf-8")
+
+    def test_the_function_names_the_cap_and_spells_no_bare_value(self):
+        """COUNTING RULE: `ast` nodes in the function body, docstring dropped.
+
+        A REFERENCE is an `ast.Name` carrying the constant name. A LITERAL is
+        an `ast.Constant` equal to the value the constant holds. A `BinOp` of
+        two constants is FOLDED first, so a split spelling counts as a
+        literal rather than passing as two unequal parts.
+        """
+        import ast
+
+        from working_memory import COMPRESSED_SUMMARY_CHAR_CAP
+
+        tree = ast.parse(self._module_source())
+        target = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == self.FUNCTION_NAME:
+                target = node
+                break
+        # NON-VACUITY: a renamed or removed function must not pass by absence.
+        assert target is not None, (
+            f"{self.FUNCTION_NAME} is not present in working_memory.py. If it "
+            f"moved, re-point this arm rather than remove it."
+        )
+
+        body = list(target.body)
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            body = body[1:]
+
+        names, literals = set(), []
+        for statement in body:
+            for node in ast.walk(statement):
+                if isinstance(node, ast.Name):
+                    names.add(node.id)
+                    continue
+                folded = _fold_constant(node)
+                if folded is not None and folded == COMPRESSED_SUMMARY_CHAR_CAP:
+                    literals.append(ast.unparse(node))
+
+        assert self.CONSTANT_NAME in names, (
+            f"{self.FUNCTION_NAME} does not reference {self.CONSTANT_NAME}. "
+            f"The cap and the sites that use it must move together."
+        )
+        assert not literals, (
+            f"{self.FUNCTION_NAME} spells the cap value "
+            f"{COMPRESSED_SUMMARY_CHAR_CAP} as a literal at {literals}. "
+            f"Behaviour is identical today, so no behavioural test can see "
+            f"this. It becomes a defect when the constant value changes."
+        )
+
+    def test_control_the_folding_pass_resolves_a_split_literal(self):
+        """CONTROL, asserted before the arm above is read as evidence.
+
+        The arm keys on a folded value. A folding pass that resolved nothing
+        would report zero literals for every input, which reads as a clean
+        sweep. This drives the pass across the shapes it must separate.
+        """
+        import ast
+
+        def folded(expression):
+            return _fold_constant(ast.parse(expression, mode="eval").body)
+
+        assert folded("120") == 120
+        assert folded("60 + 60") == 120
+        assert folded("240 // 2") == 120
+        assert folded("119") == 119
+        assert folded("some_name") is None
+        assert folded("'120'") == "120"
+
+
+def _fold_constant(node):
+    """Return the value of a constant expression, or None where it is not one.
+
+    KEPT NARROW ON PURPOSE. It resolves a `Constant` and an arithmetic
+    `BinOp` over constants, which is the split-spelling shape. It does not
+    evaluate calls, names or attributes, so it cannot run module code while
+    a test collects.
+    """
+    import ast
+
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.BinOp):
+        left = _fold_constant(node.left)
+        right = _fold_constant(node.right)
+        if left is None or right is None:
+            return None
+        try:
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.FloorDiv):
+                return left // right
+        except Exception:
+            return None
+    return None
