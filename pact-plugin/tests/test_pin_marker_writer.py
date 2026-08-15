@@ -179,10 +179,13 @@ class TestMarkerLiterals:
         rotation evicts that entry. A matched one terminates the scan at the
         true end of the section and lands in the span the rebuild preserves.
 
-        The alternations are rebuilt here from each module's OWN constant --
-        `PACT_BOUNDARY_PREFIXES` for the hooks side and `_PACT_BOUNDARY_ALT`
-        for the skills side -- so this measures the real rule rather than a
-        copy of it.
+        The alternations are rebuilt here from each module's OWN constants --
+        `PACT_BOUNDARY_PREFIXES` for the hooks side, and `_PACT_BOUNDARY_ALT`
+        WITH `_SESSION_BOUNDARY_ALT` for the skills side -- so this measures
+        the real rule rather than a copy of it. THE SECOND SKILLS CONSTANT IS
+        NOT OPTIONAL HERE: the two write-side scans embed the two names, so a
+        rebuild from one of them is a PARTIAL copy that keeps passing while it
+        stops measuring what ships.
         """
         # `syspath_prepend` is reverted by pytest when the test ends. A bare
         # `sys.path.insert(0, ...)` here would OUTLIVE this test and re-order
@@ -191,18 +194,19 @@ class TestMarkerLiterals:
         monkeypatch.syspath_prepend(
             str(Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts")
         )
-        from working_memory import _PACT_BOUNDARY_ALT
+        from working_memory import _PACT_BOUNDARY_ALT, _SESSION_BOUNDARY_ALT
 
         hooks_alt = "|".join(PACT_BOUNDARY_PREFIXES)
+        skills_alt = f"{_PACT_BOUNDARY_ALT}|{_SESSION_BOUNDARY_ALT}"
         alternations = {
             "staleness pinned scan": re.compile(
                 rf'(?:#{{1,2}}\s|<!-- (?:{hooks_alt}))'
             ),
             "working memory scan": re.compile(
-                rf'(#\s|##\s(?!Working Memory)|---|<!-- (?:{_PACT_BOUNDARY_ALT}))'
+                rf'(#\s|##\s(?!Working Memory)|---|<!-- (?:{skills_alt}))'
             ),
             "retrieved context scan": re.compile(
-                rf'(#\s|##\s(?!Retrieved Context)|---|<!-- (?:{_PACT_BOUNDARY_ALT}))'
+                rf'(#\s|##\s(?!Retrieved Context)|---|<!-- (?:{skills_alt}))'
             ),
         }
         for marker in (PINNED_START_MARKER,):

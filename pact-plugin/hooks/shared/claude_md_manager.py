@@ -261,9 +261,10 @@ MANAGED_TITLE = "# PACT Framework and Managed Project Memory"
 # sites that need to terminate scans on any PACT-managed boundary marker.
 # Extracted as a constant so the three-prefix union is defined once.
 #
-# Twin copy: working_memory.py maintains a parallel _PACT_BOUNDARY_PREFIXES
-# tuple because skills/pact-memory/scripts/ cannot cleanly import from
-# hooks/shared/. A drift-detection test asserts the two tuples stay in sync.
+# Twin copy: working_memory.py maintains `_PACT_BOUNDARY_ALT`, a STRING that
+# spells this tuple as a regex alternation, because skills/pact-memory/scripts/
+# cannot cleanly import from hooks/shared/. A drift-detection test asserts the
+# twin string equals the alternation built from this tuple.
 PACT_BOUNDARY_PREFIXES: tuple[str, ...] = (
     "PACT_MEMORY_",
     "PACT_MANAGED_",
@@ -1413,7 +1414,17 @@ def _build_migrated_content(content: str) -> str:
                 current_section = []
             in_memory_section = True
             current_section.append(line)
-        elif stripped.startswith("## ") or stripped.startswith("# "):
+        # INDENT-TOLERANT ON PURPOSE, AND THE EXACT-MATCH TEST ABOVE IS NOT.
+        # THAT ASYMMETRY IS THE DESIGN AND NOT AN OVERSIGHT, SO DO NOT
+        # "FINISH" IT BY RELAXING THE TEST AT THE `if` ABOVE.
+        #
+        # THE CAUSE IS THE FAILURE DIRECTION. This branch makes an indented
+        # heading a BOUNDARY, so the user text that follows it LEAVES the
+        # managed region and the plugin does not own it. Make the exact-match
+        # test indent-tolerant as well and the plugin ADOPTS that text into a
+        # section it rewrites and prunes, on a file that git does not track.
+        # A boundary loses nothing. An adoption can lose the text.
+        elif lstripped.startswith("## ") or lstripped.startswith("# "):
             if current_section:
                 if in_memory_section:
                     memory_parts.extend(current_section)
