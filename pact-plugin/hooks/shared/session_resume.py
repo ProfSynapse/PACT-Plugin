@@ -245,9 +245,43 @@ def update_session_info(
                 # user-authored fenced code blocks can contain real SESSION
                 # markers, so fence-aware scanning is unnecessary.
                 if SESSION_START in content and SESSION_END in content:
+                    # A CALLABLE REPLACEMENT, BECAUSE THE STRING FORM IS AN
+                    # ESCAPE GRAMMAR EVALUATED OVER CALLER-INFLUENCED DATA.
+                    # `re.sub` expands its replacement grammar in a replacement
+                    # STRING. It does NOT expand the RETURN VALUE of a
+                    # replacement CALLABLE, which is substituted literally.
+                    # `session_block` interpolates a session dir, a plugin
+                    # root, a session id and a team name, and a directory name
+                    # may legally contain a backslash, so two of those carriers
+                    # reach this call WITH NO ATTACKER.
+                    #
+                    # THE SANITIZE ABOVE DOES NOT COVER THIS.
+                    # `_PROMPT_CONTROL_CHARS_RE` strips control characters and
+                    # backslash is not one, so the guard removes a newline and
+                    # a string replacement PUTS IT BACK. Three productions,
+                    # each measured against this pattern and these flags:
+                    #   `\n`    re-materialises a newline. Inline code does not
+                    #           span a line break, so the value leaves its
+                    #           backtick span and lands a HEADING of its own in
+                    #           the PACT-managed region.
+                    #   `\d`    raises `re.error`, which the handler below
+                    #           catches and returns as a failure string. NOT a
+                    #           crash, and that is what makes it survivable:
+                    #           every later pass fails identically, so the
+                    #           session block FREEZES at first-pass content
+                    #           while the directory name persists, and state
+                    #           recovery then reads a stale pointer.
+                    #   `\g<0>` is a group reference and splices the ENTIRE
+                    #           matched block back inside itself.
+                    #
+                    # DO NOT ANSWER THIS BY ADDING BACKSLASH TO THE SANITIZE
+                    # CLASS. That is the wrong layer: the substitution
+                    # re-materialises anything else the grammar spells, so a
+                    # character-class fix closes ONE production and leaves the
+                    # grammar. The callable takes the grammar off the path.
                     new_content = re.sub(
                         re.escape(SESSION_START) + r".*?" + re.escape(SESSION_END),
-                        session_block,
+                        lambda _match: session_block,
                         content,
                         count=1,
                         flags=re.DOTALL,
@@ -312,6 +346,26 @@ def update_session_info(
                 # Opaque skip, matching the removed is_symlink guard's message.
                 return "Session info skipped: path precondition not met."
             except Exception as e:
+                # WHAT THIS HANDLER COVERS, WRITTEN DOWN BECAUSE ONE OF ITS
+                # CAUSES WAS REMOVED AND A HANDLER THAT LOOKS THE SAME AFTER
+                # ITS CAUSE GOES IS THE SHAPE THAT ROTS.
+                #
+                # IT USED TO CATCH `re.error` FROM THE SUBSTITUTION ABOVE,
+                # raised when a caller-influenced value spelled an invalid
+                # escape such as `\d`. THAT CAUSE IS GONE: the replacement is
+                # a callable, its return value is not escape-processed, and
+                # the pattern is two `re.escape`'d literal constants, so
+                # neither side of that call can raise on any input.
+                #
+                # IT IS NOT DEAD COVER. WHAT REMAINS UNDER IT IS THE FILE
+                # LAYER, on the read path and the write path inside the lock:
+                # `Path.exists` and `read_text` (OSError, and
+                # UnicodeDecodeError for a CLAUDE.md that is not valid UTF-8),
+                # and `_atomic_write_text` (OSError, UnicodeEncodeError).
+                # `ContainmentError` is handled above and does not reach here,
+                # and `str.replace` cannot raise. So this stays a fail-open
+                # I/O backstop: one unreadable or unwritable file degrades the
+                # session block, and it does not take down SessionStart.
                 return f"Session info failed: {str(e)[:50]}"
     except TimeoutError:
         return (
