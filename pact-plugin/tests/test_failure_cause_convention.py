@@ -180,41 +180,42 @@ class TestRoutedProducersEmitNoPath:
         assert result.startswith("Failed to remove stale kernel block:")
 
     def test_setup_plugin_symlinks(self, tmp_path, monkeypatch):
-        """HARNESS ARM. Injects at the symlink seam.
+        """HARNESS ARM. Injects at the symlink seam, and REACHES THE BRANCH.
 
         THIS SITE WAS OUTSIDE THE ORIGINAL CENSUS, because it spelled its cut
         `[:20]` rather than `[:50]`. Its fragment reaches the routed return
         through the `messages` join, so the routing token must survive that
         join as well as the message.
-        MUTANT: restore `{str(e)[:20]}`, then drive with `OSError(2, "x", p)`.
-        A 20-character cut of THAT shape carries the path; the same cut of a
-        PermissionError does not, which is why the census missed it.
+
+        THE FIXTURE IS THREE LINES, AND THAT IS WHY IT EXISTS. The branch is
+        gated on `CLAUDE_PLUGIN_ROOT`, which is DECLARED in the environment
+        rather than DISCOVERED from the installed plugin, so a temporary
+        directory holding a `protocols/` child satisfies all three entry
+        gates. The writes that follow stay inside `tmp_path`, because the
+        autouse `_isolate_config_root_to_tmp` fixture in conftest redirects
+        `Path.home()` for every test.
+
+        PATCH ONLY `symlink_to`, so the `mkdir` above it succeeds and the
+        failure lands INSIDE the protocols try-block rather than earlier.
+
+        MUTANT: restore `{str(e)[:20]}` and drive with `OSError(2, "x", p)`.
+        A 20-character cut of THAT shape carries the path, while the same cut
+        of a PermissionError does not, which is how the census missed it.
         """
         from shared import symlinks as sym
 
-        # Patch ONLY the symlink call, so the `mkdir` above it succeeds and
-        # the failure lands inside the protocols try-block rather than
-        # somewhere earlier.
-        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+        plugin_root = tmp_path / "plugin"
+        (plugin_root / "protocols").mkdir(parents=True)
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
         with patch.object(sym.Path, "symlink_to", side_effect=_oserror()):
             result = sym.setup_plugin_symlinks()
 
-        if result is not None and "protocols failed" in result:
-            _assert_convention(result, "PermissionError (EACCES)")
-            return
-
-        # THE END-TO-END DRIVE DID NOT REACH THE BRANCH, and this arm does NOT
-        # skip on that. A permanently-skipped arm reports nothing for ever.
-        # The branch needs a plugin root carrying a `protocols/` directory,
-        # which this test environment does not supply. So assert the site's
-        # own RENDERING instead, and state the reduced claim plainly: this
-        # proves the message construction is clean, and it does NOT prove the
-        # branch is reachable. Reachability for this site rests on the AST
-        # guard and the prefix arm below, both of which read the shipped file.
-        rendered = f"protocols failed: {sym.failure_cause(_oserror())}"
-        assert "/" not in rendered, rendered
-        assert "PermissionError (EACCES)" in rendered
-        assert "failed" in rendered.lower()
+        assert result is not None, "the branch was not reached"
+        assert "protocols failed" in result, (
+            f"the protocols branch was not reached: {result!r}"
+        )
+        _assert_convention(result, "PermissionError (EACCES)")
 
     def test_update_session_info(self, tmp_path, monkeypatch):
         """PRODUCT ARM. Natural read failure, no injection.
