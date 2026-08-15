@@ -56,6 +56,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from shared.claude_md_manager import (
+    MEMORY_END_MARKER,
+    MEMORY_START_MARKER,
     PACT_BOUNDARY_PREFIXES,
     PINNED_END_MARKER,
     PINNED_START_MARKER,
@@ -113,6 +115,45 @@ _PINNED_HEADING = re.compile(r'^## Pinned Context\s*\n', re.MULTILINE)
 # markers, so a marker and its newline can never be accounted separately.
 START_LINE = PINNED_START_MARKER + "\n"
 END_LINE = PINNED_END_MARKER + "\n"
+
+
+def _narrow_to_memory_region(
+    region_text: str, region_start: int
+) -> tuple[str, int] | None:
+    """Narrow an already-extracted managed region to the MEMORY region inside
+    it, or None when the memory marker pair is not there.
+
+    THE WINDOW AND THE TARGET MUST BE THE SAME REGION, and before this function
+    they were not. `extract_managed_region` returns the WIDE region, and the
+    `## Pinned Context` heading this module anchors on is defined to live in the
+    NARROW memory region nested inside it. The session block sits inside the
+    wide window and ABOVE the narrow one, so a heading placed there is the FIRST
+    match and the anchor lands on it. Neither downstream guard stops that:
+    `certify_expel_nothing` declines placement in its own docstring, and the
+    collision label answers a different question. Placement had ONE runtime
+    constraint and this is now the other half of it.
+
+    THE SEARCH IS BOUNDED TO THE MANAGED REGION IT IS GIVEN, never to the whole
+    file, and that direction is load-bearing rather than tidy. A memory marker
+    OUTSIDE the managed block belongs to no boundary this writer honours, and a
+    whole-file search would let one define the window. Taking the caller's
+    already-bounded text makes that unrepresentable instead of guarded against.
+
+    RETURNS ABSOLUTE OFFSETS, matching `extract_managed_region`, so the caller
+    substitutes the pair and every offset arithmetic below it is unchanged.
+
+    THE PAIR IS REQUIRED, AND THE MISSING-PAIR CASE REFUSES rather than falls
+    back to the wide window. See `SkipReason.NO_MEMORY_REGION` for why a
+    fall-back is unsafe on this document shape.
+    """
+    start_idx = region_text.find(MEMORY_START_MARKER)
+    if start_idx == -1:
+        return None
+    inner_start = start_idx + len(MEMORY_START_MARKER)
+    end_idx = region_text.find(MEMORY_END_MARKER, inner_start)
+    if end_idx == -1:
+        return None
+    return region_text[inner_start:end_idx], region_start + inner_start
 
 
 def _body_contains_a_fence(body: str) -> bool:
@@ -389,6 +430,34 @@ class SkipReason(str, Enum):
     """
 
     NOT_MIGRATED = "noop_not_migrated"
+    # The managed region is there and the MEMORY marker pair inside it is not,
+    # so the window this writer anchors in does not exist. REFUSE rather than
+    # widen back to the managed region.
+    #
+    # WHY A FALL-BACK IS UNSAFE HERE, and it is a property of the build order
+    # rather than a preference. The emitter writes the managed marker, the
+    # title, THEN the session block, THEN the memory marker, so the session
+    # block sits ABOVE the memory marker BY CONSTRUCTION. Removing the memory
+    # markers does not remove the session block. A document missing the pair
+    # therefore STILL HOLDS A POSITION where a heading can sit above the pinned
+    # section, which is the placement this narrowing exists to close. Widening
+    # on exactly that document restores the defect on the one shape that has it.
+    #
+    # EMITTING THE MISSING PAIR IS ALSO REFUSED, and for a different cause: it
+    # would write markers back into a block the file labels do-not-edit, on a
+    # gitignored file with no recovery commit.
+    #
+    # THE POPULATION IS ONE ROUTE. Every emitter writes the two markers
+    # unconditionally, and the two constants entered the tree in one commit, so
+    # no shipped version wrote the outer marker without the inner pair. The only
+    # route to this state is a hand-edit, and it does not self-clear, because
+    # the migration returns early when the managed marker is present and it is
+    # the only path that adds the memory markers to an existing document.
+    #
+    # RESIDUAL, STATED RATHER THAN IMPLIED: this narrowing does not cover a
+    # heading a user places BY HAND inside the session block, which is the same
+    # self-inflicted population as the marker-less document itself.
+    NO_MEMORY_REGION = "noop_no_memory_region"
     NO_SECTION = "noop_no_section"
     EMPTY_SECTION = "noop_empty_section"
     # The pinned body contains a fenced code block. See `_body_contains_a_fence`.
@@ -458,6 +527,13 @@ def plan_insertion(content: str) -> Insertion | SkipReason:
        byte-correct pair. That reason RETIRED WITH THE PAIR. One marker cannot
        be inverted. The step survives on the mechanical ground alone, which is
        sufficient on its own.
+    1b. The MEMORY marker pair sits inside that managed region, and the search
+       narrows to it. THE WINDOW AND THE TARGET MUST BE ONE REGION: the pinned
+       heading is defined to live in the memory region, while the managed region
+       also contains the session block ABOVE it, so a wider window matches a
+       heading there FIRST. Absent pair REFUSES; see
+       `SkipReason.NO_MEMORY_REGION` for why widening is unsafe on that exact
+       shape, and `_narrow_to_memory_region` for the bound on the search.
     2. A `## Pinned Context` heading exists inside that region. Most files do
        not have one. Placing a marker there would mean CREATING the section,
        which is an insert above pre-existing content and is exactly the
@@ -504,6 +580,15 @@ def plan_insertion(content: str) -> Insertion | SkipReason:
         if region is None:
             return SkipReason.NOT_MIGRATED
         region_text, region_start = region
+
+        # NARROW THE WINDOW TO THE REGION THE TARGET IS DEFINED TO LIVE IN.
+        # Everything below this line reads `region_text` as its coordinate
+        # system, so substituting the pair here is what moves the anchor search
+        # off the session block. See `_narrow_to_memory_region`.
+        inner = _narrow_to_memory_region(region_text, region_start)
+        if inner is None:
+            return SkipReason.NO_MEMORY_REGION
+        region_text, region_start = inner
 
         heading = _PINNED_HEADING.search(region_text)
         if heading is None:
