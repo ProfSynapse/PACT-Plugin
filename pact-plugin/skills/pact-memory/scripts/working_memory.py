@@ -73,6 +73,16 @@ WORKING_MEMORY_TOKEN_BUDGET = 800
 RETRIEVED_CONTEXT_TOKEN_BUDGET = 500
 # Note: PINNED_CONTEXT_TOKEN_BUDGET is defined solely in hooks/staleness.py
 
+# Maximum characters `_compress_memory_entry` keeps of a summary before it
+# appends "...". NAMED BECAUSE THE BARE LITERAL HAD A DECOY. This value was
+# spelled 120 at five sites in `_compress_memory_entry`, while
+# OVERRIDE_RATIONALE_MAX below is a DIFFERENT 120 that bounds an override
+# rationale. A reader who greps the literal to find the source of the
+# compressed-entry arithmetic can bind to the override cap, and the two
+# values AGREE, so nothing goes red and the mistake is invisible. The name
+# is the fix: COMPRESSED_ENTRY_TOKEN_CEILING derives from THIS constant.
+COMPRESSED_SUMMARY_CHAR_CAP = 120
+
 # Pin caps constants (twin copy of hooks/pin_caps.py — cannot import across
 # the skills-to-hooks package boundary). Drift-detection test in
 # tests/test_staleness.py guards against divergence; if you change these,
@@ -959,17 +969,27 @@ def _estimate_tokens(text: str) -> int:
 
 def _compress_memory_entry(entry: str) -> str:
     """
-    Compress a full memory entry to a single-line summary.
+    Compress a full memory entry to a date header, a summary and its key.
 
-    Preserves the date header and extracts the first sentence from the
-    Context field. All other fields (Goal, Decisions, Lessons, Files,
-    Memory ID) are dropped.
+    Preserves the date header, extracts the first sentence from the Context
+    field, and KEEPS THE `**Memory ID**` LINE. The other fields (Goal,
+    Decisions, Lessons, Files) are dropped.
+
+    THE POINTER IS KEPT BECAUSE THE ROUTE IS NOT THE KEY. The section
+    comment tells a reader that the full history is searchable through the
+    pact-memory skill, which is the ROUTE. The `**Memory ID**` line is the
+    KEY. This function dropped the key and left the route, so recovery of a
+    compressed entry fell back to a content search across at most 120
+    characters of summary. One line of 47 characters restores the key, and
+    the whole design accepts loss at this rendering ONLY because the loss is
+    recoverable from the store.
 
     Args:
         entry: Full markdown memory entry string starting with ### YYYY-MM-DD.
 
     Returns:
-        Compressed entry with date header and one-line summary.
+        Compressed entry: date header, one-line summary, and the memory id
+        where the entry carried one.
     """
     lines = entry.strip().split("\n")
     if not lines:
@@ -977,6 +997,16 @@ def _compress_memory_entry(entry: str) -> str:
 
     # Preserve the date header line (### YYYY-MM-DD HH:MM)
     date_line = lines[0]
+
+    # Preserve the recovery key. An entry that carried no id keeps none,
+    # because there was none to keep. That is not a regression, and the
+    # worst-case cost below assumes the line IS present, so the derived
+    # ceiling is conservative for the entries that lack it.
+    id_line = ""
+    for line in lines[1:]:
+        if line.startswith("**Memory ID**"):
+            id_line = line
+            break
 
     # Find the Context field and extract its first sentence
     summary_text = ""
@@ -1006,9 +1036,14 @@ def _compress_memory_entry(entry: str) -> str:
                     summary_text += "..."
                 break
 
+    # The id line is appended LAST, so the compressed entry keeps the same
+    # "pointer at the end" shape as an uncompressed one, and
+    # `_apply_entry_token_ceiling` exempts it by PREFIX at whatever index it
+    # sits, so the two agree without either depending on a position.
+    tail = f"\n{id_line}" if id_line else ""
     if summary_text:
-        return f"{date_line}\n**Summary**: {summary_text}"
-    return date_line
+        return f"{date_line}\n**Summary**: {summary_text}{tail}"
+    return f"{date_line}{tail}"
 
 
 def _apply_token_budget(

@@ -72,7 +72,13 @@ class TestCompressMemoryEntry:
         assert "**Summary**: Working on authentication module." in result
         assert "**Goal**" not in result
         assert "**Decisions**" not in result
-        assert "**Memory ID**" not in result
+        # THE MEMORY ID IS KEPT, AND THIS ASSERTION WAS REVERSED RATHER THAN
+        # REMOVED. It read `"**Memory ID**" not in result`, which pinned the
+        # defect: compression dropped the RECOVERY KEY and left only the
+        # ROUTE, so a compressed entry could be recovered from the store
+        # only by a content search across the summary. The compressed form
+        # is now three lines, and the key is the third.
+        assert "**Memory ID**: abc123" in result
 
     def test_truncates_long_context_without_period(self):
         """Should truncate to 120 chars with ellipsis when no period found early."""
