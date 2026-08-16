@@ -2,15 +2,43 @@
 Location: pact-plugin/tests/test_managed_comment_mirror.py
 
 Summary: Enforces that the two managed-section comment strings are IDENTICAL
-across the three modules that write them into a CLAUDE.md. `working_memory.py`
+across the SOURCE TEXT of the three modules that carry them. `working_memory.py`
 holds the named constants; `session_resume.py` and `claude_md_manager.py` repeat
 the same text in different syntactic shapes.
 
+WHAT THIS FILE ENFORCES, AND WHAT IT CANNOT SEE. IT ENFORCES TEXT IDENTITY
+ACROSS THREE FILES. IT CANNOT SEE WHICH FUNCTION EMITS. It reads two things and
+no others: a MODULE-LEVEL assignment in the SSOT, by AST, and a SUBSTRING of the
+RAW SOURCE of each mirror. Nothing here inspects a function body, a call site,
+or an emission. So an emitter that STOPS EMITTING leaves this gate green for as
+long as the constants stay defined, and that is not hypothetical: MEASURED, four
+of the five emitters in this family are invisible here.
+
+THE CAUSE IS A SEPARATION, AND THE SEPARATION IS CORRECT IN ITSELF. The two
+comments were once literals inside the creation template of
+`claude_md_manager.py`, so deletion of an emission also deleted the text and
+this gate reddened BY ACCIDENT. Extracting them to module constants split the
+DEFINITION from the USE. This gate reads the definition.
+`session_resume.py` is the one mirror for which source-text presence continues
+to track emission, and only because the literal IS the emission there. That is
+an accident of spelling rather than a mechanism, so do not read it as coverage
+of the other two files.
+
+THE BEHAVIOURAL HALF LIVES IN `tests/test_managed_comment_emitted.py`, which
+RUNS each emitter and asserts the emitted region. The two files have different
+subjects on purpose and neither replaces the other. This one compares files to
+each other and needs no fixture. That one compares output to the SSOT.
+
 Used by/with:
-- skills/pact-memory/scripts/working_memory.py: the named constants, treated
-  here as the single source of truth.
-- hooks/shared/session_resume.py: repeats both literals inside a concatenation.
-- hooks/shared/claude_md_manager.py: repeats both inside a triple-quoted block.
+- skills/pact-memory/scripts/working_memory.py: the named constants. THIS FILE
+  IS THE SSOT, and `_SSOT` below names it and nothing else.
+- hooks/shared/session_resume.py: a MIRROR. It repeats both literals inside a
+  concatenation.
+- hooks/shared/claude_md_manager.py: a MIRROR, and at the same time the
+  HOOKS-SIDE ORIGIN, which is the one spelling inside `hooks/` that
+  `session_resume.py` imports from.
+- tests/test_managed_comment_emitted.py: the behavioural sibling described
+  above.
 
 WHY A TEST AND NOT A COMMENT. `working_memory.py` carries a prose instruction to
 "Change all three in ONE commit", and warns that fixing two of three converts one
@@ -108,7 +136,18 @@ class TestTheManagedCommentsAgreeAcrossEveryWriter:
 class TestThisGuardCanFire:
     """Mutation arm. Without it the assertions above could pass against a
     comparison that cannot fail -- which is the exact defect class this test
-    exists to close, one level up."""
+    exists to close, one level up.
+
+    READ THIS BEFORE YOU TREAT THIS ARM AS COVERAGE OF THE FAMILY. It mutates
+    the SSOT CONSTANT and asserts the mutation is ABSENT from the mirror, so it
+    is A CONTROL ON THE COMPARISON AND NOT ON THE EMISSION. It proves the
+    comparison CAN fail. It says NOTHING about whether the comparison is on the
+    RIGHT SUBJECT. A POSITIVE CONTROL VALIDATES THE PIPELINE AND NOT THE
+    PATTERN.
+
+    That distinction is the one this arm has been read against. A green here
+    means the instrument is live. It does not mean an emitter still emits, and
+    the behavioural sibling is what answers that question."""
 
     @pytest.mark.parametrize("mirror", _MIRRORS, ids=lambda p: p.name)
     def test_a_diverged_string_is_not_found(self, mirror):
