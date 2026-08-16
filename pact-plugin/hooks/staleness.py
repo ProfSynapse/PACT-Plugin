@@ -677,6 +677,40 @@ def _parse_pinned_section(
     no span to return, so this parameter changes nothing for it: the position is
     UNDEFINED rather than declined, and no flag here can invent one.
 
+    THIS WINDOW IS LOOSER THAN THE WRITER WINDOW ON PURPOSE, AND THE WRITER MUST
+    NOT BE WIDENED TO AGREE WITH IT. `pin_markers._narrow_to_memory_region`
+    resolves the memory region for the PIN WRITER, and it is deliberately
+    stricter than this parse at each of the three points below. THE TWO
+    DIRECTIONS ARE NOT THE SAME SIZE OF MISTAKE. Widening the writer back to the
+    managed region reopens the placement defect its narrow window closes, so that
+    direction is a defect. Narrowing THIS parse is a possible future change with
+    an unmeasured blast radius, so that direction is open work rather than a
+    tidying pass. Neither gap is closed here, and an editor who finds the two
+    windows inconsistent must leave them inconsistent.
+
+    THE SEARCH START BELOW TAKES A BARE SUBSTRING SEARCH, where the writer needs
+    the marker to occupy a LINE. So the marker text carried INSIDE a longer
+    session line moves this search start and does not move the writer window. NO
+    CODE AT EITHER SITE HOLDS THAT CLOSED. What holds it closed is the newline
+    substitution in `session_resume._sanitize_prompt_field`, which is recorded at
+    that one site, so a change there separates the two starts with no signal at
+    either function.
+
+    THE TWO END BOUNDARIES AGREE TODAY, AND NO LINE OF CODE STATES THE
+    AGREEMENT. `MEMORY_END_MARKER` carries the `PACT_MEMORY_` prefix, and the
+    terminator alternation below is built from `PACT_BOUNDARY_PREFIXES`, so this
+    scan stops at that marker BY PREFIX MEMBERSHIP and not by naming it. A READER
+    OF THE CODE SEES NO END BOUND AND A DRIVER OF A DOCUMENT SEES ONE. Take the
+    marker name out of that prefix family, or take the prefix out of the
+    alternation, and this parse over-runs the memory region in silence while the
+    writer is unchanged. DO NOT TIDY THAT AGREEMENT AWAY, and drive a document
+    before you conclude the two ends differ.
+
+    A MISSING MARKER PAIR SPLITS THE TWO IN KIND RATHER THAN IN WIDTH. The writer
+    returns None and plans nothing. This parse keeps its search start at 0 and
+    continues across the full managed region. That fall-back is this function's
+    behaviour and not a model for the writer.
+
     Args:
         content: Full CLAUDE.md file content.
         allow_empty_section: When True, a resolved heading whose body is empty
@@ -746,6 +780,11 @@ def _parse_pinned_section(
     # search bound above is there rather than a wider alternation here. The
     # start of the span, and not its end, is what put the forged pin on the
     # two sides of the comparison.
+    # THE MEMORY END BOUNDARY RIDES ON `_BOUNDARY_ALT` AND IS NAMED NOWHERE.
+    # `MEMORY_END_MARKER` carries the `PACT_MEMORY_` prefix, so this scan stops
+    # at it by PREFIX MEMBERSHIP. Take `PACT_MEMORY_` out of the alternation, or
+    # rename that marker out of the prefix family, and this parse over-runs the
+    # memory region with nothing to see at either this site or the writer.
     next_section_pattern = re.compile(
         rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}|{SESSION_BOUNDARY_PREFIX}))'
     )

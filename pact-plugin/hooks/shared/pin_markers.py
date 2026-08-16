@@ -188,6 +188,38 @@ def _narrow_to_memory_region(
     back to the wide window. See `SkipReason.NO_MEMORY_REGION` for why a
     fall-back is unsafe on this document shape.
 
+    DO NOT WIDEN THIS WINDOW TO AGREE WITH THE READER. The pin reader,
+    `staleness._parse_pinned_section`, resolves a LOOSER window than this one,
+    and the difference is deliberate at each of the three points below. THE TWO
+    DIRECTIONS ARE NOT THE SAME SIZE OF MISTAKE. Widening this function back to
+    the managed region reopens the placement defect the narrow window closes, so
+    that direction is a defect. Narrowing the READER is a possible future change
+    with an unmeasured blast radius, so that direction is open work rather than a
+    tidying pass. Neither gap is closed here, and an editor who finds the two
+    windows inconsistent must leave them inconsistent.
+
+    THE READER TAKES ITS SEARCH START FROM A BARE SUBSTRING SEARCH FOR
+    `MEMORY_START_MARKER`, where this function needs a marker LINE. So the marker
+    text carried INSIDE a longer session line moves the reader search start and
+    does not move this window. NO CODE AT EITHER SITE HOLDS THAT CLOSED. What
+    holds it closed is the newline substitution in
+    `session_resume._sanitize_prompt_field`, which is recorded at that one site,
+    so a change there separates the two starts with no signal at either function.
+
+    THE TWO END BOUNDARIES AGREE TODAY, AND NO LINE OF CODE STATES THE
+    AGREEMENT. `MEMORY_END_MARKER` carries the `PACT_MEMORY_` prefix, and the
+    reader terminator alternation is built from `PACT_BOUNDARY_PREFIXES`, so the
+    reader stops at that marker BY PREFIX MEMBERSHIP and not by naming it. A
+    READER OF THE CODE SEES NO END BOUND AND A DRIVER OF A DOCUMENT SEES ONE.
+    Take the marker name out of that prefix family and the reader over-runs the
+    memory region in silence while this function is unchanged. Drive a document
+    before you conclude the two ends differ.
+
+    A MISSING MARKER PAIR SPLITS THE TWO IN KIND RATHER THAN IN WIDTH. This
+    function returns None and plans nothing. The reader keeps its search start at
+    0 and continues across the full managed region. Do not make this function
+    fall back to reach that behaviour.
+
     THE STRIPPED COMPARISON IS INHERITED FROM `marker_line_span` AND WAS
     RE-JUDGED FOR THIS JOB, because that docstring justifies its tolerance by a
     REFUSAL failure direction and this site bounds a WINDOW instead. MEASURED
