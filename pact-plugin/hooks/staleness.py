@@ -27,6 +27,7 @@ from typing import List, Optional, Tuple
 from shared.claude_md_manager import (
     PACT_BOUNDARY_PREFIXES,
     PINNED_END_MARKER,
+    SESSION_BOUNDARY_PREFIX,
     extract_managed_region,
 )
 from shared.failure_cause import failure_cause
@@ -701,8 +702,27 @@ def _parse_pinned_section(
     # boundary marker — PACT_MEMORY_, PACT_MANAGED_, PACT_ROUTING_ — or end
     # of scan region). No fence-awareness needed — managed region contains
     # only plugin-generated content (round 10 structural guarantee).
+    # THE SESSION PREFIX STOPS THIS SCAN RUNNING THROUGH THE SESSION-END
+    # MARKER. IT DOES NOT CLOSE THE UNDER-BLOCK BELOW, AND SAYING SO IS THE
+    # POINT OF THIS COMMENT.
+    #
+    # The window above is the MANAGED region, which holds the session block
+    # ABOVE the memory markers. A forged `## Pinned Context` heading in that
+    # block sits ABOVE the genuine one, and the search below takes the FIRST
+    # match. WITHOUT the SESSION term the body then ran from the forgery
+    # THROUGH the session-end marker to the memory start marker. MEASURED: the
+    # returned body carried that marker, and it no longer does.
+    #
+    # 🔴 THE UNDER-BLOCK IS UNCHANGED BY THIS TERM, MEASURED ON DOCUMENT PAIRS
+    # THROUGH `pin_staleness_gate._counts_show_an_add`. The extent still
+    # STARTS at the forgery, so the counted body is the forged pin either way
+    # and the count is 1 on the two sides. The increase test stays False and
+    # THE GATE MISSES A REAL PIN ADDITION. The verdict moves from True to
+    # False in the forgery-in-both and forgery-in-post pairings, before this
+    # change and after it, and NO pairing produces the opposite flip. Closing
+    # that needs the WINDOW or the first-match SELECTION, not the terminator.
     next_section_pattern = re.compile(
-        rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}))'
+        rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}|{SESSION_BOUNDARY_PREFIX}))'
     )
     pinned_end = _find_terminator_offset(
         scan_text, pinned_start, next_section_pattern

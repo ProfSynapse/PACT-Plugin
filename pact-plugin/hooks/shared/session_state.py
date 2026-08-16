@@ -86,6 +86,24 @@ _SAFE_PATH_COMPONENT_RE = SAFE_PATH_COMPONENT_RE
 # defined its own copy and asymmetric strip sets across interpolation
 # sinks could become the attacker's entry point. See security-engineer
 # memory patterns_symmetric_sanitization.md.
+#
+# \ud83d\udd34 IT IS NARROWER THAN `_PROMPT_CONTROL_CHARS_RE`, ON PURPOSE, AND A WIDENING
+# OF THAT ONE MUST NOT BE COPIED HERE. The two are different objects with
+# different jobs, and the differences are the design:
+#   - THIS one is a DETECTOR. Every call site uses `.search()`, so it answers
+#     `does this identifier carry a line breaker`. It carries NO `+`, and that
+#     is correct: for a search predicate a one-or-more quantifier matches the
+#     same set of strings and buys nothing.
+#   - THE OTHER one is a REPLACER. Its call sites use `.sub(" ", value)`, and
+#     there the `+` IS load-bearing: without it a run of N control characters
+#     becomes N spaces rather than one.
+# ON LINE BREAKERS THE TWO ARE EQUAL. The other one covers U+0085 inside its
+# `\x7f-\x9f` range, and this one names U+0085 by codepoint. This one omits
+# ONLY the non-line-breaking C1 characters, which is what the list above says
+# it intends. Making them one definition changes behaviour in either
+# direction: the replacer would stop removing `\x80-\x84` and `\x86-\x9f` from
+# model-visible prose, or this detector would start refusing session ids for
+# C1 characters that break no line.
 SESSION_ID_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]")
 # Module-private alias (back-compat for existing call sites that import
 # `_RENDER_STRIP_RE`). New code should import the public name via

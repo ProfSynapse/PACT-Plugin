@@ -61,6 +61,7 @@ from shared.claude_md_manager import (
     PACT_BOUNDARY_PREFIXES,
     PINNED_END_MARKER,
     PINNED_START_MARKER,
+    SESSION_BOUNDARY_PREFIX,
     extract_managed_region,
 )
 # The line scanner is REUSED from the module that owns it rather than copied.
@@ -103,8 +104,19 @@ from staleness import _find_terminator_offset
 # and MIRRORS the pattern `staleness._parse_pinned_section` compiles inline: an
 # H1 or H2 heading, or any PACT-managed boundary comment. Spelling the three
 # prefixes literally here would be a twin copy that drifts silently.
+#
+# THE SESSION PREFIX IS INERT HERE TODAY, AND IT IS PRESENT FOR SYMMETRY WITH
+# `staleness._parse_pinned_section`, WHICH NEEDS IT. MEASURED: the caller
+# below narrows its window to the MEMORY region before it searches, and it
+# REFUSES with `SkipReason.NO_MEMORY_REGION` when that marker pair is absent,
+# so no session marker can enter the window this pattern scans. The sibling
+# takes the MANAGED region and does reach one. Do NOT read this term as
+# evidence that a route to it was found here. If the narrowing above is ever
+# widened, this term is what stops the same defect arriving in this file.
 _BOUNDARY_ALT = "|".join(PACT_BOUNDARY_PREFIXES)
-_PINNED_TERMINATOR = re.compile(rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}))')
+_PINNED_TERMINATOR = re.compile(
+    rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}|{SESSION_BOUNDARY_PREFIX}))'
+)
 
 # The pinned section heading. `re.search` takes the FIRST occurrence and a
 # second one is ignored, which matches every existing reader of this region.

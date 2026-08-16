@@ -616,6 +616,26 @@ class TestPACTBoundaryAltTwinDriftDetection:
             f"PACT_BOUNDARY_PREFIXES in claude_md_manager.py."
         )
 
+    def test_session_boundary_alt_matches_canonical(self):
+        """The SESSION half of the terminator is a twin too, and it has a gate.
+
+        `working_memory.py` cannot import from `hooks/shared/`, so it carries
+        `_SESSION_BOUNDARY_ALT` locally beside `_PACT_BOUNDARY_ALT`. The
+        canonical side is DERIVED from the marker literal rather than spelled,
+        so this arm also fails when a rename of that marker does not carry
+        into the skills-side copy.
+        """
+        from scripts.working_memory import _SESSION_BOUNDARY_ALT
+        from shared.claude_md_manager import SESSION_BOUNDARY_PREFIX
+
+        assert _SESSION_BOUNDARY_ALT == SESSION_BOUNDARY_PREFIX, (
+            f"_SESSION_BOUNDARY_ALT in working_memory.py "
+            f"({_SESSION_BOUNDARY_ALT!r}) drifted from canonical "
+            f"({SESSION_BOUNDARY_PREFIX!r}). Update the twin in "
+            f"working_memory.py to match SESSION_BOUNDARY_PREFIX in "
+            f"claude_md_manager.py."
+        )
+
 
 class TestExtractManagedRegionTwinDriftDetection:
     """PR #404 round 12 item 3: drift-detection test for the

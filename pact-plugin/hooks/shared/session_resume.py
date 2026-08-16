@@ -29,6 +29,8 @@ from shared.claude_md_manager import (
     MANAGED_TITLE,
     MEMORY_END_MARKER,
     MEMORY_START_MARKER,
+    SESSION_END_MARKER,
+    SESSION_START_MARKER,
     ContainmentError,
     _atomic_write_text,
     ensure_dot_claude_parent,
@@ -77,6 +79,15 @@ _REFRESH_IDENTIFIER_TRUNCATION_LIMIT = 64
 # includes NEL U+0085 — a str.splitlines boundary), and the Unicode
 # line/paragraph separators — anything that could break the prompt onto
 # a new line and masquerade as a separate directive.
+#
+# 🔴 A THIRD CLASS EXISTS AND IT IS NARROWER ON PURPOSE. DO NOT MERGE THEM.
+# `session_state.SESSION_ID_CONTROL_CHARS_RE` covers the same line breakers
+# and omits the non-line-breaking C1 characters. The two do different jobs:
+# that one is a DETECTOR, used only through `.search()` on identifiers, so it
+# carries no `+` and needs none. THIS one is a REPLACER, used through
+# `.sub(" ", value)`, and HERE THE `+` IS LOAD-BEARING: without it a run of N
+# control characters becomes N spaces rather than one. Widening that one to
+# match this one would refuse session ids over characters that break no line.
 _PROMPT_CONTROL_CHARS_RE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]+")
 
 # Maximum characters for phase strings rendered into journal resume output.
@@ -122,8 +133,11 @@ def update_session_info(
     # ($project_dir/.claude/CLAUDE.md) so we create at the preferred path.
     target_file, _source = resolve_project_claude_md_path(project_dir)
 
-    SESSION_START = "<!-- SESSION_START -->"
-    SESSION_END = "<!-- SESSION_END -->"
+    # From the canonical pair in claude_md_manager, NOT re-spelled here. The
+    # scan terminator that stops a section body at these markers is DERIVED
+    # from the same two names, so a rename carries to the readers.
+    SESSION_START = SESSION_START_MARKER
+    SESSION_END = SESSION_END_MARKER
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 

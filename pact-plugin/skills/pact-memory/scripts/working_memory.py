@@ -255,6 +255,16 @@ _REFRESH_IDENTIFIER_TRUNCATION_LIMIT = 64
 # U+0085 — a str.splitlines boundary), and the Unicode line/paragraph
 # separators — anything that could break a value onto a new line and
 # masquerade as a heading or a separate entry.
+#
+# 🔴 A THIRD CLASS EXISTS AND IT IS NARROWER ON PURPOSE. DO NOT MERGE THEM.
+# `hooks/shared/session_state.SESSION_ID_CONTROL_CHARS_RE` covers the same
+# line breakers and omits the non-line-breaking C1 characters. The two do
+# different jobs: that one is a DETECTOR, used only through `.search()` on
+# identifiers, so it carries no `+` and needs none. THIS one is a REPLACER,
+# used through `.sub(" ", value)`, and HERE THE `+` IS LOAD-BEARING: without
+# it a run of N control characters becomes N spaces rather than one. Widening
+# that one to match this one would refuse session ids over characters that
+# break no line.
 _PROMPT_CONTROL_CHARS_RE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]+")
 
 

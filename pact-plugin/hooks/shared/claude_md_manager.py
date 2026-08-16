@@ -279,6 +279,29 @@ PACT_BOUNDARY_PREFIXES: tuple[str, ...] = (
 # picks it up everywhere via a one-line constant change.
 _BOUNDARY_ALT = "|".join(PACT_BOUNDARY_PREFIXES)
 
+# Session-block boundary markers, and the scan-terminator prefix DERIVED from
+# them.
+#
+# THESE ARE NOT MEMBERS OF `PACT_BOUNDARY_PREFIXES` AND MUST NOT BE ADDED TO
+# IT. They carry no `PACT_` prefix, so a SESSION member makes that name
+# incorrect about its own contents.
+#
+# THE PREFIX IS DERIVED AND NOT DECLARED, AND THAT IS THE WHOLE POINT.
+# MEASURED: the marker text was spelled SIX times in THREE pairs, each one
+# local to a function or to a template, with no module-level constant
+# anywhere. A hand-written prefix beside them would have been a SEVENTH
+# spelling that unifies none of the others, and the failure direction is the
+# bad one: rename a marker at a producer, the prefix does not follow, and a
+# terminator that matches nothing stops nothing. Deriving it removes that
+# drift axis rather than adding to it.
+SESSION_START_MARKER = "<!-- SESSION_START -->"
+SESSION_END_MARKER = "<!-- SESSION_END -->"
+# Derived, so a rename of the marker above carries into every scan that
+# terminates on it. A literal here would be the seventh spelling.
+SESSION_BOUNDARY_PREFIX = SESSION_START_MARKER.removeprefix(
+    "<!-- "
+).removesuffix("START -->")
+
 # Stale line from the legacy project CLAUDE.md template. The line lingers
 # in upgraded files; strip it during migration. Allows optional trailing
 # period / whitespace.
@@ -1139,10 +1162,10 @@ def ensure_project_memory_md() -> str | None:
     memory_template = f"""{MANAGED_START_MARKER}
 {MANAGED_TITLE}
 
-<!-- SESSION_START -->
+{SESSION_START_MARKER}
 ## Current Session
 <!-- Auto-managed by session_init hook. Overwritten each session. -->
-<!-- SESSION_END -->
+{SESSION_END_MARKER}
 
 {MEMORY_START_MARKER}
 ## Retrieved Context
@@ -1325,8 +1348,8 @@ def _build_migrated_content(content: str) -> str:
     session_block = ""
     content_sans_routing = content
     content_sans_session = content_sans_routing
-    session_start = "<!-- SESSION_START -->"
-    session_end = "<!-- SESSION_END -->"
+    session_start = SESSION_START_MARKER
+    session_end = SESSION_END_MARKER
     if session_start in content_sans_routing and session_end in content_sans_routing:
         pattern = re.compile(
             re.escape(session_start) + r".*?" + re.escape(session_end),
