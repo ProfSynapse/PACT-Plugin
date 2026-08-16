@@ -426,10 +426,20 @@ class TestRetrievedContextThinMargin:
 
         THIS IS WRITTEN AS A PROPERTY AND NOT AS A NUMBER, because a number
         rots when a constant moves. It goes red if the identifier limit
-        rises, if the exempt set widens to a third line, if
-        `MAX_RETRIEVED_MEMORIES` rises, or if the budget falls. Each of
-        those is a change a later author can make without seeing this
-        coupling, and no single file names the two constants together.
+        rises, if `MAX_RETRIEVED_MEMORIES` rises, or if the budget falls.
+        Each of those is a change a later author can make without seeing
+        this coupling, and no single file names the two constants together.
+
+        WHAT THIS ARM DOES NOT CATCH, CORRECTED AGAINST A MEASUREMENT. An
+        earlier wording of this docstring also promised a red when the
+        exempt set WIDENS. It does not have that red and it never did.
+        With the shipped cut replaced by one that holds out EVERY line, the
+        shape arms in `TestTheExemptSetIsTheHeaderAndThePointer` went red
+        and THIS ARM STAYED GREEN: the slice became the whole entry, and a
+        bound against a constant passed anyway because the entry is small.
+        THE SET AXIS IS ARMED THERE AND NOT HERE. The leg below closes the
+        remaining half, which is that the cost measured here must be the
+        cost of a PROPER slice.
         """
         from working_memory import (
             _estimate_tokens,
@@ -451,10 +461,28 @@ class TestRetrievedContextThinMargin:
         # the cost below is the date header alone and the bound is trivial.
         assert "**Memory ID**" in exempt
 
-        assert _estimate_tokens(exempt) < share, (
-            f"the exempt lines cost {_estimate_tokens(exempt)} tokens against "
-            f"a share of {share}. At or above the share the ceiling stops "
-            f"binding and the section can exceed its budget in silence."
+        # NON-VACUITY, THE OTHER DIRECTION, AND THE ONE THAT WAS MISSING.
+        # The leg above bounds the slice from BELOW. Nothing bounded it from
+        # ABOVE, so a cut that dropped NOTHING handed this arm the cost of
+        # the WHOLE entry and the comparison below passed regardless. The
+        # sibling class asserts the SHAPE of the derived set; this arm takes
+        # a NUMBER from that same derivation and had no statement about what
+        # the number describes. A cost is only evidence about the ceiling
+        # while it is the cost of the lines the cut REFUSED to drop.
+        assert len(exempt.split("\n")) < len(entry.split("\n")), (
+            f"the derivation dropped no line: {len(entry.split(chr(10)))} in, "
+            f"{len(exempt.split(chr(10)))} out. The slice is the whole entry, "
+            f"so the cost below is not the cost of the exempt lines and the "
+            f"bound says nothing about the ceiling."
+        )
+
+        cost = _estimate_tokens(exempt)
+        margin = share - cost
+        assert cost < share, (
+            f"the exempt lines cost {cost} tokens against a share of "
+            f"{share}, a margin of {margin}. At or above the share the "
+            f"ceiling stops binding and the section can exceed its budget "
+            f"in silence."
         )
 
     def test_three_worst_case_entries_fit_the_retrieved_budget(self):
