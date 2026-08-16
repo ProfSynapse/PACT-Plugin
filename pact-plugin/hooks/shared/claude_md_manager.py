@@ -296,11 +296,36 @@ _BOUNDARY_ALT = "|".join(PACT_BOUNDARY_PREFIXES)
 # drift axis rather than adding to it.
 SESSION_START_MARKER = "<!-- SESSION_START -->"
 SESSION_END_MARKER = "<!-- SESSION_END -->"
-# Derived, so a rename of the marker above carries into every scan that
-# terminates on it. A literal here would be the seventh spelling.
-SESSION_BOUNDARY_PREFIX = SESSION_START_MARKER.removeprefix(
-    "<!-- "
-).removesuffix("START -->")
+# Derived from the COMMON PREFIX OF THE TWO MARKERS, so a rename of either
+# one carries into every scan that terminates on them. A literal here would
+# be the seventh spelling.
+#
+# THE COMMON PREFIX AND NOT THE START MARKER ALONE. A first version read the
+# START marker only. Rename the END marker by itself and that version keeps
+# returning a prefix which matches the START marker, so the terminator goes
+# on and the END marker escapes it with nothing red. The common prefix of
+# the two shrinks the moment either name moves.
+SESSION_BOUNDARY_PREFIX = os.path.commonprefix(
+    [SESSION_START_MARKER, SESSION_END_MARKER]
+).removeprefix("<!-- ")
+
+# 🔴 AND THE DERIVATION HAS ITS OWN FAILURE MODE, WHICH THIS REFUSES.
+# MEASURED: rename the END marker to a name that shares NO word with the
+# START marker and the common prefix is the EMPTY STRING. An empty term in a
+# scan-terminator alternation matches EVERY HTML comment, so every section
+# body stops at its first comment and the sections TRUNCATE. That is the
+# silent-loss direction, and it arrives from a one-line edit above.
+#
+# The refusal is loud and it is at import. A gate that cannot import this
+# module takes its own fail-open path and allows the edit, which is the safe
+# direction. A wildcard terminator is not.
+if not SESSION_BOUNDARY_PREFIX:
+    raise ValueError(
+        "SESSION_BOUNDARY_PREFIX derived empty: "
+        f"{SESSION_START_MARKER!r} and {SESSION_END_MARKER!r} share no "
+        "common prefix. An empty prefix matches every HTML comment and "
+        "truncates every section scan. Give the two markers a common name."
+    )
 
 # Stale line from the legacy project CLAUDE.md template. The line lingers
 # in upgraded files; strip it during migration. Allows optional trailing

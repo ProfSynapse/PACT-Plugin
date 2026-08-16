@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from shared.claude_md_manager import (
+    MEMORY_START_MARKER,
     PACT_BOUNDARY_PREFIXES,
     PINNED_END_MARKER,
     SESSION_BOUNDARY_PREFIX,
@@ -42,6 +43,11 @@ from pin_caps import (
 # PACT_BOUNDARY_PREFIXES (round 5, item 1) so the three-prefix union is
 # defined in one place.
 _BOUNDARY_ALT = "|".join(PACT_BOUNDARY_PREFIXES)
+
+# Compiled so `_parse_pinned_section` can pass a `pos` to `.search()`. The
+# module-level `re.search` function takes no start position, and the start
+# position is what bounds the first-match selection there.
+_PINNED_HEADING_RE = re.compile(r'^## Pinned Context\s*\n', re.MULTILINE)
 
 # NOTE FOR ANYONE RE-ADDING A PROBE PATTERN HERE. A second alphabet used to live
 # at this spot, for a well-formedness gate that tried to DETECT the cases where a
@@ -692,7 +698,32 @@ def _parse_pinned_section(
     else:
         scan_text, offset = content, 0
 
-    pinned_match = re.search(r'^## Pinned Context\s*\n', scan_text, re.MULTILINE)
+    # START THE SEARCH BELOW THE MEMORY START MARKER WHEN THAT MARKER IS
+    # THERE. THIS IS THE FIRST-MATCH SELECTION AND IT IS THE LEVER FOR THE
+    # UNDER-BLOCK, WHICH THE TERMINATOR BELOW IS NOT.
+    #
+    # The window is the MANAGED region, and the session block sits in it
+    # ABOVE the memory markers. `re.search` takes the FIRST match, so a
+    # forged `## Pinned Context` heading in the session block WINS over the
+    # genuine one. MEASURED on document PAIRS through
+    # `pin_staleness_gate._counts_show_an_add`: the counted body was then
+    # the forged pin on the two sides, the count read 1 against 1, and the
+    # increase test stayed False WHILE A REAL PIN WAS ADDED. The gate missed
+    # the addition. That is an UNDER-block, and it is what this bound closes.
+    #
+    # `pos` MOVES THE SEARCH, NOT THE WINDOW, so `scan_text` and `offset`
+    # keep their meaning and every offset returned below is unchanged.
+    #
+    # WHAT THIS DOES NOT TOUCH, ON PURPOSE. A document with NO memory start
+    # marker keeps today's behaviour, because `search_from` stays 0. That
+    # missing-pair class is the subject of the standing pin-count alert about
+    # this counting window, and it is not this bound.
+    search_from = 0
+    memory_start = scan_text.find(MEMORY_START_MARKER)
+    if memory_start != -1:
+        search_from = memory_start + len(MEMORY_START_MARKER)
+
+    pinned_match = _PINNED_HEADING_RE.search(scan_text, search_from)
     if not pinned_match:
         return None
 
@@ -703,24 +734,18 @@ def _parse_pinned_section(
     # of scan region). No fence-awareness needed — managed region contains
     # only plugin-generated content (round 10 structural guarantee).
     # THE SESSION PREFIX STOPS THIS SCAN RUNNING THROUGH THE SESSION-END
-    # MARKER. IT DOES NOT CLOSE THE UNDER-BLOCK BELOW, AND SAYING SO IS THE
-    # POINT OF THIS COMMENT.
+    # MARKER. IT IS A DIFFERENT DEFECT FROM THE ONE THE SEARCH BOUND ABOVE
+    # CLOSES, AND THE TWO ARE DELIBERATELY SEPARATE.
     #
-    # The window above is the MANAGED region, which holds the session block
-    # ABOVE the memory markers. A forged `## Pinned Context` heading in that
-    # block sits ABOVE the genuine one, and the search below takes the FIRST
-    # match. WITHOUT the SESSION term the body then ran from the forgery
-    # THROUGH the session-end marker to the memory start marker. MEASURED: the
-    # returned body carried that marker, and it no longer does.
+    # MEASURED, before the search bound above existed: with a forged
+    # `## Pinned Context` heading in the session block the body ran from that
+    # forgery THROUGH the session-end marker, and the returned body carried
+    # the marker. It does not carry it now.
     #
-    # 🔴 THE UNDER-BLOCK IS UNCHANGED BY THIS TERM, MEASURED ON DOCUMENT PAIRS
-    # THROUGH `pin_staleness_gate._counts_show_an_add`. The extent still
-    # STARTS at the forgery, so the counted body is the forged pin either way
-    # and the count is 1 on the two sides. The increase test stays False and
-    # THE GATE MISSES A REAL PIN ADDITION. The verdict moves from True to
-    # False in the forgery-in-both and forgery-in-post pairings, before this
-    # change and after it, and NO pairing produces the opposite flip. Closing
-    # that needs the WINDOW or the first-match SELECTION, not the terminator.
+    # THIS TERM ALONE DID NOT CLOSE THE UNDER-BLOCK, and that is why the
+    # search bound above is there rather than a wider alternation here. The
+    # start of the span, and not its end, is what put the forged pin on the
+    # two sides of the comparison.
     next_section_pattern = re.compile(
         rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}|{SESSION_BOUNDARY_PREFIX}))'
     )

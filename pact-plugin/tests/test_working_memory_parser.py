@@ -636,6 +636,54 @@ class TestPACTBoundaryAltTwinDriftDetection:
             f"claude_md_manager.py."
         )
 
+    def test_derived_prefix_follows_an_end_only_rename(self):
+        """The prefix must keep matching BOTH markers when only END moves.
+
+        A derivation that reads the START marker alone returns `SESSION_` for
+        every END-marker name, so an END renamed to a different word escapes
+        the terminator while this file stays green. The common prefix of the
+        two shrinks instead. The renames below are chosen so the two
+        derivations DISAGREE: a rename that keeps the same first word does
+        not separate them and proves nothing.
+        """
+        import os
+
+        start = "<!-- SESSION_START -->"
+        for renamed_end in ("<!-- SESS_END -->", "<!-- SESSION_FINISH -->"):
+            common = os.path.commonprefix(
+                [start, renamed_end]
+            ).removeprefix("<!-- ")
+            assert common, "an empty prefix would match every comment"
+            assert start.startswith(f"<!-- {common}"), renamed_end
+            assert renamed_end.startswith(f"<!-- {common}"), (
+                f"the derived prefix {common!r} does not match the renamed "
+                f"end marker {renamed_end!r}, so that marker would escape "
+                f"every scan terminator built from it."
+            )
+
+    def test_the_empty_prefix_case_the_import_guard_exists_for_is_reachable(
+        self
+    ):
+        """The unrelated-name case DOES derive empty, so the guard has work.
+
+        THIS ARM DOES NOT EXERCISE THE REFUSAL. It pins the PRECONDITION that
+        makes the refusal non-vacuous: two markers with no shared name derive
+        the EMPTY prefix, and an empty term in a terminator alternation
+        matches every HTML comment. `claude_md_manager` raises at import for
+        that case. Exercising the raise needs a re-import with mutated
+        constants, and this arm is the cheap half: if this stops deriving
+        empty, the guard is dead code and somebody must find out here.
+        """
+        import os
+
+        common = os.path.commonprefix(
+            ["<!-- SESSION_START -->", "<!-- BLOCK_END -->"]
+        ).removeprefix("<!-- ")
+        assert common == "", (
+            "the unrelated-name case no longer derives an empty prefix, so "
+            "the import guard in claude_md_manager guards nothing"
+        )
+
 
 class TestExtractManagedRegionTwinDriftDetection:
     """PR #404 round 12 item 3: drift-detection test for the
