@@ -367,12 +367,41 @@ _TARGET_KEYS = (
 )
 
 
+# The line `merge_guard_post.main` prints on the mint path, at
+# hooks/merge_guard_post.py:1019. IT GOES TO sys.stderr, which is why `_mint` below
+# patches that stream beside the existing sys.stdout. The line also carries the token
+# PATH, and that path is the identity of the write event.
+_TOKEN_WRITTEN_LINE = "Merge authorization token written:"
+
+
 def _mint(cmd, tok):
     """Drive the REAL post hook with an approval embedding `cmd`. Returns
     (count_of_tokens_minted, context_dict_or_None) — the context is read from the token
     FILE, which is authoritative for which-key-won even when the whole-command extractor
-    binds nothing (the compound-row artifact)."""
-    before = set(tok.glob("merge-authorized-*"))
+    binds nothing (the compound-row artifact).
+
+    BOTH MEMBERS NOW COME FROM THE EMITTED LINE, NOT FROM THE DIRECTORY. A name-keyed
+    set difference over `merge-authorized-*` is incorrect in two cells, and one of the
+    two is silent. Token names carry whole-second granularity, and `write_token` retires
+    the prior token by RENAME before it creates the new one:
+
+      - ACROSS A SECOND BOUNDARY the difference holds the retired name AND the new one,
+        so the count reads 2 and the context is dropped.
+      - INSIDE ONE SECOND the rename frees the name and the exclusive create takes the
+        identical one back, so the difference holds the RETIRED file alone. The count
+        reads 1, which is correct, and the context is then read off the PRIOR command's
+        token. That one is silent: a plausible dict for the wrong command.
+
+    Measured through this file's own helper. No row in this file mints twice into one
+    token dir today, so neither cell is reachable from the rows as they stand; the
+    sibling 1129 cert had such a row and went red about one run in sixteen.
+
+    Counting an emitted fact is immune to both cells, and to the read side's `.use-N`
+    markers, which match that glob too and are not JSON. THE REPAIR ADDS A COUPLING TO
+    A STRING THE PRODUCTION HOOK PRINTS: if that line is reworded the count reads 0 and
+    the arms here redden, and if the path is dropped from it the read raises. Both
+    failure directions are red, which is why the coupling is acceptable.
+    """
     env = json.dumps({
         "tool_name": "AskUserQuestion",
         "tool_input": {"questions": [{
@@ -385,17 +414,25 @@ def _mint(cmd, tok):
         "tool_response": {"answers": {"Proceed?": "Yes"}},
         "session_id": "cert-1134",
     })
+    err = io.StringIO()
     with patch.object(mgpost, "TOKEN_DIR", tok), \
             patch("sys.stdin", io.StringIO(env)), \
-            patch("sys.stdout", io.StringIO()):
+            patch("sys.stdout", io.StringIO()), \
+            patch("sys.stderr", err):
         try:
             post_main()
         except SystemExit as e:
             assert e.code == 0, "post hook exited nonzero: %r" % (e.code,)
-    new = set(tok.glob("merge-authorized-*")) - before
-    if len(new) != 1:
-        return len(new), None
-    ctx = json.loads(next(iter(new)).read_text()).get("context", {})
+    written = [ln for ln in err.getvalue().splitlines() if _TOKEN_WRITTEN_LINE in ln]
+    # THE GUARD IS RE-BASED AND NOW GUARDS AN EMITTED-LINE ANOMALY, not a directory
+    # one. A count other than 1 means the hook printed the line zero times or twice.
+    # Zero is the ordinary non-mint and is what most rows here assert; two would mean
+    # one approval wrote two tokens, which is an anomaly a cert must refuse on. Either
+    # way there is no single write event to read a context off, so the context is None.
+    if len(written) != 1:
+        return len(written), None
+    path = written[0].split(_TOKEN_WRITTEN_LINE, 1)[1].strip()
+    ctx = json.loads(Path(path).read_text()).get("context", {})
     return 1, ctx
 
 
