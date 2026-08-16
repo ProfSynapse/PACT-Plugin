@@ -211,9 +211,18 @@ def _narrow_to_memory_region(
     reader terminator alternation is built from `PACT_BOUNDARY_PREFIXES`, so the
     reader stops at that marker BY PREFIX MEMBERSHIP and not by naming it. A
     READER OF THE CODE SEES NO END BOUND AND A DRIVER OF A DOCUMENT SEES ONE.
-    Take the marker name out of that prefix family and the reader over-runs the
-    memory region in silence while this function is unchanged. Drive a document
-    before you conclude the two ends differ.
+    Drive a document before you conclude the two ends differ.
+
+    THE READER REACHES THAT MARKER ONLY WHEN NOTHING STOPS IT EARLIER. A heading
+    or a boundary comment between the pinned body and the marker ends the reader
+    scan at that earlier line, and the canonical template puts a `## Working
+    Memory` heading in that position. So on a template-made document the reader
+    does not reach the marker, and a rename of it changes nothing there. DO NOT
+    READ THAT AS PERMISSION TO MOVE THE MARKER OUT OF THE PREFIX FAMILY. A
+    document with no such heading between the pins and the marker DOES reach it,
+    a user edit can make one, and the pin cap gate compares two user documents.
+    On that document the rename removes the reader bound with nothing to see,
+    and this function is unchanged in each case.
 
     A MISSING MARKER PAIR SPLITS THE TWO IN KIND RATHER THAN IN WIDTH. This
     function returns None and plans nothing. The reader keeps its search start at

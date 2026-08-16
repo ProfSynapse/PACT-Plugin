@@ -700,11 +700,20 @@ def _parse_pinned_section(
     AGREEMENT. `MEMORY_END_MARKER` carries the `PACT_MEMORY_` prefix, and the
     terminator alternation below is built from `PACT_BOUNDARY_PREFIXES`, so this
     scan stops at that marker BY PREFIX MEMBERSHIP and not by naming it. A READER
-    OF THE CODE SEES NO END BOUND AND A DRIVER OF A DOCUMENT SEES ONE. Take the
-    marker name out of that prefix family, or take the prefix out of the
-    alternation, and this parse over-runs the memory region in silence while the
-    writer is unchanged. DO NOT TIDY THAT AGREEMENT AWAY, and drive a document
-    before you conclude the two ends differ.
+    OF THE CODE SEES NO END BOUND AND A DRIVER OF A DOCUMENT SEES ONE. DO NOT
+    TIDY THAT AGREEMENT AWAY, and drive a document before you conclude the two
+    ends differ.
+
+    THIS SCAN REACHES THAT MARKER ONLY WHEN NOTHING STOPS IT EARLIER. A heading
+    or a boundary comment between the pinned body and the marker ends the scan at
+    that earlier line, and the canonical template puts a `## Working Memory`
+    heading in that position. So on a template-made document this scan does not
+    reach the marker, and a rename of it changes nothing there. DO NOT READ THAT
+    AS PERMISSION TO MOVE THE MARKER OUT OF THE PREFIX FAMILY, OR THE PREFIX OUT
+    OF THE ALTERNATION. A document with no such heading between the pins and the
+    marker DOES reach it, a user edit can make one, and the pin cap gate compares
+    two user documents. On that document each change removes the bound with
+    nothing to see, while the writer is unchanged.
 
     A MISSING MARKER PAIR SPLITS THE TWO IN KIND RATHER THAN IN WIDTH. The writer
     returns None and plans nothing. This parse keeps its search start at 0 and
@@ -780,11 +789,16 @@ def _parse_pinned_section(
     # search bound above is there rather than a wider alternation here. The
     # start of the span, and not its end, is what put the forged pin on the
     # two sides of the comparison.
+    #
     # THE MEMORY END BOUNDARY RIDES ON `_BOUNDARY_ALT` AND IS NAMED NOWHERE.
     # `MEMORY_END_MARKER` carries the `PACT_MEMORY_` prefix, so this scan stops
-    # at it by PREFIX MEMBERSHIP. Take `PACT_MEMORY_` out of the alternation, or
-    # rename that marker out of the prefix family, and this parse over-runs the
-    # memory region with nothing to see at either this site or the writer.
+    # at it by PREFIX MEMBERSHIP when it reaches it. It reaches it only when no
+    # heading and no boundary comment sits between the pinned body and the
+    # marker, and the canonical template puts a `## Working Memory` heading
+    # there. THAT IS NOT PERMISSION TO DROP THE PREFIX. On a document with no
+    # such heading the marker IS the bound, and taking `PACT_MEMORY_` out of
+    # this alternation, or renaming that marker out of the prefix family,
+    # removes the bound with nothing to see at this site or at the writer.
     next_section_pattern = re.compile(
         rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}|{SESSION_BOUNDARY_PREFIX}))'
     )
