@@ -157,6 +157,27 @@ MANAGED_END_MARKER = "<!-- PACT_MANAGED_END -->"
 MEMORY_START_MARKER = "<!-- PACT_MEMORY_START -->"
 MEMORY_END_MARKER = "<!-- PACT_MEMORY_END -->"
 
+# The auto-managed comment each memory heading carries. NAMED HERE so the two
+# writers in THIS module cannot drift apart, which they did: the creation
+# template emitted these and `_build_migrated_content` did not, so a document
+# through migration came out with headings and no comments.
+#
+# THE TEXT IS SPELLED HERE RATHER THAN IMPORTED, AND THAT IS FORCED RATHER THAN
+# PREFERRED. The canonical definition is `WORKING_MEMORY_COMMENT` and
+# `RETRIEVED_CONTEXT_COMMENT` in `skills/pact-memory/scripts/working_memory.py`.
+# THIS MODULE CANNOT IMPORT THEM. A hook runs as
+# `python3 <plugin_root>/hooks/<name>.py`, so `hooks/` is the only entry on
+# `sys.path` and `working_memory` does not resolve. MEASURED with
+# `importlib.util.find_spec` on that reconstructed path: NOT FOUND. Do not
+# "tidy" these into an import: it resolves inside pytest, because `conftest.py`
+# adds paths a hook does not have, and raises for every real user.
+#
+# `TestTheManagedCommentsAgreeAcrossEveryWriter` in
+# `tests/test_managed_comment_mirror.py` holds this copy to that definition.
+# `## Pinned Context` carries no comment in the template, so it gets none here.
+RETRIEVED_CONTEXT_COMMENT = "<!-- Auto-managed by pact-memory skill. Last 3 retrieved memories shown. -->"
+WORKING_MEMORY_COMMENT = "<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. -->"
+
 # Declared START boundary of the `## Pinned Context` section. The pinned
 # region's extent was INFERRED before this pair existed -- every reader guessed
 # where the section ends from a terminator pattern. This literal declares where
@@ -1194,12 +1215,12 @@ def ensure_project_memory_md() -> str | None:
 
 {MEMORY_START_MARKER}
 ## Retrieved Context
-<!-- Auto-managed by pact-memory skill. Last 3 retrieved memories shown. -->
+{RETRIEVED_CONTEXT_COMMENT}
 
 ## Pinned Context
 
 ## Working Memory
-<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. -->
+{WORKING_MEMORY_COMMENT}
 {MEMORY_END_MARKER}
 
 {MANAGED_END_MARKER}
@@ -1530,9 +1551,33 @@ def _build_migrated_content(content: str) -> str:
         parts.extend(["\n", session_block, "\n"])
 
     parts.extend(["\n", MEMORY_START_MARKER, "\n"])
+    # THE COMMENT EACH HEADING CARRIES IN THE CREATION TEMPLATE, from the same
+    # constants that template uses, so the two writers in this module cannot
+    # emit different shapes again. `## Pinned Context` has no comment there and
+    # gets none here.
+    heading_comments = {
+        "## Retrieved Context": RETRIEVED_CONTEXT_COMMENT,
+        "## Working Memory": WORKING_MEMORY_COMMENT,
+    }
     heading_chunks: list[str] = []
     for heading in ("## Retrieved Context", "## Pinned Context", "## Working Memory"):
         body = memory_sections[heading]
+        comment = heading_comments.get(heading)
+        # ADD THE COMMENT ONLY WHEN THE SECTION ARRIVES WITHOUT ONE, and test
+        # for it ANYWHERE IN THE BODY rather than at the start.
+        #
+        # A PREFIX TEST GIVES A DUPLICATE ON THREE SHAPES A DOCUMENT REALLY
+        # HAS: the comment after a blank line, the comment indented, and a
+        # different comment first. Each one reads as absent to `startswith`,
+        # so each one gains a second copy.
+        #
+        # THE FAILURE DIRECTION OF THE WIDER TEST IS THE SAFE ONE. A document
+        # that quotes this comment deep inside an entry suppresses the add, and
+        # what it gets is the heading with no comment, which is what every such
+        # document gets today. A duplicate cannot be undone by a later pass. A
+        # missing comment is what the next writer supplies.
+        if comment and comment not in body:
+            body = f"{comment}\n{body}" if body else comment
         if body:
             heading_chunks.append(f"{heading}\n{body}\n")
         else:
