@@ -1964,10 +1964,20 @@ class SyncResult:
     # THE ENUM SIZE. A new CLASS of document stops being written here, and a
     # reader must be able to see WHICH class. `REFUSED` is the ambient-target
     # guard, which arrives by a RAISE and is set by whoever catches it. This
-    # one arrives by a RETURN, on the same route as UNRESOLVED and MISSING,
-    # and it reaches `sync_status` on the structured channel with no handler
-    # change. Merging the two into one reason would make a signal that cannot
+    # one arrives by a RETURN, on the same route as UNRESOLVED and MISSING.
+    # Merging the two into one reason would make a signal that cannot
     # separate its own causes.
+    #
+    # WHERE THAT RETURN ARRIVES DIFFERS BY WRITER, AND THE TWO ARE NOT ALIKE.
+    # From `sync_to_claude_md` it reaches `sync_status` on the structured
+    # channel with no handler change, because `PACTMemory.save` assigns the
+    # reason to `last_sync_status` and `cmd_save` puts that field in the
+    # success envelope. From `sync_retrieved_to_claude_md` IT REACHES NOBODY:
+    # its one caller, `PACTMemory.search`, discards the returned object, so
+    # the reason is produced and dropped. THAT IS A PROPERTY OF THE CALLER
+    # AND NOT OF THIS ENUM, so it holds for each reason here rather than for
+    # this one alone. Do not read the first sentence as covering the two
+    # writers together.
     NO_WINDOW = "no_window"      # no write window resolved; see _resolve_write_window
 
     def __init__(self, reason: str) -> None:

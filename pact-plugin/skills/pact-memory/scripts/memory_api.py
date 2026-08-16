@@ -380,8 +380,13 @@ class PACTMemory:
         """Outcome of the most recent save()'s CLAUDE.md sync.
 
         One of `SyncResult`'s reasons: `wrote`, `refused`, `suppressed`,
-        `unresolved`, `missing` or `failed`. None means no save has run yet on
-        this instance.
+        `unresolved`, `missing`, `failed` or `no_window`. None means no save
+        has run yet on this instance.
+
+        THIS LIST IS THE REACHABLE SET AND NOT THE FULL ENUM. `empty` is a
+        reason of `SyncResult` that only the retrieved-context writer returns,
+        and no save can produce it here. A reader who takes this list for the
+        enum will look for a case that cannot arrive.
 
         READ THIS BESIDE `last_embedding_status`, BECAUSE THE TWO DIFFER IN
         MORE THAN POLARITY. That one is PARTIAL: it reports a PROBLEM, and it

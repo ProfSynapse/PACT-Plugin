@@ -551,12 +551,16 @@ def cmd_search(args, db_path=None):
     current_file = getattr(args, "current_file", None)
     # NO `sync_status` HERE, AND THE REASON IS AN OBSERVATION RATHER THAN A
     # PROPERTY. As of 2026-08-04 this call passes `sync_to_claude=False`
-    # unconditionally, so no sync can happen on the search path -- and the sync
+    # unconditionally, so no sync can happen on the search path. The sync
     # `search` would otherwise perform is `sync_retrieved_to_claude_md`, the
-    # SIBLING writer, which still returns a bare bool and feeds no reason
-    # channel. Both facts can change. If this argument ever becomes
-    # caller-controlled, or the sibling gains a reason channel, this envelope
-    # needs the field too; do not read its absence as "search never syncs".
+    # SIBLING writer, AND THE GAP THERE IS IN THE CONSUMER RATHER THAN IN THE
+    # PRODUCER. That function is annotated `-> SyncResult` and all six of its
+    # returns are `SyncResult`, so the reason IS produced. Its one caller,
+    # `PACTMemory.search`, discards the returned object, so the reason feeds
+    # no channel and reaches nobody. Both facts can change. If this argument
+    # ever becomes caller-controlled, or that caller keeps what it is handed,
+    # this envelope needs the field too. Do not read its absence as
+    # "search never syncs".
     # Conditional kwarg, for the reason `cmd_save` states two functions up: an
     # unflagged call must stay BYTE-IDENTICAL, not merely equivalent, because
     # the suite pins these calls exactly. Passing `claude_md_root=None`
