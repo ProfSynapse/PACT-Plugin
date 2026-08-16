@@ -184,6 +184,13 @@ _PACT_BOUNDARY_ALT = "PACT_MEMORY_|PACT_MANAGED_|PACT_ROUTING_"
 # file, so no commit can restore it.
 _SESSION_BOUNDARY_ALT = "SESSION_"
 
+# The session-end marker line, DERIVED from the prefix above rather than
+# spelled again. A drift gate holds that prefix equal to its canonical
+# source, so a rename of the canonical marker reaches this line through the
+# gate. A literal here would be a twin with no gate, which is the shape this
+# branch keeps removing.
+_SESSION_END_MARKER = f"<!-- {_SESSION_BOUNDARY_ALT}END -->"
+
 # Managed-region boundary markers. Twin copies of the canonical definitions
 # in hooks/shared/claude_md_manager.py (cannot import — separate package).
 _MANAGED_START_MARKER = "<!-- PACT_MANAGED_START: Managed by pact-plugin - do not edit this block -->"
@@ -864,6 +871,73 @@ def marker_line_span(text: str, literal: str) -> tuple[int, int] | None:
         if line.strip() == literal:
             return offset, offset + len(line)
         offset += len(line)
+    return None
+
+
+def _resolve_write_window(content: str) -> tuple[str, int] | None:
+    """Resolve the window a section write may search, or None to DECLINE.
+
+    THE THREE STEPS, IN ORDER.
+    STEP 1. The memory marker pair resolves: use the memory region.
+    STEP 2. ELSE, if the managed-end marker and the session-end marker each
+            resolve: use (end of the session block, managed end).
+    STEP 3. ELSE decline. The caller must NOT widen.
+
+    A document with NO managed region keeps today's whole-file window. That
+    is the pre-migration class and it is outside this rule.
+
+    🔴 R3: ALL THREE STEPS SHARE ONE BLIND SPOT, AND STEP 1 IS NOT THE SAFE
+    CASE. The bound defends against a forgery ABOVE the memory region and NOT
+    against one INSIDE it, because the marker pair BOUNDS that region and
+    cannot exclude what it bounds. Read the step-1 window as `the smallest
+    window we can justify`, and not as `the forgery is out`.
+
+    PROPORTIONALITY, AND THE TWO HALVES TRAVEL TOGETHER. The control-character
+    sanitizer covers the newline and is applied to all four session-block
+    values and each memory-record field, so a forged section title is a
+    FIXTURE GIVEN and this bound is DEFENCE IN DEPTH. AND a separate
+    measurement found a second load-bearing control, the label prefix, that
+    the sanitizer does not touch. One half alone is not the honest statement.
+    """
+    region_result = extract_managed_region(content)
+    if region_result is None:
+        return content, 0
+
+    narrowed = _narrow_to_memory_region(region_result[0], region_result[1])
+    if narrowed is not None:
+        return narrowed
+
+    # STEP 2, AND ITS CAUSE IS AVAILABILITY RATHER THAN SECURITY.
+    #
+    # 🔴 R1: THE GRANTED SECURITY CAUSE OF THIS STEP IS DEAD. An effective
+    # forgery must sit in [0, genuine title), the session-block end SPLITS
+    # that interval, and the two memory-entry formatters write BELOW the
+    # split, WHERE THIS WINDOW INCLUDES THE FORGERY. This step excludes only
+    # a forgery ABOVE the session-block end, which is the session-block
+    # writer's own territory. DO NOT READ A NARROWED WINDOW AS AN EXCLUDED
+    # FORGERY. No byte size is quoted for the uncovered band on purpose: it
+    # was measured as a FLOOR on a one-entry fixture and it GROWS with each
+    # memory entry.
+    #
+    # WHAT IT IS FOR. It keeps a document with no memory marker pair
+    # WRITABLE, so it shrinks the population that reaches the decline below.
+    # That population is ordinary users with a document not fully migrated or
+    # hand-edited, and not attackers.
+    #
+    # 🔴 R2: A CONSUMED SESSION-END MARKER MAKES THIS STEP UNAVAILABLE, SO
+    # CONTROL PASSES TO THE DECLINE AND THE WRITE DECLINES. It does NOT fall
+    # back to the wide window. A consumed session-end marker is EVIDENCE that
+    # a forged title has run against this document, so a widening there
+    # rewards the attack. Such documents can be on disk today: the terminator
+    # fix stops NEW ones entering that state and repairs NONE in it.
+    region_text, region_start = region_result
+    if _MANAGED_END_MARKER in content:
+        session_end = marker_line_span(region_text, _SESSION_END_MARKER)
+        if session_end is not None:
+            inner_start = session_end[1]
+            return region_text[inner_start:], region_start + inner_start
+
+    # STEP 3.
     return None
 
 
@@ -1724,7 +1798,7 @@ def _find_terminator_offset(
 
 def _parse_working_memory_section(
     content: str
-) -> Tuple[str, str, str, List[str]]:
+) -> Optional[Tuple[str, str, str, List[str]]]:
     """
     Parse CLAUDE.md content to extract working memory section.
 
@@ -1756,21 +1830,16 @@ def _parse_working_memory_section(
     # the production emitter rather than a literal: the splice landed at 234
     # against a memory start marker at 274, with the genuine heading at 350.
     # THE WRITE WOULD HAVE GONE OUTSIDE THE MEMORY REGION.
-    region_result = extract_managed_region(content)
-    if region_result is not None:
-        narrowed = _narrow_to_memory_region(region_result[0], region_result[1])
-        # THE MISSING-PAIR DIRECTION IS NOT SETTLED HERE, AND THIS BRANCH
-        # KEEPS TODAY'S BEHAVIOUR ON PURPOSE. A managed document with no
-        # memory marker pair takes the wide window, which is what it took
-        # before this bound existed, so this repair changes nothing for that
-        # class. The sibling writer REFUSES at this point, and a refusal
-        # cannot be copied here: the not-found return of this function sends
-        # the caller to its append-at-end branch, which writes the section
-        # OUTSIDE every marker rather than declining. That is a caller
-        # change and it is out of scope for this bound.
-        scan_text, offset = narrowed if narrowed is not None else region_result
-    else:
-        scan_text, offset = content, 0
+    # THE MISSING-PAIR DIRECTION IS SETTLED NOW, AND THE RESOLVER OWNS IT.
+    # `None` means DECLINE, and this function returns `None` to say so. It
+    # must NOT return the not-found tuple, because that sends the caller to
+    # its append-at-end branch, which writes the section OUTSIDE every marker.
+    # A decline and an append-at-end are one line apart and they are opposite
+    # outcomes. Read `_resolve_write_window` for the three steps.
+    window = _resolve_write_window(content)
+    if window is None:
+        return None
+    scan_text, offset = window
 
     # Pattern to find the Working Memory section.
     # Negative lookahead excludes the three plugin-managed boundary prefixes
@@ -1891,6 +1960,15 @@ class SyncResult:
     MISSING = "missing"          # resolved a path that does not exist
     FAILED = "failed"            # the write itself raised
     EMPTY = "empty"              # nothing to write; caller passed no entries
+    # A NEW REASON RATHER THAN `REFUSED`, AND THE CAUSE IS THE SIGNAL AND NOT
+    # THE ENUM SIZE. A new CLASS of document stops being written here, and a
+    # reader must be able to see WHICH class. `REFUSED` is the ambient-target
+    # guard, which arrives by a RAISE and is set by whoever catches it. This
+    # one arrives by a RETURN, on the same route as UNRESOLVED and MISSING,
+    # and it reaches `sync_status` on the structured channel with no handler
+    # change. Merging the two into one reason would make a signal that cannot
+    # separate its own causes.
+    NO_WINDOW = "no_window"      # no write window resolved; see _resolve_write_window
 
     def __init__(self, reason: str) -> None:
         self.reason = reason
@@ -2190,8 +2268,17 @@ def sync_to_claude_md(
             content = claude_md_path.read_text(encoding="utf-8")
 
             # Parse existing working memory section
-            before_section, section_header, after_section, existing_entries = \
-                _parse_working_memory_section(content)
+            parsed = _parse_working_memory_section(content)
+            if parsed is None:
+                # THE DECLINE, AND IT IS LOUD RATHER THAN SILENT. `bool()` on
+                # this result is False, so a caller that reads it as a success
+                # flag sees the write did not happen, and `.reason` names the
+                # cause on the structured `sync_status` channel. THE FAILURE
+                # DIRECTION IS A LOST ENTRY, so it must not be silent: the
+                # alternative shape here, the not-found tuple, would append
+                # the section OUTSIDE every marker instead.
+                return SyncResult(SyncResult.NO_WINDOW)
+            before_section, section_header, after_section, existing_entries = parsed
 
             # Format new memory entry
             new_entry = _format_memory_entry(memory, files, memory_id)
@@ -2241,7 +2328,7 @@ def sync_to_claude_md(
 
 def _parse_retrieved_context_section(
     content: str
-) -> Tuple[str, str, str, List[str]]:
+) -> Optional[Tuple[str, str, str, List[str]]]:
     """
     Parse CLAUDE.md content to extract retrieved context section.
 
@@ -2262,12 +2349,13 @@ def _parse_retrieved_context_section(
     # MEASURED at THIS site, on a production-shaped document with a forged
     # `## Retrieved Context` line in the session block: the splice landed at
     # 234 against a memory start marker at 277.
-    region_result = extract_managed_region(content)
-    if region_result is not None:
-        narrowed = _narrow_to_memory_region(region_result[0], region_result[1])
-        scan_text, offset = narrowed if narrowed is not None else region_result
-    else:
-        scan_text, offset = content, 0
+    # Same three-step window and the same DECLINE as the sibling above. `None`
+    # here means decline, and it must not be the not-found tuple, for the same
+    # cause: that tuple sends the caller to its append-at-end branch.
+    window = _resolve_write_window(content)
+    if window is None:
+        return None
+    scan_text, offset = window
 
     # Pattern to find the Retrieved Context section.
     # Negative lookahead narrows to the plugin-managed boundary prefixes
@@ -2522,8 +2610,11 @@ def sync_retrieved_to_claude_md(
             content = claude_md_path.read_text(encoding="utf-8")
 
             # Parse existing retrieved context section
-            before_section, section_header, after_section, existing_entries = \
-                _parse_retrieved_context_section(content)
+            parsed = _parse_retrieved_context_section(content)
+            if parsed is None:
+                # The same decline as the sibling writer, for the same cause.
+                return SyncResult(SyncResult.NO_WINDOW)
+            before_section, section_header, after_section, existing_entries = parsed
 
             # Format new entries (only the top result to avoid clutter)
             new_entries = []

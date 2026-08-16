@@ -1071,12 +1071,26 @@ class TestAfterSectionSurvivesTheSync:
             RETRIEVED_CONTEXT_COMMENT,
             _MANAGED_END_MARKER,
             _MANAGED_START_MARKER,
+            _SESSION_END_MARKER,
             _parse_retrieved_context_section,
         )
 
         section = (
             f"## Retrieved Context\n{RETRIEVED_CONTEXT_COMMENT}\n\n"
             "### 2026-01-14 10:00\n**Context**: old\n"
+        )
+        # THE WRAPPED FIXTURE CARRIES A SESSION BLOCK, AND THE CHOICE IS
+        # MEASURED RATHER THAN INCIDENTAL. The window rule declines a managed
+        # document that resolves neither the memory marker pair nor the
+        # session block, so the wrapped cells stopped parsing at all. TWO
+        # REPAIRS RESTORE A WINDOW, AND THEY ARE NOT THE SAME ARM. Measured
+        # per cell against the pre-rule parser over this 9x2 grid: the session
+        # block reproduces 18 of 18 `after` values, and a memory marker pair
+        # reproduces 9 of 18, because the memory-region window ends earlier
+        # and each wrapped `after` then gains a memory-end marker prefix.
+        # The session block keeps this arm on the strings it always measured.
+        session_block = (
+            f"<!-- SESSION_START -->\n## Current Session\n{_SESSION_END_MARKER}\n"
         )
         tails = [
             "\n## Later\n\nX\n", "\n\n\n## Later\n", "\nX\n", "\n---\n\nX\n",
@@ -1087,12 +1101,19 @@ class TestAfterSectionSurvivesTheSync:
             for wrapped in (False, True):
                 if wrapped:
                     doc = (
-                        f"# P\n\n{_MANAGED_START_MARKER}\n{section}"
+                        f"# P\n\n{_MANAGED_START_MARKER}\n{session_block}{section}"
                         f"{_MANAGED_END_MARKER}\n{tail}"
                     )
                 else:
                     doc = f"# P\n\n{section}{tail}"
-                _before, _header, after, _entries = _parse_retrieved_context_section(doc)
+                parsed = _parse_retrieved_context_section(doc)
+                assert parsed is not None, (
+                    f"the parser declined the fixture with tail {tail!r} and "
+                    f"managed region {wrapped}. THIS ARM MEASURES THE VALUE OF "
+                    f"THE AFTER-SECTION, so a decline retires it silently "
+                    f"rather than reddening it."
+                )
+                _before, _header, after, _entries = parsed
                 seen_non_empty += 1 if after else 0
                 assert not after.startswith("\n"), (
                     f"a newline-leading after-section is now reachable with "
