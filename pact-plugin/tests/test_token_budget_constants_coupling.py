@@ -178,12 +178,15 @@ class TestCompressedEntryCeilingCoupling:
     @pytest.mark.parametrize(
         "density_label, make_id",
         [
-            # THE ADVERSARIAL SHAPE. At the bound, one character for each word.
+            # THE ADVERSARIAL SHAPE, AND IT IS THE WORST CASE. At the bound,
+            # one character for each word. No emitted pointer can cost more,
+            # because the formatter REFUSES an id longer than the bound and
+            # emits no line at all for it. A row that fed an id past the bound
+            # would therefore measure a CHEAPER entry than this one, and its
+            # own non-vacuity check on the pointer line would go red.
             ("dense", lambda limit: _densest(limit)),
             # THE FRIENDLY SHAPE. At the bound, a single token.
             ("one_token", lambda limit: "a" * limit),
-            # Longer than the bound, so the sanitize truncates it.
-            ("dense_beyond_bound", lambda limit: _densest(limit * 4)),
             # What the generator actually emits.
             ("generated_32_hex", lambda limit: "0123456789abcdef" * 2),
         ],

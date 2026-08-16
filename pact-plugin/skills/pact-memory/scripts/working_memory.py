@@ -1746,7 +1746,25 @@ def _format_memory_entry(
         # `_recover_identifier` then accepts the raw id unchanged or refuses
         # it. See its docstring for why it is an acceptor and not a second
         # sanitizer.
-        if raw_id and not cleaned_id:
+        #
+        # THE LENGTH TEST IS THE SECOND ROUTE TO THE ACCEPTOR, AND IT COVERS
+        # A STATE THE EMPTY TEST CANNOT SEE. For a raw id past the bound the
+        # sanitizer CUTS to `cleaned[:limit - 3] + "..."`, which is NON-EMPTY,
+        # so the empty test cannot fire and a cut key reaches the line. THE
+        # THIRD CASE IS WHAT DECIDES THIS, and it is not the one the acceptor
+        # docstring weighs: an ABSENT line says no key is here, a labelled
+        # EMPTY value says the key is empty and is visibly broken, and a CUT
+        # value says HERE IS THE KEY while being INDISTINGUISHABLE FROM A GOOD
+        # ONE. It fails at the READER, far from this writer, and it reads as a
+        # loss in the store rather than as a loss at the rendering. So an id
+        # past the bound goes to the acceptor, which refuses it, and no line
+        # is emitted. The compressed form copies this line verbatim, so a bad
+        # key would outlive the entry text that could identify the record
+        # another way.
+        if raw_id and (
+            not cleaned_id
+            or len(raw_id) > _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+        ):
             cleaned_id = _recover_identifier(raw_id)
         if cleaned_id:
             lines.append(f"{_MEMORY_ID_LABEL}: {cleaned_id}")
@@ -2483,7 +2501,17 @@ def _format_retrieved_entry(
         # `_recover_identifier` then accepts the raw id unchanged or refuses
         # it. See its docstring for why it is an acceptor and not a second
         # sanitizer.
-        if raw_id and not cleaned_id:
+        #
+        # THE LENGTH TEST IS THE SECOND ROUTE TO THE ACCEPTOR, AND THE CAUSE
+        # IS RECORDED IN FULL AT THE TWIN BLOCK IN `_format_memory_entry`. In
+        # short: a raw id past the bound is CUT to a non-empty value, so the
+        # empty test cannot fire, and a cut key is INDISTINGUISHABLE FROM A
+        # GOOD ONE at the reader. The acceptor refuses it and no line is
+        # emitted.
+        if raw_id and (
+            not cleaned_id
+            or len(raw_id) > _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+        ):
             cleaned_id = _recover_identifier(raw_id)
         if cleaned_id:
             lines.append(f"{_MEMORY_ID_LABEL}: {cleaned_id}")
