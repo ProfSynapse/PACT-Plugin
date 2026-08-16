@@ -29,8 +29,10 @@ from shared.claude_md_manager import (
     MANAGED_TITLE,
     MEMORY_END_MARKER,
     MEMORY_START_MARKER,
+    RETRIEVED_CONTEXT_COMMENT,
     SESSION_END_MARKER,
     SESSION_START_MARKER,
+    WORKING_MEMORY_COMMENT,
     ContainmentError,
     _atomic_write_text,
     ensure_dot_claude_parent,
@@ -235,12 +237,12 @@ def update_session_info(
                         "\n"
                         f"{MEMORY_START_MARKER}\n"
                         "## Retrieved Context\n"
-                        "<!-- Auto-managed by pact-memory skill. Last 3 retrieved memories shown. -->\n"
+                        f"{RETRIEVED_CONTEXT_COMMENT}\n"
                         "\n"
                         "## Pinned Context\n"
                         "\n"
                         "## Working Memory\n"
-                        "<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. -->\n"
+                        f"{WORKING_MEMORY_COMMENT}\n"
                         f"{MEMORY_END_MARKER}\n"
                         "\n"
                         f"{MANAGED_END_MARKER}\n"
