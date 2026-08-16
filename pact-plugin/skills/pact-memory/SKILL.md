@@ -482,10 +482,11 @@ markdown does not provide.
 **Coexistence model**: Auto-memory captures broad session context automatically.
 pact-memory captures deliberate, structured knowledge at PACT phase boundaries.
 The Working Memory section in CLAUDE.md shows the most recent pact-memory
-entries — capped at 3, then reduced further by a token budget, so it commonly
-shows fewer and often only one. The newest entry is kept in full and is the only
-one guaranteed to carry its Memory ID; older entries are compressed to a one-line
-summary and lose theirs. What survives provides structured context that
+entries, capped at 3, then reduced further by a token budget, so it can show
+fewer. The newest entry is not compressed and not dropped. Older entries are
+compressed to a one-line summary and keep their Memory ID. An entry carries no
+Memory ID when the record was saved without one, or when the identifier could
+not be written safely. What survives provides structured context that
 complements auto-memory's general learnings, and the full history stays
 searchable via the `search` command.
 
