@@ -218,16 +218,31 @@ class TestRetrievedContextSpliceWindow:
 class TestMissingPairKeepsTodayBehaviour:
     """A managed document with NO memory pair keeps the wide window.
 
-    THIS ARM RECORDS A PENDING DECISION RATHER THAN A SETTLED ONE. The
-    missing-pair direction is with the architect, and the current expression
-    preserves the behaviour that predates the bound on purpose. This arm says
-    what the code does TODAY so that a change to it is visible, and it is
-    named so a later ruling can find and re-point it rather than delete it.
+    THIS ARM PINS WHAT THE CODE DOES TODAY, and today's behaviour predates
+    the bound on purpose. It is named so a later author can find it and
+    re-point it rather than delete it.
 
-    WHEN THE RULING LANDS AND CHANGES THIS DIRECTION, RE-POINT THIS ARM. Do
-    not remove it: the class it covers (a managed document with no memory
-    pair) keeps its behaviour either way, and only the expected direction
-    moves.
+    THE TRIGGER IS THE CODE AND NOT A RULING, AND THE DIFFERENCE IS NOT
+    PEDANTIC. An earlier version of this docstring said to re-point WHEN THE
+    RULING LANDS. THE RULING HAS LANDED AND THE IMPLEMENTATION HAS NOT, so
+    that trigger reads as satisfied against code that has not moved, and a
+    reader who obeys it re-points a correct arm at a behaviour the writer
+    does not have. A test instruction keyed on a DECISION goes stale at the
+    decision. One keyed on an EXPRESSION goes stale at the expression, which
+    is the thing the arm measures.
+
+    SO RE-POINT THIS ARM WHEN, AND ONLY WHEN, THE TWO CONDITIONS BELOW STOP
+    HOLDING IN `skills/pact-memory/scripts/working_memory.py`:
+
+      1. `_narrow_to_memory_region` returns None when the memory marker pair
+         is missing.
+      2. The two callers of it fall back to the WIDE managed region, each
+         through `narrowed if narrowed is not None else region_result`.
+
+    While the two hold, the write goes ahead and this arm is correct. When
+    either one moves, the class this arm covers (a managed document with no
+    memory pair) keeps its behaviour either way, and only the expected
+    direction moves. DO NOT REMOVE THE ARM.
     """
 
     def test_a_document_with_no_memory_pair_is_written_without_raising(
@@ -247,7 +262,11 @@ class TestMissingPairKeepsTodayBehaviour:
         )
 
         assert ENTRY_SENTINEL in emitted, (
-            "today's behaviour writes the entry for this class. If the "
-            "architect ruling changes the missing-pair direction, RE-POINT "
-            "this arm at the ruled behaviour rather than remove it."
+            "today's behaviour writes the entry for this class, and it did "
+            "not.\n"
+            "RE-POINT THIS ARM AT THE NEW EXPRESSION RATHER THAN REMOVE IT, "
+            "and read the class docstring first: the trigger is the CODE in "
+            "`working_memory.py`, not a ruling. A ruling on this direction "
+            "can land months before the expression moves, so a decision is "
+            "the wrong thing to key a test instruction on."
         )
