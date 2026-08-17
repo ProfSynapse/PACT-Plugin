@@ -28,6 +28,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# THE STORE ORIGIN IS ASKED FOR, NEVER RE-DERIVED. `_refuse_ambient_sync_from_a_
+# redirected_store` must know if the row it is about to project went to the
+# DEFAULT store or to a redirected one. Reading `PACT_TEST_MEMORY_DIR` here
+# instead would be a second derivation of a rule `config` owns, and it would be
+# BLIND to the `--db-path` store scope, which is the other redirect route.
+#
+# Dual import: relative (when loaded as a package) vs absolute (when a caller
+# adds scripts/ to sys.path). This module is loaded BOTH ways -- the package
+# imports it as `.working_memory`, and callers that put scripts/ on the path
+# import it bare -- so a relative-only import would break the bare route. Same
+# idiom and same reason as the pact_session import in memory_api.
+try:
+    from .config import STORE_ORIGIN_HOME, store_path_origin
+except ImportError:
+    from config import STORE_ORIGIN_HOME, store_path_origin
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -2081,6 +2097,130 @@ def _refuse_ambient_target_under_pytest(
     )
 
 
+def _target_is_inside_the_declared_project_dir(resolved_target: Path) -> bool:
+    """Report whether resolution landed inside the caller's declared project dir.
+
+    `CLAUDE_PROJECT_DIR` IS A DECLARATION, THE SAME KIND OF WARRANT AS
+    `claude_md_root`, AND THE INCIDENT IS WHAT SHOWS THE DIFFERENCE MATTERS. The
+    write that reached an operator's file came from a process started with the
+    environment CLEARED, so the variable was absent and resolution fell through
+    to a git anchor that pointed at a checkout nobody had named.
+
+    THE CHECK IS CONTAINMENT, NEVER THE PRESENCE OF THE VARIABLE. A set variable
+    is a PROXY and a wrong one: `_find_existing_claude_md` probes that directory
+    and CONTINUES when it finds nothing, so resolution can begin at a declared
+    root and finish somewhere else entirely. Presence would exempt exactly that
+    escape. Comparing the RESOLVED path against the declared root reports what
+    resolution did rather than what the caller intended.
+
+    Both sides are resolved before the comparison so that a symlink or a `..`
+    cannot make an outside path read as an inside one.
+
+    Returns False when the variable is unset, when it is empty, or when it names
+    a directory the target does not sit under.
+    """
+    declared = os.environ.get("CLAUDE_PROJECT_DIR")
+    if not declared:
+        return False
+    try:
+        Path(resolved_target).resolve().relative_to(Path(declared).resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def _refuse_ambient_sync_from_a_redirected_store(
+    target: Optional[Path],
+    claude_md_root: Optional[Path] = None,
+    resolved_target: Optional[Path] = None,
+) -> None:
+    """Refuse an AMBIENT sync when the ROW went to a store that is not the default.
+
+    THE HOLE ITS SIBLING LEAVES OPEN, AND THE TWO ARE NOT INTERCHANGEABLE.
+    `_refuse_ambient_target_under_pytest` keys on `PYTEST_CURRENT_TEST` in the
+    ENVIRONMENT. A caller that clears the environment (`env -i python3 cli.py
+    save ...`) STRIPS that variable, so that guard reads a clean process and
+    admits the write. That is not a hypothetical shape: it is the invocation
+    that put three entries into an operator's live CLAUDE.md, entries the
+    operator could not then look up, because the rows had gone to two throwaway
+    stores below a scratch directory while the projection went to the real file.
+
+    THE CLASS REFUSED IS KEYED ON THE RESULT, NOT ON THE CALLER. A caller-keyed
+    rule ("refuse saves from a test agent") is defeated by the next new caller.
+    The property that separates the incident from ordinary use is this: the row
+    was written to a REDIRECTED store, and the projection was about to go to an
+    AMBIENTLY RESOLVED file. Those two together produce an entry that displays
+    in a document no reader can resolve back to a store. A save that uses the
+    default store cannot produce that, whatever it calls itself.
+
+    THE CROSSING IS THE DEFECT, NOT THE RESOLUTION. Do NOT read this as a rule
+    against the main-repo resolution branch. That branch is deliberate: a
+    session that runs in a worktree reads the MAIN checkout's CLAUDE.md, so the
+    branch is how an ordinary save reaches the file the session displays.
+    Refusing it would lose every worktree save projection, which is the
+    over-block this guard is shaped to avoid.
+
+    SCOPE, mirroring the sibling guard deliberately rather than inventing a
+    second shape:
+    - An EXPLICIT `target` is always allowed. The caller named its file.
+    - A DECLARED `claude_md_root` is always allowed, and it is the STRONGER
+      warrant: the write must land inside it or `_atomic_write_text` refuses,
+      so a caller that declares a sandbox cannot escape it.
+    - An IN-PROCESS caller (`pytest` already imported) is out of scope. The
+      suite binds a redirected store for every test AND syncs ambiently on
+      purpose, so refusing there would break the suite rather than the hazard.
+      The incident process had no pytest in it, so this exemption does not
+      reopen the class.
+    - A TARGET THAT LANDED INSIDE `CLAUDE_PROJECT_DIR` is allowed, and this
+      exemption was added because a MEASURED over-block demanded it. Without it
+      the guard refused a suite arm that spawns a child with a redirected store
+      and a tmp project directory, which is a legitimate and common shape: the
+      caller declared a root through the environment and resolution stayed
+      inside it. The incident does NOT come back, because that process ran with
+      the environment cleared and resolution escaped to a git anchor.
+
+    THE FAILURE DIRECTION IS DELIBERATE AND IT IS THE SAFE ONE. When this guard
+    is wrong it refuses a GOOD projection rather than admitting a bad one. That
+    is acceptable here and would not be elsewhere, because the refused thing is
+    a PROJECTION and never a RECORD: `save` has already committed the row and
+    goes on to return success, and the caller reads `sync_status='refused'`. So
+    a wrong refusal costs a display line the next sync rebuilds, while a wrong
+    admission corrupts a gitignored, always-loaded file that has no commit to
+    restore it from.
+
+    Raises AmbientSyncRefused, the same type as the sibling guard, so the one
+    handler in `memory_api.save` maps both to `SyncResult.REFUSED` with no
+    second branch to keep in step.
+    """
+    if target is not None:
+        return
+    if claude_md_root is not None:
+        return
+    if "pytest" in sys.modules:
+        return
+    origin = store_path_origin()
+    if origin == STORE_ORIGIN_HOME:
+        return
+    # LAST, AND ONLY WITH A RESOLVED PATH IN HAND. A caller that has not
+    # resolved yet passes None, and None cannot be inside anything, so the
+    # refusal stands. That is the safe direction: the exemption has to be
+    # EARNED by a resolution that landed inside the declared root.
+    if resolved_target is not None and _target_is_inside_the_declared_project_dir(
+        resolved_target
+    ):
+        return
+    # THE ORIGIN WORD, NEVER THE PATH. `origin` is one of a closed set of words
+    # ("scope", "environment"), so it names the redirect without putting a
+    # filesystem path into a message that reaches a log and a caller.
+    raise AmbientSyncRefused(
+        "refusing to sync working memory to an ambiently-resolved CLAUDE.md: "
+        f"the memory store is redirected (origin={origin}), so this entry "
+        "would display in a file that does not read from the store that holds "
+        "it. Pass an explicit target=, declare claude_md_root=, or use the "
+        "CLI's --no-sync flag."
+    )
+
+
 def sync_to_claude_md(
     memory: Dict[str, Any],
     files: Optional[List[str]] = None,
@@ -2286,6 +2426,16 @@ def sync_to_claude_md(
                 "or the file was removed after it resolved.", claude_md_path
             )
         return SyncResult(SyncResult.MISSING)
+
+    # THE REDIRECTED-STORE REFUSAL SITS HERE, BELOW RESOLUTION AND ABOVE THE
+    # LOCK, and the position is load-bearing rather than tidy. It needs the
+    # RESOLVED path to judge whether the destination was declared or derived,
+    # so it cannot run at the top with its sibling. It must run before
+    # `file_lock`, which creates the sidecar's parent directories: a refusal
+    # after that point would leave a write behind on the path it refused.
+    _refuse_ambient_sync_from_a_redirected_store(
+        target, claude_md_root, claude_md_path
+    )
 
     try:
         # Serialize the FULL read-modify-write window under the shared sidecar
@@ -2638,6 +2788,13 @@ def sync_retrieved_to_claude_md(
             "removed after it resolved.", claude_md_path
         )
         return SyncResult(SyncResult.MISSING)
+
+    # Same position and same reasons as in the sibling: below resolution because
+    # it judges the RESOLVED destination, above `file_lock` because that call
+    # creates directories.
+    _refuse_ambient_sync_from_a_redirected_store(
+        None, claude_md_root, claude_md_path
+    )
 
     try:
         # Serialize the FULL read-modify-write window under the shared sidecar
