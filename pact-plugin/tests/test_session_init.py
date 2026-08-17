@@ -3638,9 +3638,10 @@ class TestSessionInitSlotAIntegration:
         own notice, and it MUST write at index 0 like every other role branch,
         so the banner is not the first thing a reader meets.
 
-        The two non-vacuity assertions come first, because each names a way
+        The three non-vacuity assertions come first, because each names a way
         this arm could pass while measuring nothing: a run that never reached
-        Slot 4c, and a run where the pin-slot line came back.
+        Slot 4c, a run where the pin-slot line came back, and an anchor that
+        cannot hold up a prefix test.
         """
         import session_init as _session_init
         from session_init import _UNKNOWN_ROLE_NOTICE
@@ -3663,6 +3664,14 @@ class TestSessionInitSlotAIntegration:
         assert "Pin slots:" not in additional, (
             "non-vacuity: the pin-slot line is back, so this arm no longer "
             "reproduces the pinless-checkout condition it exists to drive"
+        )
+        assert _UNKNOWN_ROLE_FRAGMENT in _UNKNOWN_ROLE_NOTICE, (
+            "non-vacuity: the anchor does not carry this module's own literal, "
+            "so the startswith below is satisfiable by a degenerate constant "
+            "and measures nothing. An imported anchor inherits any degeneracy "
+            "of the source it comes from: startswith('') is correct for every "
+            "string, and a whitespace-only anchor matches the leading space of "
+            "the join. The independent literal is the yardstick."
         )
         assert additional.startswith(_UNKNOWN_ROLE_NOTICE), (
             "the unknown-role branch must write its notice at index 0 "
