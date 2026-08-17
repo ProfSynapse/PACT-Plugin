@@ -363,6 +363,19 @@ For full detail, `Read(file_path="../protocols/pact-variety.md")` when calibrati
 >
 > ⚠️ **NEVER** use plain `Agent(subagent_type=...)` without `name` and `team_name` for specialist agents. This bypasses team coordination, task tracking, and `SendMessage` communication.
 
+#### Which signal governs a tool call
+
+A tool gives you three signals about itself, and they can disagree. Rank them:
+
+1. **The dispatch template above** and **the tool parameter list** (the `properties` object) both govern.
+2. **The tool prose description** ranks below the two of them.
+
+If the prose says a parameter is unavailable and the parameter list shows it, PASS IT. Your default is to trust the description, because it reads like an instruction. Do not. A description can go stale against the schema in the same block.
+
+If the template and the parameter list disagree, that disagreement is a FINDING. Report it to the user. Do not pick one.
+
+**A gate that demands a parameter is evidence that the parameter is available**, because a gate cannot demand what the interface cannot express. So when a gate refuses a dispatch for a missing field you believe you cannot pass, check the belief first. Do not hunt for a different tool.
+
 **Teachback-Gated Dispatch**:
 
 Every specialist dispatch is a Task A (TEACHBACK) + Task B (primary work, `blockedBy=[A]`) pair. Both tasks must exist with the teammate as owner BEFORE the `Agent()` spawn. The mission lives in Task B's `description`, never in the spawn prompt.
