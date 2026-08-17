@@ -275,15 +275,28 @@ class TestRedirectedStoreDoesNotProjectIntoAnAmbientDocument:
     def test_the_default_store_is_admitted_even_when_it_escapes(self, tmp_path):
         """THE ACCEPTED UNDER-BLOCK, ARMED SO THAT IT IS A DECISION AND NOT A GAP.
 
-        A DEFAULT-store save whose resolution escapes the declared root is
-        ADMITTED. That is deliberate: the row is in the store the display reads
-        from, so the entry it projects can be looked up, and the incident class
-        is an entry that CANNOT be. Refusing here would refuse an ordinary
-        session that runs in a worktree, which is the over-block direction.
+        A DEFAULT-store save that resolves outside the declared root is
+        ADMITTED.
 
-        The arm exists so that a later reader finds this boundary stated and
-        measured. If a future change makes this refuse, this arm reddens and the
-        widening becomes a decision somebody takes on purpose.
+        THE CAUSE IS THAT THE FALL-THROUGH IS THE DESIGNED PATH, NOT AN ANOMALY,
+        and that is what makes the admission correct rather than merely tolerable.
+        A PACT worktree holds no CLAUDE.md of its own. Resolution therefore falls
+        through to the MAIN checkout's file on purpose, and each ordinary worktree
+        session depends on that fall-through to reach the file it displays. So for
+        a default store, resolving outside the declared root IS the normal case,
+        and a refusal here breaks the memory display for each such session. That
+        is the cardinal over-block.
+
+        A WEAKER CAUSE WAS RECORDED HERE BEFORE AND IS REPLACED, because a weak
+        cause invites a later reader to overturn a correct decision. The weaker
+        one: the row sits in the store the display reads from, so the entry can
+        be looked up. That is correct, and it compares HARM SEVERITY. The cause
+        above says the behaviour is the design, which is much harder to argue
+        away.
+
+        The arm is available so that a later reader finds this boundary stated
+        and measured. If a future change makes this refuse, this arm reddens and
+        the widening becomes a decision somebody takes on purpose.
         """
         target = _seed_project(tmp_path)
         before = target.read_bytes()
