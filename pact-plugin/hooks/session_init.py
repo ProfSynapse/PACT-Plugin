@@ -1516,7 +1516,17 @@ def main():
             # the arm a positive token to assert beside the absence, and puts
             # the cue on a channel that is delivered. The same literal serves
             # both channels, so the two cannot drift.
-            context_parts.append(_UNKNOWN_ROLE_NOTICE)
+            #
+            # INDEX 0, LIKE EVERY OTHER LIMB OF THIS GATE. The teammate limb
+            # above and each source limb below write at index 0, because this
+            # gate runs LATE: the banner (step 4c) and the pin/config
+            # surfacings are in context_parts before it. An APPEND here left
+            # the notice last, and on a frame with no pin-slot line (any
+            # checkout carrying no project CLAUDE.md) it left the BANNER
+            # first, so the role message sat below diagnostics a reader meets
+            # first. Position only. The ruling that an unknown frame gets no
+            # orchestrator ladder is unchanged.
+            context_parts.insert(0, _UNKNOWN_ROLE_NOTICE)
         else:
             # The team always exists (the platform pre-creates it), so the
             # directive is source-agnostic; the per-source branches differ only

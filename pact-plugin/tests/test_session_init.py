@@ -3619,6 +3619,62 @@ class TestSessionInitSlotAIntegration:
                 f"context_parts ordering around line 700-710."
             )
 
+    def test_banner_is_not_first_when_the_pin_slot_line_is_absent(
+        self, monkeypatch, tmp_path
+    ):
+        """Drive the join-order property in the state a pinless checkout makes.
+
+        THE SIBLING ARM ABOVE CANNOT FAIL ON A MACHINE THAT HAS PINS. It rides
+        the pin-slot diagnostic: while that line precedes the banner, the
+        `startswith` assertion holds whatever the role branch does with its own
+        write. The line comes from `check_pin_slot_status`, which returns None
+        when no project CLAUDE.md resolves — the state of a checkout that does
+        not carry one, and the state that made the sibling arm red on a runner
+        while it stayed green beside a developer's own file.
+
+        Suppress that line here, so the assertion rests on the role branch
+        instead of on an adjacent diagnostic. The fixture sends no
+        `agent_type`, so the frame classifies "unknown": that branch emits its
+        own notice, and it MUST write at index 0 like every other role branch,
+        so the banner is not the first thing a reader meets.
+
+        The two non-vacuity assertions come first, because each names a way
+        this arm could pass while measuring nothing: a run that never reached
+        Slot 4c, and a run where the pin-slot line came back.
+        """
+        import session_init as _session_init
+        from session_init import _UNKNOWN_ROLE_NOTICE
+
+        monkeypatch.setattr(_session_init, "check_pin_slot_status", lambda: None)
+
+        plugin_root = tmp_path / "installed-cache"
+        additional = self._run_main(
+            monkeypatch,
+            tmp_path,
+            plugin_root=plugin_root,
+            manifest=json.dumps({"name": "PACT", "version": "3.18.1"}),
+        )
+
+        banner = f"PACT plugin: PACT 3.18.1 (root: {plugin_root})"
+        assert banner in additional, (
+            "non-vacuity: the run never reached Slot 4c, so the ordering "
+            "assertions below would pass without measuring anything"
+        )
+        assert "Pin slots:" not in additional, (
+            "non-vacuity: the pin-slot line is back, so this arm no longer "
+            "reproduces the pinless-checkout condition it exists to drive"
+        )
+        assert additional.startswith(_UNKNOWN_ROLE_NOTICE), (
+            "the unknown-role branch must write its notice at index 0 "
+            "(context_parts.insert(0, ...)), not append it — an appended "
+            "notice leaves the banner first for a frame with no other "
+            "pre-banner diagnostic"
+        )
+        assert not additional.startswith(banner), (
+            "banner (Slot 4c) is the first element of additionalContext: the "
+            "role branch made no index-0 write for this frame"
+        )
+
 
 class TestCounterTestBySlotARevert:
     """Counter-test-by-revert for session_init Slot A append (d4f0f794
