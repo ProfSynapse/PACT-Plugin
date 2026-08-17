@@ -145,10 +145,21 @@ _INPROCESS_MODE_NOTICE = (
 # session_init silently performs none of the lead-only writes. That is the
 # intended fail-toward-teammate direction, but it is invisible to an operator
 # who MEANT to launch the orchestrator and forgot the flag. This notice makes
-# that case observable. Emitted for the "unknown" role only, and on TWO
-# channels: system_messages (user-facing) and context_parts (model-facing).
-# A lead frame and a teammate frame get it on neither channel. Pure literal
-# so tests can pin the exact substring.
+# that case observable. IT RIDES TWO CHANNELS ACROSS THREE EMISSION SITES,
+# AND EACH CHANNEL HAS ITS OWN POPULATION, BECAUSE THE GATES USE DIFFERENT
+# PREDICATES. Do not state one population for the pair.
+#   systemMessage: THE EMISSION NEEDS TWO CONDITIONS TOGETHER. The source
+#     must be a launch event (`startup` or `resume`), AND
+#     _should_warn_unknown_role must pass. That predicate is the WIDER of
+#     the two: it passes for a frame with no recognized role, and ALSO for
+#     an agent_type that is present but is not the lead and is not a
+#     registered specialist. So a typo such as `--agent pact-architct`
+#     classifies as a teammate and reaches this channel ON A LAUNCH, and on
+#     a compact or a clear it reaches no channel at all.
+#   additionalContext: gated by `frame_role == "unknown"`, which needs an
+#     ABSENT agent_type, because a truthy agent_type classifies as a
+#     teammate. A typo does NOT reach this channel.
+# Pure literal so tests can pin the exact substring.
 _UNKNOWN_ROLE_NOTICE = (
     "PACT: this session has no recognized agent role (no `--agent` flag, or an "
     "unrecognized agent_type), so lead-only session setup was skipped. If you "
@@ -1041,8 +1052,10 @@ def main():
         # PACT:-strip) lives in _should_warn_unknown_role — total (never raises),
         # so no try/except is needed at the call site.
         #
-        # The sibling emission of this literal into context_parts takes NO
-        # source gate. The cause is recorded at that limb.
+        # This literal is emitted at TWO other sites: the unknown-role limb of
+        # the frame-role gate below, and _build_safety_net_context on the
+        # exception path. The gating decision of each site, and its cause, are
+        # recorded at that site.
         if source in ("startup", "resume") and _should_warn_unknown_role(input_data):
             system_messages.append(_UNKNOWN_ROLE_NOTICE)
 
