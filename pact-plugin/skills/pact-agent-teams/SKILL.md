@@ -48,7 +48,7 @@ A reply to the user that contains content the team-lead needs to act on (a block
 
 > **Worktree scope**: Files that are gitignored (e.g., `CLAUDE.md`) do not exist in a worktree, so a write there makes a new file, not an update.
 
-> **Write your blocker report so that it works alone**: When you report a blocker, the work can continue without your context. The team-lead can message you to continue, and can also spawn a new teammate for the same task. Put what you learned, what you changed, and the following step into the task, and not only into your own context. A report that is complete in the task is correct in the two cases.
+> **Write your blocker report so that it works alone**: When you report a blocker, the work can continue without your context. The team-lead can message you to continue, and can also spawn a new teammate for the same task. Put what you learned, what you changed, and what must happen after into the task, and not only into your own context. A report that is complete in the task is correct in the two cases.
 
 > **Custom start flows**: If your agent definition specifies a custom On Start sequence (e.g., the secretary's session briefing), you must explicitly re-enter this standard lifecycle after your custom flow completes — call `TaskList`, claim assigned tasks, and follow the teachback protocol from the teachback step onward.
 
