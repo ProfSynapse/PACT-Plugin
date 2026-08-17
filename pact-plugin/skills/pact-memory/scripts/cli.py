@@ -366,6 +366,27 @@ def _refuse_live_db_under_pytest(db_path) -> None:
     would look byte-identical, because a census counts spawns and cannot see
     refusals that did not happen. Nothing here detects its own exemption.
 
+    AND THE SAME BLINDNESS IS REACHABLE TODAY, WITHOUT WAITING FOR THAT CHANGE.
+    A caller that clears the environment strips `PYTEST_CURRENT_TEST`, so this
+    guard reads a clean process and admits the write. `env -i` does it, and so
+    does a selective unset. THE HAZARD IS NOT IN THE FUTURE TENSE. The
+    paragraph above describes only the startup-module route, which reads as
+    though the danger has not arrived yet.
+
+    THE PART THAT INVERTS THE USUAL THREAT INTUITION, and it is why this
+    survived review: clearing the environment is what a CAREFUL caller does to
+    isolate a probe. It is a habit, not an attack. So the more careful the
+    caller, the more likely this guard goes blind, and a reviewer who imagines
+    an adversary passes it.
+
+    NO IN-PROCESS PROPERTY CLOSES THIS, and that is a BOUND rather than a
+    to-do. The separating fact is CALLER IDENTITY, and for a fresh interpreter
+    that lives only in the environment, so a stronger predicate is not
+    available here. The parent-side sibling in `archive_pin._run_memory_cli`
+    CAN add `"pytest" in sys.modules`, because that one runs in the pytest
+    interpreter. This one cannot, which is the same forced choice recorded
+    above, stated as a residual rather than as a justification.
+
     WHY IT IS GATED, AND WHY THE GATE IS NOT OPTIONAL. `archive_pin --index N`
     is the curator's documented production invocation and it passes NO
     `--db-path` -- production SHOULD use the real store. An ungated refusal

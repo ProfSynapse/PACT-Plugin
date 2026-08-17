@@ -643,7 +643,25 @@ def _run_memory_cli(args, db_path=None, stdin_data=None, cwd=None):
     # a store. Rejecting plain falsiness would redden all six for a hazard
     # they do not have. A real spawn carrying None is caught at the process
     # boundary instead, in the child, where the decision actually lands.
-    if os.environ.get("PYTEST_CURRENT_TEST") and db_path is not None and not db_path:
+    # THE IN-PROCESS HALF IS `sys.modules`, AND IT IS THE HALF A CLEARED
+    # ENVIRONMENT CANNOT REMOVE. `PYTEST_CURRENT_TEST` is caller-controlled:
+    # `env -i` strips it, and so does a selective unset, so an environment-only
+    # predicate goes blind for the careful caller who isolates a probe. This
+    # function runs IN THE PARENT, which for a test IS the pytest interpreter,
+    # so `pytest` is in `sys.modules` and no environment edit can hide it.
+    #
+    # THE TWO HALVES COVER DIFFERENT POPULATIONS AND NEITHER IS REDUNDANT.
+    # `sys.modules` covers an in-process caller and cannot see a fresh
+    # interpreter. The environment variable covers a spawned child that
+    # inherited it and is the only signal that crosses that boundary.
+    #
+    # RESIDUAL, STATED RATHER THAN IMPLIED: a spawned child that runs with the
+    # environment cleared is covered by NEITHER half here. That case is the
+    # child-side guard's to catch, and the child-side guard keys on the same
+    # environment variable, so the two layers share one predicate there.
+    if (
+        "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST")
+    ) and db_path is not None and not db_path:
         raise _Unevaluable(
             "db_path was given as an empty value under pytest; it is falsy, "
             "so the memory CLI would fall back to the LIVE database. "
