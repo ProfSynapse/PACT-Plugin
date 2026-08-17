@@ -121,9 +121,21 @@ class TestSessionInitCheckpointRealSeam:
 # ── Seam B: session-dir resolution behind the lead-read instruction ──────────
 
 
-def _run_compact_main(tmp_path, monkeypatch, session_id):
+_LEAD_AGENT_TYPE = "pact-orchestrator"
+_UNKNOWN_ROLE_FRAGMENT = "relaunch with `--agent PACT:pact-orchestrator`"
+
+
+def _run_compact_main(tmp_path, monkeypatch, session_id,
+                      agent_type=_LEAD_AGENT_TYPE):
     """Drive session_init.main() at source='compact' and return the emitted
     additionalContext.
+
+    ``agent_type=None`` OMITS the key and builds an UNKNOWN frame, which is the
+    only way to reach the unknown branch of the role gate. The DEFAULT is the
+    lead role, because the archive instructions this file asserts are emitted on
+    the lead path and on no other. The driver used to omit the key and reach
+    those instructions only because a lead frame and an unknown frame emitted
+    identical bytes before the gate became three-way.
 
     session_init is imported INSIDE the function, not at module scope, for the
     same reason the module header gives: a collection-time import of the 73KB
@@ -138,6 +150,8 @@ def _run_compact_main(tmp_path, monkeypatch, session_id):
     payload: dict = {"source": "compact"}
     if session_id is not None:
         payload["session_id"] = session_id
+    if agent_type is not None:
+        payload["agent_type"] = agent_type
 
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/test/project")
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -188,6 +202,27 @@ class TestCompactReadInstructionRealSeam:
     ever returns "" for a well-formed session.
     ==========================================================================
     """
+
+    def test_unknown_frame_gets_the_notice_not_the_archive_instruction(
+        self, tmp_path, monkeypatch
+    ):
+        """PAIRED UNKNOWN ARM, at the real-composition seam.
+
+        The two arms below drive a LEAD frame, which is the frame the archive
+        instruction is written for. This arm keeps the UNKNOWN frame they used
+        to build by accident, so the seam covers both branches of the role gate
+        rather than trading one for the other. It runs the assembled hook, so it
+        also proves the unknown branch survives composition and is not an
+        artefact of the unit mocks.
+        """
+        sid = "aabb1122-0000-0000-0000-000000000000"
+        ctx = _run_compact_main(tmp_path, monkeypatch, sid, agent_type=None)
+
+        assert "YOUR PACT ROLE: orchestrator." not in ctx
+        assert _UNKNOWN_ROLE_FRAGMENT in ctx
+        # The archive instruction is lead-only guidance, so it must not ride an
+        # unknown frame either.
+        assert "compact-summary.txt" not in ctx
 
     def test_real_session_id_names_the_resolved_archive_directory(
         self, tmp_path, monkeypatch
