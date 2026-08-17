@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Run the test suite against a DECLARED tree, and record which tree was measured.
+#
+# WHAT THIS SOLVES
+#   A suite run reports a count. The count is correct for the tree the run
+#   measured, and the capture file does not say which tree that was. So a run
+#   in a different checkout produces a clean summary that certifies nothing
+#   about the branch under review, and it reads the same as a faithful run.
+#
+# WHAT THIS DOES
+#   1. REFUSES before pytest starts if the run would measure a tree other than
+#      the declared one.
+#   2. STAMPS the tree identity into the capture file above the pytest output,
+#      so a later reader can tell what was measured without a re-run.
+#
+#   The STAMP is the load-bearing part. The REFUSAL is the enhancement. If the
+#   two are ever in tension, keep the stamp.
+#
+# WHAT THIS DOES NOT COVER
+#   This wrapper gates the MERGE-GATE suite run only. It requires a git
+#   worktree, because tree identity is what it asserts. An exported or copied
+#   tree has no identity to assert, so this wrapper REFUSES it and tells the
+#   operator to call pytest directly. That refusal is loud and immediate, and
+#   the operator routes around it in seconds.
+#
+# USAGE
+#   verify-gate-tree.sh <declared-worktree-path> <capture-file> [pytest args...]
+#
+# EXIT CODES
+#   0    pytest ran and passed
+#   2    refused before pytest started
+#   1    a usage error, or the pytest exit code
+
+set -u
+
+usage() {
+    cat >&2 <<'USAGE'
+Usage: verify-gate-tree.sh <declared-worktree-path> <capture-file> [pytest args...]
+
+  declared-worktree-path  the worktree this run must measure
+  capture-file            where to write the stamps and the pytest output
+
+Example, run from the pact-plugin directory of the declared worktree:
+  ../scripts/verify-gate-tree.sh "$PWD/.." /tmp/gate.txt -q
+USAGE
+}
+
+if [ "$#" -lt 2 ]; then
+    usage
+    exit 1
+fi
+
+declared="$1"
+capture="$2"
+shift 2
+
+if ! command -v git >/dev/null 2>&1; then
+    printf 'GATE REFUSED: git is not available, so the tree cannot be identified.\n' >&2
+    printf '  To run the suite without this check, call pytest directly.\n' >&2
+    exit 2
+fi
+
+if [ ! -d "$declared" ]; then
+    printf 'GATE REFUSED: the declared path is not a directory.\n' >&2
+    printf '  declared: %s\n' "$declared" >&2
+    printf '  Give the path of the worktree this run must measure.\n' >&2
+    exit 2
+fi
+
+# The tree this run will measure, resolved from the current directory.
+actual="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+
+if [ -z "$actual" ]; then
+    printf 'GATE REFUSED: the working directory is not in a git worktree.\n' >&2
+    printf '  working directory: %s\n' "$(pwd -P)" >&2
+    printf '  This wrapper gates the merge-gate suite run, and it identifies the tree by git.\n' >&2
+    printf '  An exported or copied tree has no identity to check.\n' >&2
+    printf '  To run the suite there, call pytest directly:\n' >&2
+    printf '    python3 -m pytest [args]\n' >&2
+    exit 2
+fi
+
+# Compare resolved paths, because one tree can be spelled two ways through a
+# symlink, and a trailing slash or a relative path names the same directory.
+declared_real="$(cd "$declared" && pwd -P)"
+actual_real="$(cd "$actual" && pwd -P)"
+
+if [ "$declared_real" != "$actual_real" ]; then
+    printf 'GATE REFUSED: this run would measure a different tree than the declared one.\n' >&2
+    printf '  declared: %s\n' "$declared_real" >&2
+    printf '  actual  : %s\n' "$actual_real" >&2
+    printf '  A summary from the actual tree is correct about that tree, and says nothing about the declared one.\n' >&2
+    printf '  Either change to the declared tree, or declare the tree you are in.\n' >&2
+    exit 2
+fi
+
+head_sha="$(git -C "$actual_real" rev-parse HEAD)"
+dirty_count="$(git -C "$actual_real" status --porcelain | wc -l | tr -d ' ')"
+
+# Make the capture directory, because a missing directory is a faithful call
+# with an absent parent, and a refusal there would teach the operator nothing.
+capture_dir="$(dirname "$capture")"
+mkdir -p "$capture_dir" || {
+    printf 'GATE REFUSED: the capture directory cannot be made.\n' >&2
+    printf '  capture: %s\n' "$capture" >&2
+    exit 2
+}
+
+{
+    printf 'GATE-TREE %s\n' "$actual_real"
+    printf 'GATE-HEAD %s\n' "$head_sha"
+    printf 'GATE-DIRTY-PATHS %s\n' "$dirty_count"
+    printf 'GATE-CWD %s\n' "$(pwd -P)"
+    printf 'GATE-COMMAND python3 -m pytest %s\n' "$*"
+} > "$capture"
+
+python3 -m pytest "$@" >> "$capture" 2>&1
+status=$?
+
+printf 'GATE-PYTEST-EXIT %s\n' "$status" >> "$capture"
+exit "$status"
