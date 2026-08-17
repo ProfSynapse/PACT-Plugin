@@ -39,9 +39,8 @@ c. `TaskCreate`: agent task(s) as children of phase
 d. `TaskUpdate`: agent tasks owner = "{agent-name}"
 e. `TaskUpdate`: next phase addBlockedBy = [agent IDs]
 f. Spawn teammates with the canonical dispatch form (shown at each specific phase below)
-g. Store agent IDs: `TaskUpdate(taskId, metadata={"agent_id": "{id_from_Task_return}"})`
-h. Monitor via `SendMessage` (completion summaries) and `TaskList` until agents complete
-i. `TaskUpdate`: phase status = "completed" (agents self-manage their task status)
+g. Monitor via `SendMessage` (completion summaries) and `TaskList` until agents complete
+h. `TaskUpdate`: phase status = "completed" (agents self-manage their task status)
 ```
 
 The canonical `Agent()` dispatch form, referenced by every phase below:
@@ -54,8 +53,6 @@ Agent(
   prompt="YOUR PACT ROLE: teammate ({teammate-name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
 )
 ```
-
-> **Why store `agent_id`?** One name can belong to more than one teammate across a session. If a newer teammate gets the name of an earlier one, a message addressed to that name reaches the newer teammate. The stored id is the handle for that case. UNVERIFIED: this latest-wins behaviour comes from the `SendMessage` tool description. No measurement covers it and no document states it, so do not read the stored id as a guarantee.
 
 ### Teachback-Gated Dispatch
 
@@ -941,8 +938,6 @@ After you resolve a blocker, message the teammate by name. Spawn fresh if the te
 **Message pattern**:
 
 `SendMessage(to="{teammate-name}", message="Blocker resolved: {details}. Continue your task.")`
-
-If one name went to more than one teammate this session, address the message to the stored `agent_id` and not to the name. UNVERIFIED, from the `SendMessage` tool description.
 
 ⚠️ **Write the message so that it works alone.** The teammate can hold none of its earlier context. Put the full resolution, the task id, and what the teammate must do into the message. A self-contained message is correct in the two cases. A message that points back at earlier context gives the teammate nothing, and the result looks like a teammate that ignored you.
 
