@@ -375,10 +375,10 @@ EXPECTED_SPAWN_LITERAL_COUNTS = {
 _PROMPT_LITERAL_RE = re.compile(r'prompt="((?:[^"\\]|\\.)*)"')
 
 # A teammate-spawn prompt literal always opens with the role prelude. This
-# prefix is what distinguishes a spawn literal from a non-spawn prompt such as
-# Agent(resume=..., prompt="Blocker resolved: ...") — a resumed agent already
-# registered on its INITIAL spawn, so its resume prompt must NOT carry (or be
-# required to carry) the register directive.
+# prefix is what distinguishes a spawn literal from a non-spawn prompt, such as
+# a prompt that gives an instruction to a teammate that is running. A teammate
+# registers on its OWN spawn, so a prompt with no role prelude must NOT carry
+# the register directive, and must not be required to.
 _SPAWN_LITERAL_PREFIX = "YOUR PACT ROLE: teammate ("
 
 
@@ -443,16 +443,48 @@ class TestRegisterDirectivePresentInEverySpawnLiteral:
                 f"Offending literal (truncated): {value[:90]!r}"
             )
 
-    # The former test_resume_prompt_excluded_from_directive_requirement is
-    # DELETED, on the instruction its own failure message carried: it required
-    # at least one "Blocker resolved" prompt in orchestrate.md as its
-    # non-vacuity fixture, and that prompt is gone with the resume-recovery
-    # example. MEASURED after the removal: orchestrate.md carries 6 prompt
-    # literals and all 6 are spawn literals, so ZERO non-spawn literals remain.
-    # The exclusion property is therefore UNGUARDED in this file rather than
-    # covered by the count assertion above: a widened extractor would find no
-    # extra literal to admit, so the count would not move. Restoring coverage
-    # needs a synthetic non-spawn fixture, which is a separate decision.
+    def test_a_prompt_without_the_role_prelude_is_not_a_spawn_literal(self):
+        """The extractor must EXCLUDE a prompt literal that carries no role
+        prelude, so a non-spawn prompt is never required to carry the register
+        directive.
+
+        The fixture is SYNTHETIC and that is deliberate. The predecessor of
+        this test took its fixture from a live "Blocker resolved" prompt in
+        orchestrate.md, and it went red when that prompt was removed with the
+        resume-recovery example. A fixture that lives in a document can be
+        drained by an edit to that document; this one cannot. MEASURED at the
+        time of writing: orchestrate.md carries 6 prompt literals and all 6
+        are spawn literals, so no document supplies a non-spawn fixture.
+
+        Three arms. Each one was PROVEN red under its own mutation of an
+        isolated copy, against a green control on the unmutated copy:
+          1. the extractor no longer matches a plain Agent(prompt=...)
+          2. the exclusion widens and admits a prompt with no role prelude
+          3. the exclusion narrows and drops a genuine spawn literal
+        """
+        non_spawn = 'Agent(prompt="Blocker resolved: {details}. Continue.")'
+        assert _PROMPT_LITERAL_RE.findall(non_spawn) == [
+            "Blocker resolved: {details}. Continue."
+        ], (
+            "the prompt-literal extractor no longer sees a plain "
+            "Agent(prompt=...) call. Without this the exclusion below would be "
+            "vacuously true, because there would be nothing to exclude."
+        )
+        assert _spawn_prompt_literals(non_spawn) == [], (
+            "a prompt with no role prelude leaked into the teammate-spawn "
+            "literal set. It would then be wrongly required to carry the "
+            "register directive."
+        )
+
+        spawn = (
+            'Agent(prompt="YOUR PACT ROLE: teammate (x).\\n\\nYou are joining '
+            'team t. As your FIRST action, Invoke Skill(\\"'
+            'PACT:pact-team-registration\\") to record your identity.")'
+        )
+        assert len(_spawn_prompt_literals(spawn)) == 1, (
+            "a genuine teammate-spawn literal was dropped by the extractor. "
+            "The directive requirement would then cover nothing."
+        )
 
 
 class TestTeamRegistrationSkillLiveness:
