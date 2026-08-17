@@ -553,11 +553,23 @@ class TestTeachbackMicroSkillExtraction:
     # into the When-to-Method-Reconstruct section. Budget ceiling
     # provides ~620-char headroom for future small edits.
     #
+    # Bumped to 17000 to accommodate the Step 1 shallow-merge callout:
+    # TaskUpdate merges metadata at the top level only, so a partial write
+    # to a nested sub-object replaces it and erases the omitted fields
+    # silently. The callout states the mechanism, the one-call rule, the
+    # re-send-the-full-object rule for a later correction, and the
+    # read-back check. It also states that two different TOP-LEVEL keys do
+    # not overwrite each other, which keeps a reader from "fixing" the
+    # hazard by merging Step 1 and Step 3 into one call (Common Mistakes
+    # row 4). Before this bump the file sat 22 chars below the 16000
+    # ceiling, so no callout of any useful length fit. Budget ceiling
+    # provides ~470-char headroom for future small edits.
+    #
     # Tighten-back trigger: if a future PR removes optional content
     # (e.g., if a future PR removes the transitional permissiveness
     # paragraph), reduce MAX_SKILL_CHARS to keep this budget a
     # meaningful ceiling and not a ratchet.
-    MAX_SKILL_CHARS = 16000
+    MAX_SKILL_CHARS = 17000
 
     # Key protocol elements that must be in the extracted skill.
     # Presence-only checks are deliberately strict — any drop indicates

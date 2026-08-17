@@ -31,6 +31,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from .failure_cause import failure_cause
 from .paths import get_claude_config_dir
 
 # Project-level CLAUDE.md is preferred at .claude/CLAUDE.md (the new default)
@@ -156,6 +157,27 @@ MANAGED_END_MARKER = "<!-- PACT_MANAGED_END -->"
 MEMORY_START_MARKER = "<!-- PACT_MEMORY_START -->"
 MEMORY_END_MARKER = "<!-- PACT_MEMORY_END -->"
 
+# The auto-managed comment each memory heading carries. NAMED HERE so the two
+# writers in THIS module cannot drift apart, which they did: the creation
+# template emitted these and `_build_migrated_content` did not, so a document
+# through migration came out with headings and no comments.
+#
+# THE TEXT IS SPELLED HERE RATHER THAN IMPORTED, AND THAT IS FORCED RATHER THAN
+# PREFERRED. The canonical definition is `WORKING_MEMORY_COMMENT` and
+# `RETRIEVED_CONTEXT_COMMENT` in `skills/pact-memory/scripts/working_memory.py`.
+# THIS MODULE CANNOT IMPORT THEM. A hook runs as
+# `python3 <plugin_root>/hooks/<name>.py`, so `hooks/` is the only entry on
+# `sys.path` and `working_memory` does not resolve. MEASURED with
+# `importlib.util.find_spec` on that reconstructed path: NOT FOUND. Do not
+# "tidy" these into an import: it resolves inside pytest, because `conftest.py`
+# adds paths a hook does not have, and raises for every real user.
+#
+# `TestTheManagedCommentsAgreeAcrossEveryWriter` in
+# `tests/test_managed_comment_mirror.py` holds this copy to that definition.
+# `## Pinned Context` carries no comment in the template, so it gets none here.
+RETRIEVED_CONTEXT_COMMENT = "<!-- Auto-managed by pact-memory skill. Last 3 retrieved memories shown. -->"
+WORKING_MEMORY_COMMENT = "<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. -->"
+
 # Declared START boundary of the `## Pinned Context` section. The pinned
 # region's extent was INFERRED before this pair existed -- every reader guessed
 # where the section ends from a terminator pattern. This literal declares where
@@ -260,9 +282,10 @@ MANAGED_TITLE = "# PACT Framework and Managed Project Memory"
 # sites that need to terminate scans on any PACT-managed boundary marker.
 # Extracted as a constant so the three-prefix union is defined once.
 #
-# Twin copy: working_memory.py maintains a parallel _PACT_BOUNDARY_PREFIXES
-# tuple because skills/pact-memory/scripts/ cannot cleanly import from
-# hooks/shared/. A drift-detection test asserts the two tuples stay in sync.
+# Twin copy: working_memory.py maintains `_PACT_BOUNDARY_ALT`, a STRING that
+# spells this tuple as a regex alternation, because skills/pact-memory/scripts/
+# cannot cleanly import from hooks/shared/. A drift-detection test asserts the
+# twin string equals the alternation built from this tuple.
 PACT_BOUNDARY_PREFIXES: tuple[str, ...] = (
     "PACT_MEMORY_",
     "PACT_MANAGED_",
@@ -276,6 +299,54 @@ PACT_BOUNDARY_PREFIXES: tuple[str, ...] = (
 # way, adding a fourth prefix to `PACT_BOUNDARY_PREFIXES` automatically
 # picks it up everywhere via a one-line constant change.
 _BOUNDARY_ALT = "|".join(PACT_BOUNDARY_PREFIXES)
+
+# Session-block boundary markers, and the scan-terminator prefix DERIVED from
+# them.
+#
+# THESE ARE NOT MEMBERS OF `PACT_BOUNDARY_PREFIXES` AND MUST NOT BE ADDED TO
+# IT. They carry no `PACT_` prefix, so a SESSION member makes that name
+# incorrect about its own contents.
+#
+# THE PREFIX IS DERIVED AND NOT DECLARED, AND THAT IS THE WHOLE POINT.
+# MEASURED: the marker text was spelled SIX times in THREE pairs, each one
+# local to a function or to a template, with no module-level constant
+# anywhere. A hand-written prefix beside them would have been a SEVENTH
+# spelling that unifies none of the others, and the failure direction is the
+# bad one: rename a marker at a producer, the prefix does not follow, and a
+# terminator that matches nothing stops nothing. Deriving it removes that
+# drift axis rather than adding to it.
+SESSION_START_MARKER = "<!-- SESSION_START -->"
+SESSION_END_MARKER = "<!-- SESSION_END -->"
+# Derived from the COMMON PREFIX OF THE TWO MARKERS, so a rename of either
+# one carries into every scan that terminates on them. A literal here would
+# be the seventh spelling.
+#
+# THE COMMON PREFIX AND NOT THE START MARKER ALONE. A first version read the
+# START marker only. Rename the END marker by itself and that version keeps
+# returning a prefix which matches the START marker, so the terminator goes
+# on and the END marker escapes it with nothing red. The common prefix of
+# the two shrinks the moment either name moves.
+SESSION_BOUNDARY_PREFIX = os.path.commonprefix(
+    [SESSION_START_MARKER, SESSION_END_MARKER]
+).removeprefix("<!-- ")
+
+# 🔴 AND THE DERIVATION HAS ITS OWN FAILURE MODE, WHICH THIS REFUSES.
+# MEASURED: rename the END marker to a name that shares NO word with the
+# START marker and the common prefix is the EMPTY STRING. An empty term in a
+# scan-terminator alternation matches EVERY HTML comment, so every section
+# body stops at its first comment and the sections TRUNCATE. That is the
+# silent-loss direction, and it arrives from a one-line edit above.
+#
+# The refusal is loud and it is at import. A gate that cannot import this
+# module takes its own fail-open path and allows the edit, which is the safe
+# direction. A wildcard terminator is not.
+if not SESSION_BOUNDARY_PREFIX:
+    raise ValueError(
+        "SESSION_BOUNDARY_PREFIX derived empty: "
+        f"{SESSION_START_MARKER!r} and {SESSION_END_MARKER!r} share no "
+        "common prefix. An empty prefix matches every HTML comment and "
+        "truncates every section scan. Give the two markers a common name."
+    )
 
 # Stale line from the legacy project CLAUDE.md template. The line lingers
 # in upgraded files; strip it during migration. Allows optional trailing
@@ -972,8 +1043,13 @@ def strip_orphan_kernel_block() -> str | None:
                     "precondition not met."
                 )
             except OSError as e:
+                # `Failed` IS THE ROUTING TOKEN. session_init step 3c routes
+                # this return into system_messages on a substring test. The
+                # prefix stays byte-identical; only the cause token changed,
+                # from a cut of the caller's message (which carries the
+                # absolute path an OSError attaches) to a closed vocabulary.
                 return (
-                    f"Failed to remove stale kernel block: {str(e)[:50]}"
+                    f"Failed to remove stale kernel block: {failure_cause(e)}"
                 )
     except TimeoutError:
         return (
@@ -1132,19 +1208,19 @@ def ensure_project_memory_md() -> str | None:
     memory_template = f"""{MANAGED_START_MARKER}
 {MANAGED_TITLE}
 
-<!-- SESSION_START -->
+{SESSION_START_MARKER}
 ## Current Session
 <!-- Auto-managed by session_init hook. Overwritten each session. -->
-<!-- SESSION_END -->
+{SESSION_END_MARKER}
 
 {MEMORY_START_MARKER}
 ## Retrieved Context
-<!-- Auto-managed by pact-memory skill. Last 3 retrieved memories shown. -->
+{RETRIEVED_CONTEXT_COMMENT}
 
 ## Pinned Context
 
 ## Working Memory
-<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. -->
+{WORKING_MEMORY_COMMENT}
 {MEMORY_END_MARKER}
 
 {MANAGED_END_MARKER}
@@ -1175,7 +1251,9 @@ def ensure_project_memory_md() -> str | None:
             except ContainmentError:
                 return "Project CLAUDE.md skipped: path precondition not met."
             except OSError as e:
-                return f"Project CLAUDE.md failed: {str(e)[:50]}"
+                # `failed` IS THE ROUTING TOKEN (session_init step 3). The
+                # prefix stays byte-identical. Only the cause token changed.
+                return f"Project CLAUDE.md failed: {failure_cause(e)}"
     except TimeoutError:
         return (
             "Failed to acquire lock on project CLAUDE.md within 5s "
@@ -1183,7 +1261,9 @@ def ensure_project_memory_md() -> str | None:
             "Project CLAUDE.md creation skipped; will retry on next session start."
         )
     except OSError as e:
-        return f"Project CLAUDE.md failed: {str(e)[:50]}"
+        # Lock-acquisition failure. Same routing token, same closed
+        # vocabulary as the inner arm above.
+        return f"Project CLAUDE.md failed: {failure_cause(e)}"
 
 
 def migrate_to_managed_structure() -> str | None:
@@ -1258,7 +1338,9 @@ def migrate_to_managed_structure() -> str | None:
             except ContainmentError:
                 return "Migration skipped: project CLAUDE.md path precondition not met."
             except OSError as e:
-                return f"Migration failed: {str(e)[:50]}"
+                # `failed` IS THE ROUTING TOKEN (session_init step 3b). The
+                # prefix stays byte-identical. Only the cause token changed.
+                return f"Migration failed: {failure_cause(e)}"
     except TimeoutError:
         return (
             "Failed to acquire lock on project CLAUDE.md within 5s "
@@ -1312,8 +1394,8 @@ def _build_migrated_content(content: str) -> str:
     session_block = ""
     content_sans_routing = content
     content_sans_session = content_sans_routing
-    session_start = "<!-- SESSION_START -->"
-    session_end = "<!-- SESSION_END -->"
+    session_start = SESSION_START_MARKER
+    session_end = SESSION_END_MARKER
     if session_start in content_sans_routing and session_end in content_sans_routing:
         pattern = re.compile(
             re.escape(session_start) + r".*?" + re.escape(session_end),
@@ -1401,7 +1483,17 @@ def _build_migrated_content(content: str) -> str:
                 current_section = []
             in_memory_section = True
             current_section.append(line)
-        elif stripped.startswith("## ") or stripped.startswith("# "):
+        # INDENT-TOLERANT ON PURPOSE, AND THE EXACT-MATCH TEST ABOVE IS NOT.
+        # THAT ASYMMETRY IS THE DESIGN AND NOT AN OVERSIGHT, SO DO NOT
+        # "FINISH" IT BY RELAXING THE TEST AT THE `if` ABOVE.
+        #
+        # THE CAUSE IS THE FAILURE DIRECTION. This branch makes an indented
+        # heading a BOUNDARY, so the user text that follows it LEAVES the
+        # managed region and the plugin does not own it. Make the exact-match
+        # test indent-tolerant as well and the plugin ADOPTS that text into a
+        # section it rewrites and prunes, on a file that git does not track.
+        # A boundary loses nothing. An adoption can lose the text.
+        elif lstripped.startswith("## ") or lstripped.startswith("# "):
             if current_section:
                 if in_memory_section:
                     memory_parts.extend(current_section)
@@ -1459,9 +1551,33 @@ def _build_migrated_content(content: str) -> str:
         parts.extend(["\n", session_block, "\n"])
 
     parts.extend(["\n", MEMORY_START_MARKER, "\n"])
+    # THE COMMENT EACH HEADING CARRIES IN THE CREATION TEMPLATE, from the same
+    # constants that template uses, so the two writers in this module cannot
+    # emit different shapes again. `## Pinned Context` has no comment there and
+    # gets none here.
+    heading_comments = {
+        "## Retrieved Context": RETRIEVED_CONTEXT_COMMENT,
+        "## Working Memory": WORKING_MEMORY_COMMENT,
+    }
     heading_chunks: list[str] = []
     for heading in ("## Retrieved Context", "## Pinned Context", "## Working Memory"):
         body = memory_sections[heading]
+        comment = heading_comments.get(heading)
+        # ADD THE COMMENT ONLY WHEN THE SECTION ARRIVES WITHOUT ONE, and test
+        # for it ANYWHERE IN THE BODY rather than at the start.
+        #
+        # A PREFIX TEST GIVES A DUPLICATE ON THREE SHAPES A DOCUMENT REALLY
+        # HAS: the comment after a blank line, the comment indented, and a
+        # different comment first. Each one reads as absent to `startswith`,
+        # so each one gains a second copy.
+        #
+        # THE FAILURE DIRECTION OF THE WIDER TEST IS THE SAFE ONE. A document
+        # that quotes this comment deep inside an entry suppresses the add, and
+        # what it gets is the heading with no comment, which is what every such
+        # document gets today. A duplicate cannot be undone by a later pass. A
+        # missing comment is what the next writer supplies.
+        if comment and comment not in body:
+            body = f"{comment}\n{body}" if body else comment
         if body:
             heading_chunks.append(f"{heading}\n{body}\n")
         else:

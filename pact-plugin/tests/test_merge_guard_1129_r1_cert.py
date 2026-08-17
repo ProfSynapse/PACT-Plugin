@@ -71,11 +71,37 @@ def _cmd(flags: str, names: list) -> str:
 # assertions cover the FULL mint pipeline (_collect_pairs / _target_value /
 # token-write) that the read-side unit tests bypass.
 # ---------------------------------------------------------------------------
+# The line `merge_guard_post.main` prints on the mint path, at
+# hooks/merge_guard_post.py:1019. IT GOES TO sys.stderr, which is why `_mint`
+# below patches that stream and not stdout alone.
+_TOKEN_WRITTEN_LINE = "Merge authorization token written:"
+
+
 def _mint(cmd: str, tok: Path) -> int:
-    """Drive the REAL post hook with an approval whose clicked option embeds `cmd`;
-    return the count of tokens minted BY THIS CALL (new files only, so a second mint
-    into the same token dir — e.g. a non-vacuity control — is counted independently)."""
-    before = set(tok.glob("merge-authorized-*"))
+    """Drive the REAL post hook with an approval whose clicked option embeds `cmd`.
+    Return the count of tokens minted BY THIS CALL.
+
+    THE IDENTITY IS THE EMITTED WRITE EVENT, AND IT LEAVES THE DIRECTORY. This
+    helper counted a set difference of NAMES from `tok.glob("merge-authorized-*")`.
+    That glob is over-broad and the name is reusable, so the count was incorrect
+    in two opposite cells, MEASURED:
+      - two mints in ONE integer second: the token name is `merge-authorized-{int(time)}`,
+        the retirement rename frees that name, and the new file takes it again. The
+        name-keyed difference then counted the `.consumed` rename in place of the
+        mint and read 1 for two wrong causes that cancel.
+      - two mints across a second boundary: the difference counted the rename AND
+        the new token and read 2 where 1 is correct.
+    A narrowed glob does not repair this. It reads 0 in the same-second cell,
+    which is the common one.
+
+    COUNTING AN EMITTED FACT is immune to name reuse, to the retirement rename,
+    and to the `.use-N` marker siblings that also match that glob. MEASURED
+    CORRECT in six cells: a mint in one second, a mint across a boundary, three
+    non-minting refusals, and a FAILED write. On a failed write `write_token`
+    returns None and prints no line, so the count is 0, which is correct because
+    no token exists. That count does not say WHY it is 0, and no counter in this
+    family separates did-not-mint from tried-and-failed.
+    """
     env = json.dumps({
         "tool_name": "AskUserQuestion",
         "tool_input": {"questions": [{
@@ -88,14 +114,16 @@ def _mint(cmd: str, tok: Path) -> int:
         "tool_response": {"answers": {"Proceed?": "Yes"}},
         "session_id": "cert-session",
     })
+    err = io.StringIO()
     with patch.object(merge_guard_post, "TOKEN_DIR", tok), \
          patch("sys.stdin", io.StringIO(env)), \
-         patch("sys.stdout", io.StringIO()):
+         patch("sys.stdout", io.StringIO()), \
+         patch("sys.stderr", err):
         try:
             post_main()
         except SystemExit as e:
             assert e.code == 0, "post hook exited nonzero: %r" % (e.code,)
-    return len(set(tok.glob("merge-authorized-*")) - before)
+    return err.getvalue().count(_TOKEN_WRITTEN_LINE)
 
 
 def _execute(cmd: str, tok: Path, session_id: str = "cert-session") -> int:

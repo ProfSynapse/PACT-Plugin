@@ -256,10 +256,13 @@ class TestFallbackGoesDarkWithoutResolution:
         assert _ORCH_MARKER not in additional
 
 
-class TestLeadAndUnknownKeepOrchestratorBlock:
-    """LEG 3 — real-composition regression: lead and unknown/plain frames take
-    the else-branch (no resolver call), keep the orchestrator-directive block,
-    and get NO peer body."""
+class TestLeadKeepsOrchestratorBlockAndUnknownGetsNeither:
+    """LEG 3 — real-composition regression: a LEAD frame takes the else-branch
+    (no resolver call), keeps the orchestrator-directive block, and gets NO peer
+    body. An UNKNOWN/plain frame takes its own branch and gets NEITHER.
+
+    RENAMED FROM TestLeadAndUnknownKeepOrchestratorBlock. The old name grouped
+    the two roles into one claim, which is the grouping the role gate removed."""
 
     @pytest.mark.parametrize(
         "agent_type", ["PACT:pact-orchestrator", "pact-orchestrator"]
@@ -269,7 +272,13 @@ class TestLeadAndUnknownKeepOrchestratorBlock:
         assert _ORCH_MARKER in additional
         assert _PEER_LIST_PREFIX not in additional
 
-    def test_plain_unknown_frame_emits_orchestrator_block_not_peer_body(self, tmp_path):
+    def test_plain_unknown_frame_emits_neither_block_nor_peer_body(self, tmp_path):
+        """RETARGET of test_plain_unknown_frame_emits_orchestrator_block_not_peer_body.
+        The unit-level twin in test_session_init_teammate_peer_inject.py carries
+        the full reasoning. This is the real-composition half: it drives the
+        assembled hook rather than a mocked seam, so it proves the unknown
+        branch survives composition and is not an artefact of the unit mocks.
+        """
         frame = {
             "session_id": _SESSION_ID,
             "source": "startup",
@@ -277,7 +286,8 @@ class TestLeadAndUnknownKeepOrchestratorBlock:
             "hook_event_name": "SessionStart",
         }
         additional, _ = _run_real_session_init(frame, tmp_path)
-        assert _ORCH_MARKER in additional
+        assert _ORCH_MARKER not in additional
+        assert "relaunch with `--agent PACT:pact-orchestrator`" in additional
         assert _PEER_LIST_PREFIX not in additional
 
 

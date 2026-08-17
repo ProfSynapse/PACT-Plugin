@@ -28,6 +28,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# THE STORE ORIGIN IS ASKED FOR, NEVER RE-DERIVED. `_refuse_ambient_sync_from_a_
+# redirected_store` must know if the row it is about to project went to the
+# DEFAULT store or to a redirected one. Reading `PACT_TEST_MEMORY_DIR` here
+# instead would be a second derivation of a rule `config` owns, and it would be
+# BLIND to the `--db-path` store scope, which is the other redirect route.
+#
+# Dual import: relative (when loaded as a package) vs absolute (when a caller
+# adds scripts/ to sys.path). This module is loaded BOTH ways -- the package
+# imports it as `.working_memory`, and callers that put scripts/ on the path
+# import it bare -- so a relative-only import would break the bare route. Same
+# idiom and same reason as the pact_session import in memory_api.
+try:
+    from .config import STORE_ORIGIN_HOME, store_path_origin
+except ImportError:
+    from config import STORE_ORIGIN_HOME, store_path_origin
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -41,10 +57,18 @@ WORKING_MEMORY_HEADER = "## Working Memory"
 # THE COUNT CLAUSE WAS REMOVED BECAUSE IT WAS FALSE IN THE COMMON REGIME, NOT
 # BECAUSE IT WAS UNTIDY. `_apply_token_budget` never compresses `entries[0]`
 # and its drop loop is `while len(result) > 1`, so when the newest entry ALONE
-# exceeds the whole-section budget -- as a typical full entry does -- the older
-# entries are dropped and the section shows ONE entry. This string is written
-# INTO the artifact it describes, so every agent loading a CLAUDE.md read the
-# false claim inline, beside a section that often held a single entry.
+# exceeded the whole-section budget the older entries were dropped and the
+# section showed ONE entry. This string is written INTO the artifact it
+# describes, so every agent loading a CLAUDE.md read the false claim inline,
+# beside a section that often held a single entry.
+#
+# THAT ONE-ENTRY REGIME IS NOW CLOSED, AND THE COUNT CLAUSE STAYS OUT ANYWAY.
+# `_apply_entry_token_ceiling` bounds each entry so that the newest one
+# cannot exhaust the section alone, and the per-field character bound in
+# `_format_memory_entry` puts a typical full entry far below the budget. A
+# fixed count is still the wrong thing to promise: the cap is a CAP, the
+# store can hold fewer entries than it, and a promise here would go stale the
+# next time either bound moves.
 #
 # WHAT REPLACED IT IS UNCONDITIONAL. The searchability clause is TRUE in every
 # regime and is kept: it is the clause that tells a reader where the durable
@@ -73,6 +97,69 @@ WORKING_MEMORY_TOKEN_BUDGET = 800
 RETRIEVED_CONTEXT_TOKEN_BUDGET = 500
 # Note: PINNED_CONTEXT_TOKEN_BUDGET is defined solely in hooks/staleness.py
 
+# Maximum characters `_compress_memory_entry` keeps of a summary before it
+# appends "...". NAMED BECAUSE THE BARE LITERAL HAD A DECOY. This value was
+# spelled 120 at five sites in `_compress_memory_entry`, while
+# OVERRIDE_RATIONALE_MAX below is a DIFFERENT 120 that bounds an override
+# rationale. A reader who greps the literal to find the source of the
+# compressed-entry arithmetic can bind to the override cap, and the two
+# values AGREE, so nothing goes red and the mistake is invisible. The name
+# is the fix: COMPRESSED_ENTRY_TOKEN_CEILING derives from THIS constant.
+COMPRESSED_SUMMARY_CHAR_CAP = 120
+
+# Token cost of ONE compressed neighbour, at its maximum.
+#
+# THIS IS AN ESTIMATE AND IT IS LABELLED ONE DELIBERATELY. It rests on
+# THREE premises, and a change to any of them moves it: the summary cap is
+# COMPRESSED_SUMMARY_CHAR_CAP plus the 3 characters of the truncation
+# marker; a memory id is bounded at _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+# characters; and the worst-case density is 2 characters for each word
+# ROUNDED DOWN, which is one character plus one space and is the densest
+# input `str.split()` can meet. THE DIRECTION OF THE ROUND IS PART OF THE
+# RULE AND IT IS REPEATED AT EACH RESTATEMENT, because a reader who meets
+# this premise alone would otherwise hold the rule without its direction.
+#
+# COUNTING RULE, AND IT STATES ITS ROUNDING BECAUSE THE ARITHMETIC IS ODD:
+# measure the ASSEMBLED three-line compressed form, being the date header,
+# the `**Summary**` line at the cap, and the `**Memory ID**` line. At 2
+# characters for each word, ROUNDED DOWN, 123 characters gives 61 words
+# rather than 61.5. A reader who rounds UP reproduces none of the numbers
+# here, so the direction is part of the rule. MEASURED: 128.
+#
+# THE VARIABLE IS DENSITY AND NOT LENGTH, WHICH IS THE WHOLE CAUSE OF THIS
+# CONSTANT MOVING. A character bound cannot enforce a token budget, because
+# the producer of the value controls the ratio. At the 64-character
+# identifier bound, a DENSE id costs 128 and a one-token id costs 88, from
+# the same character count. The 128 is the dense case, so the bound holds
+# for the adversarial shape rather than for the friendly one.
+#
+# DO NOT DERIVE THIS BY ADDING PARTS. The estimator applies `int()` ONCE
+# to the word count of the WHOLE string, so two separately rounded parts
+# do not sum to the rounded whole.
+#
+# This is the per-entry cost the SITE A ceiling reserves for the two
+# neighbours it compresses; see `_apply_token_budget`.
+COMPRESSED_ENTRY_TOKEN_CEILING = 128
+
+# The line prefix that carries the pointer to the durable record.
+#
+# NAMED BECAUSE FOUR EXECUTABLE SITES MUST AGREE, AND A RENAME AT SOME OF
+# THEM IS A SILENT DEFECT. Two sites WRITE the line
+# (`_format_memory_entry` and `_format_retrieved_entry`). Two sites READ it
+# by prefix: `_compress_memory_entry` keeps it, and
+# `_apply_entry_token_ceiling` holds it out of the cut.
+#
+# THAT EXCLUSION FROM THE CUT IS THE PROPERTY THE CUT RULE RESTS ON. This
+# design accepts truncation rather than refusal ONLY WHILE the recovery
+# pointer survives the cut. So a rename at the two writers without the two
+# readers, or the opposite, makes the id line droppable again: THE
+# RECOVERY ROUTE GOES, nothing raises and nothing reddens. One name for
+# the four sites makes that silent rename not possible.
+#
+# THE VALUE CARRIES NO COLON, because the readers test a PREFIX and the
+# writers append `: ` and the value.
+_MEMORY_ID_LABEL = "**Memory ID**"
+
 # Pin caps constants (twin copy of hooks/pin_caps.py — cannot import across
 # the skills-to-hooks package boundary). Drift-detection test in
 # tests/test_staleness.py guards against divergence; if you change these,
@@ -97,10 +184,50 @@ OVERRIDE_RATIONALE_MAX = 120
 # three prefixes rarely change; if a 4th is added, update this string.
 _PACT_BOUNDARY_ALT = "PACT_MEMORY_|PACT_MANAGED_|PACT_ROUTING_"
 
+# Session-block boundary marker prefix, and it is deliberately NOT a member of
+# PACT_BOUNDARY_PREFIXES. That set is canonical in
+# hooks/shared/claude_md_manager.py, a drift gate holds the copy above equal to
+# it, and the SESSION markers carry no PACT_ prefix. A SESSION member in a set
+# named for PACT_ prefixes makes the name incorrect about its own contents, so
+# the scans below embed this alternation WITH _PACT_BOUNDARY_ALT and not in it.
+#
+# WHAT IT DEFENDS, MEASURED. The session block sits in the managed region
+# ABOVE the memory markers. When the memory marker pair is absent, the window
+# below falls back to the wide managed region, and a forged section heading in
+# the session block wins the first-match search. The body scan then runs
+# THROUGH the session-end marker line, and the rebuild replaces that span, so
+# the marker is gone from the emitted document. CLAUDE.md is not a tracked
+# file, so no commit can restore it.
+_SESSION_BOUNDARY_ALT = "SESSION_"
+
+# The session-end marker line, DERIVED from the prefix above rather than
+# spelled again. A drift gate holds that prefix equal to its canonical
+# source, so a rename of the canonical marker reaches this line through the
+# gate. A literal here would be a twin with no gate, which is the shape this
+# branch keeps removing.
+_SESSION_END_MARKER = f"<!-- {_SESSION_BOUNDARY_ALT}END -->"
+
 # Managed-region boundary markers. Twin copies of the canonical definitions
 # in hooks/shared/claude_md_manager.py (cannot import — separate package).
 _MANAGED_START_MARKER = "<!-- PACT_MANAGED_START: Managed by pact-plugin - do not edit this block -->"
 _MANAGED_END_MARKER = "<!-- PACT_MANAGED_END -->"
+
+# The INNER memory-region boundary, nested in the managed region above.
+#
+# THESE TWO CARRY THE CANONICAL NAMES AND NOT THE LOCAL PRIVATE PREFIX, AND
+# THAT IS A DELIBERATE DEPARTURE FROM THE TWO LINES ABOVE. The prefix is a
+# choice made at some sites here and not at others: `MAX_WORKING_MEMORIES`
+# and `WORKING_MEMORY_TOKEN_BUDGET` carry none. `_narrow_to_memory_region`
+# below reads these two names IN ITS BODY, and its body is byte-compared
+# against the canonical copy by a drift gate. A prefix here puts a
+# difference in that body, and the gate would go RED ON ARRIVAL on a choice
+# somebody made rather than on divergence.
+#
+# `extract_managed_region` records the opposite call for its own twin, and
+# the difference is the GATE rather than the taste: that one is not
+# byte-compared, so its local names cost nothing.
+MEMORY_START_MARKER = "<!-- PACT_MEMORY_START -->"
+MEMORY_END_MARKER = "<!-- PACT_MEMORY_END -->"
 
 # file_lock: vendored twin of hooks/shared/claude_md_manager.file_lock —
 # skills/pact-memory/scripts/ cannot import from hooks/shared/ (separate
@@ -114,6 +241,54 @@ _MANAGED_END_MARKER = "<!-- PACT_MANAGED_END -->"
 # must match the canonical values.
 _LOCK_TIMEOUT_SECONDS = 5.0
 _LOCK_POLL_INTERVAL = 0.1
+
+# _sanitize_prompt_field: vendored twin of
+# hooks/shared/session_resume._sanitize_prompt_field — skills/pact-memory/
+# scripts/ cannot import from hooks/shared/ (separate package boundary).
+# The drift-detection test (TestSanitizePromptFieldTwinCopyDrift in
+# tests/test_staleness.py) guards byte-alignment of the function body with
+# the canonical copy; if you change either, update both in the SAME commit.
+# The three values below are part of the twin and must match the canonical
+# ones, which is what test_sanitize_prompt_field_constants_match asserts.
+#
+# Bounds for record field values interpolated into the managed regions of
+# CLAUDE.md. The store is plain SQLite on disk and a field value is
+# caller-influenced, so a hand-crafted or corrupted record must not be able
+# to open a heading inside a PACT-managed region or flood the always-loaded
+# context. Free-text fields get the tight bound; paths get a wider one
+# because legitimate absolute paths can be long.
+_REFRESH_FIELD_TRUNCATION_LIMIT = 200
+_REFRESH_PATH_TRUNCATION_LIMIT = 512
+
+# IDENTIFIER is a THIRD field kind, and its absence was a defect rather
+# than an omission. A memory id took the FREE-TEXT bound of 200, which is
+# 3 times what the generator emits and lets one field dominate the token
+# cost of a compressed entry. The store does NOT bound this value: the
+# ingress validates the KEY SET of a record rather than the length of a
+# value, so a caller-supplied id reaches the formatter unbounded.
+# 64 covers a 32-character generated id with double the margin.
+#
+# CLASSIFY BY FIELD KIND, NOT BY DEFAULT. A field with no row in the
+# classification falls to free text, and free text is the WIDEST bound, so
+# a missing row always errs toward the loose end.
+_REFRESH_IDENTIFIER_TRUNCATION_LIMIT = 64
+
+# Control characters collapsed in interpolated field values: C0 controls
+# (includes \n, \r, \t), DEL plus the full C1 block (which includes NEL
+# U+0085 — a str.splitlines boundary), and the Unicode line/paragraph
+# separators — anything that could break a value onto a new line and
+# masquerade as a heading or a separate entry.
+#
+# 🔴 A THIRD CLASS EXISTS AND IT IS NARROWER ON PURPOSE. DO NOT MERGE THEM.
+# `hooks/shared/session_state.SESSION_ID_CONTROL_CHARS_RE` covers the same
+# line breakers and omits the non-line-breaking C1 characters. The two do
+# different jobs: that one is a DETECTOR, used only through `.search()` on
+# identifiers, so it carries no `+` and needs none. THIS one is a REPLACER,
+# used through `.sub(" ", value)`, and HERE THE `+` IS LOAD-BEARING: without
+# it a run of N control characters becomes N spaces rather than one. Widening
+# that one to match this one would refuse session ids over characters that
+# break no line.
+_PROMPT_CONTROL_CHARS_RE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]+")
 
 
 @contextmanager
@@ -693,6 +868,142 @@ def extract_managed_region(content: str) -> Optional[Tuple[str, int]]:
     return content[region_start:end_idx], region_start
 
 
+def marker_line_span(text: str, literal: str) -> tuple[int, int] | None:
+    """Span of the first line of `text` that IS `literal`, else None.
+
+    TWIN OF `hooks/shared/pin_markers.marker_line_span`, kept local because
+    the production entry point does not put `hooks/` on `sys.path`. See
+    `_narrow_to_memory_region` for the measurement behind that sentence.
+
+    THE EXECUTABLE BODY MUST STAY BYTE-IDENTICAL TO THE CANONICAL COPY.
+    CHANGE THE TWO TOGETHER. Read the canonical docstring for why ONE
+    implementation of `the marker occupies a line` matters: a second,
+    independently-written predicate produced drift in this repository once,
+    and a document marked by one reading and unmarked by another is what
+    came out of it.
+    """
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        if line.strip() == literal:
+            return offset, offset + len(line)
+        offset += len(line)
+    return None
+
+
+def _resolve_write_window(content: str) -> tuple[str, int] | None:
+    """Resolve the window a section write may search, or None to DECLINE.
+
+    THE THREE STEPS, IN ORDER.
+    STEP 1. The memory marker pair resolves: use the memory region.
+    STEP 2. ELSE, if the managed-end marker and the session-end marker each
+            resolve: use (end of the session block, managed end).
+    STEP 3. ELSE decline. The caller must NOT widen.
+
+    A document with NO managed region keeps today's whole-file window. That
+    is the pre-migration class and it is outside this rule.
+
+    🔴 R3: ALL THREE STEPS SHARE ONE BLIND SPOT, AND STEP 1 IS NOT THE SAFE
+    CASE. The bound defends against a forgery ABOVE the memory region and NOT
+    against one INSIDE it, because the marker pair BOUNDS that region and
+    cannot exclude what it bounds. Read the step-1 window as `the smallest
+    window we can justify`, and not as `the forgery is out`.
+
+    PROPORTIONALITY, AND THE TWO HALVES TRAVEL TOGETHER. The control-character
+    sanitizer covers the newline and is applied to all four session-block
+    values and each memory-record field, so a forged section title is a
+    FIXTURE GIVEN and this bound is DEFENCE IN DEPTH. AND a separate
+    measurement found a second load-bearing control, the label prefix, that
+    the sanitizer does not touch. One half alone is not the honest statement.
+    """
+    region_result = extract_managed_region(content)
+    if region_result is None:
+        return content, 0
+
+    narrowed = _narrow_to_memory_region(region_result[0], region_result[1])
+    if narrowed is not None:
+        return narrowed
+
+    # STEP 2, AND ITS CAUSE IS AVAILABILITY RATHER THAN SECURITY.
+    #
+    # 🔴 R1: THE GRANTED SECURITY CAUSE OF THIS STEP IS DEAD. An effective
+    # forgery must sit in [0, genuine title), the session-block end SPLITS
+    # that interval, and the two memory-entry formatters write BELOW the
+    # split, WHERE THIS WINDOW INCLUDES THE FORGERY. This step excludes only
+    # a forgery ABOVE the session-block end, which is the session-block
+    # writer's own territory. DO NOT READ A NARROWED WINDOW AS AN EXCLUDED
+    # FORGERY. No byte size is quoted for the uncovered band on purpose: it
+    # was measured as a FLOOR on a one-entry fixture and it GROWS with each
+    # memory entry.
+    #
+    # WHAT IT IS FOR. It keeps a document with no memory marker pair
+    # WRITABLE, so it shrinks the population that reaches the decline below.
+    # That population is ordinary users with a document not fully migrated or
+    # hand-edited, and not attackers.
+    #
+    # 🔴 R2: A CONSUMED SESSION-END MARKER MAKES THIS STEP UNAVAILABLE, SO
+    # CONTROL PASSES TO THE DECLINE AND THE WRITE DECLINES. It does NOT fall
+    # back to the wide window. A consumed session-end marker is EVIDENCE that
+    # a forged title has run against this document, so a widening there
+    # rewards the attack. Such documents can be on disk today: the terminator
+    # fix stops NEW ones entering that state and repairs NONE in it.
+    region_text, region_start = region_result
+    if _MANAGED_END_MARKER in content:
+        session_end = marker_line_span(region_text, _SESSION_END_MARKER)
+        if session_end is not None:
+            inner_start = session_end[1]
+            return region_text[inner_start:], region_start + inner_start
+
+    # STEP 3.
+    return None
+
+
+def _narrow_to_memory_region(
+    region_text: str, region_start: int
+) -> tuple[str, int] | None:
+    """Narrow an already-extracted managed region to the MEMORY region inside
+    it, or None when the memory marker pair is not there.
+
+    TWIN OF `hooks/shared/pin_markers._narrow_to_memory_region`. THE
+    EXECUTABLE BODY MUST STAY BYTE-IDENTICAL TO THE CANONICAL COPY, AND THE
+    TWO DOCSTRINGS DIFFER ON PURPOSE: this copy states only what is local.
+    CHANGE THE BODIES TOGETHER, and compare them with an extractor that
+    PARSES rather than one that counts leading lines. The signature above
+    spans several lines, so a line-counting extractor leaves the parameter
+    lines and then the docstring inside what it calls the body, and reports
+    a difference that is not a difference in logic.
+
+    WHY A TWIN RATHER THAN AN IMPORT, MEASURED RATHER THAN INHERITED. The
+    comments elsewhere in this module say the two trees are a different
+    package. That cause does not hold, because `hooks/__init__.py` and
+    `hooks/shared/__init__.py` each exist. THE OPERATIVE FACT IS A PATH
+    BOOTSTRAP DIVERGENCE: the production entry `cli.py` puts ONLY the skill
+    root on `sys.path`, and `tests/conftest.py` puts `hooks/` on it. So an
+    import here RESOLVES IN PYTEST AND RAISES FROM THE CLI. The failure
+    direction of that mistake is the dangerous one: green tests and a
+    broken shipped path.
+
+    WHY THE CALLERS NEED IT. `extract_managed_region` returns the WIDE
+    region, and the session block sits inside it ABOVE the memory markers
+    while it interpolates caller-influenced values. The two write-side
+    parsers below search their heading FIRST-MATCH in the window they are
+    given, and the offset of that match rebuilds the file. MEASURED on a
+    production-shaped document with a forged `## Working Memory` line in the
+    session block: the splice landed at 234 against a memory start marker at
+    274, so the write would have gone OUTSIDE the memory region.
+    """
+    start_span = marker_line_span(region_text, MEMORY_START_MARKER)
+    if start_span is None:
+        return None
+    # The END of the marker line, so the window begins on the NEXT line and
+    # `region_start` stays a line start for every offset computed below it.
+    inner_start = start_span[1]
+    tail = region_text[inner_start:]
+    end_span = marker_line_span(tail, MEMORY_END_MARKER)
+    if end_span is None:
+        return None
+    return tail[:end_span[0]], region_start + inner_start
+
+
 def _find_existing_claude_md(base: Path) -> Optional[Path]:
     """
     Return the first existing CLAUDE.md under `base`, checking both
@@ -921,17 +1232,27 @@ def _estimate_tokens(text: str) -> int:
 
 def _compress_memory_entry(entry: str) -> str:
     """
-    Compress a full memory entry to a single-line summary.
+    Compress a full memory entry to a date header, a summary and its key.
 
-    Preserves the date header and extracts the first sentence from the
-    Context field. All other fields (Goal, Decisions, Lessons, Files,
-    Memory ID) are dropped.
+    Preserves the date header, extracts the first sentence from the Context
+    field, and KEEPS THE `**Memory ID**` LINE. The other fields (Goal,
+    Decisions, Lessons, Files) are dropped.
+
+    THE POINTER IS KEPT BECAUSE THE ROUTE IS NOT THE KEY. The section
+    comment tells a reader that the full history is searchable through the
+    pact-memory skill, which is the ROUTE. The `**Memory ID**` line is the
+    KEY. This function dropped the key and left the route, so recovery of a
+    compressed entry fell back to a content search across at most 120
+    characters of summary. One line of 47 characters restores the key, and
+    the whole design accepts loss at this rendering ONLY because the loss is
+    recoverable from the store.
 
     Args:
         entry: Full markdown memory entry string starting with ### YYYY-MM-DD.
 
     Returns:
-        Compressed entry with date header and one-line summary.
+        Compressed entry: date header, one-line summary, and the memory id
+        where the entry carried one.
     """
     lines = entry.strip().split("\n")
     if not lines:
@@ -940,20 +1261,33 @@ def _compress_memory_entry(entry: str) -> str:
     # Preserve the date header line (### YYYY-MM-DD HH:MM)
     date_line = lines[0]
 
+    # Preserve the recovery key. An entry that carried no id keeps none,
+    # because there was none to keep. That is not a regression, and the
+    # worst-case cost below assumes the line IS present, so the derived
+    # ceiling is conservative for the entries that lack it.
+    id_line = ""
+    for line in lines[1:]:
+        if line.startswith(_MEMORY_ID_LABEL):
+            id_line = line
+            break
+
     # Find the Context field and extract its first sentence
     summary_text = ""
     for line in lines[1:]:
         if line.startswith("**Context**:"):
             context_value = line.split("**Context**:", 1)[1].strip()
-            # Take first sentence (up to first ". " boundary, or first 120 chars).
-            # Uses ". " instead of "." to avoid truncating at version numbers
-            # like v2.3.1 or decimal values.
+            # Take the first sentence, up to the first ". " boundary, or the
+            # first COMPRESSED_SUMMARY_CHAR_CAP characters. Uses ". " instead
+            # of "." to avoid truncating at version numbers like v2.3.1 or
+            # decimal values. THE BOUNDARY TEST TAKES THE SAME CONSTANT AS THE
+            # CUT, and it takes it for the same reason: a sentence longer than
+            # the cap cannot be the summary, so the cut applies instead.
             period_idx = context_value.find(". ")
-            if period_idx > 0 and period_idx < 120:
+            if period_idx > 0 and period_idx < COMPRESSED_SUMMARY_CHAR_CAP:
                 summary_text = context_value[:period_idx + 1]
             else:
-                summary_text = context_value[:120]
-                if len(context_value) > 120:
+                summary_text = context_value[:COMPRESSED_SUMMARY_CHAR_CAP]
+                if len(context_value) > COMPRESSED_SUMMARY_CHAR_CAP:
                     summary_text += "..."
             break
 
@@ -963,14 +1297,180 @@ def _compress_memory_entry(entry: str) -> str:
             stripped = line.strip()
             if stripped and stripped.startswith("**") and "**:" in stripped:
                 # Extract value from any bold field
-                summary_text = stripped.split("**:", 1)[1].strip()[:120]
-                if len(stripped.split("**:", 1)[1].strip()) > 120:
+                summary_text = (
+                    stripped.split("**:", 1)[1].strip()[:COMPRESSED_SUMMARY_CHAR_CAP]
+                )
+                if len(stripped.split("**:", 1)[1].strip()) > COMPRESSED_SUMMARY_CHAR_CAP:
                     summary_text += "..."
                 break
 
+    # The id line is appended LAST, so the compressed entry keeps the same
+    # "pointer at the end" shape as an uncompressed one, and
+    # `_apply_entry_token_ceiling` exempts it by PREFIX at whatever index it
+    # sits, so the two agree without either depending on a position.
+    tail = f"\n{id_line}" if id_line else ""
     if summary_text:
-        return f"{date_line}\n**Summary**: {summary_text}"
-    return date_line
+        return f"{date_line}\n**Summary**: {summary_text}{tail}"
+    return f"{date_line}{tail}"
+
+
+def _apply_entry_token_ceiling(entry: str, ceiling: int) -> str:
+    """
+    Cut ONE entry to a token ceiling by dropping whole field LINES.
+
+    A CHARACTER BOUND CANNOT ENFORCE A TOKEN BUDGET. The per-field bound in
+    the two formatters is in CHARACTERS, the section budget is in TOKENS,
+    and the producer of a field value controls the ratio through whitespace
+    density. So the budget is enforced a second time, in its own unit, here.
+
+    THE CUT DROPS WHOLE LINES FROM THE END. It never cuts inside a line: a
+    mid-line cut can leave a partial ``**Field**: `` fragment, and a cut at
+    a line break puts the remainder at the START of a line, which is the
+    shape the whole sanitize exists to prevent.
+
+    TWO LINES ARE EXEMPT AND ALWAYS SURVIVE:
+
+    1. The ``### {date}`` header. Without it the entry stops parsing as an
+       entry, and the date-led heading is what excludes it from the pin count.
+    2. The ``**Memory ID**`` line. It is the pointer to the durable record.
+       The whole design accepts truncation rather than refusal BECAUSE a
+       loss at this rendering is recoverable from the store, and that
+       argument holds only while the pointer survives the cut.
+
+    THE MEMORY ID LINE IS THE LAST LINE OF AN ENTRY, so a drop-from-the-end
+    that did not exempt it would remove the recovery pointer FIRST, quietly
+    undoing the argument above while every test stayed green.
+
+    Args:
+        entry: One formatted markdown entry, starting with its date header.
+        ceiling: Maximum estimated tokens for this entry alone.
+
+    Returns:
+        The entry, cut to whole lines, at or below the ceiling where the
+        two exempt lines permit it.
+    """
+    if _estimate_tokens(entry) <= ceiling:
+        return entry
+
+    lines = entry.split("\n")
+    if len(lines) <= 1:
+        return entry
+
+    # Index 0 is the date header. A `**Memory ID**` line is matched by
+    # PREFIX wherever it sits, rather than by position, so the exemption
+    # does not depend on it staying last.
+    exempt = {0}
+    for index, line in enumerate(lines):
+        if line.startswith(_MEMORY_ID_LABEL):
+            exempt.add(index)
+
+    # DROP WHOLE LINES FIRST, from the end, and stop at ONE remaining
+    # droppable line. That last line is handled below instead of dropped.
+    kept = list(range(len(lines)))
+    droppable = [i for i in reversed(range(len(lines))) if i not in exempt]
+
+    # FLOOR WHEN THE EXEMPT LINES ALONE COST MORE THAN THE CEILING: RETURN
+    # THE ENTRY WHOLE. This is reached when EVERY line is exempt, which is a
+    # date header plus one or more `**Memory ID**` lines and nothing else.
+    # There is then no line this function is permitted to drop and none it is
+    # permitted to cut, so the ceiling cannot be met at any input.
+    #
+    # FLOOR IS NOT A NEW POLICY HERE. It is what the last-resort branch below
+    # does at a word budget below 1: that branch removes the final droppable
+    # line and RETURNS THE EXEMPT LINES, which can sit above the ceiling. This
+    # writes the same direction into the path where it was omitted, so the two
+    # paths agree rather than one returning and one raising.
+    #
+    # WITHOUT THIS THE FUNCTION RAISED IndexError AT `droppable[-1]` BELOW, and
+    # a raise is the worst of the three directions. The ceiling exists to stop
+    # ONE entry exhausting the SECTION, and an entry of exempt lines alone is
+    # the SMALLEST entry this function can meet. Refusing on the smallest input
+    # propagates out of the formatters and takes the sync down, which loses
+    # every entry rather than bounding one.
+    if not droppable:
+        return entry
+
+    for index in droppable[:-1] if droppable else []:
+        if _estimate_tokens("\n".join(lines[i] for i in kept)) <= ceiling:
+            break
+        kept.remove(index)
+
+    if _estimate_tokens("\n".join(lines[i] for i in kept)) <= ceiling:
+        return "\n".join(lines[i] for i in kept)
+
+    # LAST RESORT: TRUNCATE THE FINAL DROPPABLE LINE IN PLACE RATHER THAN
+    # DROP IT, AND THE CAUSE IS A MEASURED PRODUCTION DEFECT.
+    #
+    # A save that carries a CONTEXT and nothing else is an ORDINARY save, and
+    # it renders as TWO lines: the date header and one field line. The header
+    # is exempt, so that field line is the only droppable one. A pure
+    # whole-line rule removed it and left a DATED HEADING WITH NO CONTENT.
+    # Where such a save carries no memory id, the entry then kept NO POINTER
+    # TO THE STORE either, and the argument that makes this design prefer
+    # truncation to refusal is that the loss at this rendering is RECOVERABLE
+    # FROM THE STORE. At that shape the recovery pointer was gone too, so the
+    # cut destroyed the property the whole design rests on.
+    #
+    # THIS DOES NOT REOPEN THE MID-LINE-CUT TRAP. That trap has two causes: a
+    # cut can leave a partial `**Field**: ` fragment, and a cut at a line
+    # break can put the remainder at the START of a line. A truncation that
+    # KEEPS THE LINE PREFIX and appends "..." does neither, because it EMITS
+    # NO NEWLINE, so it can open no line. The forbidden class is wider than
+    # the cause that motivates it, and this is the part outside the cause.
+    #
+    # THE CODE BELOW APPENDS THE MARKER. IT DOES NOT WRITE THE MARKER ON TOP
+    # OF THE KEPT TEXT. The field sanitize uses `[:limit - 3] + "..."` because
+    # it bounds CHARACTERS, so the marker must sit within that bound. This
+    # function bounds WORDS, so no character bound applies to the marker, and
+    # a marker written on top of the kept text breaks the field name. See
+    # the two bounds below.
+    last = droppable[-1]
+    line = lines[last]
+    fitted = list(kept)
+    overhead = _estimate_tokens(
+        "\n".join(lines[i] if i != last else "" for i in fitted)
+    )
+    budget_words = max(0, int((ceiling - overhead) / 1.3))
+
+    # THE PROPERTY A READER CAN CHECK, AND IT IS A PROPERTY RATHER THAN A
+    # NUMBER: THE EMITTED FIELD LINE KEEPS ITS COMPLETE `**Field**:` NAME,
+    # OR THE LINE IS ABSENT. There is no third outcome. A number cannot
+    # state that property, and a bound written as a number was incorrect
+    # two times. The append below is what makes the property hold at each
+    # input, because it cannot reach into the words that the cut keeps.
+    #
+    # THE VALUE CAN BE EMPTY AND THE PROPERTY HOLDS. At a budget of 1 the
+    # line reads `**Context**:...`, which keeps the complete name and
+    # elides all of the value. THAT SHAPE IS DELIBERATE. A bound of 2
+    # removes it and reopens the defect above: an entry with ONE field line
+    # then drops that line and renders as a dated heading with no content
+    # and no recovery pointer.
+    #
+    # DEGENERATE EDGE: DROP THE LINE RATHER THAN EMIT A BARE MARKER. At a
+    # word budget of 0 the cut keeps no word, so the appended marker IS the
+    # line and the output is a bare `...`. That output carries no field
+    # name, so it breaks the property above, and the line goes.
+    #
+    # AN EARLIER BOUND OF 2 CAME FROM A CUT THAT WROTE THE MARKER ON TOP OF
+    # THE KEPT TEXT. That bound was one too low for its own rule: at a
+    # budget of 2 with a one-character second word, the cut went into the
+    # field name and emitted `**Context**...`. A THIRD BOUND ANSWERS ONE
+    # MORE INPUT AND LEAVES THE NEXT, so the append removes the class.
+    if budget_words < 1:
+        fitted.remove(last)
+        return "\n".join(lines[i] for i in fitted)
+
+    words = line.split()
+    truncated = " ".join(words[:budget_words])
+    if len(truncated) < len(line):
+        # APPEND, DO NOT WRITE ON TOP. `" ".join` of one or more words does
+        # not end with a space, so the marker attaches to the last kept word
+        # and adds NO word to `str.split()`. The line therefore costs
+        # `budget_words` tokens with the marker and without it, which is why
+        # this repair moves no constant.
+        truncated += "..."
+    lines[last] = truncated
+    return "\n".join(lines[i] for i in fitted)
 
 
 def _apply_token_budget(
@@ -980,19 +1480,47 @@ def _apply_token_budget(
     """
     Apply a token budget to a list of memory entries.
 
-    Strategy: Keep the newest entry in full. Compress older entries to
-    single-line summaries. If still over budget, reduce the number of
-    entries shown.
+    Strategy: Cut each entry to the per-entry ceiling. Then compress older
+    entries to single-line summaries, and if the total is above budget,
+    reduce the number of entries shown.
+
+    THE NEWEST ENTRY IS NEVER COMPRESSED AND NEVER DROPPED. IT CAN BE
+    BOUNDED. This docstring said "keep the newest entry in full", which
+    conflated THREE properties: not compressed, not dropped, not modified.
+    The ceiling does not compress and it does not drop. IT BOUNDS. So the
+    first two properties survive and the third does not, and the third is
+    the product change that came with the per-entry ceiling: an entry above
+    the ceiling loses its last field lines in this rendering, and the store
+    keeps the full record.
+
+    THE PER-ENTRY CEILING IS A FIXED EXPRESSION OVER THE MODULE CONSTANTS,
+    NOT A FUNCTION OF THE `token_budget` ARGUMENT. Deriving it from the
+    argument looks safer and is not: at a SMALL argument the ceiling falls
+    below the size of an ordinary entry, so the newest entry gets cut and
+    this function stops keeping it in full, which is its stated contract.
+    The ceiling exists to stop ONE entry exhausting the SECTION, and the
+    section is what the constants describe.
 
     Args:
         entries: List of memory entry strings (newest first).
         token_budget: Maximum estimated tokens for all entries combined.
 
     Returns:
-        List of entries (some possibly compressed) fitting within budget.
+        List of entries (some possibly cut or compressed) fitting within budget.
     """
     if not entries:
         return entries
+
+    # Reserve room for the neighbours this function COMPRESSES rather than
+    # drops, then give the rest of the section budget to the newest entry.
+    # The newest entry is never compressed and the drop loop is
+    # `while len(result) > 1`, so without this ceiling one dense entry can
+    # exhaust the section on its own and evict every genuine neighbour.
+    entry_ceiling = (
+        WORKING_MEMORY_TOKEN_BUDGET
+        - (MAX_WORKING_MEMORIES - 1) * COMPRESSED_ENTRY_TOKEN_CEILING
+    )
+    entries = [_apply_entry_token_ceiling(e, entry_ceiling) for e in entries]
 
     # Check if already within budget
     total_tokens = sum(_estimate_tokens(e) for e in entries)
@@ -1019,6 +1547,86 @@ def _apply_token_budget(
     return result
 
 
+def _sanitize_prompt_field(
+    value: str,
+    limit: int = _REFRESH_FIELD_TRUNCATION_LIMIT,
+) -> str:
+    """Sanitize a record field value for interpolation into CLAUDE.md.
+
+    Twin of hooks/shared/session_resume._sanitize_prompt_field — kept local
+    because skills/pact-memory/scripts/ cannot import from hooks/shared/.
+    Body MUST stay byte-identical to the canonical copy (drift test enforces
+    this); this docstring is allowed to differ. Change either copy and you
+    change both in the SAME commit.
+
+    Collapses control characters to single spaces, strips, and bounds the
+    length. Callers MUST sanitize BEFORE they test the value for
+    truthiness: an internal failure returns ``""`` so the caller drops that
+    field's LINE, and a test of the RAW value would emit the field label
+    with an empty value instead.
+    """
+    try:
+        cleaned = _PROMPT_CONTROL_CHARS_RE.sub(" ", value).strip()
+        if len(cleaned) > limit:
+            cleaned = cleaned[:limit - 3] + "..."
+        return cleaned
+    except Exception:
+        return ""
+
+
+def _recover_identifier(raw: str) -> str:
+    """Accept a raw identifier for the recovery-pointer fallback, or refuse it.
+
+    CALLER-SIDE COUNTERPART TO `_sanitize_prompt_field`, AND DELIBERATELY NOT A
+    SECOND SANITIZER. That helper catches bare `Exception` and returns "" on an
+    internal failure, and the two recovery-key sites gate on the truthiness of
+    its output, so A FAILURE INSIDE THE GUARD SILENTLY DROPS THE
+    `**Memory ID**` LINE. That line is the pointer to the durable record, and
+    the entry-cut design accepts truncation rather than refusal ONLY WHILE the
+    pointer survives. A failure in the guard must not be the one path that
+    spends the guarantee the cut rule rests on.
+
+    THE HELPER CANNOT SAY WHY IT RETURNED "", SO THE DISCRIMINATOR IS BUILT
+    HERE, AT THE CALLER: a NON-EMPTY input with an EMPTY output is either an
+    internal failure or a value made only of control characters. This function
+    separates the two by accepting the input or refusing it.
+
+    IT IS AN ACCEPTOR AND NOT A TRANSFORMER, WHICH IS WHAT MAKES AN EMITTED
+    POINTER RESOLVE. It returns the input UNCHANGED, or it returns "". It does
+    not cut and it does not rewrite, so an emitted value is byte-identical to
+    the id the caller received and resolves against the store by construction.
+    A fallback that cut to the bound, or that stripped the characters it does
+    not accept, would emit a pointer that is PRESENT and does NOT RESOLVE,
+    which is the shape this fallback exists to avoid.
+
+    IT HAS NO FAILURE PATH OF ITS OWN, WHICH IS WHY IT NEEDS NO FALLBACK. There
+    is no pattern engine, no encode step and no arithmetic: one length compare
+    and one character test, and both are total over `str`. A fallback that can
+    itself fail needs a fallback, and that regress is the sign of a wrong
+    design.
+
+    THE CHARACTER TEST COVERS THE INJECTION PROPERTY WITHOUT NAMING IT. Every
+    character that can open a new line (the C0 and C1 controls, NEL, and
+    U+2028 and U+2029) is a control or a separator, and NONE of them is
+    alphanumeric, so the accepted set cannot hold one.
+
+    Args:
+        raw: The identifier as the caller received it, already `str`.
+
+    Returns:
+        `raw` unchanged when it is a bounded, line-safe identifier. `""`
+        otherwise, and the caller then emits NO pointer line. That is honest:
+        where no key can be recovered, an absent line says so and a labelled
+        empty value does not.
+    """
+    if not raw or len(raw) > _REFRESH_IDENTIFIER_TRUNCATION_LIMIT:
+        return ""
+    for character in raw:
+        if not (character.isalnum() or character in "-_."):
+            return ""
+    return raw
+
+
 def _format_memory_entry(
     memory: Dict[str, Any],
     files: Optional[List[str]] = None,
@@ -1041,13 +1649,22 @@ def _format_memory_entry(
 
     lines = [f"### {date_str}"]
 
+    # EVERY field value below is SANITIZED BEFORE IT IS TESTED FOR
+    # TRUTHINESS, and the order is load-bearing. `_sanitize_prompt_field`
+    # returns "" on an internal failure so the caller drops that field's
+    # LINE; a test of the RAW value would pass, and then emit a bare
+    # "**Context**: " with no value after it. Sanitize, test the SANITIZED
+    # value, then append.
+
     # Add context if present
-    if memory.get("context"):
-        lines.append(f"**Context**: {memory['context']}")
+    context = _sanitize_prompt_field(str(memory.get("context") or ""))
+    if context:
+        lines.append(f"**Context**: {context}")
 
     # Add goal if present
-    if memory.get("goal"):
-        lines.append(f"**Goal**: {memory['goal']}")
+    goal = _sanitize_prompt_field(str(memory.get("goal") or ""))
+    if goal:
+        lines.append(f"**Goal**: {goal}")
 
     # Add decisions if present
     decisions = memory.get("decisions")
@@ -1060,50 +1677,113 @@ def _format_memory_entry(
                     decision_texts.append(d.get("decision", str(d)))
                 else:
                     decision_texts.append(str(d))
-            if decision_texts:
-                lines.append(f"**Decisions**: {', '.join(decision_texts)}")
+            # Sanitize the JOINED value, not each item: the join is what
+            # reaches the file, and a per-item bound would let N items
+            # multiply past the line bound the sanitize exists to set.
+            joined = _sanitize_prompt_field(", ".join(str(t) for t in decision_texts))
+            if joined:
+                lines.append(f"**Decisions**: {joined}")
         elif isinstance(decisions, str):
-            lines.append(f"**Decisions**: {decisions}")
+            cleaned = _sanitize_prompt_field(decisions)
+            if cleaned:
+                lines.append(f"**Decisions**: {cleaned}")
 
     # Add lessons if present
     lessons = memory.get("lessons_learned")
     if lessons:
         if isinstance(lessons, list) and lessons:
-            lines.append(f"**Lessons**: {', '.join(str(l) for l in lessons)}")
+            joined = _sanitize_prompt_field(", ".join(str(l) for l in lessons))
+            if joined:
+                lines.append(f"**Lessons**: {joined}")
         elif isinstance(lessons, str):
-            lines.append(f"**Lessons**: {lessons}")
+            cleaned = _sanitize_prompt_field(lessons)
+            if cleaned:
+                lines.append(f"**Lessons**: {cleaned}")
 
     # Add reasoning chains if present
     reasoning = memory.get("reasoning_chains")
     if reasoning:
         if isinstance(reasoning, list) and reasoning:
-            lines.append(f"**Reasoning chains**: {', '.join(str(r) for r in reasoning)}")
+            joined = _sanitize_prompt_field(", ".join(str(r) for r in reasoning))
+            if joined:
+                lines.append(f"**Reasoning chains**: {joined}")
         elif isinstance(reasoning, str):
-            lines.append(f"**Reasoning chains**: {reasoning}")
+            cleaned = _sanitize_prompt_field(reasoning)
+            if cleaned:
+                lines.append(f"**Reasoning chains**: {cleaned}")
 
     # Add agreements if present
     agreements = memory.get("agreements_reached")
     if agreements:
         if isinstance(agreements, list) and agreements:
-            lines.append(f"**Agreements**: {', '.join(str(a) for a in agreements)}")
+            joined = _sanitize_prompt_field(", ".join(str(a) for a in agreements))
+            if joined:
+                lines.append(f"**Agreements**: {joined}")
         elif isinstance(agreements, str):
-            lines.append(f"**Agreements**: {agreements}")
+            cleaned = _sanitize_prompt_field(agreements)
+            if cleaned:
+                lines.append(f"**Agreements**: {cleaned}")
 
     # Add disagreements resolved if present
     disagreements = memory.get("disagreements_resolved")
     if disagreements:
         if isinstance(disagreements, list) and disagreements:
-            lines.append(f"**Disagreements resolved**: {', '.join(str(d) for d in disagreements)}")
+            joined = _sanitize_prompt_field(", ".join(str(d) for d in disagreements))
+            if joined:
+                lines.append(f"**Disagreements resolved**: {joined}")
         elif isinstance(disagreements, str):
-            lines.append(f"**Disagreements resolved**: {disagreements}")
+            cleaned = _sanitize_prompt_field(disagreements)
+            if cleaned:
+                lines.append(f"**Disagreements resolved**: {cleaned}")
 
     # Add files if present
     if files:
-        lines.append(f"**Files**: {', '.join(files)}")
+        # A path field, so the wider bound: legitimate absolute paths are long.
+        joined_files = _sanitize_prompt_field(
+            ", ".join(str(f) for f in files), _REFRESH_PATH_TRUNCATION_LIMIT
+        )
+        if joined_files:
+            lines.append(f"**Files**: {joined_files}")
 
     # Add memory ID if provided
     if memory_id:
-        lines.append(f"**Memory ID**: {memory_id}")
+        # AN IDENTIFIER, NOT FREE TEXT. The free-text bound of 200 is 3
+        # times what the generator emits, and the store does not bound this
+        # value at its ingress, so a caller-supplied id took the widest
+        # bound in the classification.
+        raw_id = str(memory_id)
+        cleaned_id = _sanitize_prompt_field(
+            raw_id, _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+        )
+        # THE SANITIZER IS ONE OF THE PATHS THAT CAN DROP THE RECOVERY
+        # POINTER. It returns "" on an internal failure as well as for a value
+        # made only of control characters, and the truthiness gate below cannot
+        # tell the two apart. NON-EMPTY IN AND EMPTY OUT is the discriminator.
+        # `_recover_identifier` then accepts the raw id unchanged or refuses
+        # it. See its docstring for why it is an acceptor and not a second
+        # sanitizer.
+        #
+        # THE LENGTH TEST IS THE SECOND ROUTE TO THE ACCEPTOR, AND IT COVERS
+        # A STATE THE EMPTY TEST CANNOT SEE. For a raw id past the bound the
+        # sanitizer CUTS to `cleaned[:limit - 3] + "..."`, which is NON-EMPTY,
+        # so the empty test cannot fire and a cut key reaches the line. THE
+        # THIRD CASE IS WHAT DECIDES THIS, and it is not the one the acceptor
+        # docstring weighs: an ABSENT line says no key is here, a labelled
+        # EMPTY value says the key is empty and is visibly broken, and a CUT
+        # value says HERE IS THE KEY while being INDISTINGUISHABLE FROM A GOOD
+        # ONE. It fails at the READER, far from this writer, and it reads as a
+        # loss in the store rather than as a loss at the rendering. So an id
+        # past the bound goes to the acceptor, which refuses it, and no line
+        # is emitted. The compressed form copies this line verbatim, so a bad
+        # key would outlive the entry text that could identify the record
+        # another way.
+        if raw_id and (
+            not cleaned_id
+            or len(raw_id) > _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+        ):
+            cleaned_id = _recover_identifier(raw_id)
+        if cleaned_id:
+            lines.append(f"{_MEMORY_ID_LABEL}: {cleaned_id}")
 
     return "\n".join(lines)
 
@@ -1152,7 +1832,7 @@ def _find_terminator_offset(
 
 def _parse_working_memory_section(
     content: str
-) -> Tuple[str, str, str, List[str]]:
+) -> Optional[Tuple[str, str, str, List[str]]]:
     """
     Parse CLAUDE.md content to extract working memory section.
 
@@ -1171,12 +1851,29 @@ def _parse_working_memory_section(
         Tuple of (before_section, section_header_with_comment, after_section, existing_entries)
         where existing_entries is a list of individual memory entry strings.
     """
-    # Bound to managed region if available (round 10).
-    region_result = extract_managed_region(content)
-    if region_result is not None:
-        scan_text, offset = region_result
-    else:
-        scan_text, offset = content, 0
+    # Bound to the MEMORY region, not to the managed region.
+    #
+    # THE WINDOW AND THE TARGET MUST BE THE SAME REGION. The managed region
+    # holds the SESSION BLOCK above the memory markers, and that block
+    # interpolates caller-influenced values. The first-match search below
+    # takes the FIRST `## Working Memory` line in the window it is given, so
+    # a forged heading in the session block wins over the genuine one, and
+    # the offset of that match rebuilds the file.
+    #
+    # MEASURED on a production-shaped document, with the boundary taken from
+    # the production emitter rather than a literal: the splice landed at 234
+    # against a memory start marker at 274, with the genuine heading at 350.
+    # THE WRITE WOULD HAVE GONE OUTSIDE THE MEMORY REGION.
+    # THE MISSING-PAIR DIRECTION IS SETTLED NOW, AND THE RESOLVER OWNS IT.
+    # `None` means DECLINE, and this function returns `None` to say so. It
+    # must NOT return the not-found tuple, because that sends the caller to
+    # its append-at-end branch, which writes the section OUTSIDE every marker.
+    # A decline and an append-at-end are one line apart and they are opposite
+    # outcomes. Read `_resolve_write_window` for the three steps.
+    window = _resolve_write_window(content)
+    if window is None:
+        return None
+    scan_text, offset = window
 
     # Pattern to find the Working Memory section.
     # Negative lookahead excludes the three plugin-managed boundary prefixes
@@ -1185,7 +1882,8 @@ def _parse_working_memory_section(
     # would greedily swallow the marker (#404).
     section_pattern = re.compile(
         r'^(## Working Memory)\s*\n'
-        rf'(<!-- (?!(?:{_PACT_BOUNDARY_ALT}))[^>]*-->)?\s*\n?',
+        rf'(<!-- (?!(?:{_PACT_BOUNDARY_ALT}|{_SESSION_BOUNDARY_ALT}))'
+        r'[^>]*-->)?\s*\n?',
         re.MULTILINE
     )
 
@@ -1202,7 +1900,8 @@ def _parse_working_memory_section(
     # No fence-awareness needed — managed region contains only plugin-generated
     # content (round 10 structural guarantee).
     next_section_pattern = re.compile(
-        rf'(#\s|##\s(?!Working Memory)|---|<!-- (?:{_PACT_BOUNDARY_ALT}))',
+        rf'(#\s|##\s(?!Working Memory)|---|'
+        rf'<!-- (?:{_PACT_BOUNDARY_ALT}|{_SESSION_BOUNDARY_ALT}))',
     )
     section_end_rel = _find_terminator_offset(
         scan_text, section_header_end, next_section_pattern
@@ -1266,12 +1965,21 @@ class SyncResult:
     here would make a truthiness read report success on a refusal.
 
     THE ARGUMENT IS THE PRESERVED MEANING, NOT A COUNT OF CALL SITES.
-    `__bool__ == wrote` returns exactly what this function returned before, so
-    NO caller changes behaviour -- neither the callers that exist now, nor one
-    written later by an author who never reads this class. Do not restate that
-    argument as a tally of reads in the suite. A tally rots the next time a
-    test lands, and it invites a future editor to re-derive the decision from a
-    population instead of from the property. State the property.
+    `__bool__ == wrote` returns exactly what a bare bool returned, so NO
+    TRUTHINESS READER changes behaviour -- neither the truthiness readers that
+    exist now, nor one written later by an author who never reads this class.
+    Do not restate that argument as a tally of reads in the suite. A tally rots
+    the next time a test lands, and it invites a future editor to re-derive the
+    decision from a population instead of from the property. State the property.
+
+    THE PROPERTY IS ABOUT TRUTHINESS READERS AND NOT ABOUT ALL CALLERS, AND
+    THAT WIDTH IS THE CORRECTION RATHER THAN A QUALIFICATION. This paragraph
+    said "no caller changes behaviour" and that was too wide: `__bool__`
+    cannot rescue an IDENTITY comparison. For an instance of this class,
+    `bool(s)` is True while `s is True` and `s == True` are both False, so
+    `assert x is True` breaks where `assert x` does not. Seven assertions in
+    the suite were identity comparisons and each one had to change. A reader
+    who takes the wider claim will predict no breakage and be incorrect.
 
     Do not "fix" the inconsistency with `_store_embedding`; it is load-bearing.
     """
@@ -1285,6 +1993,26 @@ class SyncResult:
     UNRESOLVED = "unresolved"    # no CLAUDE.md resolved
     MISSING = "missing"          # resolved a path that does not exist
     FAILED = "failed"            # the write itself raised
+    EMPTY = "empty"              # nothing to write; caller passed no entries
+    # A NEW REASON RATHER THAN `REFUSED`, AND THE CAUSE IS THE SIGNAL AND NOT
+    # THE ENUM SIZE. A new CLASS of document stops being written here, and a
+    # reader must be able to see WHICH class. `REFUSED` is the ambient-target
+    # guard, which arrives by a RAISE and is set by whoever catches it. This
+    # one arrives by a RETURN, on the same route as UNRESOLVED and MISSING.
+    # Merging the two into one reason would make a signal that cannot
+    # separate its own causes.
+    #
+    # WHERE THAT RETURN ARRIVES DIFFERS BY WRITER, AND THE TWO ARE NOT ALIKE.
+    # From `sync_to_claude_md` it reaches `sync_status` on the structured
+    # channel with no handler change, because `PACTMemory.save` assigns the
+    # reason to `last_sync_status` and `cmd_save` puts that field in the
+    # success envelope. From `sync_retrieved_to_claude_md` IT REACHES NOBODY:
+    # its one caller, `PACTMemory.search`, discards the returned object, so
+    # the reason is produced and dropped. THAT IS A PROPERTY OF THE CALLER
+    # AND NOT OF THIS ENUM, so it holds for each reason here rather than for
+    # this one alone. Do not read the first sentence as covering the two
+    # writers together.
+    NO_WINDOW = "no_window"      # no write window resolved; see _resolve_write_window
 
     def __init__(self, reason: str) -> None:
         self.reason = reason
@@ -1369,6 +2097,130 @@ def _refuse_ambient_target_under_pytest(
     )
 
 
+def _target_is_inside_the_declared_project_dir(resolved_target: Path) -> bool:
+    """Report whether resolution landed inside the caller's declared project dir.
+
+    `CLAUDE_PROJECT_DIR` IS A DECLARATION, THE SAME KIND OF WARRANT AS
+    `claude_md_root`, AND THE INCIDENT IS WHAT SHOWS THE DIFFERENCE MATTERS. The
+    write that reached an operator's file came from a process started with the
+    environment CLEARED, so the variable was absent and resolution fell through
+    to a git anchor that pointed at a checkout nobody had named.
+
+    THE CHECK IS CONTAINMENT, NEVER THE PRESENCE OF THE VARIABLE. A set variable
+    is a PROXY and a wrong one: `_find_existing_claude_md` probes that directory
+    and CONTINUES when it finds nothing, so resolution can begin at a declared
+    root and finish somewhere else entirely. Presence would exempt exactly that
+    escape. Comparing the RESOLVED path against the declared root reports what
+    resolution did rather than what the caller intended.
+
+    Both sides are resolved before the comparison so that a symlink or a `..`
+    cannot make an outside path read as an inside one.
+
+    Returns False when the variable is unset, when it is empty, or when it names
+    a directory the target does not sit under.
+    """
+    declared = os.environ.get("CLAUDE_PROJECT_DIR")
+    if not declared:
+        return False
+    try:
+        Path(resolved_target).resolve().relative_to(Path(declared).resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def _refuse_ambient_sync_from_a_redirected_store(
+    target: Optional[Path],
+    claude_md_root: Optional[Path] = None,
+    resolved_target: Optional[Path] = None,
+) -> None:
+    """Refuse an AMBIENT sync when the ROW went to a store that is not the default.
+
+    THE HOLE ITS SIBLING LEAVES OPEN, AND THE TWO ARE NOT INTERCHANGEABLE.
+    `_refuse_ambient_target_under_pytest` keys on `PYTEST_CURRENT_TEST` in the
+    ENVIRONMENT. A caller that clears the environment (`env -i python3 cli.py
+    save ...`) STRIPS that variable, so that guard reads a clean process and
+    admits the write. That is not a hypothetical shape: it is the invocation
+    that put three entries into an operator's live CLAUDE.md, entries the
+    operator could not then look up, because the rows had gone to two throwaway
+    stores below a scratch directory while the projection went to the real file.
+
+    THE CLASS REFUSED IS KEYED ON THE RESULT, NOT ON THE CALLER. A caller-keyed
+    rule ("refuse saves from a test agent") is defeated by the next new caller.
+    The property that separates the incident from ordinary use is this: the row
+    was written to a REDIRECTED store, and the projection was about to go to an
+    AMBIENTLY RESOLVED file. Those two together produce an entry that displays
+    in a document no reader can resolve back to a store. A save that uses the
+    default store cannot produce that, whatever it calls itself.
+
+    THE CROSSING IS THE DEFECT, NOT THE RESOLUTION. Do NOT read this as a rule
+    against the main-repo resolution branch. That branch is deliberate: a
+    session that runs in a worktree reads the MAIN checkout's CLAUDE.md, so the
+    branch is how an ordinary save reaches the file the session displays.
+    Refusing it would lose every worktree save projection, which is the
+    over-block this guard is shaped to avoid.
+
+    SCOPE, mirroring the sibling guard deliberately rather than inventing a
+    second shape:
+    - An EXPLICIT `target` is always allowed. The caller named its file.
+    - A DECLARED `claude_md_root` is always allowed, and it is the STRONGER
+      warrant: the write must land inside it or `_atomic_write_text` refuses,
+      so a caller that declares a sandbox cannot escape it.
+    - An IN-PROCESS caller (`pytest` already imported) is out of scope. The
+      suite binds a redirected store for every test AND syncs ambiently on
+      purpose, so refusing there would break the suite rather than the hazard.
+      The incident process had no pytest in it, so this exemption does not
+      reopen the class.
+    - A TARGET THAT LANDED INSIDE `CLAUDE_PROJECT_DIR` is allowed, and this
+      exemption was added because a MEASURED over-block demanded it. Without it
+      the guard refused a suite arm that spawns a child with a redirected store
+      and a tmp project directory, which is a legitimate and common shape: the
+      caller declared a root through the environment and resolution stayed
+      inside it. The incident does NOT come back, because that process ran with
+      the environment cleared and resolution escaped to a git anchor.
+
+    THE FAILURE DIRECTION IS DELIBERATE AND IT IS THE SAFE ONE. When this guard
+    is wrong it refuses a GOOD projection rather than admitting a bad one. That
+    is acceptable here and would not be elsewhere, because the refused thing is
+    a PROJECTION and never a RECORD: `save` has already committed the row and
+    goes on to return success, and the caller reads `sync_status='refused'`. So
+    a wrong refusal costs a display line the next sync rebuilds, while a wrong
+    admission corrupts a gitignored, always-loaded file that has no commit to
+    restore it from.
+
+    Raises AmbientSyncRefused, the same type as the sibling guard, so the one
+    handler in `memory_api.save` maps both to `SyncResult.REFUSED` with no
+    second branch to keep in step.
+    """
+    if target is not None:
+        return
+    if claude_md_root is not None:
+        return
+    if "pytest" in sys.modules:
+        return
+    origin = store_path_origin()
+    if origin == STORE_ORIGIN_HOME:
+        return
+    # LAST, AND ONLY WITH A RESOLVED PATH IN HAND. A caller that has not
+    # resolved yet passes None, and None cannot be inside anything, so the
+    # refusal stands. That is the safe direction: the exemption has to be
+    # EARNED by a resolution that landed inside the declared root.
+    if resolved_target is not None and _target_is_inside_the_declared_project_dir(
+        resolved_target
+    ):
+        return
+    # THE ORIGIN WORD, NEVER THE PATH. `origin` is one of a closed set of words
+    # ("scope", "environment"), so it names the redirect without putting a
+    # filesystem path into a message that reaches a log and a caller.
+    raise AmbientSyncRefused(
+        "refusing to sync working memory to an ambiently-resolved CLAUDE.md: "
+        f"the memory store is redirected (origin={origin}), so this entry "
+        "would display in a file that does not read from the store that holds "
+        "it. Pass an explicit target=, declare claude_md_root=, or use the "
+        "CLI's --no-sync flag."
+    )
+
+
 def sync_to_claude_md(
     memory: Dict[str, Any],
     files: Optional[List[str]] = None,
@@ -1385,18 +2237,31 @@ def sync_to_claude_md(
     THE COUNT IS A CAP, NOT A PROMISE, and this docstring said "the last 3"
     until the claim was measured. `_apply_token_budget` keeps the newest entry
     IN FULL and its drop loop is `while len(result) > 1`, so when that entry
-    ALONE exceeds the whole-section budget -- as a typical full entry does --
-    the older ones are dropped and the section shows ONE. Stating a fixed 3
-    here is the same false claim that was removed from the comment this
-    function WRITES INTO the file, left behind in the function that makes it
-    false.
+    ALONE exceeded the whole-section budget the older ones were dropped and the
+    section showed ONE.
 
-    Its sibling `sync_retrieved_to_claude_md` genuinely does hold the last 3,
-    and its docstring is correct as written -- `_format_retrieved_entry`
-    truncates each entry to 200 chars, so three of them cannot reach that
-    section's budget and its drop loop never runs. DO NOT "fix" the sibling to
-    match this wording: the two differ because one bounds its entries and the
-    other does not, which is the whole mechanism.
+    THAT REGIME IS CLOSED AND THE CAP IS STILL A CAP. `_apply_entry_token_ceiling`
+    now bounds each entry below the section budget, so the newest entry cannot
+    exhaust the section by itself and the older ones survive at their compressed
+    size. The count remains a cap rather than a promise for the ordinary reason:
+    the store can hold fewer entries than MAX_WORKING_MEMORIES.
+
+    ITS SIBLING `sync_retrieved_to_claude_md` HOLDS THE SAME CAP BY A DIFFERENT
+    MECHANISM, AND THE EARLIER DESCRIPTION OF THAT MECHANISM HERE WAS INCORRECT
+    IN TWO PLACES. It said `_format_retrieved_entry` truncates each ENTRY to 200
+    chars; it bounded the CONTEXT FIELD only, and the query, the goal and the
+    memory id carried no bound at all. It then said the sibling's drop loop
+    "never runs"; that loop was DRIVEN, reaching 547 tokens against its budget
+    of 500 and evicting one genuine neighbour.
+
+    WHAT IS CORRECT NOW, WITH ITS CONDITION. Each field of both formatters is
+    bounded, and each entry of both sections is bounded in TOKENS. The sibling's
+    drop loop CAN still run: three retrieved entries at the full character bound
+    cost more than its budget, so an entry at the ceiling loses lines and a
+    third entry can be dropped. A realistic retrieved entry sits far below the
+    ceiling, because a query and a memory id are short. The two functions differ
+    in POLICY and not in whether they bound: this one compresses its older
+    entries before it drops any, and the sibling drops without compressing.
 
     This function is designed for graceful degradation - if CLAUDE.md doesn't
     exist or the sync fails for any reason, it logs a warning but doesn't
@@ -1562,6 +2427,16 @@ def sync_to_claude_md(
             )
         return SyncResult(SyncResult.MISSING)
 
+    # THE REDIRECTED-STORE REFUSAL SITS HERE, BELOW RESOLUTION AND ABOVE THE
+    # LOCK, and the position is load-bearing rather than tidy. It needs the
+    # RESOLVED path to judge whether the destination was declared or derived,
+    # so it cannot run at the top with its sibling. It must run before
+    # `file_lock`, which creates the sidecar's parent directories: a refusal
+    # after that point would leave a write behind on the path it refused.
+    _refuse_ambient_sync_from_a_redirected_store(
+        target, claude_md_root, claude_md_path
+    )
+
     try:
         # Serialize the FULL read-modify-write window under the shared sidecar
         # lock (see the "why lock the whole window" note above file_lock for the
@@ -1571,8 +2446,17 @@ def sync_to_claude_md(
             content = claude_md_path.read_text(encoding="utf-8")
 
             # Parse existing working memory section
-            before_section, section_header, after_section, existing_entries = \
-                _parse_working_memory_section(content)
+            parsed = _parse_working_memory_section(content)
+            if parsed is None:
+                # THE DECLINE, AND IT IS LOUD RATHER THAN SILENT. `bool()` on
+                # this result is False, so a caller that reads it as a success
+                # flag sees the write did not happen, and `.reason` names the
+                # cause on the structured `sync_status` channel. THE FAILURE
+                # DIRECTION IS A LOST ENTRY, so it must not be silent: the
+                # alternative shape here, the not-found tuple, would append
+                # the section OUTSIDE every marker instead.
+                return SyncResult(SyncResult.NO_WINDOW)
+            before_section, section_header, after_section, existing_entries = parsed
 
             # Format new memory entry
             new_entry = _format_memory_entry(memory, files, memory_id)
@@ -1622,7 +2506,7 @@ def sync_to_claude_md(
 
 def _parse_retrieved_context_section(
     content: str
-) -> Tuple[str, str, str, List[str]]:
+) -> Optional[Tuple[str, str, str, List[str]]]:
     """
     Parse CLAUDE.md content to extract retrieved context section.
 
@@ -1636,19 +2520,28 @@ def _parse_retrieved_context_section(
         Tuple of (before_section, section_header, after_section, existing_entries)
         where existing_entries is a list of individual memory entry strings.
     """
-    # Bound to managed region if available (round 10).
-    region_result = extract_managed_region(content)
-    if region_result is not None:
-        scan_text, offset = region_result
-    else:
-        scan_text, offset = content, 0
+    # Bound to the MEMORY region, not to the managed region. Same bound as
+    # `_parse_working_memory_section` and for the same cause, including the
+    # missing-pair branch: read that function for both.
+    #
+    # MEASURED at THIS site, on a production-shaped document with a forged
+    # `## Retrieved Context` line in the session block: the splice landed at
+    # 234 against a memory start marker at 277.
+    # Same three-step window and the same DECLINE as the sibling above. `None`
+    # here means decline, and it must not be the not-found tuple, for the same
+    # cause: that tuple sends the caller to its append-at-end branch.
+    window = _resolve_write_window(content)
+    if window is None:
+        return None
+    scan_text, offset = window
 
     # Pattern to find the Retrieved Context section.
     # Negative lookahead narrows to the plugin-managed boundary prefixes
     # — see _parse_working_memory_section for the full rationale (#404).
     section_pattern = re.compile(
         r'^(## Retrieved Context)\s*\n'
-        rf'(<!-- (?!(?:{_PACT_BOUNDARY_ALT}))[^>]*-->)?\s*\n?',
+        rf'(<!-- (?!(?:{_PACT_BOUNDARY_ALT}|{_SESSION_BOUNDARY_ALT}))'
+        r'[^>]*-->)?\s*\n?',
         re.MULTILINE
     )
 
@@ -1665,7 +2558,8 @@ def _parse_retrieved_context_section(
     # No fence-awareness needed — managed region contains only plugin-generated
     # content (round 10 structural guarantee).
     next_section_pattern = re.compile(
-        rf'(#\s|##\s(?!Retrieved Context)|---|<!-- (?:{_PACT_BOUNDARY_ALT}))',
+        rf'(#\s|##\s(?!Retrieved Context)|---|'
+        rf'<!-- (?:{_PACT_BOUNDARY_ALT}|{_SESSION_BOUNDARY_ALT}))',
     )
     section_end_rel = _find_terminator_offset(
         scan_text, section_header_end, next_section_pattern
@@ -1714,26 +2608,63 @@ def _format_retrieved_entry(
     date_str = now.strftime("%Y-%m-%d %H:%M")
 
     lines = [f"### {date_str}"]
-    lines.append(f"**Query**: \"{query}\"")
+    # The query is caller-supplied text, so it is sanitized like every other
+    # interpolated value. It is NOT guarded by a truthiness test: an empty
+    # query renders an empty pair of quotes, which is the pre-fix behaviour.
+    lines.append(f"**Query**: \"{_sanitize_prompt_field(str(query or ''))}\"")
 
     if score is not None:
         lines.append(f"**Relevance**: {score:.2f}")
 
-    # Add context if present
-    if memory.get("context"):
-        # Truncate long context for display
-        context = memory['context']
-        if len(context) > 200:
-            context = context[:197] + "..."
+    # Add context if present.
+    # THE HAND-ROLLED TRUNCATION THAT STOOD HERE IS GONE, AND ITS REMOVAL IS
+    # PART OF THE FIX RATHER THAN A TIDY-UP. It cut to `context[:197] +
+    # "..."`, and `_sanitize_prompt_field` at limit 200 cuts to
+    # `cleaned[:197] + "..."`. Leaving both in place would cut the value
+    # TWICE, to 194 characters. The helper output is byte-identical to the
+    # code removed for a control-character-free input, so the truncation
+    # behaviour at this site does not change; only the control-character
+    # collapse and the outer strip are new.
+    context = _sanitize_prompt_field(str(memory.get("context") or ""))
+    if context:
         lines.append(f"**Context**: {context}")
 
     # Add goal if present
-    if memory.get("goal"):
-        lines.append(f"**Goal**: {memory['goal']}")
+    goal = _sanitize_prompt_field(str(memory.get("goal") or ""))
+    if goal:
+        lines.append(f"**Goal**: {goal}")
 
     # Add memory ID if provided
     if memory_id:
-        lines.append(f"**Memory ID**: {memory_id}")
+        # AN IDENTIFIER, NOT FREE TEXT. The free-text bound of 200 is 3
+        # times what the generator emits, and the store does not bound this
+        # value at its ingress, so a caller-supplied id took the widest
+        # bound in the classification.
+        raw_id = str(memory_id)
+        cleaned_id = _sanitize_prompt_field(
+            raw_id, _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+        )
+        # THE SANITIZER IS ONE OF THE PATHS THAT CAN DROP THE RECOVERY
+        # POINTER. It returns "" on an internal failure as well as for a value
+        # made only of control characters, and the truthiness gate below cannot
+        # tell the two apart. NON-EMPTY IN AND EMPTY OUT is the discriminator.
+        # `_recover_identifier` then accepts the raw id unchanged or refuses
+        # it. See its docstring for why it is an acceptor and not a second
+        # sanitizer.
+        #
+        # THE LENGTH TEST IS THE SECOND ROUTE TO THE ACCEPTOR, AND THE CAUSE
+        # IS RECORDED IN FULL AT THE TWIN BLOCK IN `_format_memory_entry`. In
+        # short: a raw id past the bound is CUT to a non-empty value, so the
+        # empty test cannot fire, and a cut key is INDISTINGUISHABLE FROM A
+        # GOOD ONE at the reader. The acceptor refuses it and no line is
+        # emitted.
+        if raw_id and (
+            not cleaned_id
+            or len(raw_id) > _REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+        ):
+            cleaned_id = _recover_identifier(raw_id)
+        if cleaned_id:
+            lines.append(f"{_MEMORY_ID_LABEL}: {cleaned_id}")
 
     return "\n".join(lines)
 
@@ -1744,7 +2675,7 @@ def sync_retrieved_to_claude_md(
     scores: Optional[List[float]] = None,
     memory_ids: Optional[List[str]] = None,
     claude_md_root: Optional[Path] = None
-) -> bool:
+) -> SyncResult:
     """
     Sync retrieved memories to the Retrieved Context section of CLAUDE.md.
 
@@ -1761,7 +2692,8 @@ def sync_retrieved_to_claude_md(
             `sync_to_claude_md`. Omit it for today's behaviour.
 
     Returns:
-        True if sync succeeded, False otherwise.
+        `SyncResult`. `bool()` of it is the value this function returned
+        before the conversion below, and `.reason` says WHY when it is false.
 
     THIS IS THE SECOND AMBIENT WRITER AND IT HAD NO REFUSAL AT ALL. The save
     path at least had the `target` escape hatch; this one takes no target, so
@@ -1770,13 +2702,43 @@ def sync_retrieved_to_claude_md(
     whenever `sync_to_claude` is true, WHICH IS THE DEFAULT -- so an ordinary
     search was a write.
 
-    ITS SIGNATURE STAYS `bool` DELIBERATELY. The reason channel belongs to
-    `sync_to_claude_md`, whose callers read `True` as success; this function is
-    not being converted, and an annotation promising `SyncResult` here would
-    describe code that returns `False`.
+    ITS SIGNATURE WAS `bool` DELIBERATELY, AND THIS CONVERSION ANSWERS THAT
+    DECISION RATHER THAN IGNORES IT. THE RECORDED PARAGRAPH CARRIED THREE
+    CLAIMS AND TWO OF THEM NEED AN ANSWER HERE. The third, "this function
+    is not being converted", was a statement of intent at the time, and the
+    conversion settles it by being the act it describes, so it needs no
+    separate answer. A reader who counts three and finds two answered has
+    not met a claim that went missing.
+
+    THE CONTINGENT ONE: "an annotation promising `SyncResult` here would
+    describe code that returns `False`". That held only while the return
+    sites stayed bare bools. ALL FIVE OF THEM ARE CONVERTED, so the
+    annotation now describes the code and the cause is spent.
+
+    THE OWNERSHIP ONE, WHICH THE CONVERSION DOES NOT TOUCH AND WHICH IS
+    SUPERSEDED RATHER THAN DISCHARGED: the paragraph said the reason
+    channel BELONGS to `sync_to_claude_md`. That was a true statement of
+    the arrangement at the time and it is not contingent on this function.
+    The architect superseded it: the channel is shared by both writers,
+    because a caller of either one has the same need to separate a refusal
+    from a no-op.
+
+    WHY IT WAS WORTH CONVERTING, STATED WITHOUT OVERCLAIM. A REFUSED write and
+    a DID-NOT-WRITE were one observation for every caller. THIS DOES NOT REPAIR
+    A LIVE PRODUCTION OBSERVATION: the one production caller discards the
+    return value, so no shipped code reads the bool today. What the conversion
+    buys is CONSISTENCY with the sibling and a DIAGNOSTIC channel for a future
+    caller and for the suite.
+
+    NO TRUTHINESS READER CHANGES BEHAVIOUR, AND THAT IS NARROWER THAN "no
+    caller". `SyncResult.__bool__` is `wrote`, so a truthiness read gets the
+    value the bare bool gave. AN IDENTITY COMPARISON IS A DIFFERENT MATTER and
+    `__bool__` cannot rescue it: `x is True` is False for an instance of this
+    class however `bool(x)` reads. The suite held seven such comparisons and
+    each one changed with this conversion.
     """
     if not memories:
-        return False
+        return SyncResult(SyncResult.EMPTY)
 
     # Same refusal as the save path, and the same exemptions: a declared anchor
     # is checked, so it is a stronger warrant than a named target. There is no
@@ -1795,7 +2757,7 @@ def sync_retrieved_to_claude_md(
 
     if claude_md_path is None or project_root is None:
         logger.debug("CLAUDE.md not found, skipping retrieved context sync")
-        return False
+        return SyncResult(SyncResult.UNRESOLVED)
 
     # EXISTENCE GUARD. The `is None` check above is not sufficient: it covers a
     # resolver that finds NOTHING, not a resolver that returns a path to a file
@@ -1825,7 +2787,14 @@ def sync_retrieved_to_claude_md(
             "resolver stopped returning only existing paths, or the file was "
             "removed after it resolved.", claude_md_path
         )
-        return False
+        return SyncResult(SyncResult.MISSING)
+
+    # Same position and same reasons as in the sibling: below resolution because
+    # it judges the RESOLVED destination, above `file_lock` because that call
+    # creates directories.
+    _refuse_ambient_sync_from_a_redirected_store(
+        None, claude_md_root, claude_md_path
+    )
 
     try:
         # Serialize the FULL read-modify-write window under the shared sidecar
@@ -1836,8 +2805,11 @@ def sync_retrieved_to_claude_md(
             content = claude_md_path.read_text(encoding="utf-8")
 
             # Parse existing retrieved context section
-            before_section, section_header, after_section, existing_entries = \
-                _parse_retrieved_context_section(content)
+            parsed = _parse_retrieved_context_section(content)
+            if parsed is None:
+                # The same decline as the sibling writer, for the same cause.
+                return SyncResult(SyncResult.NO_WINDOW)
+            before_section, section_header, after_section, existing_entries = parsed
 
             # Format new entries (only the top result to avoid clutter)
             new_entries = []
@@ -1851,8 +2823,23 @@ def sync_retrieved_to_claude_md(
             all_entries = new_entries + existing_entries
             trimmed_entries = all_entries[:MAX_RETRIEVED_MEMORIES]
 
-            # Apply token budget: reduce entry count if over budget.
-            # Retrieved entries are already compact (~200 chars each), drop oldest rather than compress.
+            # Apply the PER-ENTRY token ceiling first, then the section
+            # budget. THIS IS A SECOND CEILING SITE AND IT IS DIFFERENT CODE
+            # FROM `_apply_token_budget`, which the Working Memory sync
+            # calls. A ceiling placed only in that function reaches that
+            # section alone and leaves this loop open. Each of the
+            # MAX_RETRIEVED_MEMORIES entries gets an equal share here,
+            # because this loop DROPS without compressing, so there is no
+            # compressed-neighbour saving to redistribute.
+            entry_ceiling = RETRIEVED_CONTEXT_TOKEN_BUDGET // MAX_RETRIEVED_MEMORIES
+            trimmed_entries = [
+                _apply_entry_token_ceiling(e, entry_ceiling) for e in trimmed_entries
+            ]
+
+            # Reduce entry count if over budget. Retrieved entries are
+            # bounded per FIELD by `_format_retrieved_entry`; drop oldest
+            # rather than compress. THE DROP-RATHER-THAN-COMPRESS CHOICE IS
+            # DELIBERATE and the per-entry ceiling above is derived from it.
             # Subtract the popped entry's tokens instead of recalculating the full sum.
             total_tokens = sum(_estimate_tokens(e) for e in trimmed_entries)
             while len(trimmed_entries) > 1 and total_tokens > RETRIEVED_CONTEXT_TOKEN_BUDGET:
@@ -1901,8 +2888,8 @@ def sync_retrieved_to_claude_md(
             _atomic_write_text(claude_md_path, new_content, project_root)
 
         logger.info("Synced retrieved memories to CLAUDE.md Retrieved Context section")
-        return True
+        return SyncResult(SyncResult.WROTE)
 
     except Exception as e:
         logger.warning(f"Failed to sync retrieved memories to CLAUDE.md: {e}")
-        return False
+        return SyncResult(SyncResult.FAILED)

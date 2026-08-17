@@ -1001,6 +1001,9 @@ The lead reviews `variety_acknowledgment` as part of teachback acceptance per [p
 - **`"yes"`**: standard teachback acceptance; lead marks Task A completed + sends paired wake-SendMessage.
 - **`"no"` or `"concern"`**: lead has two corrective options before acceptance:
   - *Orchestrator-side correction* (preferred when teammate's flag is correct): re-stamp `metadata.variety` on Task B via TaskUpdate with refined per-dimension rationales, THEN accept the teachback. The teammate's acknowledgment becomes part of the audit trail; no rejection needed.
+
+    > ⚠️ To re-stamp, RE-SEND THE FULL `variety` OBJECT in ONE `TaskUpdate` call, and include each field you did not revise, unchanged. A write that names `variety` REPLACES the whole object, and it erases each field you omit. It reports no error. Then read the task file back and enumerate the keys of `metadata.variety`.
+
   - *Teammate-side correction* (when teammate's flag is erroneous): reject the teachback via `metadata.teachback_rejection` with reason explaining why the variety scoring stands as-is; teammate revises and resubmits.
 
 **META-BLOCK escalation at 3+ rejection cycles**: if teammate flags persist across 3+ cycles after lead correction attempts, the standard imPACT META-BLOCK escalation applies — see [pact-completion-authority.md §META-BLOCK](pact-completion-authority.md#meta-block). The 3-cycle bound is the existing protocol's bound; per-dispatch variety stamping inherits, does not redefine.
@@ -2487,15 +2490,6 @@ Claude Code compaction has three durability mechanisms for orchestrator content:
 ### Malformed-Stdin Failure Log
 
 When `session_init.py` receives malformed or incomplete stdin (invalid JSON, missing `session_id`, non-string `session_id`, empty/whitespace `session_id`, or an `unknown-*` sentinel), the R3 gate drops the per-session journal anchor to avoid creating an unreapable `unknown-{hex}/` directory. The failure is instead recorded in a global bounded ring buffer at `~/.claude/pact-sessions/_session_init_failures.log` (100-entry cap, JSONL, fail-open). When debugging session start failures that produce no per-session directory — especially failures in teammate sessions whose first-message context is never seen by the user — inspect this log with `cat ~/.claude/pact-sessions/_session_init_failures.log | tail -20`. Each entry records a UTC timestamp, classification (`malformed_json` / `missing_session_id` / `non_string_session_id` / `empty_session_id` / `sentinel_session_id` / `other`), truncated error text (≤200 chars), cwd, and source.
-
----
-
-## Session Continuity
-
-If work spans sessions, update CLAUDE.md with:
-- Current phase and task
-- Blockers or open questions
-- Next steps
 
 ---
 

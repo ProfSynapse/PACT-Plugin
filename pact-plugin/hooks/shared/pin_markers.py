@@ -56,9 +56,12 @@ from dataclasses import dataclass
 from enum import Enum
 
 from shared.claude_md_manager import (
+    MEMORY_END_MARKER,
+    MEMORY_START_MARKER,
     PACT_BOUNDARY_PREFIXES,
     PINNED_END_MARKER,
     PINNED_START_MARKER,
+    SESSION_BOUNDARY_PREFIX,
     extract_managed_region,
 )
 # The line scanner is REUSED from the module that owns it rather than copied.
@@ -101,8 +104,19 @@ from staleness import _find_terminator_offset
 # and MIRRORS the pattern `staleness._parse_pinned_section` compiles inline: an
 # H1 or H2 heading, or any PACT-managed boundary comment. Spelling the three
 # prefixes literally here would be a twin copy that drifts silently.
+#
+# THE SESSION PREFIX IS INERT HERE TODAY, AND IT IS PRESENT FOR SYMMETRY WITH
+# `staleness._parse_pinned_section`, WHICH NEEDS IT. MEASURED: the caller
+# below narrows its window to the MEMORY region before it searches, and it
+# REFUSES with `SkipReason.NO_MEMORY_REGION` when that marker pair is absent,
+# so no session marker can enter the window this pattern scans. The sibling
+# takes the MANAGED region and does reach one. Do NOT read this term as
+# evidence that a route to it was found here. If the narrowing above is ever
+# widened, this term is what stops the same defect arriving in this file.
 _BOUNDARY_ALT = "|".join(PACT_BOUNDARY_PREFIXES)
-_PINNED_TERMINATOR = re.compile(rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}))')
+_PINNED_TERMINATOR = re.compile(
+    rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}|{SESSION_BOUNDARY_PREFIX}))'
+)
 
 # The pinned section heading. `re.search` takes the FIRST occurrence and a
 # second one is ignored, which matches every existing reader of this region.
@@ -113,6 +127,131 @@ _PINNED_HEADING = re.compile(r'^## Pinned Context\s*\n', re.MULTILINE)
 # markers, so a marker and its newline can never be accounted separately.
 START_LINE = PINNED_START_MARKER + "\n"
 END_LINE = PINNED_END_MARKER + "\n"
+
+
+def _narrow_to_memory_region(
+    region_text: str, region_start: int
+) -> tuple[str, int] | None:
+    """Narrow an already-extracted managed region to the MEMORY region inside
+    it, or None when the memory marker pair is not there.
+
+    THE WINDOW AND THE TARGET MUST BE THE SAME REGION, and before this function
+    they were not. `extract_managed_region` returns the WIDE region, and the
+    `## Pinned Context` heading this module anchors on is defined to live in the
+    NARROW memory region nested inside it. The session block sits inside the
+    wide window and ABOVE the narrow one, so a heading placed there is the FIRST
+    match and the anchor lands on it. Neither downstream guard stops that:
+    `certify_expel_nothing` declines placement in its own docstring, and the
+    collision label answers a different question. Placement had ONE runtime
+    constraint and this is now the other half of it.
+
+    BOTH BOUNDARIES ARE MARKER LINES, THROUGH THE FILE'S SINGLE DEFINITION.
+    `marker_line_span` decides what counts, so this function adds no third
+    reading of `the marker occupies a line`.
+
+    WHAT THAT GUARANTEES, AND AGAINST WHAT. The managed region holds the
+    session block ABOVE the memory markers, and the session block interpolates
+    caller-influenced values. A value carrying the marker TEXT cannot move
+    either boundary, because the value lands inside a longer line and such a
+    line does not strip to the marker.
+
+    THE CONTROL THAT GUARANTEE RESTS ON IS IN ANOTHER MODULE, AND IT IS NAMED
+    HERE BECAUSE THIS FUNCTION CANNOT SEE IT. A value that could occupy a line
+    ALONE would move the boundary, and what stops that is
+    `session_resume._sanitize_prompt_field`, which substitutes control
+    characters. MEASURED at that function: `'/tmp/x\\n<marker>\\ny'` comes back
+    as `'/tmp/x <marker> y'`, so the newline goes and THE MARKER TEXT SURVIVES.
+    That survival is why a text search was defeated and a line rule is not. If
+    that sanitize stops covering newlines, this boundary is reachable again.
+
+    WHAT THIS DOES NOT GUARANTEE: a marker line placed BY HAND in the managed
+    region above the genuine one. That is a user editing a block the file
+    labels do-not-edit, which is the same self-inflicted population as a
+    hand-deleted marker pair.
+
+    THE PREVIOUS VERSION OF THIS PARAGRAPH ARGUED THE WRONG CASE, and the error
+    is worth keeping because it is easy to repeat. It said a marker OUTSIDE the
+    managed block belongs to no boundary this writer honours, and that taking
+    the caller's already-bounded text made a forgery unrepresentable. THAT IS
+    TRUE ABOUT OUTSIDE AND THE ATTACK IS INSIDE, where a forgery was fully
+    representable and unguarded. The sentence certified a property the function
+    did not have, and it read as covering all cases because it named none.
+
+    THE SEARCH IS BOUNDED TO THE MANAGED REGION IT IS GIVEN, never to the whole
+    file. That remains correct and is now the SECOND bound rather than the only
+    one.
+
+    RETURNS ABSOLUTE OFFSETS, matching `extract_managed_region`, so the caller
+    substitutes the pair and every offset arithmetic below it is unchanged.
+
+    THE PAIR IS REQUIRED, AND THE MISSING-PAIR CASE REFUSES rather than falls
+    back to the wide window. See `SkipReason.NO_MEMORY_REGION` for why a
+    fall-back is unsafe on this document shape.
+
+    DO NOT WIDEN THIS WINDOW TO AGREE WITH THE READER. The pin reader,
+    `staleness._parse_pinned_section`, resolves a LOOSER window than this one,
+    and the difference is deliberate at each of the three points below. THE TWO
+    DIRECTIONS ARE NOT THE SAME SIZE OF MISTAKE. Widening this function back to
+    the managed region reopens the placement defect the narrow window closes, so
+    that direction is a defect. Narrowing the READER is a possible future change
+    with an unmeasured blast radius, so that direction is open work rather than a
+    tidying pass. Neither gap is closed here, and an editor who finds the two
+    windows inconsistent must leave them inconsistent.
+
+    THE READER TAKES ITS SEARCH START FROM A BARE SUBSTRING SEARCH FOR
+    `MEMORY_START_MARKER`, where this function needs a marker LINE. So the marker
+    text carried INSIDE a longer session line moves the reader search start and
+    does not move this window. NO CODE AT EITHER SITE HOLDS THAT CLOSED. What
+    holds it closed is the newline substitution in
+    `session_resume._sanitize_prompt_field`, which is recorded at that one site,
+    so a change there separates the two starts with no signal at either function.
+
+    THE TWO END BOUNDARIES AGREE TODAY, AND NO LINE OF CODE STATES THE
+    AGREEMENT. `MEMORY_END_MARKER` carries the `PACT_MEMORY_` prefix, and the
+    reader terminator alternation is built from `PACT_BOUNDARY_PREFIXES`, so the
+    reader stops at that marker BY PREFIX MEMBERSHIP and not by naming it. A
+    READER OF THE CODE SEES NO END BOUND AND A DRIVER OF A DOCUMENT SEES ONE.
+    Drive a document before you conclude the two ends differ.
+
+    THE READER REACHES THAT MARKER ONLY WHEN NOTHING STOPS IT EARLIER. A heading
+    or a boundary comment between the pinned body and the marker ends the reader
+    scan at that earlier line, and the canonical template puts a `## Working
+    Memory` heading in that position. So on a template-made document the reader
+    does not reach the marker, and a rename of it changes nothing there. DO NOT
+    READ THAT AS PERMISSION TO MOVE THE MARKER OUT OF THE PREFIX FAMILY. A
+    document with no such heading between the pins and the marker DOES reach it,
+    a user edit can make one, and the pin cap gate compares two user documents.
+    On that document the rename removes the reader bound with nothing to see,
+    and this function is unchanged in each case.
+
+    A MISSING MARKER PAIR SPLITS THE TWO IN KIND RATHER THAN IN WIDTH. This
+    function returns None and plans nothing. The reader keeps its search start at
+    0 and continues across the full managed region. Do not make this function
+    fall back to reach that behaviour.
+
+    THE STRIPPED COMPARISON IS INHERITED FROM `marker_line_span` AND WAS
+    RE-JUDGED FOR THIS JOB, because that docstring justifies its tolerance by a
+    REFUSAL failure direction and this site bounds a WINDOW instead. MEASURED
+    on an indented memory start marker: `marker_line_span` accepts the line and
+    `_find_terminator_offset`, which matches the RAW line, does not. THE
+    DISAGREEMENT DOES NOT REACH THE PLANNER, because the two bound DIFFERENT
+    spans -- this one sets the window, and the terminator scan runs INSIDE the
+    window it produced, so the marker line is excluded before that scan sees
+    it. A raw comparison here would refuse an indented but faithful document,
+    which is the over-block direction this repository treats as the worse
+    fault.
+    """
+    start_span = marker_line_span(region_text, MEMORY_START_MARKER)
+    if start_span is None:
+        return None
+    # The END of the marker line, so the window begins on the NEXT line and
+    # `region_start` stays a line start for every offset computed below it.
+    inner_start = start_span[1]
+    tail = region_text[inner_start:]
+    end_span = marker_line_span(tail, MEMORY_END_MARKER)
+    if end_span is None:
+        return None
+    return tail[:end_span[0]], region_start + inner_start
 
 
 def _body_contains_a_fence(body: str) -> bool:
@@ -249,18 +388,26 @@ def is_line_start(text: str, offset: int) -> bool:
     return text[offset - 1] == "\n"
 
 
-def marker_line_offset(text: str, literal: str) -> int | None:
-    """Offset of the first line of `text` that IS `literal`, else None.
+def marker_line_span(text: str, literal: str) -> tuple[int, int] | None:
+    """Span of the first line of `text` that IS `literal`, else None.
 
-    THE SINGLE DEFINITION OF `the marker occupies a line`. `marker_line_present`
-    below is this function's boolean shadow, and the planner's pair ladder uses
-    the offsets. Keeping one implementation is what stops a document being
+    THE SINGLE DEFINITION OF `the marker occupies a line`. `marker_line_offset`
+    below is this function's start projection and `marker_line_present` is its
+    boolean shadow. Keeping ONE implementation is what stops a document being
     marked by one reading and unmarked by another -- the exact drift that a
     second, independently-written predicate produced here once already.
 
+    RETURNS BOTH ENDS, and the second one is why this function exists rather
+    than the offset alone. A caller that needs the text AFTER the marker line
+    cannot get there from the start offset without computing the line length,
+    and computing it separately is that second predicate again. Returning the
+    span keeps the terminator rule inside the one walk that owns it.
+
     `splitlines()` is deliberate: it splits on LF, CRLF and CR alike, so the
     property is stated once and holds for every terminator rather than
-    enumerating them.
+    enumerating them. `keepends=True` is what makes the END offset carry the
+    same rule -- a `find("\\n")` beside this walk would disagree with it on a
+    bare-CR document, which is the drift this docstring exists to prevent.
 
     THE COMPARISON IS STRIPPED, AND HERE THAT IS THE SAFE DIRECTION -- unlike
     `staleness._find_declared_end_offset`, which tolerates trailing whitespace
@@ -269,13 +416,28 @@ def marker_line_offset(text: str, literal: str) -> int | None:
     fail-safe. That one decides where a cap stops counting, so over-matching
     drops a pin out of the counted span and fails OPEN. Tolerance follows the
     direction of failure, never the resemblance of the code.
+
+    ONE CALLER USES THIS TO BOUND A WINDOW RATHER THAN TO REFUSE, and the
+    tolerance was re-judged for that job rather than inherited. See
+    `_narrow_to_memory_region`, which records the measurement.
     """
     offset = 0
     for line in text.splitlines(keepends=True):
         if line.strip() == literal:
-            return offset
+            return offset, offset + len(line)
         offset += len(line)
     return None
+
+
+def marker_line_offset(text: str, literal: str) -> int | None:
+    """Offset of the first line of `text` that IS `literal`, else None.
+
+    THE START PROJECTION of `marker_line_span`, and a projection rather than a
+    second walk on purpose: two walks are the twin that drifts, which this
+    file has paid for once already at this exact predicate.
+    """
+    span = marker_line_span(text, literal)
+    return None if span is None else span[0]
 
 
 def _is_end_marked(region_text: str, body_end: int) -> bool:
@@ -389,6 +551,34 @@ class SkipReason(str, Enum):
     """
 
     NOT_MIGRATED = "noop_not_migrated"
+    # The managed region is there and the MEMORY marker pair inside it is not,
+    # so the window this writer anchors in does not exist. REFUSE rather than
+    # widen back to the managed region.
+    #
+    # WHY A FALL-BACK IS UNSAFE HERE, and it is a property of the build order
+    # rather than a preference. The emitter writes the managed marker, the
+    # title, THEN the session block, THEN the memory marker, so the session
+    # block sits ABOVE the memory marker BY CONSTRUCTION. Removing the memory
+    # markers does not remove the session block. A document missing the pair
+    # therefore STILL HOLDS A POSITION where a heading can sit above the pinned
+    # section, which is the placement this narrowing exists to close. Widening
+    # on exactly that document restores the defect on the one shape that has it.
+    #
+    # EMITTING THE MISSING PAIR IS ALSO REFUSED, and for a different cause: it
+    # would write markers back into a block the file labels do-not-edit, on a
+    # gitignored file with no recovery commit.
+    #
+    # THE POPULATION IS ONE ROUTE. Every emitter writes the two markers
+    # unconditionally, and the two constants entered the tree in one commit, so
+    # no shipped version wrote the outer marker without the inner pair. The only
+    # route to this state is a hand-edit, and it does not self-clear, because
+    # the migration returns early when the managed marker is present and it is
+    # the only path that adds the memory markers to an existing document.
+    #
+    # RESIDUAL, STATED RATHER THAN IMPLIED: this narrowing does not cover a
+    # heading a user places BY HAND inside the session block, which is the same
+    # self-inflicted population as the marker-less document itself.
+    NO_MEMORY_REGION = "noop_no_memory_region"
     NO_SECTION = "noop_no_section"
     EMPTY_SECTION = "noop_empty_section"
     # The pinned body contains a fenced code block. See `_body_contains_a_fence`.
@@ -458,6 +648,13 @@ def plan_insertion(content: str) -> Insertion | SkipReason:
        byte-correct pair. That reason RETIRED WITH THE PAIR. One marker cannot
        be inverted. The step survives on the mechanical ground alone, which is
        sufficient on its own.
+    1b. The MEMORY marker pair sits inside that managed region, and the search
+       narrows to it. THE WINDOW AND THE TARGET MUST BE ONE REGION: the pinned
+       heading is defined to live in the memory region, while the managed region
+       also contains the session block ABOVE it, so a wider window matches a
+       heading there FIRST. Absent pair REFUSES; see
+       `SkipReason.NO_MEMORY_REGION` for why widening is unsafe on that exact
+       shape, and `_narrow_to_memory_region` for the bound on the search.
     2. A `## Pinned Context` heading exists inside that region. Most files do
        not have one. Placing a marker there would mean CREATING the section,
        which is an insert above pre-existing content and is exactly the
@@ -504,6 +701,15 @@ def plan_insertion(content: str) -> Insertion | SkipReason:
         if region is None:
             return SkipReason.NOT_MIGRATED
         region_text, region_start = region
+
+        # NARROW THE WINDOW TO THE REGION THE TARGET IS DEFINED TO LIVE IN.
+        # Everything below this line reads `region_text` as its coordinate
+        # system, so substituting the pair here is what moves the anchor search
+        # off the session block. See `_narrow_to_memory_region`.
+        inner = _narrow_to_memory_region(region_text, region_start)
+        if inner is None:
+            return SkipReason.NO_MEMORY_REGION
+        region_text, region_start = inner
 
         heading = _PINNED_HEADING.search(region_text)
         if heading is None:

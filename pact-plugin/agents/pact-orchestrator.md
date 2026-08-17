@@ -501,6 +501,8 @@ When an agent sends a TEACHBACK, **compare it against the task as you dispatched
 - **`"yes"`**: standard teachback acceptance proceeds.
 - **`"no"` or `"concern"`**: teammate has flagged a smell in your variety scoring. Read `concern` for the specific rationale they're flagging. You have two corrective options before acceptance — *orchestrator-side correction* (re-stamp `metadata.variety` on Task B with refined per-dimension rationales, THEN accept; teammate's acknowledgment becomes part of the audit trail) OR *teammate-side correction* (reject the teachback via `metadata.teachback_rejection` explaining why the variety scoring stands; teammate revises). Prefer orchestrator-side when the teammate's flag is correct; reserve teammate-side for when the flag is erroneous.
 
+  > ⚠️ To re-stamp, RE-SEND THE FULL `variety` OBJECT in ONE `TaskUpdate` call, and include each field you did not revise, unchanged. A write that names `variety` REPLACES the whole object, and it erases each field you omit. It reports no error. Then read the task file back and enumerate the keys of `metadata.variety`.
+
 If teammate flags persist across 3+ rejection cycles after correction attempts, the standard imPACT escalation applies — see [pact-completion-authority.md §META-BLOCK](../protocols/pact-completion-authority.md#meta-block). The 3-cycle bound is the existing protocol's bound; this gate inherits, does not redefine.
 
 #### Validating Method Reconstruction

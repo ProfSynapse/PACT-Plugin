@@ -74,6 +74,8 @@ The 5 canonical fields (Step 1) are the L1 (procedure-level) gate; the optional 
 
 **Step 1 — write the teachback to task metadata** (5 canonical fields + 1 optional nested field):
 
+> ⚠️ **Write the full sub-object in ONE call.** `TaskUpdate` merges metadata at the TOP LEVEL only. A write that carries part of a nested sub-object REPLACES that sub-object. It erases each field you omit, and it reports no error. A write to one TOP-LEVEL key does not change a different TOP-LEVEL key, which is why Step 1 and Step 3 are different calls. If you must correct one field after the write, RE-SEND THE FULL OBJECT, and include each other field unchanged. Then read the task file back and enumerate the keys of `metadata.teachback_submit`.
+
 ```
 TaskUpdate(taskId, metadata={"teachback_submit": {
     "understanding": "<what you understand you're building, key constraints, interfaces>",

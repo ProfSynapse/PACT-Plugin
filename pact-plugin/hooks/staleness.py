@@ -25,10 +25,13 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from shared.claude_md_manager import (
+    MEMORY_START_MARKER,
     PACT_BOUNDARY_PREFIXES,
     PINNED_END_MARKER,
+    SESSION_BOUNDARY_PREFIX,
     extract_managed_region,
 )
+from shared.failure_cause import failure_cause
 from pin_caps import (
     PIN_STALE_BLOCK_THRESHOLD,
     CapViolation,
@@ -40,6 +43,11 @@ from pin_caps import (
 # PACT_BOUNDARY_PREFIXES (round 5, item 1) so the three-prefix union is
 # defined in one place.
 _BOUNDARY_ALT = "|".join(PACT_BOUNDARY_PREFIXES)
+
+# Compiled so `_parse_pinned_section` can pass a `pos` to `.search()`. The
+# module-level `re.search` function takes no start position, and the start
+# position is what bounds the first-match selection there.
+_PINNED_HEADING_RE = re.compile(r'^## Pinned Context\s*\n', re.MULTILINE)
 
 # NOTE FOR ANYONE RE-ADDING A PROBE PATTERN HERE. A second alphabet used to live
 # at this spot, for a well-formedness gate that tried to DETECT the cases where a
@@ -669,6 +677,49 @@ def _parse_pinned_section(
     no span to return, so this parameter changes nothing for it: the position is
     UNDEFINED rather than declined, and no flag here can invent one.
 
+    THIS WINDOW IS LOOSER THAN THE WRITER WINDOW ON PURPOSE, AND THE WRITER MUST
+    NOT BE WIDENED TO AGREE WITH IT. `pin_markers._narrow_to_memory_region`
+    resolves the memory region for the PIN WRITER, and it is deliberately
+    stricter than this parse at each of the three points below. THE TWO
+    DIRECTIONS ARE NOT THE SAME SIZE OF MISTAKE. Widening the writer back to the
+    managed region reopens the placement defect its narrow window closes, so that
+    direction is a defect. Narrowing THIS parse is a possible future change with
+    an unmeasured blast radius, so that direction is open work rather than a
+    tidying pass. Neither gap is closed here, and an editor who finds the two
+    windows inconsistent must leave them inconsistent.
+
+    THE SEARCH START BELOW TAKES A BARE SUBSTRING SEARCH, where the writer needs
+    the marker to occupy a LINE. So the marker text carried INSIDE a longer
+    session line moves this search start and does not move the writer window. NO
+    CODE AT EITHER SITE HOLDS THAT CLOSED. What holds it closed is the newline
+    substitution in `session_resume._sanitize_prompt_field`, which is recorded at
+    that one site, so a change there separates the two starts with no signal at
+    either function.
+
+    THE TWO END BOUNDARIES AGREE TODAY, AND NO LINE OF CODE STATES THE
+    AGREEMENT. `MEMORY_END_MARKER` carries the `PACT_MEMORY_` prefix, and the
+    terminator alternation below is built from `PACT_BOUNDARY_PREFIXES`, so this
+    scan stops at that marker BY PREFIX MEMBERSHIP and not by naming it. A READER
+    OF THE CODE SEES NO END BOUND AND A DRIVER OF A DOCUMENT SEES ONE. DO NOT
+    TIDY THAT AGREEMENT AWAY, and drive a document before you conclude the two
+    ends differ.
+
+    THIS SCAN REACHES THAT MARKER ONLY WHEN NOTHING STOPS IT EARLIER. A heading
+    or a boundary comment between the pinned body and the marker ends the scan at
+    that earlier line, and the canonical template puts a `## Working Memory`
+    heading in that position. So on a template-made document this scan does not
+    reach the marker, and a rename of it changes nothing there. DO NOT READ THAT
+    AS PERMISSION TO MOVE THE MARKER OUT OF THE PREFIX FAMILY, OR THE PREFIX OUT
+    OF THE ALTERNATION. A document with no such heading between the pins and the
+    marker DOES reach it, a user edit can make one, and the pin cap gate compares
+    two user documents. On that document each change removes the bound with
+    nothing to see, while the writer is unchanged.
+
+    A MISSING MARKER PAIR SPLITS THE TWO IN KIND RATHER THAN IN WIDTH. The writer
+    returns None and plans nothing. This parse keeps its search start at 0 and
+    continues across the full managed region. That fall-back is this function's
+    behaviour and not a model for the writer.
+
     Args:
         content: Full CLAUDE.md file content.
         allow_empty_section: When True, a resolved heading whose body is empty
@@ -690,7 +741,32 @@ def _parse_pinned_section(
     else:
         scan_text, offset = content, 0
 
-    pinned_match = re.search(r'^## Pinned Context\s*\n', scan_text, re.MULTILINE)
+    # START THE SEARCH BELOW THE MEMORY START MARKER WHEN THAT MARKER IS
+    # THERE. THIS IS THE FIRST-MATCH SELECTION AND IT IS THE LEVER FOR THE
+    # UNDER-BLOCK, WHICH THE TERMINATOR BELOW IS NOT.
+    #
+    # The window is the MANAGED region, and the session block sits in it
+    # ABOVE the memory markers. `re.search` takes the FIRST match, so a
+    # forged `## Pinned Context` heading in the session block WINS over the
+    # genuine one. MEASURED on document PAIRS through
+    # `pin_staleness_gate._counts_show_an_add`: the counted body was then
+    # the forged pin on the two sides, the count read 1 against 1, and the
+    # increase test stayed False WHILE A REAL PIN WAS ADDED. The gate missed
+    # the addition. That is an UNDER-block, and it is what this bound closes.
+    #
+    # `pos` MOVES THE SEARCH, NOT THE WINDOW, so `scan_text` and `offset`
+    # keep their meaning and every offset returned below is unchanged.
+    #
+    # WHAT THIS DOES NOT TOUCH, ON PURPOSE. A document with NO memory start
+    # marker keeps today's behaviour, because `search_from` stays 0. That
+    # missing-pair class is the subject of the standing pin-count alert about
+    # this counting window, and it is not this bound.
+    search_from = 0
+    memory_start = scan_text.find(MEMORY_START_MARKER)
+    if memory_start != -1:
+        search_from = memory_start + len(MEMORY_START_MARKER)
+
+    pinned_match = _PINNED_HEADING_RE.search(scan_text, search_from)
     if not pinned_match:
         return None
 
@@ -700,8 +776,31 @@ def _parse_pinned_section(
     # boundary marker — PACT_MEMORY_, PACT_MANAGED_, PACT_ROUTING_ — or end
     # of scan region). No fence-awareness needed — managed region contains
     # only plugin-generated content (round 10 structural guarantee).
+    # THE SESSION PREFIX STOPS THIS SCAN RUNNING THROUGH THE SESSION-END
+    # MARKER. IT IS A DIFFERENT DEFECT FROM THE ONE THE SEARCH BOUND ABOVE
+    # CLOSES, AND THE TWO ARE DELIBERATELY SEPARATE.
+    #
+    # MEASURED, before the search bound above existed: with a forged
+    # `## Pinned Context` heading in the session block the body ran from that
+    # forgery THROUGH the session-end marker, and the returned body carried
+    # the marker. It does not carry it now.
+    #
+    # THIS TERM ALONE DID NOT CLOSE THE UNDER-BLOCK, and that is why the
+    # search bound above is there rather than a wider alternation here. The
+    # start of the span, and not its end, is what put the forged pin on the
+    # two sides of the comparison.
+    #
+    # THE MEMORY END BOUNDARY RIDES ON `_BOUNDARY_ALT` AND IS NAMED NOWHERE.
+    # `MEMORY_END_MARKER` carries the `PACT_MEMORY_` prefix, so this scan stops
+    # at it by PREFIX MEMBERSHIP when it reaches it. It reaches it only when no
+    # heading and no boundary comment sits between the pinned body and the
+    # marker, and the canonical template puts a `## Working Memory` heading
+    # there. THAT IS NOT PERMISSION TO DROP THE PREFIX. On a document with no
+    # such heading the marker IS the bound, and taking `PACT_MEMORY_` out of
+    # this alternation, or renaming that marker out of the prefix family,
+    # removes the bound with nothing to see at this site or at the writer.
     next_section_pattern = re.compile(
-        rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}))'
+        rf'(?:#{{1,2}}\s|<!-- (?:{_BOUNDARY_ALT}|{SESSION_BOUNDARY_PREFIX}))'
     )
     pinned_end = _find_terminator_offset(
         scan_text, pinned_start, next_section_pattern
@@ -1136,10 +1235,18 @@ def check_pinned_staleness(claude_md_path: Optional[Path] = None) -> Optional[st
         except TimeoutError:
             return "Pinned staleness update skipped: lock contention."
         except OSError as e:
-            # Truncate like the sibling write sites (session_resume, cli): the
-            # raw exception embeds the absolute CLAUDE.md path, which should not
-            # leak into a status string.
-            logger_msg = f"Failed to update pinned staleness: {str(e)[:50]}"
+            # `Failed` IS THE ROUTING TOKEN. session_init step 3d routes this
+            # return into system_messages on a substring test, so the prefix
+            # stays byte-identical.
+            #
+            # THE CAUSE TOKEN COMES FROM A CLOSED VOCABULARY. The former
+            # comment here said a truncation kept the absolute CLAUDE.md path
+            # out of the status string. MEASURED, THAT IS INCORRECT: a cut
+            # keeps the LEADING characters and an OSError renders as
+            # `[Errno NN] <strerror>: '<path>'`, so a 50-character cut of a
+            # PermissionError still emits the home directory and the user
+            # name. A cut narrows the leak and does not close it.
+            logger_msg = f"Failed to update pinned staleness: {failure_cause(e)}"
             return logger_msg
 
     if stale_count > 0:

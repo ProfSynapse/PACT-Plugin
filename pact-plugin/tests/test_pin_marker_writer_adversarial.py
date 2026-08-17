@@ -113,12 +113,17 @@ from pin_caps import (
 # `pin_caps_gate` inside its own test bodies for the same reason, so this
 # follows the convention already in force here rather than inventing one.
 from shared.claude_md_manager import (
-    MANAGED_END_MARKER,
-    MANAGED_START_MARKER,
+    MEMORY_END_MARKER,
+    MEMORY_START_MARKER,
     PINNED_END_MARKER,
     PINNED_START_MARKER,
     extract_managed_region,
 )
+# The boundary layout is taken from ONE place for the whole corpus. Importing
+# the sibling's helper rather than re-deriving it here is what stops the two
+# files drifting into two different opinions about the shipping shape, which
+# is the defect this correction exists to remove.
+from tests.test_pin_marker_writer import production_head_and_tail
 from shared.pin_markers import (
     START_LINE,
     Insertion,
@@ -171,34 +176,62 @@ def claude_md(
             a_pin(i, last_pin_body if i == n_pins else "body prose")
             for i in range(1, n_pins + 1)
         )
-    body = (
-        "# PACT Framework and Managed Project Memory\n\n"
+    sections = (
         f"## Retrieved Context\n{retrieved}"
         f"## Pinned Context\n\n{pinned_body}"
         f"{WORKING_MEMORY_HEADING}\n### 2026-01-02\nA working entry.\n"
     )
     if not managed:
-        return "# My own heading\n\nUser prose above.\n\n" + body + "\nUser prose below.\n"
+        return (
+            "# My own heading\n\nUser prose above.\n\n"
+            "# PACT Framework and Managed Project Memory\n\n"
+            + sections
+            + "\nUser prose below.\n"
+        )
+    # THE BOUNDARY LAYOUT COMES FROM THE PRODUCTION EMITTER. See
+    # `test_pin_marker_writer.production_skeleton` for why a hand-written
+    # boundary is the defect rather than the shortcut: this builder used to
+    # emit the outer managed marker with NO inner memory pair, a shape
+    # production does not produce.
+    head, tail = production_head_and_tail()
     return (
         "# My own heading\n\nUser prose above.\n\n"
-        + MANAGED_START_MARKER + "\n"
-        + body
-        + MANAGED_END_MARKER + "\nUser prose below.\n"
+        + head
+        + sections
+        + tail
+        + "User prose below.\n"
     )
 
 
 def assert_is_shipping_shape(content: str) -> None:
-    """A fixture with no managed region is NOT the configuration under test.
+    """A fixture missing EITHER boundary is NOT the configuration under test.
 
-    Every reader in this feature bounds itself to the managed region and falls
-    back to the WHOLE FILE when it finds none. A fixture that fails to
-    establish the region therefore still produces plausible numbers, from a
-    different code path. This is the wrong-unit family in fixture form.
+    Every reader in this feature bounds itself to a region and falls back to a
+    WIDER text when it finds none. A fixture that fails to establish the region
+    therefore still produces plausible numbers, from a different code path.
+    This is the wrong-unit family in fixture form.
+
+    THE MEMORY CLAUSE IS THE ONE THAT WAS MISSING, and its absence is what let
+    the whole corpus drift. This guard checked the MANAGED region only, so a
+    document carrying the outer marker and no inner pair passed it while being
+    a shape production never emits. A guard that names one of two boundaries
+    certifies the fixtures it was written against and nothing wider.
     """
     assert extract_managed_region(content) is not None, (
         "fixture has no PACT-managed region, so every reader silently fell "
-        "back to scanning the whole file. Build it from MANAGED_START_MARKER, "
-        "never from a hand-typed literal."
+        "back to scanning the whole file. Build it from the production "
+        "emitter, never from a hand-typed literal."
+    )
+    region_text, _offset = extract_managed_region(content)
+    assert MEMORY_START_MARKER in region_text, (
+        "fixture has no PACT_MEMORY start marker inside its managed region, "
+        "so the pin planner has no window to anchor in. Build it from the "
+        "production emitter, never from a hand-typed literal."
+    )
+    assert MEMORY_END_MARKER in region_text, (
+        "fixture has no PACT_MEMORY end marker inside its managed region, "
+        "so the pin planner has no window to anchor in. Build it from the "
+        "production emitter, never from a hand-typed literal."
     )
 
 
@@ -684,10 +717,10 @@ def _rotation_fixture(start_marker: str, marker_above_gap: bool = False) -> str:
     end of the run, or nothing in the run rotated and every survival verdict
     taken from it is vacuous.
     """
+    head, tail = production_head_and_tail()
     return (
         "# My own heading\n\nUser prose above.\n\n"
-        + MANAGED_START_MARKER + "\n"
-        + "# PACT Framework and Managed Project Memory\n\n"
+        + head
         + "## Retrieved Context\n<!-- Auto-populated -->\n\n"
         + '### 2026-01-01 00:00\n**Query**: "SENTINEL-0"\n**Context**: seed\n\n'
         # Unrecognised content in the GAP -- after the last dated entry and
@@ -706,7 +739,8 @@ def _rotation_fixture(start_marker: str, marker_above_gap: bool = False) -> str:
                 + start_marker + "\n")
         + "## Pinned Context\n\n<!-- pinned: 2026-01-01 -->\n### A pin\nbody\n\n"
         + WORKING_MEMORY_HEADING + "\n### 2026-01-02\nA working entry.\n"
-        + MANAGED_END_MARKER + "\nUser prose below.\n"
+        + tail
+        + "User prose below.\n"
     )
 
 

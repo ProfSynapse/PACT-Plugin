@@ -378,7 +378,11 @@ class TestMigrationSyncPipeline:
             scores=[0.95],
             memory_ids=["ret-1"],
         )
-        assert result is True
+        # FLOOR, and it is a floor on purpose: this test asserts the MARKER
+        # pairing below, and it requires only that the write happened. It does
+        # not name a cause for a decline, so there is no reason to assert.
+        # `wrote` is a real bool, so `is True` keeps the identity strictness.
+        assert result.wrote is True
 
         final = claude_md.read_text(encoding="utf-8")
         self._assert_markers_paired(final)
@@ -610,6 +614,74 @@ class TestPACTBoundaryAltTwinDriftDetection:
             f"drifted from canonical ({canonical_alt!r}). "
             f"Update the twin in working_memory.py to match "
             f"PACT_BOUNDARY_PREFIXES in claude_md_manager.py."
+        )
+
+    def test_session_boundary_alt_matches_canonical(self):
+        """The SESSION half of the terminator is a twin too, and it has a gate.
+
+        `working_memory.py` cannot import from `hooks/shared/`, so it carries
+        `_SESSION_BOUNDARY_ALT` locally beside `_PACT_BOUNDARY_ALT`. The
+        canonical side is DERIVED from the marker literal rather than spelled,
+        so this arm also fails when a rename of that marker does not carry
+        into the skills-side copy.
+        """
+        from scripts.working_memory import _SESSION_BOUNDARY_ALT
+        from shared.claude_md_manager import SESSION_BOUNDARY_PREFIX
+
+        assert _SESSION_BOUNDARY_ALT == SESSION_BOUNDARY_PREFIX, (
+            f"_SESSION_BOUNDARY_ALT in working_memory.py "
+            f"({_SESSION_BOUNDARY_ALT!r}) drifted from canonical "
+            f"({SESSION_BOUNDARY_PREFIX!r}). Update the twin in "
+            f"working_memory.py to match SESSION_BOUNDARY_PREFIX in "
+            f"claude_md_manager.py."
+        )
+
+    def test_derived_prefix_follows_an_end_only_rename(self):
+        """The prefix must keep matching BOTH markers when only END moves.
+
+        A derivation that reads the START marker alone returns `SESSION_` for
+        every END-marker name, so an END renamed to a different word escapes
+        the terminator while this file stays green. The common prefix of the
+        two shrinks instead. The renames below are chosen so the two
+        derivations DISAGREE: a rename that keeps the same first word does
+        not separate them and proves nothing.
+        """
+        import os
+
+        start = "<!-- SESSION_START -->"
+        for renamed_end in ("<!-- SESS_END -->", "<!-- SESSION_FINISH -->"):
+            common = os.path.commonprefix(
+                [start, renamed_end]
+            ).removeprefix("<!-- ")
+            assert common, "an empty prefix would match every comment"
+            assert start.startswith(f"<!-- {common}"), renamed_end
+            assert renamed_end.startswith(f"<!-- {common}"), (
+                f"the derived prefix {common!r} does not match the renamed "
+                f"end marker {renamed_end!r}, so that marker would escape "
+                f"every scan terminator built from it."
+            )
+
+    def test_the_empty_prefix_case_the_import_guard_exists_for_is_reachable(
+        self
+    ):
+        """The unrelated-name case DOES derive empty, so the guard has work.
+
+        THIS ARM DOES NOT EXERCISE THE REFUSAL. It pins the PRECONDITION that
+        makes the refusal non-vacuous: two markers with no shared name derive
+        the EMPTY prefix, and an empty term in a terminator alternation
+        matches every HTML comment. `claude_md_manager` raises at import for
+        that case. Exercising the raise needs a re-import with mutated
+        constants, and this arm is the cheap half: if this stops deriving
+        empty, the guard is dead code and somebody must find out here.
+        """
+        import os
+
+        common = os.path.commonprefix(
+            ["<!-- SESSION_START -->", "<!-- BLOCK_END -->"]
+        ).removeprefix("<!-- ")
+        assert common == "", (
+            "the unrelated-name case no longer derives an empty prefix, so "
+            "the import guard in claude_md_manager guards nothing"
         )
 
 

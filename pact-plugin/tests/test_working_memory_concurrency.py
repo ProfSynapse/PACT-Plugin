@@ -180,8 +180,9 @@ class TestFailOpenOnTimeout:
         and does not raise (next save retries).
 
         The name says `failed` rather than `false` because the result is a
-        `SyncResult` now. The sibling test below still says `false`, and that is
-        correct: `sync_retrieved_to_claude_md` really does return a bool.
+        `SyncResult`. THE SIBLING BELOW NOW REPORTS A `SyncResult` TOO, so the
+        two no longer differ on this axis and both assert the REASON rather
+        than mere falsiness.
         """
         import working_memory as wm
 
@@ -230,5 +231,9 @@ class TestFailOpenOnTimeout:
             [{"context": "should-not-be-written"}], query="q", scores=[0.9],
             memory_ids=["id"],
         )
-        assert result is False
+        # `failed` is the subject here, not mere falsiness, for the same cause
+        # the sibling above states: a timeout means the write was ATTEMPTED and
+        # lost. `unresolved` or `missing` would mean the target was never
+        # reached and the lock was never in play.
+        assert result.reason == wm.SyncResult.FAILED
         assert "should-not-be-written" not in claude_md.read_text(encoding="utf-8")

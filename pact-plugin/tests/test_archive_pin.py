@@ -1378,6 +1378,51 @@ class TestLiveDbGuard:
             f"raised for the wrong reason: {excinfo.value.reason!r}"
         )
 
+    def test_parent_rejects_falsy_db_path_with_the_marker_REMOVED(
+        self, tmp_path, monkeypatch
+    ):
+        """The guard holds when the environment marker is GONE, not present.
+
+        THIS ARM DELETES THE VARIABLE THE GUARD KEYS ON. Its sibling above
+        relies on the marker pytest sets for it, so that sibling can only ever
+        see the guard succeed for the reason it was going to succeed anyway.
+        An arm that supplies the precondition it is testing cannot observe the
+        blindness, and that is the shape this arm exists to avoid.
+
+        WHAT IT MEASURES: the in-process half of the predicate. `pytest` is in
+        `sys.modules` here and no environment edit can remove it, so the guard
+        holds for a caller who cleared the environment to isolate a probe.
+
+        THE STUB IS A SAFETY BOUND, NOT A CONVENIENCE, and it is the reason
+        this arm is safe to run at all. With the in-process half removed the
+        guard does not fire, the call builds argv and spawns a child with NO
+        `--db-path`. That child is a fresh interpreter, it resolves the store
+        from `HOME`, and the autouse config-root fixture patches `Path.home`
+        while deliberately leaving `HOME` alone. So the child would reach the
+        OPERATOR'S LIVE DATABASE. The stub makes the failure land as a missing
+        exception rather than as a live-store spawn.
+        """
+        spawned = []
+        monkeypatch.setattr(
+            archive_pin.subprocess,
+            "run",
+            lambda *a, **k: spawned.append(a) or (_ for _ in ()).throw(
+                AssertionError("a spawn was attempted; the guard did not fire")
+            ),
+        )
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        assert not os.environ.get("PYTEST_CURRENT_TEST"), (
+            "the marker is present at call time, so this arm would pass "
+            "through the environment half and measure nothing new"
+        )
+
+        with pytest.raises(archive_pin._Unevaluable) as excinfo:
+            archive_pin._run_memory_cli(["get", "x" * 32], db_path="", cwd=tmp_path)
+        assert "empty value" in str(excinfo.value.reason), (
+            f"raised for the wrong reason: {excinfo.value.reason!r}"
+        )
+        assert not spawned, "the guard raised but a spawn was attempted first"
+
     def test_parent_allows_none_so_non_spawning_paths_keep_working(
         self, tmp_path, monkeypatch
     ):

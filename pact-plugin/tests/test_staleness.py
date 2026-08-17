@@ -872,7 +872,63 @@ class TestStalenessErrorPaths:
         # Should return an error message string (not None)
         assert result is not None
         assert "Failed to update pinned staleness" in result
-        assert "read-only fs" in result
+        # THE CAUSE TOKEN COMES FROM A CLOSED VOCABULARY, so the caller's own
+        # message ("read-only fs") is NOT echoed. This assertion used to
+        # require that echo, which is the behaviour that leaked the absolute
+        # CLAUDE.md path: an OSError renders as `[Errno NN] <strerror>: path`
+        # and a cut of it keeps the leading characters, path included.
+        assert "OSError" in result
+        assert "read-only fs" not in result
+        assert "/" not in result
+
+    def test_write_failure_names_its_cause_when_the_error_carries_an_errno(
+        self, tmp_path
+    ):
+        """The cause REACHES THE USER, which the arm above cannot show.
+
+        WHY THIS ARM IS SEPARATE. The arm above injects
+        `IOError("read-only fs")`, a SYNTHETIC exception with `errno = None`,
+        so it renders as a bare `OSError`. THAT IS A PROPERTY OF THE TEST
+        INPUT AND NOT OF THE CONVENTION, and reading only that arm makes the
+        message look uninformative. A real read-only filesystem raises with
+        `errno = EROFS`.
+
+        SO THIS ARM DRIVES THE PRODUCTION SHAPE: the user reads
+        `Failed to update pinned staleness: OSError (EROFS)`, which names the
+        cause and selects the repair (remount, or move the project), while
+        carrying no path.
+        """
+        import errno as errno_mod
+        from datetime import datetime, timedelta
+
+        from staleness import PINNED_STALENESS_DAYS, check_pinned_staleness
+
+        old_date = (
+            datetime.now() - timedelta(days=PINNED_STALENESS_DAYS + 10)
+        ).strftime("%Y-%m-%d")
+        claude_md = self._create_claude_md(tmp_path, (
+            "# Project Memory\n\n"
+            "## Pinned Context\n\n"
+            f"### Old Feature (PR #50, merged {old_date})\n"
+            "- Details\n\n"
+        ))
+
+        import shared.claude_md_manager as cmm
+        injected = OSError(
+            errno_mod.EROFS,
+            "Read-only file system",
+            "/Users/probe-user/secret-dir/CLAUDE.md",
+        )
+        with patch.object(cmm, "_atomic_write_text", side_effect=injected):
+            result = check_pinned_staleness(claude_md_path=claude_md)
+
+        assert result is not None
+        assert result.startswith("Failed to update pinned staleness:")
+        assert "OSError (EROFS)" in result, (
+            f"the cause did not reach the user: {result!r}"
+        )
+        assert "/" not in result
+        assert "Read-only file system" not in result
 
     def test_write_text_os_error_returns_error_message(self, tmp_path):
         """OSError on write_text() should also return an error message string."""
@@ -2229,6 +2285,291 @@ class TestFileLockTwinCopyDrift:
         assert cmm._LOCK_POLL_INTERVAL == wm._LOCK_POLL_INTERVAL, (
             "_LOCK_POLL_INTERVAL drift between claude_md_manager.py and "
             "working_memory.py — update both in the same commit"
+        )
+
+
+class TestSanitizePromptFieldTwinCopyDrift:
+    """Drift detection for the _sanitize_prompt_field twin in working_memory.
+
+    _sanitize_prompt_field is twin-copied from hooks/shared/session_resume
+    into skills/pact-memory/scripts/working_memory (skills/ cannot import
+    from hooks/shared/). The function BODY must stay byte-identical so both
+    the hook write path and the skill write path collapse the SAME control
+    characters at the SAME bound; the docstring may differ.
+
+    NO OTHER TEST COVERS THIS PAIR, WHICH IS WHY THE CLASS EXISTS RATHER
+    THAN A CASE ADDED ELSEWHERE. The neighbouring twin gates import
+    _atomic_write_text and file_lock, so a divergence in the SANITIZER
+    reddens none of them: without this class a one-copy edit is green and
+    silent, and the two write paths would disagree about what a field value
+    can carry into CLAUDE.md.
+    """
+
+    @staticmethod
+    def _extract_body(func) -> str:
+        """Return the executable body, dropping the signature and docstring.
+
+        Unlike the two extractors above, this one parses rather than counts
+        lines. _sanitize_prompt_field carries a MULTI-LINE signature, so
+        dropping a fixed number of leading lines would leave parameter lines
+        in the "body" and compare the signature as if it were logic.
+        """
+        source = textwrap.dedent(inspect.getsource(func))
+        statements = ast.parse(source).body[0].body
+        first = statements[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            statements = statements[1:]
+        body_start = statements[0].lineno - 1
+        return textwrap.dedent(
+            "\n".join(source.split("\n")[body_start:])
+        ).strip()
+
+    @staticmethod
+    def _extract_signature(func):
+        """Return an ast-NORMALISED signature, for comparison across twins.
+
+        WHY A NORMALISED FORM AND NOT THE SOURCE LINES. The extractor above
+        DROPS the signature, on purpose, so the body comparison does not
+        compare parameter lines as if they were logic. That leaves the
+        signature compared by nobody, which is the gap this closes. Comparing
+        the raw source lines instead would go red when somebody re-wraps a
+        multi-line signature onto one line, which changes no behaviour.
+
+        THE COMPARED SURFACE, so a later reader can reproduce it: the ORDERED
+        parameter names, the `ast.unparse` of each annotation, and the
+        `ast.unparse` of each default EXPRESSION.
+
+        SOURCE FORM, NOT RESOLVED VALUE, AND THAT IS THE POINT. The default
+        `limit` reads `_REFRESH_FIELD_TRUNCATION_LIMIT` in the two copies. A
+        copy rewritten to spell the bare literal 200 has the SAME resolved
+        value today, so a value comparison stays green while the two copies
+        stop tracking one constant. The unparse of the expression separates
+        them.
+        """
+        args = ast.parse(textwrap.dedent(inspect.getsource(func))).body[0].args
+
+        positional = args.posonlyargs + args.args
+        defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+
+        rendered = [
+            (a.arg,
+             ast.unparse(a.annotation) if a.annotation else None,
+             ast.unparse(d) if d is not None else None)
+            for a, d in zip(positional, defaults)
+        ]
+        for a, d in zip(args.kwonlyargs, args.kw_defaults):
+            rendered.append(
+                ("*" + a.arg,
+                 ast.unparse(a.annotation) if a.annotation else None,
+                 ast.unparse(d) if d is not None else None)
+            )
+        for star, name in (("*", args.vararg), ("**", args.kwarg)):
+            if name is not None:
+                rendered.append(
+                    (star + name.arg,
+                     ast.unparse(name.annotation) if name.annotation else None,
+                     None)
+                )
+        return tuple(rendered)
+
+    def test_sanitize_prompt_field_bodies_are_identical(self):
+        """The _sanitize_prompt_field body MUST be byte-identical across twins.
+
+        The body decides which characters can reach a line of CLAUDE.md and
+        at what length. A divergence would let one write path admit a
+        character the other collapses — so a heading injected through the
+        skill path would be stripped through the hook path, or the reverse,
+        and the guard would hold on only one of the two writers.
+        """
+        from shared.session_resume import _sanitize_prompt_field as canonical
+        from working_memory import _sanitize_prompt_field as twin
+
+        canonical_body = self._extract_body(canonical)
+        twin_body = self._extract_body(twin)
+
+        assert canonical_body == twin_body, (
+            "_sanitize_prompt_field twin drift between "
+            "hooks/shared/session_resume.py and "
+            "skills/pact-memory/scripts/working_memory.py — update both "
+            "in the SAME commit.\n"
+            f"canonical body:\n{canonical_body}\n\n"
+            f"twin body:\n{twin_body}"
+        )
+
+    def test_sanitize_prompt_field_signatures_are_identical(self):
+        """The twin SIGNATURE must agree, in source form, across the copies.
+
+        THE BODY ARM ABOVE CANNOT SEE THIS, BY CONSTRUCTION. `_extract_body`
+        drops the signature so it does not compare parameter lines as logic,
+        and the constants arm below compares MODULE-LEVEL names. A default
+        rewritten in ONE copy sits in neither population: the bodies stay
+        byte-identical, the four module constants stay equal, and the two
+        write paths bound a field differently with no arm red.
+
+        MEASURED: the two copies take `limit` defaulted to
+        `_REFRESH_FIELD_TRUNCATION_LIMIT`, which is 200. Rewriting one copy
+        to the bare literal 200 changes NO behaviour today and breaks the
+        coupling, so the next move of that constant bounds one writer and not
+        the other.
+
+        WHAT THIS ARM DOES NOT ASSERT, STATED SO NOBODY READS IT WIDER. It
+        compares the signature SURFACE, not the resolved default. Two copies
+        that name DIFFERENT constants of equal value agree here and are
+        caught by the constants arm below. The two arms are complementary,
+        and neither one covers the other.
+        """
+        from shared.session_resume import _sanitize_prompt_field as canonical
+        from working_memory import _sanitize_prompt_field as twin
+
+        canonical_signature = self._extract_signature(canonical)
+        twin_signature = self._extract_signature(twin)
+
+        # NON-VACUITY: an extractor that returned an empty tuple for each side
+        # would compare equal and report a clean sweep. The function takes a
+        # value and a bound, so the surface cannot be empty.
+        assert len(canonical_signature) >= 2, (
+            f"the canonical signature parsed as {canonical_signature!r}, which "
+            "is too small to be this function. The extractor is broken, and an "
+            "empty surface makes the comparison below pass for the wrong cause."
+        )
+
+        assert canonical_signature == twin_signature, (
+            "_sanitize_prompt_field SIGNATURE drift between "
+            "hooks/shared/session_resume.py and "
+            "skills/pact-memory/scripts/working_memory.py — update both "
+            "in the SAME commit.\n"
+            "Each row is (parameter, annotation, default), in source form.\n"
+            f"canonical: {canonical_signature}\n"
+            f"twin:      {twin_signature}"
+        )
+
+    def test_sanitize_prompt_field_constants_match(self):
+        """The sanitizer constants are part of the twin and must match.
+
+        The drift gate above compares the function body only, and the body
+        names these rather than spelling their values, so a change to one
+        copy of a constant leaves both bodies identical while the two write
+        paths bound differently. This arm is what makes that visible.
+
+        THE IDENTIFIER BOUND IS HELD HERE EVEN THOUGH session_resume TAKES
+        NO IDENTIFIER VALUE TODAY. The FIELD-KIND CLASSIFICATION is shared
+        vocabulary: a field kind that lives in one copy alone lets the two
+        writers disagree about what a kind means, and the defect this bound
+        repairs was a field with NO row in the classification falling to
+        the widest default.
+        """
+        import shared.session_resume as sr
+        import working_memory as wm
+
+        assert sr._REFRESH_FIELD_TRUNCATION_LIMIT == wm._REFRESH_FIELD_TRUNCATION_LIMIT, (
+            "_REFRESH_FIELD_TRUNCATION_LIMIT drift between session_resume.py "
+            "and working_memory.py — update both in the same commit"
+        )
+        assert sr._REFRESH_PATH_TRUNCATION_LIMIT == wm._REFRESH_PATH_TRUNCATION_LIMIT, (
+            "_REFRESH_PATH_TRUNCATION_LIMIT drift between session_resume.py "
+            "and working_memory.py — update both in the same commit"
+        )
+        assert (
+            sr._REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+            == wm._REFRESH_IDENTIFIER_TRUNCATION_LIMIT
+        ), (
+            "_REFRESH_IDENTIFIER_TRUNCATION_LIMIT drift between "
+            "session_resume.py and working_memory.py — update both in the "
+            "same commit"
+        )
+        assert sr._PROMPT_CONTROL_CHARS_RE.pattern == wm._PROMPT_CONTROL_CHARS_RE.pattern, (
+            "_PROMPT_CONTROL_CHARS_RE drift between session_resume.py and "
+            "working_memory.py — update both in the same commit"
+        )
+
+    def test_the_compared_set_covers_every_shared_constant(self):
+        """The arm above must compare EACH constant the two copies share.
+
+        THE ARM ABOVE NAMES FOUR CONSTANTS, SO IT CANNOT NOTICE A FIFTH. A
+        shared value added to the two copies tomorrow leaves that arm GREEN
+        and silent about the new value, and the two write paths can then
+        bound differently through a constant nobody compares.
+
+        MEASURED WHEN THIS ARM WAS WRITTEN: shared 4, compared 4, shared
+        and not compared 0. So the arm above is COMPLETE, and it is complete
+        by the care of the author rather than by construction. This test is
+        what makes it complete by construction.
+
+        COUNTING RULE, STATED SO A LATER READER CAN REPRODUCE THE POPULATION
+        RATHER THAN TRUST IT: module-level `NAME = value` assignments, parsed
+        with `ast` from each file, intersected BY NAME. Assignments nested in
+        a function, a class or a conditional are OUT of the population,
+        because a module-level constant is the shape the twin uses.
+
+        WHEN THIS GOES RED, DECIDE WHICH KIND OF NAME APPEARED, BECAUSE THE
+        TWO KINDS TAKE OPPOSITE ACTIONS.
+
+        1. THE NEW SHARED NAME IS PART OF THE TWINNED SANITIZER SURFACE. Add
+           it to the arm above, in the commit that introduces it.
+        2. THE NEW SHARED NAME IS A COINCIDENCE OF SPELLING with no bearing
+           on `_sanitize_prompt_field`. It does NOT belong in an arm that
+           byte-compares the constants of ONE function, so exclude it here
+           and state its cause at the exclusion.
+
+        CASE 2 IS REACHABLE RATHER THAN THEORETICAL, and the population is
+        why: this arm intersects EVERY module-level name the two files
+        share, which is WIDER than the sanitizer surface. Measured when this
+        arm was written: `working_memory.py` defines `logger` at module level
+        and `session_resume.py` does not. One ordinary edit that adds a
+        module logger to the second file puts `logger` in this intersection,
+        and a reader who obeys case 1 without thought would then add it to a
+        byte-comparison arm, which starts to assert a relation nobody meant
+        to hold.
+
+        IN NO CASE WIDEN THIS TEST INTO A BLANKET ACCEPT. An exclusion names
+        ONE value and carries its cause. A blanket accept returns the gate to
+        a promise somebody must remember to keep.
+        """
+        import ast as ast_module
+        import pathlib
+
+        plugin_root = pathlib.Path(__file__).resolve().parent.parent
+
+        def module_level_names(relative_path):
+            tree = ast_module.parse((plugin_root / relative_path).read_text())
+            return {
+                node.targets[0].id
+                for node in tree.body
+                if isinstance(node, ast_module.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast_module.Name)
+            }
+
+        canonical = module_level_names("hooks/shared/session_resume.py")
+        twin = module_level_names("skills/pact-memory/scripts/working_memory.py")
+        shared = canonical & twin
+
+        # The names the arm above compares, written out rather than derived,
+        # because deriving them from the same source they guard would make
+        # this assertion true by construction and prove nothing.
+        compared = {
+            "_REFRESH_FIELD_TRUNCATION_LIMIT",
+            "_REFRESH_PATH_TRUNCATION_LIMIT",
+            "_REFRESH_IDENTIFIER_TRUNCATION_LIMIT",
+            "_PROMPT_CONTROL_CHARS_RE",
+        }
+
+        # NON-VACUITY: the parse must find the two populations. An empty set
+        # on either side makes the comparison below pass for the wrong cause.
+        assert canonical, "no module-level names parsed from session_resume.py"
+        assert twin, "no module-level names parsed from working_memory.py"
+
+        assert shared == compared, (
+            "the set of constants SHARED by the two _sanitize_prompt_field "
+            "copies no longer equals the set the drift arm compares.\n"
+            f"  shared and not compared: {sorted(shared - compared)}\n"
+            f"  compared and not shared: {sorted(compared - shared)}\n"
+            "Add each shared name to test_sanitize_prompt_field_constants_match "
+            "in the same commit that introduces it."
         )
 
 

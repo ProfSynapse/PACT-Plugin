@@ -154,9 +154,14 @@ class TestTeammateBranchInjects:
         assert _ORCH_MARKER not in additional
 
 
-class TestLeadAndUnknownKeepOrchestratorBlock:
-    """"lead" and "unknown"/plain frames keep the existing orchestrator ladder
-    UNCHANGED — no peer body, no behavior change (minimal scope)."""
+class TestLeadKeepsOrchestratorBlockAndUnknownGetsNeither:
+    """A "lead" frame keeps the orchestrator ladder. An "unknown"/plain frame
+    gets NEITHER the ladder NOR a peer body.
+
+    RENAMED FROM TestLeadAndUnknownKeepOrchestratorBlock, because the old name
+    made a claim the gate no longer honours: the two roles are no longer one
+    case. The class holds the LEAD half and the UNKNOWN half side by side so a
+    re-merge of the two cannot stay green in either direction."""
 
     @pytest.mark.parametrize(
         "frame_builder", [lead_frame_qualified, lead_frame_unqualified]
@@ -171,15 +176,32 @@ class TestLeadAndUnknownKeepOrchestratorBlock:
         assert _PEER_SENTINEL not in additional
         assert not mock_gpc.called, "lead frame must not call the peer-context builder"
 
-    def test_plain_unknown_frame_keeps_orchestrator_block_no_peer_body(
+    def test_plain_unknown_frame_gets_neither_orchestrator_block_nor_peer_body(
         self, monkeypatch, tmp_path
     ):
+        """RETARGET, and this arm was a RETIRED EXPECTATION with the proof in
+        its own message. It used to assert the orchestrator block, and the
+        message gave the reason word for word: "unknown/plain frame behavior is
+        UNCHANGED (minimal scope) — it still receives the orchestrator block as
+        before this fix". That was a DEFERRAL, not a property: the earlier
+        change declined to touch the unknown path and said so. The role gate now
+        makes that deferred repair, so the deferral is spent.
+
+        The two surviving legs are unchanged and they are the ones the arm was
+        built for: no peer body, and no call to the peer-context builder. Only
+        the orchestrator leg flips, and it flips to the notice, not to silence,
+        so the arm asserts a POSITIVE token rather than an absence alone.
+        """
         additional, mock_gpc = _run_main_capture(
             _stdin_for(plain_frame()), monkeypatch, tmp_path
         )
-        assert _ORCH_MARKER in additional, (
-            "unknown/plain frame behavior is UNCHANGED (minimal scope) — it "
-            "still receives the orchestrator block as before this fix"
+        assert _ORCH_MARKER not in additional, (
+            "an unknown/plain frame is known NOT to be the lead, so it must not "
+            "be handed the orchestrator block"
+        )
+        assert "relaunch with `--agent PACT:pact-orchestrator`" in additional, (
+            "the unknown frame must receive the unknown-role notice: a bare "
+            "absence cannot separate correct silence from a build that died"
         )
         assert _PEER_SENTINEL not in additional
         assert not mock_gpc.called

@@ -29,12 +29,17 @@ from shared.claude_md_manager import (
     MANAGED_TITLE,
     MEMORY_END_MARKER,
     MEMORY_START_MARKER,
+    RETRIEVED_CONTEXT_COMMENT,
+    SESSION_END_MARKER,
+    SESSION_START_MARKER,
+    WORKING_MEMORY_COMMENT,
     ContainmentError,
     _atomic_write_text,
     ensure_dot_claude_parent,
     file_lock,
     resolve_project_claude_md_path,
 )
+from shared.failure_cause import failure_cause
 from shared.session_journal import (
     _parse_ts,
     _ts_supersedes,
@@ -61,11 +66,30 @@ _REFRESH_STALE_HOURS = 48
 _REFRESH_FIELD_TRUNCATION_LIMIT = 200
 _REFRESH_PATH_TRUNCATION_LIMIT = 512
 
+# IDENTIFIER is a THIRD field kind. No value in THIS module takes it today.
+# It is defined here because the field-kind classification is SHARED
+# vocabulary with the twin copy in
+# skills/pact-memory/scripts/working_memory.py, which bounds a memory id
+# with it, and a classification that lives in one copy alone lets the two
+# writers drift on what a field kind means. Held by the constants arm of
+# TestSanitizePromptFieldTwinCopyDrift; if you change either, update both
+# in the SAME commit.
+_REFRESH_IDENTIFIER_TRUNCATION_LIMIT = 64
+
 # Control characters stripped from interpolated refreshed-prompt fields:
 # C0 controls (includes \n, \r, \t), DEL plus the full C1 block (which
 # includes NEL U+0085 — a str.splitlines boundary), and the Unicode
 # line/paragraph separators — anything that could break the prompt onto
 # a new line and masquerade as a separate directive.
+#
+# 🔴 A THIRD CLASS EXISTS AND IT IS NARROWER ON PURPOSE. DO NOT MERGE THEM.
+# `session_state.SESSION_ID_CONTROL_CHARS_RE` covers the same line breakers
+# and omits the non-line-breaking C1 characters. The two do different jobs:
+# that one is a DETECTOR, used only through `.search()` on identifiers, so it
+# carries no `+` and needs none. THIS one is a REPLACER, used through
+# `.sub(" ", value)`, and HERE THE `+` IS LOAD-BEARING: without it a run of N
+# control characters becomes N spaces rather than one. Widening that one to
+# match this one would refuse session ids over characters that break no line.
 _PROMPT_CONTROL_CHARS_RE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]+")
 
 # Maximum characters for phase strings rendered into journal resume output.
@@ -73,7 +97,6 @@ _PROMPT_CONTROL_CHARS_RE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]+")
 # consumer must defend against historical or hand-crafted events that stashed
 # a long free-form string or a non-string type in the `phase` field.
 _PHASE_TRUNCATION_LIMIT = 80
-
 
 def update_session_info(
     session_id: str,
@@ -112,8 +135,11 @@ def update_session_info(
     # ($project_dir/.claude/CLAUDE.md) so we create at the preferred path.
     target_file, _source = resolve_project_claude_md_path(project_dir)
 
-    SESSION_START = "<!-- SESSION_START -->"
-    SESSION_END = "<!-- SESSION_END -->"
+    # From the canonical pair in claude_md_manager, NOT re-spelled here. The
+    # scan terminator that stops a section body at these markers is DERIVED
+    # from the same two names, so a rename carries to the readers.
+    SESSION_START = SESSION_START_MARKER
+    SESSION_END = SESSION_END_MARKER
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -123,21 +149,47 @@ def update_session_info(
     # rejects non-absolute paths via `Path(session_dir).is_absolute()`. A
     # tilde-abbreviated path would break every journal write from command
     # files (R4 regression). Mirrors `plugin_root` below.
+    #
+    # SANITIZED HERE, AT THE VALUE, AND NOT AT THE LINE BELOW. The two
+    # `*_line` variables each END WITH "\n", and that newline is the list
+    # separator. `_PROMPT_CONTROL_CHARS_RE` covers "\n", so a sanitize call
+    # wrapped around the assembled LINE would collapse its own separator and
+    # merge three bullets into one. Sanitize the VALUE, keep the separator.
+    # A newline inside the value is still stripped, because the value is
+    # what the call receives.
     session_dir_line = ""
     if session_dir:
-        session_dir_line = f"- Session dir: `{session_dir}`\n"
+        cleaned_session_dir = _sanitize_prompt_field(
+            str(session_dir), _REFRESH_PATH_TRUNCATION_LIMIT
+        )
+        session_dir_line = f"- Session dir: `{cleaned_session_dir}`\n"
 
     # Build plugin root line (no abbreviation — needs to be usable as-is in Bash)
     plugin_root_line = ""
     if plugin_root:
-        plugin_root_line = f"- Plugin root: `{plugin_root}`\n"
+        cleaned_plugin_root = _sanitize_prompt_field(
+            str(plugin_root), _REFRESH_PATH_TRUNCATION_LIMIT
+        )
+        plugin_root_line = f"- Plugin root: `{cleaned_plugin_root}`\n"
+
+    # SANITIZED AT THE VALUE, like the two path values above, and for the same
+    # cause: the newline after each bullet is the LIST SEPARATOR, so a call
+    # wrapped around an assembled line would collapse its own separator.
+    # These two are FREE TEXT by the repo classification, so they take the
+    # tight bound rather than the path bound.
+    #
+    # THE BACKTICK WRAP BELOW IS NOT A GUARD. Inline code in markdown does not
+    # span a line break, so a newline in one of these values breaks OUT of the
+    # backtick span and reaches the managed region as a line of its own.
+    cleaned_session_id = _sanitize_prompt_field(str(session_id))
+    cleaned_team_name = _sanitize_prompt_field(str(team_name))
 
     session_block = (
         f"{SESSION_START}\n"
         f"## Current Session\n"
         f"<!-- Auto-managed by session_init hook. Overwritten each session. -->\n"
-        f"- Resume: `claude --resume {session_id}`\n"
-        f"- Team: `{team_name}`\n"
+        f"- Resume: `claude --resume {cleaned_session_id}`\n"
+        f"- Team: `{cleaned_team_name}`\n"
         f"{session_dir_line}"
         f"{plugin_root_line}"
         f"- Started: {timestamp}\n"
@@ -185,12 +237,12 @@ def update_session_info(
                         "\n"
                         f"{MEMORY_START_MARKER}\n"
                         "## Retrieved Context\n"
-                        "<!-- Auto-managed by pact-memory skill. Last 3 retrieved memories shown. -->\n"
+                        f"{RETRIEVED_CONTEXT_COMMENT}\n"
                         "\n"
                         "## Pinned Context\n"
                         "\n"
                         "## Working Memory\n"
-                        "<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. -->\n"
+                        f"{WORKING_MEMORY_COMMENT}\n"
                         f"{MEMORY_END_MARKER}\n"
                         "\n"
                         f"{MANAGED_END_MARKER}\n"
@@ -209,9 +261,43 @@ def update_session_info(
                 # user-authored fenced code blocks can contain real SESSION
                 # markers, so fence-aware scanning is unnecessary.
                 if SESSION_START in content and SESSION_END in content:
+                    # A CALLABLE REPLACEMENT, BECAUSE THE STRING FORM IS AN
+                    # ESCAPE GRAMMAR EVALUATED OVER CALLER-INFLUENCED DATA.
+                    # `re.sub` expands its replacement grammar in a replacement
+                    # STRING. It does NOT expand the RETURN VALUE of a
+                    # replacement CALLABLE, which is substituted literally.
+                    # `session_block` interpolates a session dir, a plugin
+                    # root, a session id and a team name, and a directory name
+                    # may legally contain a backslash, so two of those carriers
+                    # reach this call WITH NO ATTACKER.
+                    #
+                    # THE SANITIZE ABOVE DOES NOT COVER THIS.
+                    # `_PROMPT_CONTROL_CHARS_RE` strips control characters and
+                    # backslash is not one, so the guard removes a newline and
+                    # a string replacement PUTS IT BACK. Three productions,
+                    # each measured against this pattern and these flags:
+                    #   `\n`    re-materialises a newline. Inline code does not
+                    #           span a line break, so the value leaves its
+                    #           backtick span and lands a HEADING of its own in
+                    #           the PACT-managed region.
+                    #   `\d`    raises `re.error`, which the handler below
+                    #           catches and returns as a failure string. NOT a
+                    #           crash, and that is what makes it survivable:
+                    #           every later pass fails identically, so the
+                    #           session block FREEZES at first-pass content
+                    #           while the directory name persists, and state
+                    #           recovery then reads a stale pointer.
+                    #   `\g<0>` is a group reference and splices the ENTIRE
+                    #           matched block back inside itself.
+                    #
+                    # DO NOT ANSWER THIS BY ADDING BACKSLASH TO THE SANITIZE
+                    # CLASS. That is the wrong layer: the substitution
+                    # re-materialises anything else the grammar spells, so a
+                    # character-class fix closes ONE production and leaves the
+                    # grammar. The callable takes the grammar off the path.
                     new_content = re.sub(
                         re.escape(SESSION_START) + r".*?" + re.escape(SESSION_END),
-                        session_block,
+                        lambda _match: session_block,
                         content,
                         count=1,
                         flags=re.DOTALL,
@@ -276,7 +362,54 @@ def update_session_info(
                 # Opaque skip, matching the removed is_symlink guard's message.
                 return "Session info skipped: path precondition not met."
             except Exception as e:
-                return f"Session info failed: {str(e)[:50]}"
+                # WHAT THIS HANDLER COVERS, WRITTEN DOWN BECAUSE ONE OF ITS
+                # CAUSES WAS REMOVED AND A HANDLER THAT LOOKS THE SAME AFTER
+                # ITS CAUSE GOES IS THE SHAPE THAT ROTS.
+                #
+                # IT USED TO CATCH `re.error` FROM THE SUBSTITUTION ABOVE,
+                # raised when a caller-influenced value spelled an invalid
+                # escape such as `\d`. THAT CAUSE IS GONE: the replacement is
+                # a callable, its return value is not escape-processed, and
+                # the pattern is two `re.escape`'d literal constants, so
+                # neither side of that call can raise on any input.
+                #
+                # IT IS NOT DEAD COVER. WHAT REMAINS UNDER IT IS THE FILE
+                # LAYER, on the read path and the write path inside the lock:
+                # `Path.exists` and `read_text` (OSError, and
+                # UnicodeDecodeError for a CLAUDE.md that is not valid UTF-8),
+                # and `_atomic_write_text` (OSError, UnicodeEncodeError).
+                # `ContainmentError` is handled above and does not reach here,
+                # and `str.replace` cannot raise. So this stays a fail-open
+                # I/O backstop: one unreadable or unwritable file degrades the
+                # session block, and it does not take down SessionStart.
+                #
+                # KEEP THE `Session info failed: ` PREFIX BYTE-IDENTICAL.
+                # THE WORD `failed` IS A MACHINE CONTRACT. session_init.py
+                # step 5b (line 1589) routes this return with
+                # `if "failed" in session_msg.lower() or "skipped" in ...`:
+                # a hit goes to system_messages (the user-visible error
+                # surface), a miss goes to context_parts. A REWORDED PREFIX
+                # KEEPS THE HUMAN SIGNAL AND SILENTLY DOWNGRADES THE
+                # ROUTING. The same predicate appears at five other call
+                # sites for other producers; this handler feeds only 1589.
+                #
+                # THE CAUSE TOKEN IS A CLOSED VOCABULARY (see
+                # shared/failure_cause.py, which the five sibling routed
+                # producers share). The caller's message is not read: it can
+                # carry a path with no filename attribute behind it, so a
+                # filename filter or a length bound does not remove the
+                # path. A length bound is worse than it looks -- it keeps
+                # the LEADING characters, which is where the absolute path
+                # sits.
+                #
+                # THE SECOND SENTENCE NAMES THE CONSEQUENCE. No other
+                # message in this function tells the user that the Current
+                # Session block stopped updating, which is the failure a
+                # later session inherits when it reads the stale pointer.
+                return (
+                    f"Session info failed: {failure_cause(e)}. "
+                    "The Current Session block in CLAUDE.md is now stale."
+                )
     except TimeoutError:
         return (
             "Failed to acquire lock on project CLAUDE.md within 5s "

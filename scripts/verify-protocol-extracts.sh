@@ -57,6 +57,24 @@ verify() {
     local name="$2"
     shift 2
 
+    # A TEST READS THIS LINE. It announces, at run time, that this run compared
+    # this extract, and the extracts-gate arm in
+    # pact-plugin/tests/test_audit_protocol.py builds its verified set from it.
+    # THREE PROPERTIES ARE LOAD-BEARING AND A LATER EDIT MUST KEEP ALL THREE.
+    #   1. THE NAME IS THE LITERAL FIRST ARGUMENT OF THE CALL. It must never
+    #      come from a directory listing or a glob. The arm compares this set
+    #      against a population derived from the FILESYSTEM, so a name taken
+    #      from the filesystem collapses the two sides into one source and the
+    #      comparison becomes a tautology that cannot disagree.
+    #   2. IT IS EMITTED BEFORE THE EXISTENCE CHECK BELOW. Emitting after the
+    #      check would condition this set on the filesystem too, and an extract
+    #      erased from disk would then leave both sides together and agree.
+    #   3. IT SITS AT COLUMN ZERO. Every other line this script can print with
+    #      caller-influenced content is indented (the diff body is piped
+    #      through `sed 's/^/    /'`), so nothing in an extract file can forge
+    #      this line.
+    echo "VERIFY-CALL: $file"
+
     if [ ! -f "$PROTOCOLS_DIR/$file" ]; then
         echo "✗ $name: FILE NOT FOUND ($PROTOCOLS_DIR/$file)"
         FAIL=$((FAIL + 1))
@@ -107,7 +125,7 @@ verify "pact-scope-detection.md"  "Scope Detection"         "Scope Detection"   
 verify "pact-scope-contract.md"   "Scope Contract"          "Scope Contract"                         "Scoped Phases (ATOMIZE and CONSOLIDATE)"
 verify "pact-scope-phases.md"     "Scoped Phases"           "Scoped Phases (ATOMIZE and CONSOLIDATE)" "Concurrent Audit Protocol"
 verify "pact-audit.md"            "Concurrent Audit"        "Concurrent Audit Protocol"              "Completion Authority"
-verify "pact-state-recovery.md"   "State Recovery"          "State Recovery Protocol"                "Session Continuity"
+verify "pact-state-recovery.md"   "State Recovery"          "State Recovery Protocol"                "Related"
 
 # Combined-section extracts: two heading-pairs concatenated in order.
 verify "pact-s2-coordination.md"  "S2 Coordination" \

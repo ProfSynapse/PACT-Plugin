@@ -138,16 +138,28 @@ _INPROCESS_MODE_NOTICE = (
     "native delivery, or keep a heartbeat — see reference/unattended-runs.md."
 )
 
-# Unknown-role startup warning (#878). The lead-only writes below are gated
+# Unknown-role startup warning. The lead-only writes below are gated
 # behind is_lead, which keys on the harness-set agent_type field. A session
 # launched WITHOUT `--agent` (or with a non-PACT agent_type) carries no
 # recognizable role — classify_session_role() returns "unknown" — so its
 # session_init silently performs none of the lead-only writes. That is the
 # intended fail-toward-teammate direction, but it is invisible to an operator
 # who MEANT to launch the orchestrator and forgot the flag. This notice makes
-# that case observable. Emitted via system_messages (user-facing) only for the
-# "unknown" role; lead and teammate frames never see it. Pure literal so tests
-# can pin the exact substring.
+# that case observable. IT RIDES TWO CHANNELS ACROSS THREE EMISSION SITES,
+# AND EACH CHANNEL HAS ITS OWN POPULATION, BECAUSE THE GATES USE DIFFERENT
+# PREDICATES. Do not state one population for the pair.
+#   systemMessage: THE EMISSION NEEDS TWO CONDITIONS TOGETHER. The source
+#     must be a launch event (`startup` or `resume`), AND
+#     _should_warn_unknown_role must pass. That predicate is the WIDER of
+#     the two: it passes for a frame with no recognized role, and ALSO for
+#     an agent_type that is present but is not the lead and is not a
+#     registered specialist. So a typo such as `--agent pact-architct`
+#     classifies as a teammate and reaches this channel ON A LAUNCH, and on
+#     a compact or a clear it reaches no channel at all.
+#   additionalContext: gated by `frame_role == "unknown"`, which needs an
+#     ABSENT agent_type, because a truthy agent_type classifies as a
+#     teammate. A typo does NOT reach this channel.
+# Pure literal so tests can pin the exact substring.
 _UNKNOWN_ROLE_NOTICE = (
     "PACT: this session has no recognized agent role (no `--agent` flag, or an "
     "unrecognized agent_type), so lead-only session setup was skipped. If you "
@@ -175,7 +187,7 @@ _SYMLINK_REPOINT_NOTICE = (
 
 
 def _should_warn_unknown_role(input_data: dict) -> bool:
-    """Decide whether the #878 unknown-role startup notice should fire.
+    """Decide whether the unknown-role startup notice should fire.
 
     Fires when the frame has NO recognized PACT role:
       classify_session_role == "unknown"  (agent_type absent)
@@ -601,10 +613,48 @@ def _build_safety_net_context(
     a teammate MUST NOT be handed the orchestrator-only bootstrap directive.
 
     frame_role is captured in main() BEFORE the risky assembly (alongside
-    team_name). If the exception fired before that capture, frame_role is None
-    and the orchestrator marker is emitted — identical to the pre-role-aware
-    behavior, so an early-window failure is a known no-regression default
-    rather than a misroute.
+    team_name). THE THREE VALUES AND None ARE FOUR DIFFERENT CASES AND EACH IS
+    RULED SEPARATELY. "teammate" gets the teammate marker. "lead" gets the
+    orchestrator marker, which is safe because a lead frame resolves through
+    is_lead on its own evidence. "unknown" means the classifier RAN and found
+    no role, so the frame is known not to be the lead and it gets NEITHER
+    marker. None means the classifier DID NOT RUN, so nothing is known, and it
+    gets a role-free failure note.
+
+    AN EARLIER FORM OF THIS DOCSTRING CALLED THE ORCHESTRATOR MARKER ON THE
+    None PATH "a known no-regression default rather than a misroute". THAT
+    CLAIM DOES NOT SURVIVE, AND THE TWO HALVES OF ITS RETIREMENT REST ON
+    DIFFERENT WARRANTS. READ WHICH IS WHICH BEFORE YOU CHANGE EITHER.
+
+    THE "unknown" HALF IS MEASURED. Handing the orchestrator instructions to a
+    frame that classified "unknown" is the misroute, and it was counted.
+    POPULATION OF THAT COUNT, stated so it cannot be borrowed by accident: the
+    155 files matching subagents/*.jsonl for ONE team session, of which 13
+    fired a compact SessionStart, and 13 of those 13 received the orchestrator
+    instructions. THAT CENSUS COVERS FRAMES WHERE THE CLASSIFIER RAN AND
+    RETURNED "unknown". IT COVERS NO OTHER POPULATION.
+
+    THE None HALF IS A DESIGN ARGUMENT AND IT IS DELIBERATELY WEAKER. NO
+    MEASUREMENT COVERS A FRAME WHERE THE CLASSIFIER DID NOT RUN. Nobody has
+    counted how frequently a raise fires above the capture, or which roles
+    reach that window. THE ARGUMENT, on its merits: when the role is
+    unresolved the system knows nothing about the reader, and text that claims
+    a role AND issues a governance directive asserts more than the system
+    knows.
+
+    THAT ASYMMETRY IS A BOUND ON THE EVIDENCE, NOT A GAP SOMEBODY LEFT OPEN.
+    The two halves have different warrants because they cover different
+    populations, and a reader must be able to see which is which. DO NOT
+    borrow the census above for the None half: taking it means a claim about
+    frames that did not classify, which is not what was counted. DO NOT soften
+    the "unknown" half to match. If a later measurement covers the None
+    population, cite THAT one and state its population here.
+
+    ONE COST OF THE None RULING, PRICED AND MEASURED: a lead that loses this
+    marker keeps a reactive route. The bootstrap_gate PreToolUse hook is
+    lead-only and its deny names the remedy, so such a lead is told on its
+    first blocked tool call rather than up front. That is a degradation from
+    told-up-front to told-on-first-attempt, and it is not a deadlock.
 
     This helper is deliberately zero-risk: only string literals, a single
     f-string interpolation of team_name (which is either None or a validated
@@ -617,9 +667,11 @@ def _build_safety_net_context(
                    exception fired before generate_team_name() ran.
         frame_role: Session role ("lead" / "teammate" / "unknown") captured
                     before the exception, or None if the exception fired before
-                    the capture. Only "teammate" selects the teammate marker;
-                    every other value (including None) selects the orchestrator
-                    marker — the safe default.
+                    the capture. Four cases, four outcomes: "teammate" selects
+                    the teammate marker, "unknown" and None select a role-free
+                    note that claims no role and carries no bootstrap
+                    directive, and any other value (which is "lead" today)
+                    selects the orchestrator marker.
 
     Returns:
         Minimal additionalContext string suitable for the except-block
@@ -636,6 +688,34 @@ def _build_safety_net_context(
             'YOUR PACT ROLE: teammate.\n\n'
             'session_init partially failed — check systemMessage for details. '
             'Check TaskList for tasks assigned to you.'
+        )
+    if frame_role == "unknown":
+        # The classifier RAN and found no role, so this frame is known NOT to
+        # be the lead. It gets no role marker and no bootstrap directive.
+        return (
+            'session_init partially failed — check systemMessage for details. '
+            + _UNKNOWN_ROLE_NOTICE
+        )
+    if frame_role is None:
+        # The classifier DID NOT RUN, so nothing is known about this frame.
+        # Ruled separately from "unknown": the note says which of the two
+        # happened, because a reader debugging an early-window failure needs
+        # to know that the role was never resolved rather than resolved-empty.
+        #
+        # THIS BRANCH RESTS ON A DESIGN ARGUMENT, NOT ON A MEASUREMENT, and
+        # the difference is deliberate rather than an omission. NO CENSUS
+        # COVERS A FRAME WHERE THE CLASSIFIER DID NOT RUN. The 13-of-13 count
+        # cited in the docstring above covers frames that classified
+        # "unknown", which is a different population. THE ARGUMENT: when the
+        # role is unresolved the system knows nothing about the reader, and
+        # text that claims a role AND issues a governance directive asserts
+        # more than the system knows. Do not borrow that count for this
+        # branch. If you measure this population, cite the new count here and
+        # state which frames it covers.
+        return (
+            'session_init failed before the session role was resolved — check '
+            'systemMessage for details. No role instructions are delivered for '
+            'an unresolved frame.'
         )
     prelude = (
         'YOUR PACT ROLE: orchestrator.\n\n'
@@ -959,7 +1039,7 @@ def main():
             except Exception:  # noqa: BLE001 — fail-safe → emit; never block init
                 system_messages.append(_INPROCESS_MODE_NOTICE)
 
-        # 0c. Unknown-role startup warning (#878). The lead-only writes in
+        # 0c. Unknown-role startup warning. The lead-only writes in
         # steps 5a/5b/8 are gated behind is_lead below; a frame with NO
         # recognized role (no `--agent` flag, OR a present-but-unrecognized /
         # typo'd agent_type) silently performs none of them. Surface that so a
@@ -971,6 +1051,11 @@ def main():
         # the live specialist-registry check against env plugin_root, and the
         # PACT:-strip) lives in _should_warn_unknown_role — total (never raises),
         # so no try/except is needed at the call site.
+        #
+        # This literal is emitted at TWO other sites: the unknown-role limb of
+        # the frame-role gate below, and _build_safety_net_context on the
+        # exception path. The gating decision of each site, and its cause, are
+        # recorded at that site.
         if source in ("startup", "resume") and _should_warn_unknown_role(input_data):
             system_messages.append(_UNKNOWN_ROLE_NOTICE)
 
@@ -1429,6 +1514,45 @@ def main():
                     context_parts.insert(0, _peer_body)
             except Exception:
                 pass  # fail-open: no injection; never the orchestrator safety-net
+        elif frame_role == "unknown":
+            # THE THIRD CLASSIFIER VALUE, WHICH THIS GATE USED TO DROP. The
+            # classifier RAN and found no role, so this frame is known NOT to
+            # be the lead. It gets NEITHER the teammate body above NOR the
+            # orchestrator directive below.
+            #
+            # WHY A NOTE RATHER THAN SILENCE, and the two options were priced.
+            # Silence costs nothing to emit and has two failures. First, an
+            # arm asserting an ABSENCE cannot separate correct silence from a
+            # build path that died, because a fail-open hook emits the same
+            # bytes for both, which are none. That is the property that let
+            # this defect sit undetected, and an arm that reproduces it proves
+            # nothing. Second, the operator who meant to launch the
+            # orchestrator and forgot the flag loses the cue: the sibling
+            # notice rides systemMessage, which a session transcript does not
+            # capture. A NOTE costs a few hundred bytes on a rare frame, gives
+            # the arm a positive token to assert beside the absence, and puts
+            # the cue on a channel that is delivered. The same literal serves
+            # both channels, so the two cannot drift.
+            #
+            # INDEX 0, LIKE EVERY OTHER LIMB OF THIS GATE. The teammate limb
+            # above and each source limb below write at index 0, because this
+            # gate runs LATE: the banner (step 4c) and the pin/config
+            # surfacings are in context_parts before it. An APPEND here left
+            # the notice last, and on a frame with no pin-slot line (any
+            # checkout carrying no project CLAUDE.md) it left the BANNER
+            # first, so the role message sat below diagnostics a reader meets
+            # first. Position only. The ruling that an unknown frame gets no
+            # orchestrator ladder is unchanged.
+            #
+            # NO SOURCE GATE HERE, AND THAT IS CORRECT. The sibling emission of
+            # this literal into system_messages gates on a launch source,
+            # because that gate answers a REPETITION question, and repetition
+            # is about a reader that remembers. This limb writes to
+            # context_parts. A frame after a compact does NOT hold the earlier
+            # text, so a gate here removes the only copy that reader gets. If
+            # this limb changes to write to system_messages, the reader changes
+            # with it and a source gate becomes correct.
+            context_parts.insert(0, _UNKNOWN_ROLE_NOTICE)
         else:
             # The team always exists (the platform pre-creates it), so the
             # directive is source-agnostic; the per-source branches differ only

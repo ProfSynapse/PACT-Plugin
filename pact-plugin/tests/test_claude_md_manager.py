@@ -1601,6 +1601,91 @@ class TestBuildMigratedContentAdversarial:
         assert "Some inner content" not in memory_region
 
 
+class TestBuildMigratedContentIndentedHeadingEntry:
+    """The entry axis of the section-boundary test: leading spaces."""
+
+    # The band each row of which the boundary test must cover. ZERO IS THE
+    # CONTROL ROW. With the right-stripped boundary test, zero is the one
+    # indent that keeps a foreign heading out, so a band that omitted it
+    # would report one verdict for all rows and separate nothing.
+    _INDENTS = (0, 1, 2, 3, 4, 5)
+
+    def test_indented_foreign_heading_stays_out_of_the_memory_region(self):
+        """An indented foreign heading must not enter the managed region.
+
+        The section-boundary test reads the LEFT-stripped line, and the fence
+        test beside it in the same loop reads the same form. Change the
+        boundary test back to the right-stripped line and leading spaces hide
+        the heading from it. The heading then does not close the memory
+        section, and the plugin adopts the heading and its body into the
+        PACT_MEMORY region of a file that git does not track.
+
+        THE PAYLOAD IS A HEADING THAT THE EXACT-MATCH TEST REJECTS, and that
+        choice is load-bearing. A payload that agrees with a memory heading of
+        the plugin enters at zero spaces through the legitimate exact-match
+        route, so it gives the same answer at each indent and cannot separate
+        the two states.
+
+        MEASURED. With the right-stripped boundary test, zero spaces keeps the
+        heading out and one through five spaces put it in. With the
+        left-stripped test, zero through five all keep it out.
+
+        EACH ROW CARRIES TWO LEGS, and the negative leg alone is not
+        sufficient: a document that loses the payload also satisfies it.
+        """
+        from shared.claude_md_manager import _build_migrated_content
+
+        checked = 0
+        for spaces in self._INDENTS:
+            content = (
+                "# Project Memory\n"
+                "\n"
+                "## Retrieved Context\n"
+                "A memory line.\n"
+                "\n"
+                f"{' ' * spaces}## Zzforeign Heading\n"
+                "ZZFOREIGN-BODY-TOKEN\n"
+            )
+
+            result = _build_migrated_content(content)
+
+            memory_region = result[
+                result.index(_MEMORY_START):result.index(_MEMORY_END)
+            ]
+            after_managed = result[result.index(_MANAGED_END):]
+
+            # NEGATIVE LEG FIRST, because it is the property itself. Order
+            # matters here: the positive leg below also goes red when the
+            # heading enters the memory region, and its message would name
+            # the wrong defect.
+            assert "Zzforeign Heading" not in memory_region, (
+                f"at an indent of {spaces} a foreign heading entered the "
+                f"PACT-managed memory region"
+            )
+            assert "ZZFOREIGN-BODY-TOKEN" not in memory_region, (
+                f"at an indent of {spaces} the body below a foreign heading "
+                f"entered the PACT-managed memory region"
+            )
+
+            # POSITIVE LEG. Without it, a document that dropped the payload
+            # satisfies the two assertions above and reads as a pass.
+            assert "Zzforeign Heading" in after_managed, (
+                f"at an indent of {spaces} the foreign heading is in no "
+                f"region of the two, so it left the document"
+            )
+            assert "ZZFOREIGN-BODY-TOKEN" in after_managed, (
+                f"at an indent of {spaces} the body below a foreign heading "
+                f"is in no region of the two, so it left the document"
+            )
+            checked += 1
+
+        # A band that shrinks to nothing satisfies each assertion above and
+        # reads as a pass, so gate on the row count.
+        assert checked == len(self._INDENTS) == 6, (
+            f"the indent band ran {checked} rows, and 6 are necessary"
+        )
+
+
 class TestBuildMigratedContentIdempotent:
     """_build_migrated_content() has its own idempotency guard (round 5 item 2).
 

@@ -73,6 +73,60 @@ def _with_lead_role(payload: dict) -> dict:
     return {**payload, "agent_type": _LEAD_AGENT_TYPE}
 
 
+# The canonical session id every driver below uses. One name for one value, so
+# a change lands in one place.
+_TEST_SESSION_ID = "aabb1122-0000-0000-0000-000000000000"
+
+# The unknown-role notice literal. classify_session_role returns "unknown" when
+# agent_type is absent, and the role gate then emits this instead of the
+# orchestrator ladder. Kept as a fragment rather than the full sentence so a
+# re-wrap of the source literal does not redden every arm that reads it.
+_UNKNOWN_ROLE_FRAGMENT = "relaunch with `--agent PACT:pact-orchestrator`"
+
+
+def _stdin_payload(source=None, agent_type=_LEAD_AGENT_TYPE, **extra) -> str:
+    """Build a stdin JSON string for a session_init driver.
+
+    ``agent_type=None`` OMITS the key, which is the ONLY way to build an
+    unknown frame: classify_session_role reads "unknown" from an ABSENT
+    agent_type, so a driver that cannot omit the key cannot reach that branch.
+
+    THE DEFAULT IS THE LEAD ROLE ON PURPOSE. A driver that omitted agent_type
+    silently built an UNKNOWN frame while its class asserted the LEAD contract,
+    and the two frames emitted identical bytes before the role gate became
+    three-way, so the arms passed without exercising the frame they named.
+    """
+    payload = {"session_id": _TEST_SESSION_ID}
+    if source is not None:
+        payload["source"] = source
+    if agent_type is not None:
+        payload["agent_type"] = agent_type
+    payload.update(extra)
+    return json.dumps(payload)
+
+
+def _assert_unknown_frame_body(additional: str) -> None:
+    """Assert that ``additional`` is the body an UNKNOWN frame receives.
+
+    Paired with each lead-frame arm in the same class: the lead fixture repair
+    gives an arm the frame it MEANT, and the unknown arm keeps the frame it was
+    accidentally providing. Both properties stay asserted, so neither the lead
+    contract nor the unknown branch loses its witness.
+
+    The positive token is load-bearing. An arm that asserted only the ABSENCE of
+    the orchestrator marker cannot separate a correct refusal from a build path
+    that died, because the two emit the same bytes: none.
+    """
+    assert "YOUR PACT ROLE: orchestrator." not in additional, (
+        "an unknown frame is known NOT to be the lead, so it must not receive "
+        f"the orchestrator instructions. got: {additional[:120]!r}"
+    )
+    assert _UNKNOWN_ROLE_FRAGMENT in additional, (
+        "an unknown frame must receive the unknown-role notice. got: "
+        f"{additional[:120]!r}"
+    )
+
+
 class TestGenerateTeamName:
     """Tests for generate_team_name() -- session-unique team name generation."""
 
@@ -2989,6 +3043,7 @@ def _run_session_init_for_path(
     tmp_path,
     source,
     team_exists,
+    agent_type=_LEAD_AGENT_TYPE,
 ):
     """Helper for the contract tests below: runs main() under stable mocks
     and returns (additionalContext, kernel_call_count, routing_call_count)."""
@@ -3002,10 +3057,7 @@ def _run_session_init_for_path(
         team_dir.mkdir(parents=True)
         (team_dir / "config.json").write_text('{"members": []}')
 
-    stdin_data = json.dumps({
-        "session_id": "aabb1122-0000-0000-0000-000000000000",
-        "source": source,
-    })
+    stdin_data = _stdin_payload(source=source, agent_type=agent_type)
 
     with patch("session_init.setup_plugin_symlinks", return_value=None), \
          patch("session_init.ensure_project_memory_md", return_value=None), \
@@ -3287,7 +3339,8 @@ def _compact_tasks_dir(tmp_path, monkeypatch, pact_context):
 
 
 def _run_session_init_compact(
-    monkeypatch, tmp_path, *, team_exists=True, patch_get_task_list=None
+    monkeypatch, tmp_path, *, team_exists=True, patch_get_task_list=None,
+    agent_type=_LEAD_AGENT_TYPE,
 ):
     """Drive session_init.main() with source=compact and return the
     parsed additionalContext string plus the full output dict.
@@ -3307,10 +3360,7 @@ def _run_session_init_compact(
         team_dir.mkdir(parents=True, exist_ok=True)
         (team_dir / "config.json").write_text('{"members": []}')
 
-    stdin_data = json.dumps({
-        "session_id": "aabb1122-0000-0000-0000-000000000000",
-        "source": "compact",
-    })
+    stdin_data = _stdin_payload(source="compact", agent_type=agent_type)
 
     # Minimum viable mock set: the steps that touch real disk / network
     # / external state, same shape as TestSourceAwareness._run_main_with_source
@@ -3364,6 +3414,24 @@ class TestSessionInitCompactE2E:
     agent / blocker identities into additionalContext — and never
     fabricates identities that don't exist on disk.
     """
+
+    def test_unknown_frame_gets_the_notice_not_the_checkpoint_ladder(
+        self, _compact_tasks_dir, monkeypatch, tmp_path
+    ):
+        """PAIRED UNKNOWN ARM. The lead arms in this class drive a LEAD frame,
+        which is the frame the compact checkpoint is written for. This arm keeps
+        the UNKNOWN frame those arms used to build by accident, so the class
+        covers both branches of the role gate rather than trading one for the
+        other."""
+        feature = {"id": "f-unknown", "subject": "Unknown-frame feature",
+                   "status": "in_progress"}
+        (_compact_tasks_dir / "f-unknown.json").write_text(json.dumps(feature))
+
+        additional, _ = _run_session_init_compact(
+            monkeypatch, tmp_path, agent_type=None
+        )
+
+        _assert_unknown_frame_body(additional)
 
     def test_feature_only_no_phase_emits_feature_without_phantom_phase(
         self, _compact_tasks_dir, monkeypatch, tmp_path
@@ -3551,6 +3619,71 @@ class TestSessionInitSlotAIntegration:
                 f"context_parts ordering around line 700-710."
             )
 
+    def test_banner_is_not_first_when_the_pin_slot_line_is_absent(
+        self, monkeypatch, tmp_path
+    ):
+        """Drive the join-order property in the state a pinless checkout makes.
+
+        THE SIBLING ARM ABOVE CANNOT FAIL ON A MACHINE THAT HAS PINS. It rides
+        the pin-slot diagnostic: while that line precedes the banner, the
+        `startswith` assertion holds whatever the role branch does with its own
+        write. The line comes from `check_pin_slot_status`, which returns None
+        when no project CLAUDE.md resolves — the state of a checkout that does
+        not carry one, and the state that made the sibling arm red on a runner
+        while it stayed green beside a developer's own file.
+
+        Suppress that line here, so the assertion rests on the role branch
+        instead of on an adjacent diagnostic. The fixture sends no
+        `agent_type`, so the frame classifies "unknown": that branch emits its
+        own notice, and it MUST write at index 0 like every other role branch,
+        so the banner is not the first thing a reader meets.
+
+        The three non-vacuity assertions come first, because each names a way
+        this arm could pass while measuring nothing: a run that never reached
+        Slot 4c, a run where the pin-slot line came back, and an anchor that
+        cannot hold up a prefix test.
+        """
+        import session_init as _session_init
+        from session_init import _UNKNOWN_ROLE_NOTICE
+
+        monkeypatch.setattr(_session_init, "check_pin_slot_status", lambda: None)
+
+        plugin_root = tmp_path / "installed-cache"
+        additional = self._run_main(
+            monkeypatch,
+            tmp_path,
+            plugin_root=plugin_root,
+            manifest=json.dumps({"name": "PACT", "version": "3.18.1"}),
+        )
+
+        banner = f"PACT plugin: PACT 3.18.1 (root: {plugin_root})"
+        assert banner in additional, (
+            "non-vacuity: the run never reached Slot 4c, so the ordering "
+            "assertions below would pass without measuring anything"
+        )
+        assert "Pin slots:" not in additional, (
+            "non-vacuity: the pin-slot line is back, so this arm no longer "
+            "reproduces the pinless-checkout condition it exists to drive"
+        )
+        assert _UNKNOWN_ROLE_FRAGMENT in _UNKNOWN_ROLE_NOTICE, (
+            "non-vacuity: the anchor does not carry this module's own literal, "
+            "so the startswith below is satisfiable by a degenerate constant "
+            "and measures nothing. An imported anchor inherits any degeneracy "
+            "of the source it comes from: startswith('') is correct for every "
+            "string, and a whitespace-only anchor matches the leading space of "
+            "the join. The independent literal is the yardstick."
+        )
+        assert additional.startswith(_UNKNOWN_ROLE_NOTICE), (
+            "the unknown-role branch must write its notice at index 0 "
+            "(context_parts.insert(0, ...)), not append it — an appended "
+            "notice leaves the banner first for a frame with no other "
+            "pre-banner diagnostic"
+        )
+        assert not additional.startswith(banner), (
+            "banner (Slot 4c) is the first element of additionalContext: the "
+            "role branch made no index-0 write for this frame"
+        )
+
 
 class TestCounterTestBySlotARevert:
     """Counter-test-by-revert for session_init Slot A append (d4f0f794
@@ -3620,7 +3753,9 @@ class TestTeamResumeDetection:
     resumed session (reuse instruction).
     """
 
-    def _run_main_with_team_detection(self, monkeypatch, tmp_path, stdin_data=None):
+    def _run_main_with_team_detection(
+        self, monkeypatch, tmp_path, stdin_data=None, agent_type=_LEAD_AGENT_TYPE
+    ):
         """Helper: run main() with Path.home() pointed at tmp_path.
 
         Returns the additionalContext string from the hook output.
@@ -3631,7 +3766,7 @@ class TestTeamResumeDetection:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         if stdin_data is None:
-            stdin_data = json.dumps({"session_id": "aabb1122-0000-0000-0000-000000000000"})
+            stdin_data = _stdin_payload(agent_type=agent_type)
 
         with patch("session_init.setup_plugin_symlinks", return_value=None), \
              patch("session_init.ensure_project_memory_md", return_value=None), \
@@ -3648,6 +3783,18 @@ class TestTeamResumeDetection:
         assert exc_info.value.code == 0
         output = json.loads(mock_stdout.getvalue())
         return output["hookSpecificOutput"]["additionalContext"]
+
+    def test_unknown_frame_gets_the_notice_not_the_team_directive(
+        self, monkeypatch, tmp_path
+    ):
+        """PAIRED UNKNOWN ARM for the team-detection driver. See
+        _assert_unknown_frame_body for why the positive token is load-bearing."""
+        additional = self._run_main_with_team_detection(
+            monkeypatch, tmp_path, agent_type=None
+        )
+
+        _assert_unknown_frame_body(additional)
+        assert "provided by the platform for this session" not in additional
 
     def test_fresh_session_emits_team_create(self, monkeypatch, tmp_path):
         """When no team config exists on disk, should emit unified platform directive."""
@@ -3683,7 +3830,7 @@ class TestTeamResumeDetection:
 
         monkeypatch.setattr(Path, "exists", exists_that_raises)
 
-        stdin_data = json.dumps({"session_id": "aabb1122-0000-0000-0000-000000000000"})
+        stdin_data = _stdin_payload()
 
         from session_init import main
 
@@ -3730,7 +3877,8 @@ class TestSourceAwareness:
     """
 
     def _run_main_with_source(
-        self, monkeypatch, tmp_path, source, team_exists=False
+        self, monkeypatch, tmp_path, source, team_exists=False,
+        agent_type=_LEAD_AGENT_TYPE,
     ):
         """Helper: run main() with given source and team state.
 
@@ -3756,10 +3904,7 @@ class TestSourceAwareness:
             team_dir.mkdir(parents=True)
             (team_dir / "config.json").write_text('{"members": []}')
 
-        stdin_data = json.dumps({
-            "session_id": "aabb1122-0000-0000-0000-000000000000",
-            "source": source,
-        })
+        stdin_data = _stdin_payload(source=source, agent_type=agent_type)
 
         with patch("session_init.setup_plugin_symlinks", return_value=None) as mock_symlinks, \
              patch("session_init.ensure_project_memory_md", return_value=None), \
@@ -3779,6 +3924,24 @@ class TestSourceAwareness:
         return additional, mock_symlinks.called, False
 
     # --- Path 1: startup + no team (fresh session) ---
+
+    @pytest.mark.parametrize("source", ["startup", "resume", "compact", "clear"])
+    def test_unknown_frame_gets_the_notice_on_every_source(
+        self, source, monkeypatch, tmp_path
+    ):
+        """PAIRED UNKNOWN ARM, across all four sources.
+
+        The role gate runs BEFORE the source ladder, so an unknown frame must
+        receive the notice whatever the source is. Parametrized over the four
+        sources this class exists to separate, so a role gate that leaked the
+        ladder back on one source alone cannot stay green."""
+        additional, _, _ = self._run_main_with_source(
+            monkeypatch, tmp_path, source=source, team_exists=True,
+            agent_type=None,
+        )
+
+        _assert_unknown_frame_body(additional)
+        assert "provided by the platform for this session" not in additional
 
     def test_startup_no_team_creates_team(self, monkeypatch, tmp_path):
         """startup + NO on-disk team: emit unified platform directive (bare — no recovery text).
@@ -4059,9 +4222,7 @@ class TestSourceAwareness:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         # stdin_data without "source" key
-        stdin_data = json.dumps({
-            "session_id": "aabb1122-0000-0000-0000-000000000000",
-        })
+        stdin_data = _stdin_payload()
 
         with patch("session_init.setup_plugin_symlinks", return_value=None) as mock_symlinks, \
              patch("session_init.ensure_project_memory_md", return_value=None), \
@@ -4175,6 +4336,18 @@ class TestTeamCreateStringFreshSession:
         assert "Do not read files" in additional
         assert "until bootstrap is complete" in additional
 
+    def test_unknown_frame_gets_the_notice_not_the_fresh_directive(
+        self, monkeypatch, tmp_path
+    ):
+        """PAIRED UNKNOWN ARM for the fresh-session driver."""
+        additional, _, _ = _run_session_init_for_path(
+            monkeypatch, tmp_path, source="startup", team_exists=False,
+            agent_type=None,
+        )
+
+        _assert_unknown_frame_body(additional)
+        assert "provided by the platform for this session" not in additional
+
     def test_does_not_contain_old_conditional_directive(self, monkeypatch, tmp_path):
         """The #444 unconditional directive must fully replace the old conditional.
         The conditional form ('Re-invoke if your context is compacted...') required
@@ -4206,6 +4379,18 @@ class TestTeamReuseStringResumedSession:
         assert 'Do this before anything else.' in additional
         assert 'Do not evaluate whether it is needed.' in additional
         assert 'You must invoke Skill("PACT:bootstrap") on every session start.' in additional
+
+    def test_unknown_frame_gets_the_notice_not_the_reuse_directive(
+        self, monkeypatch, tmp_path
+    ):
+        """PAIRED UNKNOWN ARM for the resumed-session driver."""
+        additional, _, _ = _run_session_init_for_path(
+            monkeypatch, tmp_path, source="resume", team_exists=True,
+            agent_type=None,
+        )
+
+        _assert_unknown_frame_body(additional)
+        assert "provided by the platform for this session" not in additional
 
     def test_does_not_contain_old_conditional_directive(self, monkeypatch, tmp_path):
         """The #444 unconditional directive must fully replace the old conditional form."""
@@ -4248,6 +4433,51 @@ class TestHappyPathOutputInvariant:
     nothing and break governance delivery.
     """
 
+    def test_unknown_frame_still_emits_hook_specific_output(
+        self, monkeypatch, tmp_path
+    ):
+        """PAIRED UNKNOWN ARM for the non-empty-output invariant.
+
+        THE INVARIANT THIS CLASS EXISTS FOR IS ROLE-FREE: the hook must emit
+        hookSpecificOutput rather than the suppression sentinel, because an
+        empty context_parts breaks governance delivery. The role gate adds a
+        branch that could have left context_parts EMPTY for an unknown frame,
+        which is the one way this invariant could have been broken by the
+        repair, so the unknown frame needs its own witness here.
+
+        This is also why the notice matters rather than silence: a silent
+        unknown branch would emit the suppression sentinel and fail this arm.
+        """
+        from session_init import main
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path / "project"))
+        (tmp_path / "project").mkdir()
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        stdin_data = _stdin_payload(source="startup", agent_type=None)
+
+        with patch("session_init.setup_plugin_symlinks", return_value=None), \
+             patch("session_init.ensure_project_memory_md", return_value=None), \
+             patch("session_init.check_pinned_staleness", return_value=None), \
+             patch("session_init.update_session_info", return_value=None), \
+             patch("session_init.get_task_list", return_value=None), \
+             patch("session_init.restore_last_session", return_value=None), \
+             patch("session_init.check_resume_state", return_value=None), \
+             patch("sys.stdin", io.StringIO(stdin_data)), \
+             patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 0
+        raw = mock_stdout.getvalue()
+        output = json.loads(raw)
+        assert "hookSpecificOutput" in output, (
+            "an unknown frame must still produce hookSpecificOutput: a silent "
+            "unknown branch would emit the suppression sentinel instead"
+        )
+        assert "suppressOutput" not in raw
+        _assert_unknown_frame_body(output["hookSpecificOutput"]["additionalContext"])
+
     def test_session_init_happy_path_emits_hook_specific_output(
         self, monkeypatch, tmp_path
     ):
@@ -4257,10 +4487,7 @@ class TestHappyPathOutputInvariant:
         (tmp_path / "project").mkdir()
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        stdin_data = json.dumps({
-            "session_id": "aabb1122-0000-0000-0000-000000000000",
-            "source": "startup",
-        })
+        stdin_data = _stdin_payload(source="startup")
 
         with patch("session_init.setup_plugin_symlinks", return_value=None), \
              patch("session_init.ensure_project_memory_md", return_value=None), \
@@ -4317,22 +4544,79 @@ class TestHappyPathOutputInvariant:
 class TestBuildSafetyNetContext:
     """Unit tests for _build_safety_net_context() helper."""
 
-    def test_none_team_starts_with_pact_role_marker(self):
-        """The lead/unknown/None roles (the safe default) lead with the
-        orchestrator marker at byte 0 (#888 role-aware contract).
+    def test_lead_role_starts_with_pact_role_marker(self):
+        """ONLY a lead frame leads with the orchestrator marker at byte 0.
 
-        frame_role is omitted (defaults to None) or set to a non-teammate
-        value; all three select the orchestrator marker — the pre-#888
-        behavior — so an early-window failure (frame_role still None) never
-        downgrades the lead's governance delivery."""
+        RETARGET of test_none_team_starts_with_pact_role_marker, which looped
+        over (None, "lead", "unknown") and asserted all three lead with the
+        orchestrator marker. Its own docstring called that grouping "the safe
+        default". IT WAS NOT SAFE, AND THAT ARM PINNED THE DEFECT: handing the
+        orchestrator instructions to a frame of unknown role was measured
+        reaching 13 of 13 teammate frames that fired a compact SessionStart.
+
+        The three roles are now three cases and each is asserted separately by
+        the three tests below, so a collapse of any two back into one cannot
+        stay green. The looped form could not do that: it asserted on the first
+        iteration, so a failure at None left "lead" and "unknown" unevaluated.
+        """
         from session_init import _build_safety_net_context
 
-        for frame_role in (None, "lead", "unknown"):
-            result = _build_safety_net_context(None, frame_role)
-            assert result.startswith("YOUR PACT ROLE: orchestrator."), (
-                f"frame_role={frame_role!r} must lead with 'YOUR PACT ROLE: "
-                "orchestrator.' (line-anchored for routing block consumer check)."
-            )
+        result = _build_safety_net_context(None, "lead")
+
+        assert result.startswith("YOUR PACT ROLE: orchestrator."), (
+            "frame_role='lead' must lead with 'YOUR PACT ROLE: orchestrator.' "
+            "(line-anchored for routing block consumer check)."
+        )
+
+    def test_unknown_role_gets_neither_marker_nor_bootstrap(self):
+        """frame_role='unknown' means the classifier RAN and found no role, so
+        the frame is known NOT to be the lead: it gets NEITHER role marker and
+        NOT the lead-only bootstrap directive.
+
+        PAIRS WITH test_lead_role_starts_with_pact_role_marker. The two of them
+        separate the roles the pre-repair helper merged, so a return of the
+        merge for either role alone cannot stay green.
+
+        The positive token is load-bearing. An arm that asserted ONLY the
+        absence of the marker cannot separate correct silence from a build path
+        that died, because both emit the same bytes: none.
+        """
+        from session_init import _build_safety_net_context
+
+        result = _build_safety_net_context(None, "unknown")
+
+        assert not result.startswith("YOUR PACT ROLE: orchestrator.")
+        assert "YOUR PACT ROLE:" not in result
+        assert 'Skill("PACT:bootstrap")' not in result
+        assert "relaunch with `--agent PACT:pact-orchestrator`" in result
+
+    def test_none_role_says_the_role_was_never_resolved(self):
+        """frame_role=None means the classifier DID NOT RUN, so nothing is known
+        about the frame. Ruled separately from "unknown": the emitted note must
+        say WHICH of the two happened, because a reader debugging an
+        early-window failure needs to know the role was unresolved rather than
+        resolved-empty.
+
+        This is the DEFAULT-ARGUMENT case, so it also guards the helper's own
+        signature: a default that silently became "lead" would redden here.
+        """
+        from session_init import _build_safety_net_context
+
+        result = _build_safety_net_context(None)
+
+        assert result == _build_safety_net_context(None, None), (
+            "the omitted-argument case and the explicit None case must agree"
+        )
+        assert "failed before the session role was resolved" in result
+        assert "YOUR PACT ROLE:" not in result
+        assert 'Skill("PACT:bootstrap")' not in result
+
+    # The four team_name tests below pass frame_role="lead" EXPLICITLY. The
+    # team_name argument is interpolated by the LEAD branch and by no other, so
+    # the branch these four exercise is reachable on the lead path alone. They
+    # used to omit frame_role and reach the branch only because every non-
+    # teammate role fell through to it; the frame they built was never the frame
+    # they named. The None and "unknown" roles keep their own tests above.
 
     def test_none_team_contains_skill_first_action(self):
         """With team_name=None the string must contain the #444 4-sentence directive.
@@ -4340,7 +4624,7 @@ class TestBuildSafetyNetContext:
         on the degraded path the risk of bootstrap-skip is higher, not lower."""
         from session_init import _build_safety_net_context
 
-        result = _build_safety_net_context(None)
+        result = _build_safety_net_context(None, "lead")
 
         assert 'Invoke Skill("PACT:bootstrap") immediately, without waiting for user input.' in result
         assert 'Do this before anything else.' in result
@@ -4351,7 +4635,7 @@ class TestBuildSafetyNetContext:
         """With team_name=None the message should tell the team-lead the team is not yet created."""
         from session_init import _build_safety_net_context
 
-        result = _build_safety_net_context(None)
+        result = _build_safety_net_context(None, "lead")
 
         assert "NOT GENERATED" in result
         assert "platform auto-creates the session team" in result
@@ -4360,7 +4644,7 @@ class TestBuildSafetyNetContext:
         """With a team_name the string must still start with the PACT ROLE marker at byte 0."""
         from session_init import _build_safety_net_context
 
-        result = _build_safety_net_context("pact-abc123")
+        result = _build_safety_net_context("pact-abc123", "lead")
 
         assert result.startswith("YOUR PACT ROLE: orchestrator.")
 
@@ -4368,7 +4652,7 @@ class TestBuildSafetyNetContext:
         """With a team_name the string must embed the team name so the team-lead can reuse it."""
         from session_init import _build_safety_net_context
 
-        result = _build_safety_net_context("pact-abc123")
+        result = _build_safety_net_context("pact-abc123", "lead")
 
         assert "pact-abc123" in result
 
@@ -4378,7 +4662,7 @@ class TestBuildSafetyNetContext:
         no divergence at the directive layer."""
         from session_init import _build_safety_net_context
 
-        result = _build_safety_net_context("pact-abc123")
+        result = _build_safety_net_context("pact-abc123", "lead")
 
         assert 'Invoke Skill("PACT:bootstrap") immediately, without waiting for user input.' in result
         assert 'Do this before anything else.' in result
@@ -4588,7 +4872,7 @@ class TestM2TeammateAdvisoryGating:
         """The team-present branch should note that session_init partially failed."""
         from session_init import _build_safety_net_context
 
-        result = _build_safety_net_context("pact-abc123")
+        result = _build_safety_net_context("pact-abc123", "lead")
 
         assert "partially failed" in result
         assert "check systemMessage" in result
@@ -4600,7 +4884,10 @@ class TestM2TeammateAdvisoryGating:
         # An empty string is falsy in Python — truthy check on team_name selects
         # the None branch, which is what we want: empty string means we never
         # successfully generated a team name.
-        result = _build_safety_net_context("")
+        # frame_role="lead" is explicit: the NOT GENERATED text lives in the
+        # lead branch and in no other, so the lead frame is the frame this arm
+        # has always meant to build.
+        result = _build_safety_net_context("", "lead")
 
         assert "NOT GENERATED" in result
 
@@ -4619,6 +4906,67 @@ class TestReadOnlyHomeScenario:
     end. Permissions are restored in a finally block so tmp_path cleanup
     does not fail.
     """
+
+    def test_readonly_home_unknown_frame_gets_the_notice(self, tmp_path, monkeypatch):
+        """PAIRED UNKNOWN ARM for the read-only home scenario.
+
+        The property this class locks is FAIL-OPEN DELIVERY: a read-only home
+        must not cost the exit code, the valid JSON, or the role-appropriate
+        body. The lead arm below asserts the lead body. This arm asserts the
+        unknown body on the same degraded path, so the role gate is shown to
+        survive a real filesystem failure rather than only the mocked ones.
+
+        The chmod and the restore in the finally block are duplicated from the
+        lead arm on purpose: the two arms must fail independently, so neither
+        can leave the directory read-only for the other.
+        """
+        import stat
+
+        from session_init import main
+
+        fake_home = tmp_path / "fakehome"
+        home_claude = fake_home / ".claude"
+        home_claude.mkdir(parents=True)
+        (home_claude / "CLAUDE.md").write_text(
+            "# Personal Preferences\n"
+            "\n"
+            "<!-- PACT_START: legacy -->\n"
+            "Obsolete orchestrator block.\n"
+            "<!-- PACT_END -->\n",
+            encoding="utf-8",
+        )
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        (project_dir / ".claude").mkdir()
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        original_mode = home_claude.stat().st_mode
+        home_claude.chmod(stat.S_IRUSR | stat.S_IXUSR)  # 0o500
+
+        stdin_data = _stdin_payload(source="startup", agent_type=None)
+
+        try:
+            with patch("session_init.setup_plugin_symlinks", return_value=None), \
+                 patch("session_init.ensure_project_memory_md", return_value=None), \
+                 patch("session_init.check_pinned_staleness", return_value=None), \
+                 patch("session_init.get_task_list", return_value=None), \
+                 patch("session_init.restore_last_session", return_value=None), \
+                 patch("session_init.check_resume_state", return_value=None), \
+                 patch("sys.stdin", io.StringIO(stdin_data)), \
+                 patch("sys.stdout", new_callable=io.StringIO) as mock_stdout, \
+                 patch("sys.stderr", new_callable=io.StringIO):
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+
+            assert exc_info.value.code == 0
+            output = json.loads(mock_stdout.getvalue())
+            _assert_unknown_frame_body(
+                output["hookSpecificOutput"]["additionalContext"]
+            )
+        finally:
+            home_claude.chmod(original_mode)
 
     def test_session_init_on_readonly_home_directory(self, tmp_path, monkeypatch):
         import stat
@@ -4663,10 +5011,7 @@ class TestReadOnlyHomeScenario:
         original_mode = home_claude.stat().st_mode
         home_claude.chmod(stat.S_IRUSR | stat.S_IXUSR)  # 0o500
 
-        stdin_data = json.dumps({
-            "session_id": "aabb1122-0000-0000-0000-000000000000",
-            "source": "startup",
-        })
+        stdin_data = _stdin_payload(source="startup")
 
         try:
             with patch("session_init.setup_plugin_symlinks", return_value=None), \
@@ -4716,6 +5061,48 @@ class TestMainExceptionSafetyNet:
     governance delivery chain (PACT ROLE marker + Skill bootstrap directive).
     """
 
+    def test_unknown_frame_exception_emits_the_notice_not_the_marker(
+        self, monkeypatch, tmp_path
+    ):
+        """PAIRED UNKNOWN ARM for the exception safety net.
+
+        The role gate was repaired at TWO sites, and this class covers the
+        second one. A site repaired at both ends with a witness at only one end
+        can lose half its repair silently, so the unknown half is asserted here
+        beside the lead half below.
+
+        The raise fires BEFORE generate_team_name, the same point the lead arm
+        uses, so the only difference between the two arms is the FRAME. That is
+        what makes this a role assertion rather than a second failure test.
+        """
+        from session_init import main
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/example/Sites/test-project")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        stdin_data = _stdin_payload(agent_type=None)
+
+        def raise_early(*args, **kwargs):
+            raise RuntimeError("simulated early failure before team name")
+
+        with patch("session_init.setup_plugin_symlinks", side_effect=raise_early), \
+             patch("sys.stdin", io.StringIO(stdin_data)), \
+             patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 0
+        output = json.loads(mock_stdout.getvalue())
+        additional = output["hookSpecificOutput"]["additionalContext"]
+
+        _assert_unknown_frame_body(additional)
+        # The team-name branch is lead-only, so its text must not ride an
+        # unknown frame either.
+        assert "NOT GENERATED" not in additional
+        # systemMessage must still carry the original error: the role gate
+        # changes WHO is addressed, not WHETHER the failure is reported.
+        assert "simulated early failure" in json.dumps(output)
+
     def test_exception_before_team_name_emits_not_generated_safety_net(
         self, monkeypatch, tmp_path
     ):
@@ -4727,9 +5114,7 @@ class TestMainExceptionSafetyNet:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/example/Sites/test-project")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        stdin_data = json.dumps({
-            "session_id": "aabb1122-0000-0000-0000-000000000000",
-        })
+        stdin_data = _stdin_payload()
 
         def raise_early(*args, **kwargs):
             raise RuntimeError("simulated early failure before team name")
@@ -4904,16 +5289,34 @@ class TestNonDictStdinNeverRaiseDominance:
             ("json_null", "null"),
         ],
     )
-    def test_non_dict_stdin_orchestrator_safety_net_classify_not_reached(
+    def test_non_dict_stdin_unresolved_role_safety_net_classify_not_reached(
         self, label, stdin_str, monkeypatch, tmp_path
     ):
         """A valid NON-DICT stdin must: (a) never raise (exit 0, asserted in the
-        helper), (b) emit the byte-0 orchestrator safety-net marker (frame_role
-        stayed None), (c) NEVER reach classify_session_role (L756 dominates L783)."""
+        helper), (b) emit the UNRESOLVED-ROLE safety-net note (frame_role stayed
+        None), (c) NEVER reach classify_session_role (L756 dominates L783).
+
+        RETARGET, and the property being locked did NOT change. The lock is the
+        DOMINANCE ORDERING, and its direct witness is spy.assert_not_called()
+        below, which passed before this retarget and passes after it. What
+        changed is leg (b), the OBSERVABLE PROXY for "frame_role stayed None":
+        the safety net used to emit the orchestrator marker for a None role and
+        now emits the unresolved-role note. Asserting the retired proxy would
+        have pinned the merged default that the role-gate repair removed.
+
+        Leg (b) is kept rather than dropped because it is what distinguishes the
+        None path from the "unknown" path. Both decline the orchestrator marker,
+        and only this one says the role was never resolved.
+        """
         additional, spy = self._run_main(stdin_str, monkeypatch, tmp_path)
-        assert additional.startswith("YOUR PACT ROLE: orchestrator."), (
-            f"non-dict stdin ({label}) must hit the orchestrator safety net; "
+        assert "failed before the session role was resolved" in additional, (
+            f"non-dict stdin ({label}) must hit the unresolved-role safety net; "
             f"got: {additional[:80]!r}"
+        )
+        assert not additional.startswith("YOUR PACT ROLE: orchestrator."), (
+            f"non-dict stdin ({label}) must NOT be handed the orchestrator "
+            f"instructions: the role was never resolved, so the frame is not "
+            f"known to be the lead. got: {additional[:80]!r}"
         )
         spy.assert_not_called()
 
@@ -4946,6 +5349,20 @@ class TestSessionInitCompactPhantomWorkflow:
     block is only appended when get_task_list() yields at least one
     in_progress task.
     """
+
+    def test_unknown_frame_gets_the_notice_and_no_checkpoint(
+        self, monkeypatch, tmp_path
+    ):
+        """PAIRED UNKNOWN ARM for the phantom-workflow class. The SACROSANCT
+        no-phantom-checkpoint invariant must hold on the unknown branch too, and
+        the notice is the positive token that proves the run reached an exit
+        rather than dying before one."""
+        additional, _ = _run_session_init_compact(
+            monkeypatch, tmp_path, patch_get_task_list=None, agent_type=None
+        )
+
+        _assert_unknown_frame_body(additional)
+        assert "[POST-COMPACTION CHECKPOINT]" not in additional
 
     def test_compact_with_no_tasks_dir_emits_no_checkpoint(
         self, tmp_path, monkeypatch, pact_context
@@ -5056,10 +5473,7 @@ class TestSessionInitCompactPhantomWorkflow:
         team_dir.mkdir(parents=True, exist_ok=True)
         (team_dir / "config.json").write_text('{"members": []}')
 
-        stdin_data = json.dumps({
-            "session_id": "aabb1122-0000-0000-0000-000000000000",
-            "source": "startup",
-        })
+        stdin_data = _stdin_payload(source="startup")
 
         stdout = io.StringIO()
         with patch("session_init.setup_plugin_symlinks", return_value=None), \
@@ -5117,10 +5531,7 @@ class TestSessionInitCompactPhantomWorkflow:
         team_dir.mkdir(parents=True, exist_ok=True)
         (team_dir / "config.json").write_text('{"members": []}')
 
-        stdin_data = json.dumps({
-            "session_id": "aabb1122-0000-0000-0000-000000000000",
-            "source": "clear",
-        })
+        stdin_data = _stdin_payload(source="clear")
 
         stdout = io.StringIO()
         with patch("session_init.setup_plugin_symlinks", return_value=None), \
@@ -5170,10 +5581,7 @@ class TestSessionInitCompactBranchExceptions:
         team_dir.mkdir(parents=True, exist_ok=True)
         (team_dir / "config.json").write_text('{"members": []}')
 
-        stdin_data = json.dumps({
-            "session_id": "aabb1122-0000-0000-0000-000000000000",
-            "source": "compact",
-        })
+        stdin_data = _stdin_payload(source="compact")
 
         def raising_get_task_list():
             raise RuntimeError("simulated task_utils failure")
@@ -5198,6 +5606,60 @@ class TestSessionInitCompactBranchExceptions:
         # Safety net still carries the 4-sentence bootstrap directive.
         assert additional.startswith("YOUR PACT ROLE: orchestrator")
         assert 'Invoke Skill("PACT:bootstrap") immediately' in additional
+
+    def test_unknown_frame_safety_net_gets_the_notice_not_the_directive(
+        self, monkeypatch, tmp_path, pact_context
+    ):
+        """PAIRED UNKNOWN ARM, and it covers the path the defect was MEASURED on.
+
+        The compact SessionStart is where the misroute was observed: teammate
+        frames fired a compact SessionStart and received the orchestrator
+        ladder. This arm drives the SAME raise as the lead arm above, on the
+        SAME branch, with an UNKNOWN frame, so the safety-net site is witnessed
+        on the branch that carries the measurement rather than only on the lead
+        path.
+
+        It reaches _build_safety_net_context with frame_role "unknown", which is
+        the SECOND of the two gate sites. The lead arm above reaches the same
+        helper with frame_role "lead". The two of them together separate the two
+        roles at the site, so a re-merge of the roles cannot stay green at
+        either end.
+        """
+        from session_init import main
+
+        pact_context(session_id="aabb1122-0000-0000-0000-000000000000")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/example/Sites/test-project")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        team_dir = tmp_path / ".claude" / "teams" / "session-aabb1122"
+        team_dir.mkdir(parents=True, exist_ok=True)
+        (team_dir / "config.json").write_text('{"members": []}')
+
+        stdin_data = _stdin_payload(source="compact", agent_type=None)
+
+        def raising_get_task_list():
+            raise RuntimeError("simulated task_utils failure")
+
+        stdout = io.StringIO()
+        with patch("session_init.setup_plugin_symlinks", return_value=None), \
+             patch("session_init.ensure_project_memory_md", return_value=None), \
+             patch("session_init.check_pinned_staleness", return_value=None), \
+             patch("session_init.update_session_info", return_value=None), \
+             patch("session_init.get_task_list", side_effect=raising_get_task_list), \
+             patch("session_init.restore_last_session", return_value=None), \
+             patch("session_init.check_resume_state", return_value=None), \
+             patch("sys.stdin", io.StringIO(stdin_data)), \
+             patch("sys.stdout", stdout):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        # Fail-open is unchanged: the role gate must not cost the exit code.
+        assert exc_info.value.code == 0
+        output = json.loads(stdout.getvalue())
+        additional = output["hookSpecificOutput"]["additionalContext"]
+
+        _assert_unknown_frame_body(additional)
+        assert 'Invoke Skill("PACT:bootstrap") immediately' not in additional
 
     def test_main_with_invalid_json_input_never_raises(
         self, tmp_path, monkeypatch
@@ -5274,10 +5736,7 @@ class TestSessionInitCompactBranchExceptions:
             "status": "in_progress",
         }))
 
-        stdin_data = json.dumps({
-            "session_id": session_id,
-            "source": "compact",
-        })
+        stdin_data = _stdin_payload(source="compact", session_id=session_id)
 
         def raise_boom(*args, **kwargs):
             raise RuntimeError(f"boom from {func_name}")
@@ -5340,10 +5799,7 @@ class TestSessionInitCompactBranchExceptions:
         team_dir.mkdir(parents=True, exist_ok=True)
         (team_dir / "config.json").write_text('{"members": []}')
 
-        stdin_data = json.dumps({
-            "session_id": session_id,
-            "source": "compact",
-        })
+        stdin_data = _stdin_payload(source="compact", session_id=session_id)
 
         mock_task_list = MagicMock(return_value=[])
 
@@ -5378,7 +5834,7 @@ class TestSessionInitDirectiveAcrossAllSources:
     _team_reuse but never had an explicit verbatim check.
     """
 
-    def _run(self, monkeypatch, tmp_path, source):
+    def _run(self, monkeypatch, tmp_path, source, agent_type=_LEAD_AGENT_TYPE):
         """Minimal driver for a compact/clear run with team_exists=True."""
         from session_init import main
 
@@ -5389,10 +5845,7 @@ class TestSessionInitDirectiveAcrossAllSources:
         team_dir.mkdir(parents=True, exist_ok=True)
         (team_dir / "config.json").write_text('{"members": []}')
 
-        stdin_data = json.dumps({
-            "session_id": "aabb1122-0000-0000-0000-000000000000",
-            "source": source,
-        })
+        stdin_data = _stdin_payload(source=source, agent_type=agent_type)
 
         stdout = io.StringIO()
         with patch("session_init.setup_plugin_symlinks", return_value=None), \
@@ -5410,6 +5863,18 @@ class TestSessionInitDirectiveAcrossAllSources:
         assert exc_info.value.code == 0
         output = json.loads(stdout.getvalue())
         return output["hookSpecificOutput"]["additionalContext"]
+
+    @pytest.mark.parametrize("source", ["compact", "clear"])
+    def test_unknown_frame_gets_the_notice_not_the_four_sentences(
+        self, source, monkeypatch, tmp_path
+    ):
+        """PAIRED UNKNOWN ARM for the directive driver. The four sentences are
+        the lead-only bootstrap ladder, so an unknown frame must carry none of
+        them and must carry the notice in their place."""
+        additional = self._run(monkeypatch, tmp_path, source, agent_type=None)
+
+        _assert_unknown_frame_body(additional)
+        assert 'Invoke Skill("PACT:bootstrap") immediately' not in additional
 
     def test_compact_source_contains_all_four_directive_sentences(
         self, monkeypatch, tmp_path
@@ -5480,10 +5945,7 @@ class TestSessionInitDirectiveAcrossAllSources:
         }
         (tasks_dir / "f-order.json").write_text(json.dumps(feature))
 
-        stdin_data = json.dumps({
-            "session_id": session_id,
-            "source": "compact",
-        })
+        stdin_data = _stdin_payload(source="compact", session_id=session_id)
 
         stdout = io.StringIO()
         with patch("session_init.setup_plugin_symlinks", return_value=None), \

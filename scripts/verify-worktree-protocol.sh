@@ -96,13 +96,30 @@ check_pattern "$COMMANDS_DIR/comPACT.md" "comPACT.md references worktree-setup i
 echo ""
 
 # --- 5. comPACT.md includes peer-review prompt after commit ---
+# This check grepped the literal "Create PR" until the post-commit prompt became
+# a three-option table and the label became lowercase. The prompt did not go
+# away, so the check reads the post-commit section itself and requires the
+# peer-review route in it. That asserts the position and the route together,
+# which the bare label did not do.
 echo "5. comPACT.md includes peer-review prompt after commit:"
-check_pattern "$COMMANDS_DIR/comPACT.md" "comPACT.md includes peer-review prompt after commit" "Create PR"
+next_steps_section=$(sed -n '/^\*\*Next steps\*\*/,/^\*\*If blocker reported\*\*/p' "$COMMANDS_DIR/comPACT.md")
+if echo "$next_steps_section" | grep -q -- "/PACT:peer-review"; then
+    echo "  ✓ comPACT.md post-commit next steps offer peer-review"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ comPACT.md post-commit next steps offer peer-review: pattern not found in Next steps section"
+    FAIL=$((FAIL + 1))
+fi
 echo ""
 
-# --- 6. peer-review.md includes worktree-cleanup after merge ---
-echo "6. peer-review.md includes worktree-cleanup after merge:"
-check_pattern "$COMMANDS_DIR/peer-review.md" "peer-review.md includes worktree-cleanup after merge" "worktree-cleanup"
+# --- 6. wrap-up.md includes worktree-cleanup after merge ---
+# This check named peer-review.md until the post-merge duties moved to wrap-up.
+# peer-review.md now runs the merge and then invokes /PACT:wrap-up, and wrap-up
+# holds the cleanup. The check follows the instruction to the file that carries
+# it. verify-scope-integrity.sh asserts the delegation half in peer-review.md,
+# so the two canaries together cover both halves of the chain.
+echo "6. wrap-up.md includes worktree-cleanup after merge:"
+check_pattern "$COMMANDS_DIR/wrap-up.md" "wrap-up.md includes worktree-cleanup after merge" "worktree-cleanup"
 echo ""
 
 # --- 7. pact-scope-phases.md ATOMIZE references worktree-setup ---

@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .failure_cause import failure_cause
 from .paths import get_claude_config_dir
 
 # The status returned when each link is correct and nothing was written. The
@@ -127,7 +128,17 @@ def setup_plugin_symlinks() -> str | None:
                     protocols_dst.symlink_to(protocols_src)
                     messages.append("protocols linked")
             except OSError as e:
-                messages.append(f"protocols failed: {str(e)[:20]}")
+                # `failed` IS THE ROUTING TOKEN, and this fragment reaches the
+                # routed return through the `messages` join below, so the
+                # word must survive the join. The prefix stays byte-identical.
+                #
+                # CLOSED VOCABULARY, and the 20-character cut it replaces was
+                # NOT a bound on the leak. MEASURED: the cut hides the path
+                # only when the strerror is long enough to fill the window, so
+                # a PermissionError was clean while `OSError(2, "x", path)`
+                # and a bare `OSError("... /path ...")` each emitted the path.
+                # A cut narrows the leaking SHAPES and does not close the leak.
+                messages.append(f"protocols failed: {failure_cause(e)}")
 
     # 2. Symlink individual agent files (enables non-prefixed agent names).
     # Agents FOLLOW the config dir — Claude discovers subagents from

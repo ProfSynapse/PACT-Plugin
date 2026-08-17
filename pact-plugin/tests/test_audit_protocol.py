@@ -9,7 +9,7 @@ Tests cover:
 5. Completion lifecycle: signal-type with audit_summary
 """
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -23,6 +23,58 @@ SKILLS_DIR = Path(__file__).parent.parent / "skills"
 AUDIT_PROTOCOL = PROTOCOLS_DIR / "pact-audit.md"
 ORCHESTRATE_CMD = COMMANDS_DIR / "orchestrate.md"
 AUDITOR_AGENT = AGENTS_DIR / "pact-auditor.md"
+
+
+# =============================================================================
+# The extract population declaration
+# =============================================================================
+#
+# THE RULE, IN ONE SENTENCE: a file in pact-plugin/protocols is an extract
+# unless it is the SSOT itself or it is named below. MEMBERSHIP READS NO BYTES
+# OF A CANDIDATE, and that content-blindness is the whole point of the rule.
+#
+# WHY NO CONTENT PREDICATE MAY DECIDE MEMBERSHIP. A rule that inferred
+# membership from a file's first line REMOVED that file at the instant its
+# first line drifted, so the file left the population and the comparison below
+# stopped covering it. THE GATE THEN WENT SILENT IN THE ONE STATE IT EXISTS TO
+# REPORT. MEASURED on pact-agent-stall.md: a heading drift moved it from
+# in-population to out-of-population; a drift in the body did not move it. Do
+# not soften this into "read the first line as a hint". A hint that can REMOVE
+# a candidate re-opens that hole by a second route.
+#
+# THE COST THIS BUYS, RECORDED SO IT IS NOT REDISCOVERED AS A DEFECT. A new
+# STANDALONE document added to that directory joins the population by default
+# and reddens the set arm until it is declared here. That red lands on correct
+# work. It is accepted because it fires at the moment the file is added, by
+# the person who holds the context, and because the failure message names the
+# one-line repair. The alternative, an INCLUSION manifest, answers the same
+# mistake with a permanent silent hole in the gate's own subject: a file added
+# with no bookkeeping at all is simply absent from the manifest and nothing
+# ever reports it.
+#
+# THIS SET MUST NOT BE DERIVED FROM THE SCRIPT. Not from its verify list, not
+# generated from it by a build step or a hook, and not parsed from its
+# run-time output. The two sides of the comparison are the GIT INDEX and the
+# SCRIPT RUN, and a declaration taken from the script collapses them into one
+# source that cannot disagree with itself.
+EXCLUDED_STANDALONES = frozenset(
+    {
+        # The algedonic signal protocol: its own document, not a slice of
+        # pact-protocols.md.
+        "algedonic.md",
+        # The team communication charter: its own document, not a slice of
+        # pact-protocols.md.
+        "pact-communication-charter.md",
+    }
+)
+
+
+class ExtractPopulationError(RuntimeError):
+    """The candidate oracle could not name a population, so it refuses.
+
+    A DEDICATED TYPE, so an arm that requires this refusal cannot pass on an
+    unrelated exception raised somewhere else in the same call.
+    """
 
 
 # =============================================================================
@@ -495,6 +547,617 @@ class TestStructuralVerificationDiscipline:
             f"stderr:\n{result.stderr}"
         )
 
+    # -- The corpus of the extracts gate --------------------------------
+    #
+    # THE GATE ABOVE ASSERTS AN EXIT CODE AND READS NOTHING ELSE. The script
+    # exits 0 when its FAILED count is 0, and an EMPTY corpus satisfies that.
+    # MEASURED: with all nineteen `verify` calls removed the script prints
+    # `Passed: 0, Failed: 0, VERIFICATION PASSED`, exits 0, and the gate above
+    # stays GREEN. With ONE call removed it prints `Passed: 18, Failed: 0` and
+    # the gate stays GREEN, so the extract that call covered goes unverified.
+    #
+    # A COUNT DERIVED FROM THE SCRIPT CANNOT CLOSE THAT. Remove one call and
+    # the counted invocations and the reported PASS both read 18, so the two
+    # agree and the arm passes. Two sides derived from ONE source cannot
+    # disagree. THE INDEPENDENT ORACLE IS THE GIT INDEX, so the arms below
+    # derive the population from the files git TRACKS in the protocols
+    # directory and compare that against what the script names.
+    #
+    # AND THE SCRIPT IS ASKED WHAT IT DID, NOT WHAT ITS SOURCE TEXT LOOKS LIKE.
+    # A rule that read the script SOURCE for `verify "<file>"` was MEASURED to
+    # over-block twice against a CORRECT script, one that exits 0 with
+    # `Passed: 19, Failed: 0`:
+    #   * an ordinary usage message, a heredoc carrying one line at column zero
+    #     of that shape, added a PHANTOM name and reddened the set comparison;
+    #   * single quotes on the first argument, which bash treats identically to
+    #     double quotes, emptied the parse and fired the NON-VACUITY assertion,
+    #     which reads as a broken harness rather than as a defect in the rule.
+    # NEITHER A TEXT LINE AT COLUMN ZERO NOR A QUOTE STYLE CAN CHANGE WHAT A
+    # SCRIPT EMITS WHEN IT RUNS, so the verified set is now parsed from the
+    # `VERIFY-CALL:` lines of a real run.
+    #
+    # THE INDEPENDENCE THIS RESTS ON, STATED SO A LATER EDIT CANNOT SPEND IT
+    # WITHOUT NOTICING. THE TWO SIDES ARE THE GIT INDEX (with a filesystem
+    # walk as the fall back) AND THE SCRIPT RUN. The script emits the literal
+    # first argument of each call, so its side stays derived from the call
+    # ARGUMENTS, and the population side is derived from what git TRACKS. A
+    # git index cannot be changed by an edit to a shell script, and a shell
+    # script cannot be changed by an edit to the index, so the two sides can
+    # disagree and the comparison is therefore evidence.
+    #
+    # THE INDEPENDENCE MUST BE SPENDABLE ONLY ON PURPOSE, so here are the
+    # three edits that spend it, each of which looks like a tidy-up:
+    #   1. THE SCRIPT NAMES ITS FILES FROM A GLOB of the protocols directory.
+    #      Both sides then derive from the directory and this comparison
+    #      becomes a tautology that cannot disagree. The same obligation is
+    #      recorded at the emission site in the script.
+    #   2. THE DECLARATION IS GENERATED from the script by a build step or a
+    #      hook, or the script is made to read the declaration.
+    #   3. THE POPULATION IS PARSED FROM THE SCRIPT RUN-TIME OUTPUT. That
+    #      route is newly available now that the script emits a file name for
+    #      each comparison, so it is newly attractive. Do not take it.
+    # THE INVARIANT BEHIND ALL THREE: NO SINGLE EDIT MAY REMOVE A FILE FROM
+    # BOTH SIDES AT ONE TIME.
+
+    # THE PROTOCOLS DIRECTORY, AS ONE STRING, because it is both a git
+    # pathspec and a path segment and the two must not drift apart.
+    PROTOCOLS_REL = "pact-plugin/protocols"
+    SSOT_NAME = "pact-protocols.md"
+
+    @classmethod
+    def _protocol_candidates(cls, repo_root):
+        """Name every file in the protocols directory. Return (names, source).
+
+        THE KEY SHAPE IS A JOINT CONTRACT WITH THE SCRIPT, so it is fixed here
+        rather than chosen. Each name is THE PATH RELATIVE TO THE PROTOCOLS
+        DIRECTORY, which is the same string the script prints, because the
+        script is given that string as the first argument of a `verify` call
+        and resolves it as `$PROTOCOLS_DIR/$file`. A key of any other shape
+        (an absolute path, the repo-root-relative path, or a bare basename for
+        a nested file) makes the two sets incomparable, and the comparison
+        below then reddens against a CORRECT tree. MEASURED at 522a5129: `git
+        ls-files -z pact-plugin/protocols` run from the repo root prints 22
+        names of the form `pact-plugin/protocols/<name>`, unquoted, and after
+        the prefix is removed the keys differ from the 19 emitted names by
+        precisely the SSOT and the two declared standalone documents.
+
+        THE GIT INDEX IS THE ORACLE, AND A FILESYSTEM WALK IS THE FALL BACK.
+        MEASURED: with ONE UNTRACKED SCRATCH FILE in that directory, git
+        reports 22 and a walk reports 23, and the walk therefore reddens a
+        contributor's local run while CI stays green. That is a NEW OVER-BLOCK
+        and this rule does not open one.
+
+        A GIT-LESS TREE MUST NOT YIELD A SILENT EMPTY POPULATION. MEASURED:
+        `git ls-files` in a tree with no repository returns 128 WITH EMPTY
+        STDOUT and writes to stderr, so a reader that parses stdout alone gets
+        a clean EMPTY population, and an empty population makes every set
+        comparison pass. That is the tautology these arms exist to escape, and
+        it renders as GREEN. So stdout is DISCARDED on a non-zero return code,
+        the walk runs instead, and a zero-candidate route RAISES.
+
+        THE FALL BACK IS A FALL BACK AND NOT A SKIP, and the cause is
+        measured: in a `git archive` export the verify script itself continues
+        to run and reports `Passed: 19, Failed: 0`, so a skip there would
+        silence a live comparison.
+
+        `-z` IS LOAD-BEARING. Without it, `core.quotePath` wraps a name
+        carrying a non-ASCII or special character in double quotes with
+        C-style escapes, and the key would then be a string nobody wrote.
+
+        WHAT THIS ORACLE CANNOT SEE, named rather than left for a later
+        reader to find:
+          1. AN UNTRACKED FILE, IN BOTH DIRECTIONS. A scratch file does not
+             redden, which is the point, and a new extract that is not yet
+             staged does not redden either, which is the price. Staging
+             bounds the window, so a committed tree and CI always see it.
+          2. THE INDEX AGAINST DISK. A tracked file removed from the working
+             tree stays in the population, and the count arm reddens because
+             the script reports one comparison fewer. The report is correct
+             and its cause is the index.
+          3. A FILE OUTSIDE THIS DIRECTORY. An extract copied elsewhere is
+             not a candidate and nothing here reports it.
+          4. CASE-FOLDING FILESYSTEMS. Two names differing only in case are
+             one file on some platforms and two on others. NOT MEASURED.
+        """
+        import subprocess
+
+        protocols = repo_root / "pact-plugin" / "protocols"
+        returncode = None
+        names = None
+        provenance = "git-index"
+        try:
+            result = subprocess.run(
+                ["git", "ls-files", "-z", cls.PROTOCOLS_REL],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+            )
+            returncode = result.returncode
+            if returncode == 0:
+                # `relative_to` RAISES on a path outside the pathspec rather
+                # than skipping it, because a silent skip would drop a file
+                # from the population, which is the failure direction this
+                # whole rule is built against.
+                names = {
+                    str(PurePosixPath(entry).relative_to(cls.PROTOCOLS_REL))
+                    for entry in result.stdout.split("\0")
+                    if entry
+                }
+        except OSError:
+            # git absent from PATH. Fall back, do not fail open.
+            returncode = None
+
+        if names is None:
+            provenance = "filesystem"
+            # RECURSIVE and EXTENSION-AGNOSTIC on purpose. A `*.md` glob at one
+            # level was MEASURED to drop a file in a SUBDIRECTORY and a file
+            # with another extension, and each dropped file leaves the
+            # comparison with nothing to report it.
+            names = {
+                path.relative_to(protocols).as_posix()
+                for path in protocols.rglob("*")
+                if path.is_file()
+            }
+
+        if not names:
+            raise ExtractPopulationError(
+                "the extract population oracle named NO candidate in "
+                f"{cls.PROTOCOLS_REL} (source: {provenance}, git return code: "
+                f"{returncode}). THIS REFUSES RATHER THAN REPORTS A GREEN: an "
+                "empty population makes every set comparison below pass, so a "
+                "silent empty here would report success while nothing at all "
+                "was checked."
+            )
+        return names, provenance
+
+    @classmethod
+    def _population_from_candidates(cls, candidates, protocols_dir):
+        """Subtract the SSOT and the declared standalone documents. Nothing else.
+
+        `protocols_dir` IS PASSED AND DELIBERATELY UNUSED, and that is the
+        point of the signature. Every predicate this rule may apply is a
+        predicate on a NAME. THE DIRECTORY IS IN SCOPE SO THAT A LATER EDIT
+        WHICH REACHES FOR A CANDIDATE'S BYTES IS VISIBLE AS AN EDIT AT THIS
+        SITE rather than hidden behind a helper, and so the arms that drive
+        this function drive the same seam a regression would land on.
+        READING A CANDIDATE HERE RE-OPENS THE HOLE: a file removed from the
+        population by its own content leaves the comparison at the instant it
+        drifts.
+        """
+        del protocols_dir
+        return {
+            name
+            for name in candidates
+            if name != cls.SSOT_NAME and name not in EXCLUDED_STANDALONES
+        }
+
+    def _extract_population(self):
+        repo_root = Path(__file__).parent.parent.parent
+        protocols = repo_root / "pact-plugin" / "protocols"
+        # THE SSOT SITS AMONG ITS OWN EXTRACTS, so an enumeration of this
+        # directory selects it too. Subtract it by name, or the SSOT is
+        # compared against itself.
+        ssot_text = (protocols / self.SSOT_NAME).read_text(encoding="utf-8")
+        candidates, _provenance = self._protocol_candidates(repo_root)
+        return self._population_from_candidates(candidates, protocols), ssot_text
+
+    # -- Driving the population rule against a built tree -------------------
+    #
+    # THE ARMS BELOW BUILD THEIR OWN protocols DIRECTORY, because the shapes
+    # that defeated the previous rule (a byte-order mark, a subdirectory, a
+    # file with another extension) are ABSENT from the repository today. A
+    # rule proven only against the shapes that happen to be present is proven
+    # against the easy case. Each arm names the mutant that fails it.
+
+    @staticmethod
+    def _build_protocols_tree(root, files, git=True):
+        """Build a repo-shaped tree and return its root.
+
+        `files` maps a path RELATIVE TO THE PROTOCOLS DIRECTORY to its bytes.
+        With `git` true the tree is a repository and each named file is added
+        to the INDEX, so a file written afterwards is untracked.
+        """
+        import subprocess
+
+        protocols = root / "pact-plugin" / "protocols"
+        protocols.mkdir(parents=True, exist_ok=True)
+        for rel, data in files.items():
+            target = protocols / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        if git:
+            subprocess.run(
+                ["git", "init", "-q"], cwd=str(root), capture_output=True,
+                text=True, check=True,
+            )
+            subprocess.run(
+                ["git", "add", "-A"], cwd=str(root), capture_output=True,
+                text=True, check=True,
+            )
+        return root
+
+    def test_control_the_population_rule_separates_declared_from_undeclared(
+        self, tmp_path
+    ):
+        """CONTROL, asserted BEFORE the population arms below run.
+
+        THIS CONTROL REPLACES ONE THAT WATCHED A RETIRED PREDICATE. The old
+        control drove a first-line classifier across a standalone document and
+        an extract. That classifier is gone, because membership must read no
+        bytes. The separation that decides membership NOW is `declared in
+        EXCLUDED_STANDALONES` against `not declared`, so that is what this
+        drives, and it drives it across two files with IDENTICAL CONTENT so
+        the only thing that can separate them is the declaration.
+
+        A CONTROL THAT CANNOT RETURN THE OPPOSITE VERDICT IS NOT EVIDENCE, so
+        the arm requires the separation in both directions in one run.
+        """
+        same_bytes = b"# Identical Content\n\nbody\n"
+        declared = sorted(EXCLUDED_STANDALONES)[0]
+        root = self._build_protocols_tree(
+            tmp_path,
+            {
+                "pact-protocols.md": b"# Title\n\n## A Section\n\nbody\n",
+                declared: same_bytes,
+                "an-undeclared-file.md": same_bytes,
+            },
+        )
+        candidates, provenance = self._protocol_candidates(root)
+        population = self._population_from_candidates(
+            candidates, root / "pact-plugin" / "protocols"
+        )
+
+        assert provenance == "git-index"
+        # THE TWO FILES CARRY THE SAME BYTES, so a content predicate cannot
+        # tell them apart and only the declaration can.
+        assert "an-undeclared-file.md" in population
+        assert declared not in population
+        # AND THE SSOT IS SUBTRACTED BY NAME, because it sits among its own
+        # extracts and would otherwise be compared against itself.
+        assert self.SSOT_NAME not in population
+
+    def test_the_population_keeps_a_file_that_has_drifted(self, tmp_path):
+        """THE TRAP ARM. A DRIFTED FILE MUST STAY IN THE POPULATION.
+
+        THIS IS THE ARM THE REJECTED DIRECTION WOULD HAVE DESTROYED, and it is
+        the whole cause of the content-blind rule. A rule that required a
+        candidate to BE a slice of the SSOT, or to open with a heading the
+        SSOT carries, REMOVED the file at the instant it drifted. The file
+        left the population, the comparison stopped covering it, and the gate
+        went silent in the one state it exists to report.
+
+        THE TWO FILES HERE DIFFER ONLY IN THAT ONE HAS DRIFTED. Both must be
+        in the population. MUTANT: reintroduce any content predicate into
+        membership, for example `first line is an H2 the SSOT carries`, and
+        the drifted file leaves and this arm goes RED.
+        """
+        ssot = b"# Title\n\n## A Section\n\nbody\n\n## Another\n\nmore\n"
+        root = self._build_protocols_tree(
+            tmp_path,
+            {
+                "pact-protocols.md": ssot,
+                # A faithful slice of the SSOT.
+                "pristine.md": b"## A Section\n\nbody\n",
+                # THE SAME EXTRACT AFTER A DRIFT IN ITS FIRST LINE, which is
+                # the precondition MEASURED to move a file out of the old
+                # population. A drift in the body did not move it.
+                "drifted.md": b"## A Section That Drifted\n\nbody\n",
+            },
+        )
+        candidates, _provenance = self._protocol_candidates(root)
+        population = self._population_from_candidates(
+            candidates, root / "pact-plugin" / "protocols"
+        )
+
+        assert "pristine.md" in population
+        assert "drifted.md" in population, (
+            "a DRIFTED extract left the population, so the comparison no "
+            "longer covers it and the gate is silent in the one state it "
+            "exists to report. Membership must read no bytes of a candidate."
+        )
+
+    def test_the_population_holds_the_shapes_a_glob_drops(self, tmp_path):
+        """A byte-order mark, a subdirectory and another extension all count.
+
+        MEASURED as three separate HOLES in the rule this replaces: each of
+        the three shapes dropped out of the population, so the file could
+        drift with nothing to report it. D4 and D5 are reachable as a RENAME
+        or a REORGANISATION of the directory, and in that form the gate goes
+        silent for every moved file at once.
+
+        MUTANT for the subdirectory and the extension: replace the enumeration
+        with `glob("*.md")` at one level. Predict RED on two names.
+        MUTANT for the byte-order mark: reintroduce a first-line predicate.
+        Predict RED on that name.
+
+        THE KEY SHAPE IS ASSERTED HERE TOO, and it is asserted against a
+        LITERAL and not against the script, so this arm can go red while the
+        set comparison is green. A nested file must read as `sub/name.md`: a
+        bare basename would not resolve as `$PROTOCOLS_DIR/$file` on the
+        script side, so the two sides would diverge on the very file the
+        subdirectory repair exists to catch.
+        """
+        root = self._build_protocols_tree(
+            tmp_path,
+            {
+                "pact-protocols.md": b"# Title\n\n## A Section\n\nbody\n",
+                "plain.md": b"## A Section\n\nbody\n",
+                "with-bom.md": b"\xef\xbb\xbf## A Section\n\nbody\n",
+                "sub/nested.md": b"## A Section\n\nbody\n",
+                "other-extension.txt": b"## A Section\n\nbody\n",
+            },
+        )
+        candidates, _provenance = self._protocol_candidates(root)
+
+        assert "with-bom.md" in candidates
+        assert "sub/nested.md" in candidates
+        assert "other-extension.txt" in candidates
+        # THE KEY SHAPE, against literals. No key carries the directory
+        # prefix, no key is absolute, and a nested file keeps its path.
+        for name in candidates:
+            assert not name.startswith(self.PROTOCOLS_REL)
+            assert not name.startswith("/")
+            assert not name.startswith("./")
+
+    def test_an_untracked_scratch_file_does_not_join_the_population(
+        self, tmp_path
+    ):
+        """THE OVER-BLOCK CONTROL. A local scratch file must not redden.
+
+        MEASURED: with one untracked file in the protocols directory, `git
+        ls-files` reports 22 and a filesystem walk reports 23, so the walk
+        reddens a contributor's local run while CI stays green. OVER-BLOCK IS
+        CARDINAL in this repository, and this repair must not open a new one.
+
+        THIS ARM HAS A SECOND FACE, AND IT IS THE PRICE OF THE FIRST. The
+        index is blind to an untracked file in BOTH directions, so a NEW
+        EXTRACT that has been written but not yet staged is also invisible,
+        and the gate stays green until it is staged. THE TWO ARE ONE
+        PROPERTY: no rule can ignore an untracked scratch file and at the
+        same time catch an untracked extract. MEASURED end to end: the same
+        new unverified extract gives 57 passed while untracked and reddens
+        two arms once `git add` has run. THE WINDOW IS THEREFORE BOUNDED BY
+        STAGING, so every committed tree and every CI run sees the file, and
+        the contributor meets the red in the change that adds it.
+
+        MUTANT: take the population from the walk when git is available.
+        Predict RED.
+        """
+        root = self._build_protocols_tree(
+            tmp_path,
+            {
+                "pact-protocols.md": b"# Title\n\n## A Section\n\nbody\n",
+                "tracked.md": b"## A Section\n\nbody\n",
+            },
+        )
+        # WRITTEN AFTER `git add`, so it is present on disk and absent from
+        # the index. That is what a contributor's scratch file looks like.
+        (root / "pact-plugin" / "protocols" / "SCRATCH-notes.md").write_bytes(
+            b"## A Section\n\nscratch\n"
+        )
+        candidates, provenance = self._protocol_candidates(root)
+
+        assert provenance == "git-index"
+        assert "tracked.md" in candidates
+        assert "SCRATCH-notes.md" not in candidates, (
+            "an UNTRACKED scratch file joined the population, which reddens a "
+            "contributor's local run while CI stays green. That is a new "
+            "over-block, and the git index is the oracle to prevent it."
+        )
+
+    def test_a_tree_with_no_repository_falls_back_and_never_returns_empty(
+        self, tmp_path
+    ):
+        """A git-less tree falls back to the walk, and an empty one RAISES.
+
+        MEASURED: `git ls-files` in a tree with no repository returns 128 WITH
+        EMPTY STDOUT. A reader that parses stdout alone therefore gets a clean
+        EMPTY population, and an empty population makes every set comparison
+        below pass. THAT IS THE TAUTOLOGY THESE ARMS EXIST TO ESCAPE, and it
+        renders as GREEN, which is the one failure a suite does not report.
+
+        THE POSITIVE ARM IS FIRST AND IT IS NOT DECORATION. A refusal arm on
+        its own cannot tell a working fall back apart from a route that fails
+        for any cause at all, so the fall back is required to RETURN NAMES
+        before the empty case is required to refuse.
+
+        FALL BACK RATHER THAN SKIP, and the cause is measured: in a `git
+        archive` export the verify script itself continues to run and reports
+        `Passed: 19, Failed: 0`, so a skip would silence a live comparison.
+
+        MUTANT: parse `git ls-files` stdout with no return-code check. Predict
+        a silent EMPTY population, which fails the positive arm below.
+        """
+        populated = self._build_protocols_tree(
+            tmp_path / "populated",
+            {
+                "pact-protocols.md": b"# Title\n\n## A Section\n\nbody\n",
+                "plain.md": b"## A Section\n\nbody\n",
+                "sub/nested.md": b"## A Section\n\nbody\n",
+            },
+            git=False,
+        )
+        names, provenance = self._protocol_candidates(populated)
+        assert provenance == "filesystem"
+        assert names == {"pact-protocols.md", "plain.md", "sub/nested.md"}
+
+        empty = self._build_protocols_tree(tmp_path / "empty", {}, git=False)
+        with pytest.raises(ExtractPopulationError) as excinfo:
+            self._protocol_candidates(empty)
+        # THE MESSAGE IS PART OF THE CONTRACT: a refusal that does not say the
+        # route it took sends the next reader to the wrong repair.
+        assert "filesystem" in str(excinfo.value)
+
+    def test_each_declared_exclusion_is_present_and_is_not_a_slice(self):
+        """The declaration must name files that are here and are not extracts.
+
+        TWO FAILURE DIRECTIONS, and each is silent without this arm.
+        A name declared for a file that no longer exists protects nothing and
+        reads as maintained. A name declared for a GENUINE extract silences
+        the gate for that extract.
+
+        THIS GUARD IS ONE-DIRECTIONAL BY CONSTRUCTION. It can only REPORT an
+        incorrectly declared name. IT MUST NOT REMOVE A NAME FROM THE
+        POPULATION, because a guard that removes one is a content predicate
+        deciding membership by a second route, which is the hole the whole
+        rule is built against.
+
+        WHAT IT CANNOT SEE, named rather than left implicit: it compares
+        against the SSOT as it is now, so it catches the pristine mistake and
+        goes quiet once an incorrectly declared file has drifted.
+        """
+        repo_root = Path(__file__).parent.parent.parent
+        protocols = repo_root / "pact-plugin" / "protocols"
+        ssot_text = (protocols / self.SSOT_NAME).read_text(encoding="utf-8")
+        candidates, _provenance = self._protocol_candidates(repo_root)
+
+        assert EXCLUDED_STANDALONES, "the declaration is empty"
+        for name in sorted(EXCLUDED_STANDALONES):
+            assert name in candidates, (
+                f"EXCLUDED_STANDALONES declares {name!r}, which is not in "
+                "pact-plugin/protocols. A declaration for an absent file "
+                "protects nothing and reads as maintained. Remove the entry."
+            )
+            text = (protocols / name).read_text(encoding="utf-8")
+            assert text.strip() not in ssot_text, (
+                f"EXCLUDED_STANDALONES declares {name!r}, but that file IS a "
+                "literal slice of pact-protocols.md, so it is an extract and "
+                "the declaration silences the gate for it. Remove the entry "
+                "and give the file a verify call in "
+                "scripts/verify-protocol-extracts.sh."
+            )
+
+    def test_the_gate_verifies_every_extract_file_that_exists(self):
+        """The script must name each extract in the protocols directory.
+
+        THE TWO SIDES COME FROM DIFFERENT SOURCES ON PURPOSE. The population
+        is derived from the FILES. The verified set is what the SCRIPT DID: it
+        announces one `VERIFY-CALL:` line for each comparison it performed, and
+        that line carries the literal file name the call was given. A call
+        removed from the script leaves a file in the population and out of the
+        verified set, so this reddens where a count derived from the script
+        alone would agree with itself.
+
+        A NEW EXTRACT FILE ALSO REDDENS THIS, with no edit here, which is what
+        keeps the arm from needing maintenance every time the surface grows.
+
+        WHY A RUN AND NOT THE SOURCE TEXT. Reading the script source for
+        `verify "<file>"` was measured to redden twice against a CORRECT
+        script: a usage heredoc with one line at column zero added a phantom
+        name, and a change of quote style, which bash treats identically,
+        emptied the parse. The corpus comment above this class carries the
+        detail. What a script EMITS is immune to both.
+
+        THE AXIS THIS ARM CANNOT SEE, NAMED RATHER THAN LEFT IMPLICIT: it
+        checks that each extract IS compared. It does not check that the
+        heading pair each `verify` call passes is the correct pair, and it does
+        not check the OUTCOME of the comparison. The byte-comparison inside the
+        script is what checks the pair, and the exit-code arm above is what
+        reports the outcome. So an extract that genuinely differs from its
+        slice stays in this set and reddens the other two arms instead.
+        """
+        import re
+        import subprocess
+
+        repo_root = Path(__file__).parent.parent.parent
+        script = repo_root / "scripts" / "verify-protocol-extracts.sh"
+        if not script.exists():
+            pytest.skip("verify-protocol-extracts.sh not present")
+
+        population, _ssot = self._extract_population()
+        result = subprocess.run(
+            ["bash", str(script)], cwd=str(repo_root),
+            capture_output=True, text=True,
+        )
+        verified = set(
+            re.findall(r"^VERIFY-CALL: (.+)$", result.stdout, re.MULTILINE)
+        )
+
+        # THE SCRIPT REACHED ITS END, CHECKED BEFORE THE SET IS READ. An empty
+        # verified set has TWO causes now, and they call for different repairs:
+        # the script ran and compared nothing, or THE SCRIPT NEVER GOT THERE.
+        # It exits 1 before the first comparison when its SSOT source file is
+        # absent. Separating the two here stops an aborted run from reading as
+        # an empty corpus.
+        assert re.search(r"^Passed:\s*\d+$", result.stdout, re.MULTILINE), (
+            "the gate script did not reach its summary, so it aborted before "
+            "it compared anything and this arm has no run to read.\n"
+            f"exit code: {result.returncode}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+
+        # NON-VACUITY, BOTH SIDES. An empty population makes the comparison
+        # pass for the wrong cause, and so does a run that announced no call.
+        assert population, "no extract file classified in pact-plugin/protocols/"
+        assert verified, (
+            "the gate script ran to its summary and announced no VERIFY-CALL, "
+            "so its corpus is empty and every extract goes uncompared.\n"
+            f"stdout:\n{result.stdout}"
+        )
+
+        assert population == verified, (
+            "the set of extract FILES and the set the gate script VERIFIES "
+            "have diverged.\n"
+            f"  files not verified: {sorted(population - verified)}\n"
+            f"  verified but not a file: {sorted(verified - population)}\n"
+            "A file in the first list is an extract that can drift from its "
+            "SSOT region with nothing to report it.\n"
+            "\n"
+            "TWO REPAIRS, AND WHICH ONE DEPENDS ON WHAT THE FILE IS. THIS "
+            "GATE CANNOT TELL THE TWO APART, which is why it asks rather "
+            "than guesses:\n"
+            "  * IT IS AN EXTRACT (a verbatim slice of pact-protocols.md): "
+            "give it a `verify` call in scripts/verify-protocol-extracts.sh.\n"
+            "  * IT IS A STANDALONE DOCUMENT that happens to live in this "
+            "directory: add its name to EXCLUDED_STANDALONES at the top of "
+            "pact-plugin/tests/test_audit_protocol.py, with a one-line "
+            "reason. That is the whole repair, one line.\n"
+            "THE NAME IS THE PATH RELATIVE TO pact-plugin/protocols, so a "
+            "file in a subdirectory reads as `sub/name.md` on both sides."
+        )
+
+    def test_the_gate_reports_a_pass_for_every_extract_and_no_failure(self):
+        """The reported counts must account for the whole population.
+
+        THIS IS THE ARM THAT REFUSES AN EMPTY CORPUS. `Passed: 0, Failed: 0`
+        with exit 0 satisfies the exit-code gate above and means nothing was
+        compared. Here the PASS count must equal the number of extract files.
+        """
+        import re
+        import subprocess
+
+        repo_root = Path(__file__).parent.parent.parent
+        script = repo_root / "scripts" / "verify-protocol-extracts.sh"
+        if not script.exists():
+            pytest.skip("verify-protocol-extracts.sh not present")
+
+        population, _ssot = self._extract_population()
+        assert population, "no extract file classified in pact-plugin/protocols/"
+
+        result = subprocess.run(
+            ["bash", str(script)], cwd=str(repo_root),
+            capture_output=True, text=True,
+        )
+        passed = re.search(r"^Passed:\s*(\d+)$", result.stdout, re.MULTILINE)
+        failed = re.search(r"^Failed:\s*(\d+)$", result.stdout, re.MULTILINE)
+
+        # NON-VACUITY: a summary the script did not print would make the two
+        # reads below `None`, and a comparison against `None` is not a count.
+        assert passed and failed, (
+            "the script printed no Passed/Failed summary, so this arm has no "
+            f"number to check.\nstdout:\n{result.stdout}"
+        )
+
+        assert int(passed.group(1)) == len(population), (
+            f"the gate reported {passed.group(1)} passing comparisons against "
+            f"{len(population)} extract files. A shortfall means an extract "
+            f"was not compared at all, which the exit code cannot report."
+        )
+        assert int(failed.group(1)) == 0, (
+            f"the gate reported {failed.group(1)} failing comparisons.\n"
+            f"stdout:\n{result.stdout}"
+        )
+
     def test_verify_protocol_extracts_script_is_present(self):
         """The extracts-sync gate must not silently no-op.
 
@@ -583,4 +1246,106 @@ class TestTeachbackBlockingSemanticGuard:
                     f"semantics). If this phrasing is intentionally returning, the "
                     f"reconciliation is being reverted; update this guard "
                     f"deliberately."
+                )
+
+
+class TestLeadSidePartialVarietyWriteWarning:
+    """The lead-facing re-stamp instruction must carry its partial-write warning.
+
+    THE SUBJECT. `TaskUpdate` merges metadata at the TOP LEVEL only, so a write
+    that names `variety` REPLACES the whole object and erases each field it did
+    not carry. Three lead-facing surfaces instruct the lead to RE-STAMP
+    `metadata.variety` after it was already written, which is precisely that
+    shape. Each of the three must state the hazard beside the instruction.
+
+    WHY AN ARM AND NOT PROSE ALONE. The warning is prose that nothing executes.
+    A later editor can drop it from one carrier while the other two keep it, and
+    no run reports anything. That is the stale-twin direction, and it is the one
+    failure this arm is built to catch.
+
+    THIS ARM ASSERTS A PROPERTY, NOT A SENTENCE, AND THE DISTINCTION IS THE
+    WHOLE DESIGN. An arm that pinned the wording would redden on any rewording
+    that preserves the instruction, which is an over-block, and an arm that
+    obstructs the next contributor gets removed rather than repaired. So the
+    check requires three CONCEPTS near the instruction, each satisfied by any
+    member of a synonym group:
+      G1 REPLACEMENT: the write destroys what it did not carry.
+      G2 WHOLE-OBJECT: the correction must re-send all of it.
+      G3 READ-BACK: check the result on disk afterwards.
+    A rewriter free to choose words stays green while all three concepts
+    survive. Dropping one of the three reddens, which is correct, because each
+    one alone leaves a lead able to reason its way back to a partial write.
+
+    WHAT THIS ARM CANNOT SEE. It cannot judge whether the wording is CLEAR, and
+    it cannot see a warning that states all three concepts incorrectly. It reads
+    concept presence in a bounded window, nothing more.
+
+    A MEASURED GAP THIS ARM DOES NOT CLOSE, RECORDED SO IT IS NOT READ AS
+    COVERED. The same hazard is stated on two TEAMMATE-facing carriers, the
+    rejection-correction step of the `pact-agent-teams` skill and Step 1 of the
+    `pact-teachback` skill. NO arm reads either of those two. Their omission
+    here is deliberate: widening this arm to cover them is a decision about
+    another author's ruled scope, not a tidy-up.
+    """
+
+    # The three lead-facing carriers of the re-stamp instruction. The first two
+    # are a byte-compared extract and its SSOT region, so they must move
+    # together; the third is the persona body the lead itself loads.
+    RESTAMP_CARRIERS = [
+        PROTOCOLS_DIR / "pact-variety.md",
+        PROTOCOLS_DIR / "pact-protocols.md",
+        AGENTS_DIR / "pact-orchestrator.md",
+    ]
+
+    # The instruction this arm attaches to. Each line is lower-cased and its
+    # runs of whitespace are collapsed to one space before the comparison, so
+    # a re-cased edit and a re-wrapped line are both still found.
+    RESTAMP_TOKEN = "re-stamp `metadata.variety`"
+
+    # Lines to scan after the instruction line for its warning. Four allows a
+    # blank line, the warning, and a trailing blank, with one line of slack.
+    WINDOW = 4
+
+    # Each group is satisfied by ANY member. Substring matching against
+    # lower-cased text, so inflections that contain a listed stem also match.
+    CONCEPT_GROUPS = {
+        "G1 replacement": ("replace", "overwrite", "erase", "discard", "drop"),
+        "G2 whole object": ("full", "whole", "entire", "complete", "all of"),
+        "G3 read-back": ("read the task file back", "read back", "read-back",
+                         "re-read", "enumerate"),
+    }
+
+    def _warning_window(self, path):
+        """Return the text that follows the single re-stamp instruction."""
+        assert path.is_file(), f"re-stamp carrier missing: {path}"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        hits = [
+            i for i, line in enumerate(lines)
+            if self.RESTAMP_TOKEN in " ".join(line.split()).lower()
+        ]
+        # NON-VACUITY. Zero hits means the instruction was reworded or removed,
+        # and the window below would be empty, which would pass every concept
+        # check against nothing. That fails LOUDLY here instead.
+        assert len(hits) == 1, (
+            f"{path.name} carries {len(hits)} instruction(s) containing "
+            f"{self.RESTAMP_TOKEN!r}, and this arm attaches its warning "
+            "check to exactly one. If the instruction moved, was reworded, or "
+            "was duplicated, re-point this arm deliberately."
+        )
+        start = hits[0] + 1
+        return "\n".join(lines[start:start + self.WINDOW]).lower()
+
+    def test_each_lead_carrier_states_the_partial_write_hazard(self):
+        for path in self.RESTAMP_CARRIERS:
+            window = self._warning_window(path)
+            for group, members in self.CONCEPT_GROUPS.items():
+                assert any(member in window for member in members), (
+                    f"{path.name} instructs a re-stamp of `metadata.variety` "
+                    f"without stating {group} within {self.WINDOW} lines of "
+                    f"the instruction.\n"
+                    f"A partial write to `variety` REPLACES the whole object "
+                    f"and reports no error, so a lead reading this carrier "
+                    f"alone can lose the fields it did not re-send.\n"
+                    f"This arm accepts ANY of: {members}. It does not pin a "
+                    f"wording. Reword freely, and keep the concept."
                 )
