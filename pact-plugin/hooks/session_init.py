@@ -138,16 +138,17 @@ _INPROCESS_MODE_NOTICE = (
     "native delivery, or keep a heartbeat — see reference/unattended-runs.md."
 )
 
-# Unknown-role startup warning (#878). The lead-only writes below are gated
+# Unknown-role startup warning. The lead-only writes below are gated
 # behind is_lead, which keys on the harness-set agent_type field. A session
 # launched WITHOUT `--agent` (or with a non-PACT agent_type) carries no
 # recognizable role — classify_session_role() returns "unknown" — so its
 # session_init silently performs none of the lead-only writes. That is the
 # intended fail-toward-teammate direction, but it is invisible to an operator
 # who MEANT to launch the orchestrator and forgot the flag. This notice makes
-# that case observable. Emitted via system_messages (user-facing) only for the
-# "unknown" role; lead and teammate frames never see it. Pure literal so tests
-# can pin the exact substring.
+# that case observable. Emitted for the "unknown" role only, and on TWO
+# channels: system_messages (user-facing) and context_parts (model-facing).
+# A lead frame and a teammate frame get it on neither channel. Pure literal
+# so tests can pin the exact substring.
 _UNKNOWN_ROLE_NOTICE = (
     "PACT: this session has no recognized agent role (no `--agent` flag, or an "
     "unrecognized agent_type), so lead-only session setup was skipped. If you "
@@ -175,7 +176,7 @@ _SYMLINK_REPOINT_NOTICE = (
 
 
 def _should_warn_unknown_role(input_data: dict) -> bool:
-    """Decide whether the #878 unknown-role startup notice should fire.
+    """Decide whether the unknown-role startup notice should fire.
 
     Fires when the frame has NO recognized PACT role:
       classify_session_role == "unknown"  (agent_type absent)
@@ -1027,7 +1028,7 @@ def main():
             except Exception:  # noqa: BLE001 — fail-safe → emit; never block init
                 system_messages.append(_INPROCESS_MODE_NOTICE)
 
-        # 0c. Unknown-role startup warning (#878). The lead-only writes in
+        # 0c. Unknown-role startup warning. The lead-only writes in
         # steps 5a/5b/8 are gated behind is_lead below; a frame with NO
         # recognized role (no `--agent` flag, OR a present-but-unrecognized /
         # typo'd agent_type) silently performs none of them. Surface that so a
@@ -1039,6 +1040,9 @@ def main():
         # the live specialist-registry check against env plugin_root, and the
         # PACT:-strip) lives in _should_warn_unknown_role — total (never raises),
         # so no try/except is needed at the call site.
+        #
+        # The sibling emission of this literal into context_parts takes NO
+        # source gate. The cause is recorded at that limb.
         if source in ("startup", "resume") and _should_warn_unknown_role(input_data):
             system_messages.append(_UNKNOWN_ROLE_NOTICE)
 
@@ -1526,6 +1530,15 @@ def main():
             # first, so the role message sat below diagnostics a reader meets
             # first. Position only. The ruling that an unknown frame gets no
             # orchestrator ladder is unchanged.
+            #
+            # NO SOURCE GATE HERE, AND THAT IS CORRECT. The sibling emission of
+            # this literal into system_messages gates on a launch source,
+            # because that gate answers a REPETITION question, and repetition
+            # is about a reader that remembers. This limb writes to
+            # context_parts. A frame after a compact does NOT hold the earlier
+            # text, so a gate here removes the only copy that reader gets. If
+            # this limb changes to write to system_messages, the reader changes
+            # with it and a source gate becomes correct.
             context_parts.insert(0, _UNKNOWN_ROLE_NOTICE)
         else:
             # The team always exists (the platform pre-creates it), so the
