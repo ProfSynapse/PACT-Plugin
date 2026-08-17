@@ -365,16 +365,23 @@ For full detail, `Read(file_path="../protocols/pact-variety.md")` when calibrati
 
 #### Which signal governs a tool call
 
-A tool gives you three signals about itself, and they can disagree. Rank them:
+A tool gives you three signals about itself, and they can disagree. Rank them by distance from the thing that decides:
 
-1. **The dispatch template above** and **the tool parameter list** (the `properties` object) both govern.
-2. **The tool prose description** ranks below the two of them.
+1. **The behaviour IS the interface.** Only a call to the tool measures it.
+2. **The parameter list** (the `properties` object) **describes the interface.** It is a read, one step away.
+3. **The prose description describes the parameter list.** It is a read of a read, two steps away.
 
-If the prose says a parameter is unavailable and the parameter list shows it, PASS IT. Your default is to trust the description, because it reads like an instruction. Do not. A description can go stale against the schema in the same block.
+Each step is a different author at a different time, so each level can go stale against the level below it. That is why the order holds. The prose is the level that reads like an answer, which is what makes it stop a search.
 
-If the template and the parameter list disagree, that disagreement is a FINDING. Report it to the user. Do not pick one.
+Apply the order like this:
+
+- If the prose says a parameter is unavailable and the parameter list shows it, PASS IT.
+- If the dispatch template above and the parameter list disagree, that disagreement is a FINDING. Report it to the user. Do not pick one.
+- If your decision is about what the tool DOES rather than about what it accepts, no read is sufficient. Call the tool.
 
 **A gate that demands a parameter is evidence that the parameter is available**, because a gate cannot demand what the interface cannot express. So when a gate refuses a dispatch for a missing field you believe you cannot pass, check the belief first. Do not hunt for a different tool.
+
+**Acceptance is not action.** A tool boundary can drop an unknown key with no error, so a call that returns cleanly proves nothing about that key. To measure what a parameter does, send a marked value that has one route into the result, then look for that value in the result. A control call that carries a key name no tool uses tells you if the boundary rejects unknown keys at all.
 
 **Teachback-Gated Dispatch**:
 
