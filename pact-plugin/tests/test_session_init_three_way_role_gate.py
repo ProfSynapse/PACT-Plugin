@@ -187,18 +187,25 @@ class TestSafetyNetThreeWay:
         )
 
     def test_none_is_ruled_separately_from_unknown(self):
-        """None and 'unknown' are DIFFERENT facts and get DIFFERENT text. A
-        reader debugging an early-window failure must be able to tell that the
-        role was never resolved rather than resolved-empty."""
+        """None and 'unknown' are DIFFERENT facts and get DIFFERENT text.
+
+        THE TWO SHARE THE LADDER AND DIFFER IN THE CUE. An unresolved frame
+        keeps the orchestrator instructions, because the classifier not
+        running says nothing about the reader, and that frame is mostly a
+        primary user. What separates it is its own sentence, which a reader
+        who debugs the early window needs to tell an unresolved frame from a
+        resolved-empty one.
+        """
         out = _build_safety_net_context("session-x", None)
         assert out, "the safety net returned an empty string for an unresolved frame"
         assert "before the session role was resolved" in out, (
             "the unresolved-frame case lost its distinguishing sentence, so it "
             "can no longer be told apart from the resolved-empty case"
         )
-        assert LADDER not in out, (
-            "an unresolved frame received the lead ladder. An earlier comment "
-            "called that a known no-regression default. It is the misroute."
+        assert LADDER in out, (
+            "an unresolved frame lost the lead ladder. Withholding it denies "
+            "an ordinary user every tool, and the reactive route that was "
+            "supposed to cover that cost did not work in the field."
         )
         assert _build_safety_net_context("session-x", None) != \
             _build_safety_net_context("session-x", "unknown"), (

@@ -238,6 +238,63 @@ class TestSafetyNetPrimaryFrame:
             "classifier did not find"
         )
 
+    def test_unresolved_role_keeps_the_ladder_and_its_own_diagnostic(self):
+        """A frame that never classified STILL gets the tools.
+
+        `frame_role is None` means the classifier DID NOT RUN, because the
+        raise fired above the capture. The frame behind it is the same
+        population as every other frame: mostly a primary user. Withholding
+        the ladder there leaves the bootstrap marker unstamped and
+        bootstrap_gate denies each tool call.
+
+        THE STATED PRICE OF WITHHOLDING IT WAS A REACTIVE ROUTE, and the field
+        report is evidence that route does not work: the reporter did not
+        recover through the deny text, he rolled the plugin back.
+
+        THE DIAGNOSTIC SENTENCE IS KEPT AND IS AN ADDITION OVER 4.6.34, WHICH
+        HAD NO None BRANCH AT ALL. It is what keeps an unresolved frame
+        separable from a resolved-empty one for a reader who debugs the early
+        window. It rides BESIDE the ladder, never in place of it.
+        """
+        out = _build_safety_net_context("session-x", None)
+        assert out, "the safety net returned an empty string for an unresolved frame"
+        assert LADDER in out, (
+            "an unresolved frame lost the orchestrator marker. The classifier "
+            "not running says nothing about who the reader is, and the "
+            "population behind that frame is mostly a primary user."
+        )
+        assert BOOTSTRAP in out, (
+            "an unresolved frame kept the marker and lost the bootstrap "
+            "directive, so no marker is stamped and the deny stands"
+        )
+        assert "before the session role was resolved" in out, (
+            "the unresolved-frame case lost its distinguishing sentence, so a "
+            "reader can no longer tell it from the resolved-empty case"
+        )
+
+    def test_unresolved_does_not_claim_the_unknown_role_fact(self):
+        """None and 'unknown' stay DIFFERENT, and the difference is a fact.
+
+        The unknown-role notice asserts that no `--agent` flag was recognized.
+        For an unresolved frame the classifier did not run, so that fact was
+        never established and the notice must NOT be emitted. Asserting it
+        would claim more than the system knows, which is the one half of the
+        original None argument that survives.
+        """
+        out = _build_safety_net_context("session-x", None)
+        assert LADDER in out, (
+            "the ladder is missing, so this arm cannot show what rides beside it"
+        )
+        assert _UNKNOWN_ROLE_NOTICE not in out, (
+            "an unresolved frame received the unknown-role notice, which "
+            "asserts a classifier result that was never computed"
+        )
+        assert _build_safety_net_context("session-x", None) != \
+            _build_safety_net_context("session-x", "unknown"), (
+            "the None case and the 'unknown' case now emit identical text, so "
+            "the two have been collapsed into one"
+        )
+
     def test_lead_is_unchanged(self):
         out = _build_safety_net_context("session-x", "lead")
         assert out, "the safety net returned an empty string for a lead frame"

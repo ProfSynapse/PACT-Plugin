@@ -646,13 +646,24 @@ def _build_safety_net_context(
     cost of the notice is a few hundred bytes, and the cost of withholding the
     ladder is a user who cannot use any tool.
 
-    THE None PATH IS RULED SEPARATELY AND IS NOT COVERED BY THE MEASUREMENT
-    ABOVE. No count covers a frame where the classifier did not run. THE
-    ARGUMENT, on its merits: when the role is unresolved the system knows
-    nothing about the reader, and text that claims a role AND issues a
-    governance directive asserts more than the system knows. Do not borrow the
-    census above for that branch, and do not read this "unknown" ruling as
-    settling it.
+    THE None PATH KEEPS THE LADDER TOO, AND THAT RULING REPLACED AN EARLIER
+    ONE. The earlier ruling withheld the ladder from an unresolved frame on
+    the argument that text claiming a role asserts more than the system knows.
+    It priced the cost as a REACTIVE route, because the bootstrap_gate deny
+    names its own remedy. THE FIELD REPORT RETIRED THAT PRICE: the reporter
+    did not recover through the deny text, he rolled the plugin back.
+
+    AND A FULL REVERT IS A SMALLER DELTA FROM A KNOWN-GOOD SHIPPED ARTIFACT
+    THAN A PARTIAL ONE. 4.6.34 had no None branch at all. Leaving None
+    suppressed keeps one novel behaviour of which the only justification is
+    now discredited, and it makes the drift-robustness argument for this
+    revert dishonest, because that argument rests on a return to 4.6.34
+    semantics.
+
+    WHAT SURVIVES OF THE OLD ARGUMENT IS THE CUE, NOT THE SUPPRESSION. An
+    unresolved frame does NOT receive the unknown-role notice, because that
+    notice asserts a classifier result that was never computed. It receives
+    its own sentence, which keeps it separable from a resolved-empty frame.
 
     This helper is deliberately zero-risk: only string literals, a single
     f-string interpolation of team_name (which is either None or a validated
@@ -687,27 +698,6 @@ def _build_safety_net_context(
             'session_init partially failed — check systemMessage for details. '
             'Check TaskList for tasks assigned to you.'
         )
-    if frame_role is None:
-        # The classifier DID NOT RUN, so nothing is known about this frame.
-        # Ruled separately from "unknown": the note says which of the two
-        # happened, because a reader debugging an early-window failure needs
-        # to know that the role was never resolved rather than resolved-empty.
-        #
-        # THIS BRANCH RESTS ON A DESIGN ARGUMENT, NOT ON A MEASUREMENT, and
-        # the difference is deliberate rather than an omission. NO CENSUS
-        # COVERS A FRAME WHERE THE CLASSIFIER DID NOT RUN. The 13-of-13 count
-        # cited in the docstring above covers frames that classified
-        # "unknown", which is a different population. THE ARGUMENT: when the
-        # role is unresolved the system knows nothing about the reader, and
-        # text that claims a role AND issues a governance directive asserts
-        # more than the system knows. Do not borrow that count for this
-        # branch. If you measure this population, cite the new count here and
-        # state which frames it covers.
-        return (
-            'session_init failed before the session role was resolved — check '
-            'systemMessage for details. No role instructions are delivered for '
-            'an unresolved frame.'
-        )
     prelude = (
         'YOUR PACT ROLE: orchestrator.\n\n'
         'Invoke Skill("PACT:bootstrap") immediately, without waiting for user input. '
@@ -715,11 +705,36 @@ def _build_safety_net_context(
         'Do not evaluate whether it is needed. '
         'You must invoke Skill("PACT:bootstrap") on every session start.'
     )
-    # An "unknown" frame is a primary frame launched with no `--agent`, so it
-    # keeps the ladder above and ALSO gets the operator cue. APPENDED, never
-    # prepended: the byte-0 marker contract in this docstring is what the
-    # line-anchored readers key on, and a leading notice would break it.
-    cue = f'\n\n{_UNKNOWN_ROLE_NOTICE}' if frame_role == "unknown" else ''
+    # TWO ROLES REACH THIS LADDER BESIDE "lead", AND EACH GETS ITS OWN CUE
+    # APPENDED. Appended, never prepended: the byte-0 marker contract in this
+    # docstring is what the line-anchored readers key on.
+    #
+    # "unknown" is a primary frame launched with no `--agent`, and its cue
+    # names that fact, because the classifier established it.
+    #
+    # None means the classifier DID NOT RUN. THE FRAME BEHIND IT IS THE SAME
+    # POPULATION AS EVERY OTHER FRAME, WHICH IS MOSTLY A PRIMARY USER, so
+    # withholding the ladder there denies an ordinary user their tools. The
+    # earlier ruling withheld it and priced the cost as a REACTIVE route,
+    # because the bootstrap_gate deny names its own remedy. THE FIELD REPORT
+    # IS EVIDENCE THAT ROUTE DOES NOT WORK: the reporter did not recover
+    # through the deny text, he rolled the plugin back.
+    #
+    # THE ONE HALF OF THE OLD ARGUMENT THAT SURVIVES IS THE CUE, NOT THE
+    # SUPPRESSION. An unresolved frame must NOT receive the unknown-role
+    # notice, because that notice asserts a classifier result that was never
+    # computed. It gets its own sentence instead, which keeps it separable
+    # from a resolved-empty frame for anyone who debugs the early window.
+    if frame_role == "unknown":
+        cue = f'\n\n{_UNKNOWN_ROLE_NOTICE}'
+    elif frame_role is None:
+        cue = (
+            '\n\nNote: session_init failed before the session role was '
+            'resolved, so this frame was not classified. If you are not '
+            'driving PACT as the orchestrator, ignore the instructions above.'
+        )
+    else:
+        cue = ''
     if team_name:
         return (
             f'{prelude}\n\n'

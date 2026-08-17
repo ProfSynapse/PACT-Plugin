@@ -4640,9 +4640,19 @@ class TestBuildSafetyNetContext:
         assert result == _build_safety_net_context(None, None), (
             "the omitted-argument case and the explicit None case must agree"
         )
+        # The distinguishing sentence is what keeps an unresolved frame apart
+        # from a resolved-empty one. It rides BESIDE the ladder, not instead.
         assert "failed before the session role was resolved" in result
-        assert "YOUR PACT ROLE:" not in result
-        assert 'Skill("PACT:bootstrap")' not in result
+        assert result.startswith("YOUR PACT ROLE: orchestrator."), (
+            "an unresolved frame lost the orchestrator marker. The classifier "
+            "not running says nothing about who the reader is, and that frame "
+            "is mostly a primary user who would then be denied every tool."
+        )
+        assert 'Skill("PACT:bootstrap")' in result
+        assert "relaunch with `--agent PACT:pact-orchestrator`" not in result, (
+            "an unresolved frame received the unknown-role notice, which "
+            "asserts a classifier result that was never computed"
+        )
 
     # The four team_name tests below pass frame_role="lead" EXPLICITLY. The
     # team_name argument is interpolated by the LEAD branch and by no other, so
@@ -5346,10 +5356,10 @@ class TestNonDictStdinNeverRaiseDominance:
             f"non-dict stdin ({label}) must hit the unresolved-role safety net; "
             f"got: {additional[:80]!r}"
         )
-        assert not additional.startswith("YOUR PACT ROLE: orchestrator."), (
-            f"non-dict stdin ({label}) must NOT be handed the orchestrator "
-            f"instructions: the role was never resolved, so the frame is not "
-            f"known to be the lead. got: {additional[:80]!r}"
+        assert additional.startswith("YOUR PACT ROLE: orchestrator."), (
+            f"non-dict stdin ({label}) lost the orchestrator instructions. The "
+            f"role was never resolved, which says nothing about the reader, "
+            f"and that frame is mostly a primary user. got: {additional[:80]!r}"
         )
         spy.assert_not_called()
 
