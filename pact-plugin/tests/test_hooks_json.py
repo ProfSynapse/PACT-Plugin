@@ -13,6 +13,7 @@ Tests cover:
 8. SubagentStart matcher covers all PACT agent types
 """
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -355,13 +356,22 @@ class TestMatcherPatterns:
         assert errors == [], f"Invalid matcher patterns:\n" + "\n".join(errors)
 
     def test_subagent_start_covers_all_agent_types(self, hooks_config):
-        """SubagentStart matcher must include all SPAWNABLE PACT agent types
-        from agents/ directory.
+        """SubagentStart must SELECT every spawnable PACT agent type in agents/.
 
-        pact-orchestrator.md is excluded: it is delivered via the
+        pact-orchestrator.md is excluded: it is delivered through the
         `claude --agent PACT:pact-orchestrator` flag for the team-lead
-        session ONLY and never spawns through SubagentStart, so the
-        peer_inject hook does not need to fire for it.
+        session ONLY and does not spawn through SubagentStart, so the
+        peer_inject hook does not have to fire for it.
+
+        THIS ASSERTS SELECTION, NOT ENUMERATION, and the difference is the
+        point. The former shape of this test read the matcher string and
+        demanded each agent type appear in it. An enumeration cannot reach an
+        in-process teammate: the platform puts the TEAMMATE NAME in the field
+        the matcher reads, and a name is user-chosen. A registration with NO
+        matcher selects every frame, which covers the same agent types and the
+        teammate frames too, so it must satisfy this test rather than fail it.
+        The teammate-frame half is armed separately in
+        test_subagent_start_selects_teammate_frames.py.
         """
         # Read expected agent names from disk (spawnable teammates only)
         expected_agents = set()
@@ -372,18 +382,21 @@ class TestMatcherPatterns:
 
         assert len(expected_agents) > 0, "No spawnable agent files found in agents/ directory"
 
-        # Extract the SubagentStart matcher
         subagent_start_entries = hooks_config["hooks"].get("SubagentStart", [])
-        matcher_agents = set()
-        for entry in subagent_start_entries:
-            if "matcher" in entry:
-                matcher_agents.update(entry["matcher"].split("|"))
+        assert subagent_start_entries, "SubagentStart has no registration at all"
 
-        # Every spawnable agent definition should appear in the matcher
-        missing = expected_agents - matcher_agents
+        def _selected(agent_type):
+            """An entry with no matcher selects every frame; an entry with one
+            selects a frame when the pattern matches the whole agent type."""
+            for entry in subagent_start_entries:
+                pattern = entry.get("matcher")
+                if pattern is None or re.fullmatch(pattern, agent_type):
+                    return True
+            return False
+
+        missing = {a for a in expected_agents if not _selected(a)}
         assert missing == set(), (
-            f"SubagentStart matcher is missing agent types: {sorted(missing)}. "
-            f"Matcher has: {sorted(matcher_agents)}. "
+            f"SubagentStart does not select agent types: {sorted(missing)}. "
             f"Expected from agents/ (excluding pact-orchestrator): "
             f"{sorted(expected_agents)}"
         )
