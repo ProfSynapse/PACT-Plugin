@@ -443,28 +443,16 @@ class TestRegisterDirectivePresentInEverySpawnLiteral:
                 f"Offending literal (truncated): {value[:90]!r}"
             )
 
-    def test_resume_prompt_excluded_from_directive_requirement(self):
-        """Regression: a non-spawn prompt — Agent(resume=..., prompt="Blocker
-        resolved: ...") — is NOT a teammate-spawn literal (no role prelude) and
-        is correctly EXCLUDED from the directive requirement. Pins the exclusion
-        so a future extractor change can't start demanding the directive in a
-        resume prompt (wrong: a resumed agent already registered on its initial
-        spawn). orchestrate.md is the surface that carries the resume example."""
-        orch = (COMMANDS_DIR / "orchestrate.md").read_text(encoding="utf-8")
-        all_prompts = _PROMPT_LITERAL_RE.findall(orch)
-        resume_prompts = [v for v in all_prompts if v.startswith("Blocker resolved")]
-        assert resume_prompts, (
-            "expected at least one Agent(resume=...) 'Blocker resolved' prompt in "
-            "orchestrate.md — the resume-recovery example. If it was removed, drop "
-            "this test; if the extractor regex changed shape, fix it. Without this "
-            "fixture the exclusion below would be vacuously true."
-        )
-        # The resume prompt must NOT be classified as a spawn literal.
-        spawn = _spawn_prompt_literals(orch)
-        assert all(not v.startswith("Blocker resolved") for v in spawn), (
-            "a resume prompt leaked into the teammate-spawn literal set — it "
-            "would then be wrongly required to carry the register directive."
-        )
+    # The former test_resume_prompt_excluded_from_directive_requirement is
+    # DELETED, on the instruction its own failure message carried: it required
+    # at least one "Blocker resolved" prompt in orchestrate.md as its
+    # non-vacuity fixture, and that prompt is gone with the resume-recovery
+    # example. MEASURED after the removal: orchestrate.md carries 6 prompt
+    # literals and all 6 are spawn literals, so ZERO non-spawn literals remain.
+    # The exclusion property is therefore UNGUARDED in this file rather than
+    # covered by the count assertion above: a widened extractor would find no
+    # extra literal to admit, so the count would not move. Restoring coverage
+    # needs a synthetic non-spawn fixture, which is a separate decision.
 
 
 class TestTeamRegistrationSkillLiveness:
@@ -736,10 +724,10 @@ class TestPerLoopDispatchSites:
     # 9 per-loop dispatch sites. Each entry is
     # (relative_command_path, lead_in_line_number_1based, role_or_phase_label).
     SITES = [
-        ("orchestrate.md", 463, "PREPARE"),
-        ("orchestrate.md", 570, "ARCHITECT"),
-        ("orchestrate.md", 705, "CODE"),
-        ("orchestrate.md", 855, "TEST"),
+        ("orchestrate.md", 461, "PREPARE"),
+        ("orchestrate.md", 568, "ARCHITECT"),
+        ("orchestrate.md", 703, "CODE"),
+        ("orchestrate.md", 853, "TEST"),
         ("comPACT.md", 233, "MultipleSpecialists"),
         ("comPACT.md", 293, "SingleSpecialist"),
         ("peer-review.md", 192, "Reviewers"),

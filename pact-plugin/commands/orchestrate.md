@@ -55,8 +55,6 @@ Agent(
 )
 ```
 
-> **Why store agent_id?** Enables `resume` for blocker recovery — see [Blocker Recovery](#blocker-recovery-resume-vs-fresh-spawn).
-
 ### Teachback-Gated Dispatch
 
 Every specialist dispatch creates **two tasks**, not one:
@@ -923,24 +921,28 @@ When an agent reports a blocker or algedonic signal via `SendMessage`:
 
 **HALT handling**: On HALT signal, immediately stop all running teammates using the [Lead-Side HALT Fan-Out](../protocols/algedonic.md#lead-side-halt-fan-out) idiom (one `SendMessage` per in-progress teammate by name) before presenting to user.
 
-### Blocker Recovery: Resume vs. Fresh Spawn
+### Blocker Recovery: Message the Teammate, or Spawn Fresh
 
-When a blocker is resolved, prefer resuming the original agent over spawning fresh — this preserves the agent's accumulated context.
+🔴 **The `Agent` tool has no working `resume` parameter. Do not pass one.** A call that carries `resume=` does NOT error. The tool drops the key. A FRESH agent then starts with none of the prior work. The call succeeds and reports an agent, so the call site shows no defect. The defect appears later, as a teammate that knows nothing.
+
+After you resolve a blocker, message the teammate by name. Spawn fresh if the teammate stopped, or if its approach was incorrect.
 
 **Decision matrix**:
 
 | Situation | Action | Rationale |
 |-----------|--------|-----------|
-| Blocker resolved, agent had significant partial work | `resume` | Preserve context |
-| Blocker resolved, agent's approach was wrong | Fresh spawn | Clean slate needed |
-| Agent hit `maxTurns` limit | Fresh spawn | Agent was likely looping |
-| Agent shut down for lifecycle cleanup | Fresh spawn | Context is stale |
+| Blocker resolved, teammate is `in_progress` | `SendMessage` to the teammate name | The teammate is live and can continue |
+| Blocker resolved, the approach of the teammate was incorrect | Fresh spawn | A clean slate is necessary |
+| Teammate hit the `maxTurns` limit | Fresh spawn | The teammate was probably in a loop |
+| Teammate shut down for lifecycle cleanup | Fresh spawn | It holds no context |
 
-**Resume pattern**:
-1. Read agent ID from task metadata: `TaskGet(taskId).metadata.agent_id`
-2. Resume with blocker context: `Agent(resume="{agent_id}", prompt="Blocker resolved: {details}. Continue your task.")`
+**Message pattern**:
 
-**Fresh spawn pattern** (when resume is inappropriate): Follow the standard dispatch pattern (`TaskCreate` + `TaskUpdate` + Agent with name/team_name/subagent_type).
+`SendMessage(to="{teammate-name}", message="Blocker resolved: {details}. Continue your task.")`
+
+⚠️ **Write the message so that it works alone.** The teammate can hold none of its earlier context. Put the full resolution, the following step, and the task id into the message. A self-contained message is correct in the two cases. A message that points back at earlier context gives the teammate nothing, and the result looks like a teammate that ignored you.
+
+**Fresh spawn pattern**: Follow the standard dispatch pattern (`TaskCreate` + `TaskUpdate` + Agent with name/team_name/subagent_type).
 
 ---
 
