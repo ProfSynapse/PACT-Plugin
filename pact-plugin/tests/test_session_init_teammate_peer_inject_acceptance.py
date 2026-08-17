@@ -272,12 +272,11 @@ class TestLeadKeepsOrchestratorBlockAndUnknownGetsNeither:
         assert _ORCH_MARKER in additional
         assert _PEER_LIST_PREFIX not in additional
 
-    def test_plain_unknown_frame_emits_neither_block_nor_peer_body(self, tmp_path):
-        """RETARGET of test_plain_unknown_frame_emits_orchestrator_block_not_peer_body.
-        The unit-level twin in test_session_init_teammate_peer_inject.py carries
-        the full reasoning. This is the real-composition half: it drives the
-        assembled hook rather than a mocked seam, so it proves the unknown
-        branch survives composition and is not an artefact of the unit mocks.
+    def test_plain_unknown_frame_emits_the_block_but_no_peer_body(self, tmp_path):
+        """The unit-level twin in test_session_init_teammate_peer_inject.py
+        carries the full reasoning. This is the real-composition half: it drives
+        the assembled hook rather than a mocked seam, so it proves the branch
+        survives composition and is not an artefact of the unit mocks.
         """
         frame = {
             "session_id": _SESSION_ID,
@@ -286,7 +285,7 @@ class TestLeadKeepsOrchestratorBlockAndUnknownGetsNeither:
             "hook_event_name": "SessionStart",
         }
         additional, _ = _run_real_session_init(frame, tmp_path)
-        assert _ORCH_MARKER not in additional
+        assert _ORCH_MARKER in additional
         assert "relaunch with `--agent PACT:pact-orchestrator`" in additional
         assert _PEER_LIST_PREFIX not in additional
 

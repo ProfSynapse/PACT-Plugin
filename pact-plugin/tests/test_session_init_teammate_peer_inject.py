@@ -176,32 +176,36 @@ class TestLeadKeepsOrchestratorBlockAndUnknownGetsNeither:
         assert _PEER_SENTINEL not in additional
         assert not mock_gpc.called, "lead frame must not call the peer-context builder"
 
-    def test_plain_unknown_frame_gets_neither_orchestrator_block_nor_peer_body(
+    def test_plain_unknown_frame_gets_the_orchestrator_block_but_no_peer_body(
         self, monkeypatch, tmp_path
     ):
-        """RETARGET, and this arm was a RETIRED EXPECTATION with the proof in
-        its own message. It used to assert the orchestrator block, and the
-        message gave the reason word for word: "unknown/plain frame behavior is
-        UNCHANGED (minimal scope) — it still receives the orchestrator block as
-        before this fix". That was a DEFERRAL, not a property: the earlier
-        change declined to touch the unknown path and said so. The role gate now
-        makes that deferred repair, so the deferral is spent.
+        """THE PLAIN FRAME KEEPS THE ORCHESTRATOR BLOCK, and the arm has now
+        held that expectation twice with one interlude.
 
-        The two surviving legs are unchanged and they are the ones the arm was
-        built for: no peer body, and no call to the peer-context builder. Only
-        the orchestrator leg flips, and it flips to the notice, not to silence,
-        so the arm asserts a POSITIVE token rather than an absence alone.
+        Its ORIGINAL message stated it word for word: "unknown/plain frame
+        behavior is UNCHANGED (minimal scope) - it still receives the
+        orchestrator block as before this fix". A later change read that as a
+        spent DEFERRAL and flipped the arm to assert suppression. THAT READING
+        WAS WRONG, and the census behind it measured a population that never
+        reaches this hook. A plain frame is a no-`--agent` PRIMARY frame: an
+        ordinary user running plain `claude`. Suppressing its block leaves the
+        bootstrap marker unstamped and bootstrap_gate then denies every tool.
+
+        The two legs this arm was BUILT for are unchanged throughout: no peer
+        body, and no call to the peer-context builder. The notice is asserted
+        beside the block, so the plain frame stays separable from a lead frame.
         """
         additional, mock_gpc = _run_main_capture(
             _stdin_for(plain_frame()), monkeypatch, tmp_path
         )
-        assert _ORCH_MARKER not in additional, (
-            "an unknown/plain frame is known NOT to be the lead, so it must not "
-            "be handed the orchestrator block"
+        assert _ORCH_MARKER in additional, (
+            "an unknown/plain frame is a no-`--agent` PRIMARY frame and must "
+            "keep the orchestrator block: without it no bootstrap marker is "
+            "stamped and bootstrap_gate denies Edit, Write and Agent"
         )
         assert "relaunch with `--agent PACT:pact-orchestrator`" in additional, (
-            "the unknown frame must receive the unknown-role notice: a bare "
-            "absence cannot separate correct silence from a build that died"
+            "the unknown frame must also receive the unknown-role notice, "
+            "which is what separates it from a genuine lead frame"
         )
         assert _PEER_SENTINEL not in additional
         assert not mock_gpc.called
