@@ -84,7 +84,7 @@ managed settings → command-line args → env vars → settings files (local �
 1. **The `env` block overrides a same-named shell variable.** A value pinned in `settings.json`'s `env` block wins over a shell export of the same name — so a one-shot `PACT_PR_GREEDY_FIX=0 claude …` will **not** override a `"PACT_PR_GREEDY_FIX": "1"` pinned in the `env` block. A one-shot override works only when the variable is not pinned there.
 2. **A malformed `settings.json` is dropped WHOLESALE in headless mode.** In `-p` / headless mode, a syntax error anywhere in `settings.json` makes Claude Code silently ignore the **entire** file — including the whole `env` block, so every PACT option persisted there stops applying. `session_init` warns at startup if it reads a malformed `settings.json`. Keep the file valid JSON.
 
-**Namespace guardrail**: name every PACT option `PACT_*`. Never reuse a `CLAUDE_CODE_*` identity variable — Claude Code strips those from the `env` block.
+**Namespace guardrail**: name each PACT option `PACT_*`, and do not give a PACT option a `CLAUDE_CODE_*` name. A `PACT_*` name makes the owner of an option unambiguous.
 
 ## Migration — `autonomous-scope-detection` marker → env var
 
