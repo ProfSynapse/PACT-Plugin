@@ -385,8 +385,8 @@ _SECRETARY_AGENT_TYPE = "pact-secretary"
 # ritual simply has not been run yet. The clause is therefore CONDITIONED on a
 # symptom the reader can observe for themselves, never phrased as advice to go
 # change a setting. Routing a user who has merely not bootstrapped toward a
-# high-blast-radius configuration change would be actively harmful, which is
-# why the condition comes first and the pointer second.
+# configuration change would be actively harmful, which is why the condition
+# comes first and the pointer second.
 #
 # "State-independent" here means TRUE in every state, not RECOMMENDING THE SAME
 # ACTION in every state: when the condition does not hold the clause asks

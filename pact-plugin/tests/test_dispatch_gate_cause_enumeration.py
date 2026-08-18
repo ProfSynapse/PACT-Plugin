@@ -28,8 +28,8 @@ of them a gap that more coverage closes:
   * Verification-before-remedy ordering in the README section the gates point
     at. ``test_readme_pointer_has_a_referent`` pins that the referent EXISTS,
     and deliberately not that it still leads with a falsifiable check before
-    showing the reader a high-blast-radius setting. That protection is a
-    property of the gate/README pair which no single artifact can enforce.
+    showing the reader the setting. That protection is a property of the
+    gate/README pair which no single artifact can enforce.
 
 NON-VACUITY DISCIPLINE — the reasons, so a later editor does not undo them:
 
@@ -1089,8 +1089,7 @@ def test_readme_pointer_has_a_referent():
 
     WHAT THIS DOES NOT PIN, and must not be read as pinning. The clause in the
     bootstrap gate is safe to over-point partly because the reader is told how
-    to confirm they have this problem before being shown a high-blast-radius
-    setting.
+    to confirm they have this problem before being shown the setting.
 
     BE PRECISE ABOUT WHERE THAT PROTECTION LIVES, because an earlier state of
     this file got it wrong in each direction. The gates now name the
