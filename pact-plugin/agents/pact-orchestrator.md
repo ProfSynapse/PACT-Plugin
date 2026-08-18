@@ -399,6 +399,8 @@ For non-exempt teammates (everyone except `pact-secretary`):
 
 #### First-spawn verification (HARD-RULE)
 
+**Before you conclude the dispatch was malformed, check the tools YOU hold.** If you cannot see `TaskCreate`, `TaskUpdate`, `TaskList` and `TaskGet`, the spawn shape is not the cause and a re-spawn will not help. The host withholds those tools from some model and client-version combinations unless a session opts in. Tell the user to see [If specialist agents will not spawn](https://github.com/Synaptic-Labs-AI/PACT-Plugin#if-specialist-agents-will-not-spawn). Do not re-spawn until you rule that out.
+
 After your first specialist spawn in a session — and after any subsequent spawn where you suspect dispatch tooling may be misconfigured — verify the teammate received the full PACT protocol surface. The teammate's first message MUST demonstrate access to `TaskList`, `TaskUpdate`, and `SendMessage`. If the teammate reports any of those tools "not available", "not loaded", or otherwise missing:
 
 > ⚠️ **HARD STOP — DISPATCH PROTOCOL VIOLATION**. This is **NOT** degraded mode. **NOT** something to "work around". The dispatch was malformed (almost always: spawn shape used `Task(...)` instead of `Agent(...)`, or omitted `name=` / `team_name=`). Stop the teammate, correct the dispatch shape, and re-spawn with the canonical `Agent(name=..., team_name=..., subagent_type=...)` form documented above. Do **not** instruct the teammate to "make do" — they cannot self-recover from a malformed spawn.
