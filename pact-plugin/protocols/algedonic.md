@@ -91,7 +91,7 @@ With PACT Task integration, algedonic signals create **signal Tasks** that persi
 
 **Agent behavior on algedonic signal:**
 
-Under Agent Teams, teammates have access to Task tools (`TaskGet`, `TaskUpdate`, `TaskList`) and messaging (`SendMessage`). When an agent detects a viability threat:
+Under Agent Teams, the algedonic signal travels on `SendMessage`, which does not depend on the Task tools. If the Task tools (`TaskGet`, `TaskUpdate`, `TaskList`) are not available to you, send the signal anyway. When an agent detects a viability threat:
 1. Stop work immediately
 2. Send the signal to the team-lead via `SendMessage` (using the Signal Format above):
    ```
