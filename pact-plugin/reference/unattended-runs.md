@@ -27,6 +27,14 @@ You can also set it permanently in `~/.claude/settings.json`:
 { "teammateMode": "tmux" }
 ```
 
+> **In tmux mode, set the task-tools value too.** A teammate in its own split
+> pane is a separate Claude Code process, so the tools it gets follow its own
+> model. A lead can hold the task tools while a teammate does not. The `env`
+> block that restores them sits in the same `~/.claude/settings.json` shown
+> above, which each Claude Code process reads at start, so one entry is
+> sufficient for the lead and the teammate. See
+> [If specialist agents will not spawn](https://github.com/Synaptic-Labs-AI/PACT-Plugin#if-specialist-agents-will-not-spawn).
+
 ## If you must stay on in-process mode
 
 Keep a lightweight external heartbeat in another terminal so you periodically
