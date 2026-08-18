@@ -18,6 +18,10 @@ Then add `~/.claude/teams` and `~/.claude/pact-sessions` to your `additionalDire
 
 ```json
 {
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"
+  },
   "permissions": {
     "additionalDirectories": [
       "~/.claude/teams",
@@ -42,6 +46,8 @@ Then add `~/.claude/teams` and `~/.claude/pact-sessions` to your `additionalDire
 ```
 
 > **Note:** Bash allow rules are intentionally omitted — they are [fragile](https://docs.anthropic.com/en/docs/claude-code/settings#permission-settings) for commands with arguments. When agents run `mkdir` or `rm` in `~/.claude/` paths, select **"Yes, and always allow from this project"** to add the rule automatically.
+
+The two `env` values are prerequisites and they gate different things: Agent Teams, and the task tools PACT must have to bootstrap. If specialists will not spawn, see [If specialist agents will not spawn](https://github.com/Synaptic-Labs-AI/PACT-Plugin#if-specialist-agents-will-not-spawn).
 
 Then restart Claude Code. Requires [Agent Teams enabled](https://github.com/Synaptic-Labs-AI/PACT-Plugin#enabling-agent-teams) and the `--agent` flag wired up — see [Loading PACT at session start](https://github.com/Synaptic-Labs-AI/PACT-Plugin#upgrading-from-v3x-to-v40) for the three convenience patterns (per-project `.claude/settings.json`, the `pact` shell wrapper, or manual `claude --agent PACT:pact-orchestrator`).
 

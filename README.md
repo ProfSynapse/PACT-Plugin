@@ -360,7 +360,8 @@ Add the following to your `settings.json` (global `~/.claude/settings.json` or p
 ```json
 {
   "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"
   },
   "permissions": {
     "additionalDirectories": [
@@ -385,11 +386,11 @@ Add the following to your `settings.json` (global `~/.claude/settings.json` or p
 }
 ```
 
-The `env` setting enables Agent Teams. The `permissions.additionalDirectories` entries allow agents to access team coordination files in `~/.claude/teams/` and session journals in `~/.claude/pact-sessions/` without permission prompts. The `permissions.allow` rules prevent recurring prompts for agent memory, session state, and Telegram config file operations.
+The `env` settings enable Agent Teams and restore the task tools PACT must have to bootstrap. The `permissions.additionalDirectories` entries allow agents to access team coordination files in `~/.claude/teams/` and session journals in `~/.claude/pact-sessions/` without permission prompts. The `permissions.allow` rules prevent recurring prompts for agent memory, session state, and Telegram config file operations.
 
 > **Note:** Bash allow rules are intentionally omitted — they are [fragile](https://docs.anthropic.com/en/docs/claude-code/settings#permission-settings) for commands with arguments. When agents run `mkdir` or `rm` in `~/.claude/` paths, select **"Yes, and always allow from this project"** to add the rule automatically.
 
-Without the `env` setting, PACT commands like `/PACT:orchestrate` and `/PACT:comPACT` will fail to spawn specialist agents. If they still fail *with* the setting in place, see [If specialist agents will not spawn](#if-specialist-agents-will-not-spawn) below.
+Without the Agent Teams `env` setting, PACT commands like `/PACT:orchestrate` and `/PACT:comPACT` cannot spawn specialist agents. A missing task-tools `env` setting stops the spawn for a different cause. See [If specialist agents will not spawn](#if-specialist-agents-will-not-spawn) below, which covers that case.
 
 > **Note:** Agent Teams have [known limitations](https://code.claude.com/docs/en/agent-teams#limitations) around session resumption, task coordination, and shutdown behavior. See the Claude Code docs for details.
 
@@ -409,24 +410,28 @@ are present.
 - **Any of the four missing** — this is the problem, and the setting below fixes it.
 - **All four present** — this is *not* the problem, and the setting below will not help. Something else is refusing the spawn; this check rules out one cause, not the rest.
 
-**The setting.** Add `DISABLE_GROWTHBOOK` to the `env` block of your `~/.claude/settings.json`, alongside the Agent Teams setting, then start a new session. A session that has already been denied the tools does not pick them up again, so the stuck one cannot be rescued:
+**The setting.** Add `CLAUDE_CODE_ENABLE_TODO_TOOLS` to the `env` block of your `~/.claude/settings.json`, alongside the Agent Teams setting, then start a new session:
 
 ```json
 {
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "DISABLE_GROWTHBOOK": "1"
+    "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"
   }
 }
 ```
 
-**What it costs you.** The setting is blunt: it turns off Claude Code's remote configuration channel entirely. Every remotely-controlled option reverts to its built-in default, and Remote Control stops working. That channel is also the vendor's fastest lever for responding to an incident, so leaving this in place permanently opts you out of server-side mitigations that would otherwise reach you between releases.
+The value is the string `"1"`, which is the form measured to work.
 
-**The other side of the same trade.** Turning the channel off also means a vendor-controlled switch can no longer change how your already-installed client behaves. A reader who treats that capability as attack surface will see this setting as a hardening measure rather than a concession. Both readings are correct; which one governs depends on whether you are more exposed to a mitigation that never arrives or to a behavior change you never reviewed.
+**Why the Agent Teams setting does not cover this.** The two values gate different things, and one does not replace the other. `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` enables Agent Teams. `CLAUDE_CODE_ENABLE_TODO_TOOLS` restores the task tools. A session with Agent Teams enabled and no task tools shows the symptom above. That is why the Agent Teams setting did not prevent it.
 
-**Taking it back out.** This is a workaround for current platform behavior, not a standing recommendation — the gate is server-controlled and can change without notice, so expect to remove this setting eventually.
+**Where this comes from.** The vendor documents the gate: "In Claude Code v2.1.233 and later, the following tools aren't available on Opus 4.8, Sonnet 5, Fable 5, Mythos 5, or later versions of those families unless you opt in: `TodoWrite`, `TaskCreate`, `TaskGet`, `TaskUpdate`, and `TaskList`." See [Task tool availability](https://code.claude.com/docs/en/tools-reference#task-tool-availability), which records other opt-in routes as well. This page gives the `env` block, because it persists across sessions.
 
-To find out whether you still need it, delete the entry, **start a new shell, and start a new session from that shell**, then run the check above. All three steps matter, because environment values propagate asymmetrically: a value added to `settings.json` reaches processes that are already running, but removing it does not retract it from them; a value set in a shell profile only affects shells started afterwards; and a value exported by hand in a live shell survives both. Deleting the line and re-testing in place tells you nothing.
+**If you set `DISABLE_GROWTHBOOK` on earlier advice, it is retired.** That setting was the previous remedy here, and `CLAUDE_CODE_ENABLE_TODO_TOOLS` addresses this symptom directly. The retired setting is blunt: it stops the remote configuration channel of Claude Code fully, each remotely-controlled option reverts to its built-in default, and Remote Control stops working. That channel is also the fastest route the vendor has to send a mitigation between releases. It is not a standing recommendation, so remove it, unless you set it deliberately to close the remote-configuration channel.
+
+**To remove a setting.**
+
+To find out whether you still need a setting, delete that entry, **start a new shell, and start a new session from that shell**, then run the check above. All three steps matter, because environment values propagate asymmetrically: a value added to `settings.json` reaches processes that are already running, but removing it does not retract it from them; a value set in a shell profile only affects shells started afterwards; and a value exported by hand in a live shell survives both. Deleting the line and re-testing in place tells you nothing.
 
 ### Optional dependencies
 
