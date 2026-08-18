@@ -100,7 +100,7 @@ _CANONICAL_DENY_REASON_LITERAL = (
     "until bootstrap completes. Bash, Read, Glob, Grep are available. "
     "If bootstrap cannot complete because the task-management tools are "
     "unavailable, see "
-    "https://github.com/Synaptic-Labs-AI/PACT-Plugin#enabling-agent-teams"
+    "https://github.com/Synaptic-Labs-AI/PACT-Plugin#if-specialist-agents-will-not-spawn"
 )
 
 

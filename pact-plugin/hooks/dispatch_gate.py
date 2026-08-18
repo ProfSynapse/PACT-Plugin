@@ -634,19 +634,17 @@ def _augment_deny_with_stale_diagnosis(
 # therefore report "not case (4)" in precisely the case that IS (4). A cue that
 # NARROWS is admissible; an assertion that ELIMINATES is not.
 #
-# The remedy for cause (3) is a pointer, never an inlined setting: it is a
-# conditional prerequisite with real blast radius, and a deny message cannot
-# carry the cost statement that has to accompany it.
+# The remedy for cause (3) is a pointer, never an inlined setting.
 #
-# That pointer is an ABSOLUTE URL rather than a section name. The README
-# shipped INSIDE the plugin package does not contain that section — it lives
-# in the repository README — so a reader searching their local copy for a
-# quoted section title finds nothing, which is worse than no pointer at all.
-# The shipped README already links this exact URL twice, so this follows an
-# established convention rather than inventing one. The URL also lands on the
-# section TOGETHER WITH its cost paragraph, which is the entire reason the
-# remedy is a pointer; a terse local restatement would drop it. Do NOT
-# "simplify" this back to a section name.
+# That pointer is an ABSOLUTE URL rather than a section name, and ONE ground
+# carries the two halves. The README shipped INSIDE the plugin package does
+# not contain that section — it lives in the repository README — so a reader
+# searching their local copy for a quoted section title finds nothing, which
+# is worse than no pointer at all. The shipped README links this exact URL
+# once (measured 2026-08-18 as full-URL occurrences in pact-plugin/README.md,
+# the file marketplace.json packages), so this follows an established
+# convention rather than inventing one.
+# Do NOT "simplify" this back to a section name.
 #
 # THE OPENING QUALIFIER IS LOAD-BEARING, not throat-clearing. The rule-⑧ base
 # message ends with an unhedged imperative — create the teachback task and the
@@ -671,8 +669,8 @@ _CAUSE_ENUMERATION = (
     "TO NARROW IT DOWN, confirm all four task tools are available to you:\n"
     "    ToolSearch \"select:TaskCreate,TaskUpdate,TaskList,TaskGet\"\n"
     "  Any missing      -> case (3) below. For the setting that restores\n"
-    "                      them, and its trade-offs, see\n"
-    "                      https://github.com/Synaptic-Labs-AI/PACT-Plugin#enabling-agent-teams\n"
+    "                      them, see\n"
+    "                      https://github.com/Synaptic-Labs-AI/PACT-Plugin#if-specialist-agents-will-not-spawn\n"
     "  All four present -> not case (3). That rules out one cause, not the rest.\n"
     "If listing the task store reports a PERMISSIONS ERROR, you are in case (4).\n"
     "\n"

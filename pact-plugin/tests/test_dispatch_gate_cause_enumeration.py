@@ -1024,8 +1024,8 @@ _POINTER_URL_RE = re.compile(r"https://github\.com/[^\s\"'\\]+#[^\s\"'\\]+")
 # command and why a computed slug would be unsound here. Both halves are pinned
 # so an edit to EITHER side reds, which is what makes this a correspondence
 # check rather than a restatement of one side.
-_VERIFIED_ANCHOR = "enabling-agent-teams"
-_VERIFIED_HEADING = "### Enabling Agent Teams"
+_VERIFIED_ANCHOR = "if-specialist-agents-will-not-spawn"
+_VERIFIED_HEADING = "#### If specialist agents will not spawn"
 
 
 def _pointer_urls(source_name):
@@ -1092,17 +1092,22 @@ def test_readme_pointer_has_a_referent():
     to confirm they have this problem before being shown a high-blast-radius
     setting.
 
-    BE PRECISE ABOUT WHERE THAT PROTECTION LIVES — an earlier draft of this
-    docstring said the referent "opens with a falsifiable check", and it does
-    not. The pointed-at section opens with the Agent Teams settings block. The
-    check lives further down, inside its "If specialist agents will not spawn"
-    SUBSECTION, which opens with "First, confirm this is what you are hitting"
-    and only then reaches "The setting". So the ordering invariant is
-    check-before-remedy WITHIN THAT SUBSECTION, not at the top of the section
-    the gates name. The distinction matters because this paragraph exists for a
-    future auditor re-checking the ordering: one who reads "opens with" lands at
-    the section heading, finds a settings block and no check, and concludes the
-    protection has already been lost when it has not.
+    BE PRECISE ABOUT WHERE THAT PROTECTION LIVES, because an earlier state of
+    this file got it wrong in each direction. The gates now name the
+    "If specialist agents will not spawn" SUBSECTION itself, so the ordering
+    invariant and the pointer target are the same region. That subsection opens
+    with a "Symptom." statement, reaches "First, confirm this is what you are
+    hitting" with its four-tool check, and only THEN reaches "The setting". So
+    check-before-remedy holds INSIDE the pointed-at region, and an auditor who
+    follows the URL lands on the check rather than on a settings block.
+
+    WHAT THIS PARAGRAPH IS FOR, stated so it survives the next repoint: when
+    the gates named the PARENT section instead, the check sat one heading below
+    the landing point, and an auditor who read the section top-down found the
+    Agent Teams settings block first and could conclude the protection had been
+    lost when it had not. Re-check this paragraph against the pointer when the
+    anchor moves. It describes a REGION, and repointing changes the region it
+    describes.
 
     That protection is a property of the PAIR, not of either file: reorder the
     subsection to lead with the remedy and the protection is gone while this
@@ -1159,9 +1164,9 @@ def test_readme_pointer_has_a_referent():
     #
     # Verified empirically against GitHub's own renderer rather than assumed:
     #     gh api repos/<owner>/<repo>/readme -H "Accept: application/vnd.github.html"
-    # which returned id="user-content-enabling-agent-teams" for this heading.
-    # Re-run that command if either side of the pair below changes; do NOT
-    # "simplify" this into a slugger.
+    # which returned id="user-content-if-specialist-agents-will-not-spawn" for
+    # this heading, served as an <h4>. Re-run that command if either side of
+    # the pair below changes; do NOT "simplify" this into a slugger.
     anchor = url.split("#", 1)[1]
     assert anchor == _VERIFIED_ANCHOR, (
         f"the gates now point at anchor {anchor!r}, but the verified pair pins "
