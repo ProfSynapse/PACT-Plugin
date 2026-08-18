@@ -363,26 +363,6 @@ For full detail, `Read(file_path="../protocols/pact-variety.md")` when calibrati
 >
 > ⚠️ **NEVER** use plain `Agent(subagent_type=...)` without `name` and `team_name` for specialist agents. This bypasses team coordination, task tracking, and `SendMessage` communication.
 
-#### Which signal governs a tool call
-
-A tool gives you three signals about itself, and they can disagree. Rank them by distance from the thing that decides:
-
-1. **The behaviour IS the interface.** Only a call to the tool measures it.
-2. **The parameter list** (the `properties` object) **describes the interface.** It is a read, one step away.
-3. **The prose description describes the parameter list.** It is a read of a read, two steps away.
-
-Each step is a different author at a different time, so each level can go stale against the level below it. That is why the order holds. The prose is the level that reads like an answer, which is what makes it stop a search.
-
-Apply the order like this:
-
-- If the prose says a parameter is unavailable and the parameter list shows it, PASS IT.
-- If the dispatch template above and the parameter list disagree, that disagreement is a FINDING. Report it to the user. Do not pick one.
-- If your decision is about what the tool DOES rather than about what it accepts, no read is sufficient. Call the tool.
-
-**A gate that demands a parameter is evidence that the parameter is available**, because a gate cannot demand what the interface cannot express. So when a gate refuses a dispatch for a missing field you believe you cannot pass, check the belief first. Do not hunt for a different tool.
-
-**Acceptance is not action.** A tool boundary can drop an unknown key with no error, so a call that returns cleanly proves nothing about that key. To measure what a parameter does, send a marked value that has one route into the result, then look for that value in the result. A control call that carries a key name no tool uses tells you if the boundary rejects unknown keys at all.
-
 **Teachback-Gated Dispatch**:
 
 Every specialist dispatch is a Task A (TEACHBACK) + Task B (primary work, `blockedBy=[A]`) pair. Both tasks must exist with the teammate as owner BEFORE the `Agent()` spawn. The mission lives in Task B's `description`, never in the spawn prompt.
@@ -396,6 +376,22 @@ For non-exempt teammates (everyone except `pact-secretary`):
 3. `TaskUpdate(A_id, owner="{name}", addBlocks=[B_id])` — assign Task A to the teammate and wire it as the gate that unblocks Task B.
 4. `TaskUpdate(B_id, owner="{name}", addBlockedBy=[A_id])` — assign Task B to the same teammate and explicitly mirror the block edge. Do NOT pre-set `status="in_progress"` on either task — the teammate self-claims on arrival. Ensure the Task A brief reminds the teammate to claim Task B (`status="in_progress"`) before any implementation tool-use once it unblocks (the command dispatch templates carry this line) — the teammate flips it, never you.
 5. `Agent(name="{name}", team_name="{team_name}", subagent_type="pact-{type}", prompt="YOUR PACT ROLE: teammate ({name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you.")` — spawn the teammate. Keep the prompt ≤ 800 chars and include the literal `TaskList` reference (or one of: `task list`, `tasks assigned`, `check your tasks`); the teammate reads the mission via `TaskGet(B_id)`, not from the prompt.
+
+#### Which signal governs a tool call
+
+A tool gives three signals about itself, and they can disagree. Trust them in this order:
+
+1. **The behaviour.** Only a call measures it.
+2. **The parameter list** (the `properties` object).
+3. **The prose description**, which describes the parameter list.
+
+A different author writes each level at a different time, so a higher level can be stale.
+
+- Prose says a parameter is not available, parameter list shows it: PASS IT.
+- Dispatch template and parameter list disagree: that is a FINDING. Report it. Do not select one.
+- Your question is what the tool DOES: call the tool.
+
+**A gate that demands a parameter is evidence the parameter is available**, because a gate cannot demand what the interface cannot express. Check that belief before you look for a different tool.
 
 #### First-spawn verification (HARD-RULE)
 
