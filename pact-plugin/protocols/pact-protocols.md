@@ -1791,7 +1791,7 @@ See [rePACT.md](../commands/rePACT.md) for the full command documentation, inclu
 
 #### Future Executor: Agent Teams
 
-> **Status**: Agent Teams is experimental, gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`.
+> **Status**: Agent Teams is experimental. It is gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, and the Task tools PACT must have are gated behind `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`.
 > The API has evolved from earlier community-documented versions (monolithic `TeammateTool` with 13 operations)
 > into separate purpose-built tools. The mappings below reflect the current API shape but may change
 > before official release. This section is documentation/future reference, not current behavior.

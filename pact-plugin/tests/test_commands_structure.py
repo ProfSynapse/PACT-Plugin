@@ -375,10 +375,10 @@ EXPECTED_SPAWN_LITERAL_COUNTS = {
 _PROMPT_LITERAL_RE = re.compile(r'prompt="((?:[^"\\]|\\.)*)"')
 
 # A teammate-spawn prompt literal always opens with the role prelude. This
-# prefix is what distinguishes a spawn literal from a non-spawn prompt such as
-# Agent(resume=..., prompt="Blocker resolved: ...") — a resumed agent already
-# registered on its INITIAL spawn, so its resume prompt must NOT carry (or be
-# required to carry) the register directive.
+# prefix is what distinguishes a spawn literal from a non-spawn prompt, such as
+# a prompt that gives an instruction to a teammate that is running. A teammate
+# registers on its OWN spawn, so a prompt with no role prelude must NOT carry
+# the register directive, and must not be required to.
 _SPAWN_LITERAL_PREFIX = "YOUR PACT ROLE: teammate ("
 
 
@@ -443,27 +443,47 @@ class TestRegisterDirectivePresentInEverySpawnLiteral:
                 f"Offending literal (truncated): {value[:90]!r}"
             )
 
-    def test_resume_prompt_excluded_from_directive_requirement(self):
-        """Regression: a non-spawn prompt — Agent(resume=..., prompt="Blocker
-        resolved: ...") — is NOT a teammate-spawn literal (no role prelude) and
-        is correctly EXCLUDED from the directive requirement. Pins the exclusion
-        so a future extractor change can't start demanding the directive in a
-        resume prompt (wrong: a resumed agent already registered on its initial
-        spawn). orchestrate.md is the surface that carries the resume example."""
-        orch = (COMMANDS_DIR / "orchestrate.md").read_text(encoding="utf-8")
-        all_prompts = _PROMPT_LITERAL_RE.findall(orch)
-        resume_prompts = [v for v in all_prompts if v.startswith("Blocker resolved")]
-        assert resume_prompts, (
-            "expected at least one Agent(resume=...) 'Blocker resolved' prompt in "
-            "orchestrate.md — the resume-recovery example. If it was removed, drop "
-            "this test; if the extractor regex changed shape, fix it. Without this "
-            "fixture the exclusion below would be vacuously true."
+    def test_a_prompt_without_the_role_prelude_is_not_a_spawn_literal(self):
+        """The extractor must EXCLUDE a prompt literal that carries no role
+        prelude, so a non-spawn prompt is never required to carry the register
+        directive.
+
+        The fixture is SYNTHETIC and that is deliberate. The predecessor of
+        this test took its fixture from a live "Blocker resolved" prompt in
+        orchestrate.md, and it went red when that prompt was removed with the
+        resume-recovery example. A fixture that lives in a document can be
+        drained by an edit to that document; this one cannot. MEASURED at the
+        time of writing: orchestrate.md carries 6 prompt literals and all 6
+        are spawn literals, so no document supplies a non-spawn fixture.
+
+        Three arms. Each one was PROVEN red under its own mutation of an
+        isolated copy, against a green control on the unmutated copy:
+          1. the extractor no longer matches a plain Agent(prompt=...)
+          2. the exclusion widens and admits a prompt with no role prelude
+          3. the exclusion narrows and drops a genuine spawn literal
+        """
+        non_spawn = 'Agent(prompt="Blocker resolved: {details}. Continue.")'
+        assert _PROMPT_LITERAL_RE.findall(non_spawn) == [
+            "Blocker resolved: {details}. Continue."
+        ], (
+            "the prompt-literal extractor no longer sees a plain "
+            "Agent(prompt=...) call. Without this the exclusion below would be "
+            "vacuously true, because there would be nothing to exclude."
         )
-        # The resume prompt must NOT be classified as a spawn literal.
-        spawn = _spawn_prompt_literals(orch)
-        assert all(not v.startswith("Blocker resolved") for v in spawn), (
-            "a resume prompt leaked into the teammate-spawn literal set — it "
-            "would then be wrongly required to carry the register directive."
+        assert _spawn_prompt_literals(non_spawn) == [], (
+            "a prompt with no role prelude leaked into the teammate-spawn "
+            "literal set. It would then be wrongly required to carry the "
+            "register directive."
+        )
+
+        spawn = (
+            'Agent(prompt="YOUR PACT ROLE: teammate (x).\\n\\nYou are joining '
+            'team t. As your FIRST action, Invoke Skill(\\"'
+            'PACT:pact-team-registration\\") to record your identity.")'
+        )
+        assert len(_spawn_prompt_literals(spawn)) == 1, (
+            "a genuine teammate-spawn literal was dropped by the extractor. "
+            "The directive requirement would then cover nothing."
         )
 
 
@@ -736,10 +756,10 @@ class TestPerLoopDispatchSites:
     # 9 per-loop dispatch sites. Each entry is
     # (relative_command_path, lead_in_line_number_1based, role_or_phase_label).
     SITES = [
-        ("orchestrate.md", 463, "PREPARE"),
-        ("orchestrate.md", 570, "ARCHITECT"),
-        ("orchestrate.md", 705, "CODE"),
-        ("orchestrate.md", 855, "TEST"),
+        ("orchestrate.md", 460, "PREPARE"),
+        ("orchestrate.md", 567, "ARCHITECT"),
+        ("orchestrate.md", 702, "CODE"),
+        ("orchestrate.md", 852, "TEST"),
         ("comPACT.md", 233, "MultipleSpecialists"),
         ("comPACT.md", 293, "SingleSpecialist"),
         ("peer-review.md", 192, "Reviewers"),

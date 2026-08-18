@@ -203,26 +203,30 @@ class TestCompactReadInstructionRealSeam:
     ==========================================================================
     """
 
-    def test_unknown_frame_gets_the_notice_not_the_archive_instruction(
+    def test_unknown_frame_gets_the_notice_and_the_archive_instruction(
         self, tmp_path, monkeypatch
     ):
         """PAIRED UNKNOWN ARM, at the real-composition seam.
 
-        The two arms below drive a LEAD frame, which is the frame the archive
-        instruction is written for. This arm keeps the UNKNOWN frame they used
-        to build by accident, so the seam covers both branches of the role gate
-        rather than trading one for the other. It runs the assembled hook, so it
-        also proves the unknown branch survives composition and is not an
-        artefact of the unit mocks.
+        The two arms below drive a LEAD frame. This arm drives the UNKNOWN
+        frame, which is a no-`--agent` PRIMARY frame and takes the SAME compact
+        ladder, so the seam covers both branches of the role gate rather than
+        trading one for the other. It runs the assembled hook, so it also proves
+        the branch survives composition and is not an artefact of the unit
+        mocks.
+
+        THE NOTICE IS WHAT SEPARATES THE TWO ROLES HERE. Both frames get the
+        ladder and the archive instruction, and only the unknown frame gets the
+        notice, so a collapse of the two roles reddens this arm.
         """
         sid = "aabb1122-0000-0000-0000-000000000000"
         ctx = _run_compact_main(tmp_path, monkeypatch, sid, agent_type=None)
 
-        assert "YOUR PACT ROLE: orchestrator." not in ctx
+        assert "YOUR PACT ROLE: orchestrator." in ctx
         assert _UNKNOWN_ROLE_FRAGMENT in ctx
-        # The archive instruction is lead-only guidance, so it must not ride an
-        # unknown frame either.
-        assert "compact-summary.txt" not in ctx
+        # The archive instruction rides the compact ladder, so a primary frame
+        # that compacts receives it too.
+        assert "compact-summary.txt" in ctx
 
     def test_real_session_id_names_the_resolved_archive_directory(
         self, tmp_path, monkeypatch

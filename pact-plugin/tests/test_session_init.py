@@ -45,6 +45,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -78,13 +79,18 @@ def _with_lead_role(payload: dict) -> dict:
 _TEST_SESSION_ID = "aabb1122-0000-0000-0000-000000000000"
 
 # The unknown-role notice literal. classify_session_role returns "unknown" when
-# agent_type is absent, and the role gate then emits this instead of the
-# orchestrator ladder. Kept as a fragment rather than the full sentence so a
-# re-wrap of the source literal does not redden every arm that reads it.
+# agent_type is absent, and the role gate emits this BESIDE the orchestrator
+# ladder, never in place of it. Kept as a fragment rather than the full
+# sentence so a re-wrap of the source literal does not redden every arm that
+# reads it.
 _UNKNOWN_ROLE_FRAGMENT = "relaunch with `--agent PACT:pact-orchestrator`"
 
 
-def _stdin_payload(source=None, agent_type=_LEAD_AGENT_TYPE, **extra) -> str:
+def _stdin_payload(
+    source=None,
+    agent_type: Optional[str] = _LEAD_AGENT_TYPE,
+    **extra,
+) -> str:
     """Build a stdin JSON string for a session_init driver.
 
     ``agent_type=None`` OMITS the key, which is the ONLY way to build an
@@ -113,16 +119,22 @@ def _assert_unknown_frame_body(additional: str) -> None:
     accidentally providing. Both properties stay asserted, so neither the lead
     contract nor the unknown branch loses its witness.
 
-    The positive token is load-bearing. An arm that asserted only the ABSENCE of
-    the orchestrator marker cannot separate a correct refusal from a build path
-    that died, because the two emit the same bytes: none.
+    AN UNKNOWN FRAME IS A PRIMARY FRAME AND KEEPS THE LADDER. "unknown" means
+    agent_type was ABSENT, which is a no-`--agent` primary frame: an ordinary
+    user running plain `claude`. Withholding the ladder leaves the bootstrap
+    marker unstamped, and bootstrap_gate then denies Edit, Write and Agent on
+    every call. The notice rides BESIDE the ladder, never in place of it.
+
+    BOTH ASSERTIONS ARE PRESENCES, which is what makes this helper non-vacuous
+    in a fail-open hook: a build path that died emits no bytes and fails the
+    first assertion, so neither half can pass by accident.
     """
-    assert "YOUR PACT ROLE: orchestrator." not in additional, (
-        "an unknown frame is known NOT to be the lead, so it must not receive "
-        f"the orchestrator instructions. got: {additional[:120]!r}"
+    assert "YOUR PACT ROLE: orchestrator." in additional, (
+        "an unknown frame is a no-`--agent` PRIMARY frame and must receive the "
+        f"orchestrator instructions. got: {additional[:120]!r}"
     )
     assert _UNKNOWN_ROLE_FRAGMENT in additional, (
-        "an unknown frame must receive the unknown-role notice. got: "
+        "an unknown frame must also receive the unknown-role notice. got: "
         f"{additional[:120]!r}"
     )
 
@@ -3043,7 +3055,7 @@ def _run_session_init_for_path(
     tmp_path,
     source,
     team_exists,
-    agent_type=_LEAD_AGENT_TYPE,
+    agent_type: Optional[str] = _LEAD_AGENT_TYPE,
 ):
     """Helper for the contract tests below: runs main() under stable mocks
     and returns (additionalContext, kernel_call_count, routing_call_count)."""
@@ -3340,7 +3352,7 @@ def _compact_tasks_dir(tmp_path, monkeypatch, pact_context):
 
 def _run_session_init_compact(
     monkeypatch, tmp_path, *, team_exists=True, patch_get_task_list=None,
-    agent_type=_LEAD_AGENT_TYPE,
+    agent_type: Optional[str] = _LEAD_AGENT_TYPE,
 ):
     """Drive session_init.main() with source=compact and return the
     parsed additionalContext string plus the full output dict.
@@ -3634,14 +3646,21 @@ class TestSessionInitSlotAIntegration:
 
         Suppress that line here, so the assertion rests on the role branch
         instead of on an adjacent diagnostic. The fixture sends no
-        `agent_type`, so the frame classifies "unknown": that branch emits its
-        own notice, and it MUST write at index 0 like every other role branch,
-        so the banner is not the first thing a reader meets.
+        `agent_type`, so the frame classifies "unknown", which is a no-`--agent`
+        PRIMARY frame: that branch emits the orchestrator ladder, and it MUST
+        write at index 0 like every other role branch, so the banner is not the
+        first thing a reader meets.
 
-        The three non-vacuity assertions come first, because each names a way
-        this arm could pass while measuring nothing: a run that never reached
-        Slot 4c, a run where the pin-slot line came back, and an anchor that
-        cannot hold up a prefix test.
+        THE ANCHOR IS THE LADDER MARKER, NOT THE NOTICE. The notice rides
+        BESIDE the ladder at index 1, so the marker is what sits at byte 0.
+        Anchoring the prefix test on the notice would pin a POSITION the design
+        no longer holds, while the property under test (the role branch makes
+        an index-0 write, so the banner is not first) is unchanged.
+
+        The non-vacuity assertions come first, because each names a way this
+        arm could pass while measuring nothing: a run that never reached Slot
+        4c, a run where the pin-slot line came back, and an anchor that cannot
+        hold up a prefix test.
         """
         import session_init as _session_init
         from session_init import _UNKNOWN_ROLE_NOTICE
@@ -3665,19 +3684,26 @@ class TestSessionInitSlotAIntegration:
             "non-vacuity: the pin-slot line is back, so this arm no longer "
             "reproduces the pinless-checkout condition it exists to drive"
         )
-        assert _UNKNOWN_ROLE_FRAGMENT in _UNKNOWN_ROLE_NOTICE, (
-            "non-vacuity: the anchor does not carry this module's own literal, "
-            "so the startswith below is satisfiable by a degenerate constant "
-            "and measures nothing. An imported anchor inherits any degeneracy "
-            "of the source it comes from: startswith('') is correct for every "
-            "string, and a whitespace-only anchor matches the leading space of "
-            "the join. The independent literal is the yardstick."
+        # The anchor is a literal owned by THIS module, so it cannot inherit a
+        # degeneracy from the source: startswith('') is correct for every
+        # string, and an imported anchor could become empty without reddening.
+        ladder_marker = "YOUR PACT ROLE: orchestrator."
+        assert len(ladder_marker) > 20, (
+            "non-vacuity: the anchor is too short to hold up a prefix test"
         )
-        assert additional.startswith(_UNKNOWN_ROLE_NOTICE), (
-            "the unknown-role branch must write its notice at index 0 "
-            "(context_parts.insert(0, ...)), not append it — an appended "
-            "notice leaves the banner first for a frame with no other "
+        assert additional.startswith(ladder_marker), (
+            "the role branch must write the ladder at index 0 "
+            "(context_parts.insert(0, ...)), not append it — an appended role "
+            "message leaves the banner first for a frame with no other "
             "pre-banner diagnostic"
+        )
+        assert _UNKNOWN_ROLE_FRAGMENT in _UNKNOWN_ROLE_NOTICE, (
+            "non-vacuity: the notice literal no longer carries this module's "
+            "own fragment, so the delivery assertion below measures nothing"
+        )
+        assert _UNKNOWN_ROLE_NOTICE in additional, (
+            "the unknown-role notice must still be DELIVERED, beside the "
+            "ladder rather than in place of it"
         )
         assert not additional.startswith(banner), (
             "banner (Slot 4c) is the first element of additionalContext: the "
@@ -3754,7 +3780,11 @@ class TestTeamResumeDetection:
     """
 
     def _run_main_with_team_detection(
-        self, monkeypatch, tmp_path, stdin_data=None, agent_type=_LEAD_AGENT_TYPE
+        self,
+        monkeypatch,
+        tmp_path,
+        stdin_data=None,
+        agent_type: Optional[str] = _LEAD_AGENT_TYPE,
     ):
         """Helper: run main() with Path.home() pointed at tmp_path.
 
@@ -3794,7 +3824,8 @@ class TestTeamResumeDetection:
         )
 
         _assert_unknown_frame_body(additional)
-        assert "provided by the platform for this session" not in additional
+        # The team directive rides the ladder, so a primary frame gets it too.
+        assert "provided by the platform for this session" in additional
 
     def test_fresh_session_emits_team_create(self, monkeypatch, tmp_path):
         """When no team config exists on disk, should emit unified platform directive."""
@@ -3878,7 +3909,7 @@ class TestSourceAwareness:
 
     def _run_main_with_source(
         self, monkeypatch, tmp_path, source, team_exists=False,
-        agent_type=_LEAD_AGENT_TYPE,
+        agent_type: Optional[str] = _LEAD_AGENT_TYPE,
     ):
         """Helper: run main() with given source and team state.
 
@@ -3941,7 +3972,8 @@ class TestSourceAwareness:
         )
 
         _assert_unknown_frame_body(additional)
-        assert "provided by the platform for this session" not in additional
+        # The team directive rides the ladder, so a primary frame gets it too.
+        assert "provided by the platform for this session" in additional
 
     def test_startup_no_team_creates_team(self, monkeypatch, tmp_path):
         """startup + NO on-disk team: emit unified platform directive (bare — no recovery text).
@@ -4346,7 +4378,8 @@ class TestTeamCreateStringFreshSession:
         )
 
         _assert_unknown_frame_body(additional)
-        assert "provided by the platform for this session" not in additional
+        # The team directive rides the ladder, so a primary frame gets it too.
+        assert "provided by the platform for this session" in additional
 
     def test_does_not_contain_old_conditional_directive(self, monkeypatch, tmp_path):
         """The #444 unconditional directive must fully replace the old conditional.
@@ -4390,7 +4423,8 @@ class TestTeamReuseStringResumedSession:
         )
 
         _assert_unknown_frame_body(additional)
-        assert "provided by the platform for this session" not in additional
+        # The team directive rides the ladder, so a primary frame gets it too.
+        assert "provided by the platform for this session" in additional
 
     def test_does_not_contain_old_conditional_directive(self, monkeypatch, tmp_path):
         """The #444 unconditional directive must fully replace the old conditional form."""
@@ -4568,26 +4602,25 @@ class TestBuildSafetyNetContext:
             "(line-anchored for routing block consumer check)."
         )
 
-    def test_unknown_role_gets_neither_marker_nor_bootstrap(self):
-        """frame_role='unknown' means the classifier RAN and found no role, so
-        the frame is known NOT to be the lead: it gets NEITHER role marker and
-        NOT the lead-only bootstrap directive.
+    def test_unknown_role_gets_the_marker_the_bootstrap_and_the_notice(self):
+        """frame_role='unknown' means agent_type was ABSENT, which is a
+        no-`--agent` PRIMARY frame: an ordinary user running plain `claude`. It
+        gets the role marker at byte 0, the bootstrap directive, AND the
+        operator notice beside them.
 
-        PAIRS WITH test_lead_role_starts_with_pact_role_marker. The two of them
-        separate the roles the pre-repair helper merged, so a return of the
-        merge for either role alone cannot stay green.
+        PAIRS WITH test_lead_role_starts_with_pact_role_marker. The two roles
+        emit the same ladder and are separated by the notice, which only the
+        unknown frame receives, so a merge of the two cannot stay green.
 
-        The positive token is load-bearing. An arm that asserted ONLY the
-        absence of the marker cannot separate correct silence from a build path
-        that died, because both emit the same bytes: none.
+        WITHOUT THE BOOTSTRAP DIRECTIVE no marker is ever stamped, and
+        bootstrap_gate then denies Edit, Write and Agent on every tool call.
         """
         from session_init import _build_safety_net_context
 
         result = _build_safety_net_context(None, "unknown")
 
-        assert not result.startswith("YOUR PACT ROLE: orchestrator.")
-        assert "YOUR PACT ROLE:" not in result
-        assert 'Skill("PACT:bootstrap")' not in result
+        assert result.startswith("YOUR PACT ROLE: orchestrator.")
+        assert 'Skill("PACT:bootstrap")' in result
         assert "relaunch with `--agent PACT:pact-orchestrator`" in result
 
     def test_none_role_says_the_role_was_never_resolved(self):
@@ -4607,9 +4640,19 @@ class TestBuildSafetyNetContext:
         assert result == _build_safety_net_context(None, None), (
             "the omitted-argument case and the explicit None case must agree"
         )
+        # The distinguishing sentence is what keeps an unresolved frame apart
+        # from a resolved-empty one. It rides BESIDE the ladder, not instead.
         assert "failed before the session role was resolved" in result
-        assert "YOUR PACT ROLE:" not in result
-        assert 'Skill("PACT:bootstrap")' not in result
+        assert result.startswith("YOUR PACT ROLE: orchestrator."), (
+            "an unresolved frame lost the orchestrator marker. The classifier "
+            "not running says nothing about who the reader is, and that frame "
+            "is mostly a primary user who would then be denied every tool."
+        )
+        assert 'Skill("PACT:bootstrap")' in result
+        assert "relaunch with `--agent PACT:pact-orchestrator`" not in result, (
+            "an unresolved frame received the unknown-role notice, which "
+            "asserts a classifier result that was never computed"
+        )
 
     # The four team_name tests below pass frame_role="lead" EXPLICITLY. The
     # team_name argument is interpolated by the LEAD branch and by no other, so
@@ -5096,9 +5139,9 @@ class TestMainExceptionSafetyNet:
         additional = output["hookSpecificOutput"]["additionalContext"]
 
         _assert_unknown_frame_body(additional)
-        # The team-name branch is lead-only, so its text must not ride an
-        # unknown frame either.
-        assert "NOT GENERATED" not in additional
+        # The raise fires before generate_team_name, so team_name is None and
+        # the no-team wording is the correct half of the ladder to emit here.
+        assert "NOT GENERATED" in additional
         # systemMessage must still carry the original error: the role gate
         # changes WHO is addressed, not WHETHER the failure is reported.
         assert "simulated early failure" in json.dumps(output)
@@ -5313,10 +5356,10 @@ class TestNonDictStdinNeverRaiseDominance:
             f"non-dict stdin ({label}) must hit the unresolved-role safety net; "
             f"got: {additional[:80]!r}"
         )
-        assert not additional.startswith("YOUR PACT ROLE: orchestrator."), (
-            f"non-dict stdin ({label}) must NOT be handed the orchestrator "
-            f"instructions: the role was never resolved, so the frame is not "
-            f"known to be the lead. got: {additional[:80]!r}"
+        assert additional.startswith("YOUR PACT ROLE: orchestrator."), (
+            f"non-dict stdin ({label}) lost the orchestrator instructions. The "
+            f"role was never resolved, which says nothing about the reader, "
+            f"and that frame is mostly a primary user. got: {additional[:80]!r}"
         )
         spy.assert_not_called()
 
@@ -5659,7 +5702,9 @@ class TestSessionInitCompactBranchExceptions:
         additional = output["hookSpecificOutput"]["additionalContext"]
 
         _assert_unknown_frame_body(additional)
-        assert 'Invoke Skill("PACT:bootstrap") immediately' not in additional
+        # The bootstrap directive is the whole point of restoring the ladder:
+        # without it no marker is stamped and bootstrap_gate denies every tool.
+        assert 'Invoke Skill("PACT:bootstrap") immediately' in additional
 
     def test_main_with_invalid_json_input_never_raises(
         self, tmp_path, monkeypatch
@@ -5834,7 +5879,13 @@ class TestSessionInitDirectiveAcrossAllSources:
     _team_reuse but never had an explicit verbatim check.
     """
 
-    def _run(self, monkeypatch, tmp_path, source, agent_type=_LEAD_AGENT_TYPE):
+    def _run(
+        self,
+        monkeypatch,
+        tmp_path,
+        source,
+        agent_type: Optional[str] = _LEAD_AGENT_TYPE,
+    ):
         """Minimal driver for a compact/clear run with team_exists=True."""
         from session_init import main
 
@@ -5874,7 +5925,9 @@ class TestSessionInitDirectiveAcrossAllSources:
         additional = self._run(monkeypatch, tmp_path, source, agent_type=None)
 
         _assert_unknown_frame_body(additional)
-        assert 'Invoke Skill("PACT:bootstrap") immediately' not in additional
+        # The bootstrap directive is the whole point of restoring the ladder:
+        # without it no marker is stamped and bootstrap_gate denies every tool.
+        assert 'Invoke Skill("PACT:bootstrap") immediately' in additional
 
     def test_compact_source_contains_all_four_directive_sentences(
         self, monkeypatch, tmp_path

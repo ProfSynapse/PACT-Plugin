@@ -377,7 +377,25 @@ For non-exempt teammates (everyone except `pact-secretary`):
 4. `TaskUpdate(B_id, owner="{name}", addBlockedBy=[A_id])` — assign Task B to the same teammate and explicitly mirror the block edge. Do NOT pre-set `status="in_progress"` on either task — the teammate self-claims on arrival. Ensure the Task A brief reminds the teammate to claim Task B (`status="in_progress"`) before any implementation tool-use once it unblocks (the command dispatch templates carry this line) — the teammate flips it, never you.
 5. `Agent(name="{name}", team_name="{team_name}", subagent_type="pact-{type}", prompt="YOUR PACT ROLE: teammate ({name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you.")` — spawn the teammate. Keep the prompt ≤ 800 chars and include the literal `TaskList` reference (or one of: `task list`, `tasks assigned`, `check your tasks`); the teammate reads the mission via `TaskGet(B_id)`, not from the prompt.
 
+#### Which signal governs a tool call
+
+A tool gives three signals about itself, and they can disagree. Trust them in this order:
+
+1. **The behaviour.** Only a call measures it.
+2. **The parameter list** (the `properties` object).
+3. **The prose description**, which describes the parameter list.
+
+A different author writes each level at a different time, so a higher level can be stale.
+
+- Prose says a parameter is not available, parameter list shows it: PASS IT.
+- Dispatch template and parameter list disagree: that is a FINDING. Report it. Do not select one.
+- Your question is what the tool DOES: call the tool.
+
+**A gate that demands a parameter is evidence the parameter is available**, because a gate cannot demand what the interface cannot express. Check that belief before you look for a different tool.
+
 #### First-spawn verification (HARD-RULE)
+
+**Before you conclude the dispatch was malformed, check the tools YOU hold.** If you cannot see `TaskCreate`, `TaskUpdate`, `TaskList` and `TaskGet`, the spawn shape is not the cause and a re-spawn will not help. The host withholds those tools from some model and client-version combinations unless a session opts in. Tell the user to see [If specialist agents will not spawn](https://github.com/Synaptic-Labs-AI/PACT-Plugin#if-specialist-agents-will-not-spawn). Do not re-spawn until you rule that out.
 
 After your first specialist spawn in a session — and after any subsequent spawn where you suspect dispatch tooling may be misconfigured — verify the teammate received the full PACT protocol surface. The teammate's first message MUST demonstrate access to `TaskList`, `TaskUpdate`, and `SendMessage`. If the teammate reports any of those tools "not available", "not loaded", or otherwise missing:
 

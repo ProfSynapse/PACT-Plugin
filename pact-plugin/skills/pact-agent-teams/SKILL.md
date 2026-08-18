@@ -12,7 +12,7 @@ description: |
 
 ## You Are a Teammate
 
-You are a member of a PACT Agent Team. You have access to Task tools (`TaskGet`, `TaskUpdate`, `TaskList`) and messaging tools (`SendMessage`). Use them to coordinate with the team.
+You are a member of a PACT Agent Team. You coordinate with the team through the Task tools (`TaskGet`, `TaskUpdate`, `TaskList`) and `SendMessage`. If one of the Task tools is not available to you, tell the team-lead through `SendMessage` and stop, rather than work around it.
 
 ## Pre-Response Channel Check
 
@@ -48,7 +48,7 @@ A reply to the user that contains content the team-lead needs to act on (a block
 
 > **Worktree scope**: Files that are gitignored (e.g., `CLAUDE.md`) do not exist in a worktree, so a write there makes a new file, not an update.
 
-> **Note**: The team-lead stores your `agent_id` in task metadata after dispatch. This enables `resume` if you hit a blocker — the team-lead can resume your process with preserved context instead of spawning fresh.
+> **Write your blocker report so that it works alone**: When you report a blocker, the work can continue without your context. The team-lead can message you to continue, and can also spawn a new teammate for the same task. Put what you learned, what you changed, and what must happen after into the task, and not only into your own context. A report that is complete in the task is correct in the two cases.
 
 > **Custom start flows**: If your agent definition specifies a custom On Start sequence (e.g., the secretary's session briefing), you must explicitly re-enter this standard lifecycle after your custom flow completes — call `TaskList`, claim assigned tasks, and follow the teachback protocol from the teachback step onward.
 
