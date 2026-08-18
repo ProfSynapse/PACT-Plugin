@@ -25,9 +25,7 @@ PACT turns one AI into a coordinated dev team. Instead of a single Claude guessi
 
 ## Quick Start
 
-> **Prerequisite:** PACT requires [Agent Teams](#enabling-agent-teams), which is experimental and disabled by default. Add `"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"` to the `"env"` section of your `~/.claude/settings.json` before installing.
->
-> **Conditional prerequisite:** if specialist agents refuse to spawn once PACT is installed, one further setting may be required — see [If specialist agents will not spawn](#if-specialist-agents-will-not-spawn). Check before you set it. It carries a real cost, and most installs never need it.
+> **Prerequisite:** PACT requires [Agent Teams](#enabling-agent-teams), which is experimental and disabled by default. Add `"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"` and `"CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"` to the `"env"` section of your `~/.claude/settings.json` before installing. The first enables Agent Teams. The second restores the task tools PACT must have to bootstrap.
 
 **1. Install the plugin**
 
@@ -396,7 +394,7 @@ Without the Agent Teams `env` setting, PACT commands like `/PACT:orchestrate` an
 
 #### If specialist agents will not spawn
 
-**Symptom.** Every attempt to start a specialist is refused, and the refusal blames a missing task assignment. Creating that task is itself impossible, because the tools that create tasks are absent from the session. Claude Code decides server-side, based on the model a session is running, whether to withhold them. The session cannot recover on its own — the bootstrap step never completes, so file edits and further spawns stay blocked as well.
+**Symptom.** Every attempt to start a specialist is refused, and the refusal blames a missing task assignment. Creating that task is itself impossible, because the tools that create tasks are absent from the session. The bootstrap step does not complete, so file edits and later spawns stay blocked as well. For the cause, read the vendor statement below.
 
 **First, confirm this is what you are hitting.** In the stuck session, ask Claude:
 
@@ -427,7 +425,11 @@ The value is the string `"1"`, which is the form measured to work.
 
 **Where this comes from.** The vendor documents the gate: "In Claude Code v2.1.233 and later, the following tools aren't available on Opus 4.8, Sonnet 5, Fable 5, Mythos 5, or later versions of those families unless you opt in: `TodoWrite`, `TaskCreate`, `TaskGet`, `TaskUpdate`, and `TaskList`." See [Task tool availability](https://code.claude.com/docs/en/tools-reference#task-tool-availability), which records other opt-in routes as well. This page gives the `env` block, because it persists across sessions.
 
-**If you set `DISABLE_GROWTHBOOK` on earlier advice, it is retired.** That setting was the previous remedy here, and `CLAUDE_CODE_ENABLE_TODO_TOOLS` addresses this symptom directly. The retired setting is blunt: it stops the remote configuration channel of Claude Code fully, each remotely-controlled option reverts to its built-in default, and Remote Control stops working. That channel is also the fastest route the vendor has to send a mitigation between releases. It is not a standing recommendation, so remove it, unless you set it deliberately to close the remote-configuration channel.
+**If you set `DISABLE_GROWTHBOOK` on earlier advice, it is retired, and it is not neutral.** With `CLAUDE_CODE_ENABLE_TODO_TOOLS` absent, that setting forces the declared default, and the declared default withholds the tools. So it reproduces the symptom above rather than only failing to help. It is not the one setting that does this. `DISABLE_TELEMETRY` reaches the same declared default by a different route. Those are two known routes, and not a full list.
+
+**Setting `CLAUDE_CODE_ENABLE_TODO_TOOLS` is the remedy. Removal of a retired setting is hygiene.** The two together are measured to work, so a reader who sets the new value and keeps a retired setting is safe. A reader who removes a retired setting and sets nothing can stay blocked, because a second route reaches the same default.
+
+The retired setting is blunt: it stops the remote configuration channel of Claude Code fully, each remotely-controlled option reverts to its built-in default, and Remote Control stops working. That channel is also the fastest route the vendor has to send a mitigation between releases. It is not a standing recommendation, so remove it. If you set it deliberately to close the remote-configuration channel, keep it and set `CLAUDE_CODE_ENABLE_TODO_TOOLS` as well, because what you keep is one cause of the symptom above.
 
 **To remove a setting.**
 
