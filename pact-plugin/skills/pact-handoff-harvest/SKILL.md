@@ -94,8 +94,8 @@ For each discovered task, read the HANDOFF from the two copies and combine them.
 
 1. **Session journal** (GC-proof): If the task was discovered through `agent_handoff` journal events, the event's `handoff` field contains the full HANDOFF content inline. **The journal carries the HANDOFF as it stood at the LAST EMITTING WRITE.** Do not read it as the accepted HANDOFF. A revision that lands before completion reaches the journal. A revision that lands after completion can reach no journal event, so the journal copy can be the superseded one.
 2. **Task file** (freshest, and the task-store drain removes it): `read_task_record(task_id)`, the raw task JSON, which carries `owner`, `subject` and `metadata`. The HANDOFF is `metadata.handoff` (`TaskGet` is metadata-blind for `handoff` content).
-3. **Take the UNION of the two copies, and PREFER THE TASK FILE on a conflict.** Do not choose one copy. Content moves in the two directions between them, so a union is the safe operation and a choice is not. Keep each field that is in one copy alone. When the two hold different content for one field, keep the task-file content.
-4. **When the task file is absent, report `divergence check unavailable for task N`** and use the journal copy alone. Do not skip in silence. A drained task file is a reportable gap and not a clean single-source read.
+3. **Take the UNION of the two copies, and PREFER THE TASK FILE on a conflict, with ONE narrow exception.** Do not choose one copy. Content moves in the two directions between them, so a union is the safe operation and a choice is not. Keep each field that is in one copy alone. When the two hold different content for one field, keep the task-file content. **THE EXCEPTION HAS THREE STATES, NOT TWO.** When the task-file field is PRESENT AND EMPTY and the journal field holds content, keep the JOURNAL content. When the task-file field is ABSENT, or PRESENT AND NON-EMPTY, keep the task-file preference. A `TaskUpdate` metadata merge REPLACES a nested sub-object, so a partial re-write that carries an empty field makes the present-and-empty state, and an unconditional task-file preference then ERASES the journal content in silence. 🔴 **DO NOT restate this as a blanket prefer-the-non-empty-side rule.** The exception is per-field and applies to the present-and-empty state alone. A blanket rule makes the journal the default winner and the task file is the freshest copy, which INVERTS the precedence this step is built on.
+4. **When the task file is ABSENT, report `handoff divergence check unavailable for task N: task file absent`** and use the journal copy alone. Do not skip in silence. A drained task file is a reportable gap and not a clean single-source read.
 5. **Report gap**: If no source resolves, report the gap to the lead. Record the task_id, the agent name and the timestamp so that the team-lead has context.
 
 **SELECTION, because `agent_handoff` is a multi-event family.** Do not take the first match. The first match is the FIRST emit, which is the superseded copy. Use the rule Step 3.1 uses for snapshots:
@@ -103,7 +103,18 @@ For each discovered task, read the HANDOFF from the two copies and combine them.
 1. Filter the `agent_handoff` events to the matching `task_id`.
 2. Group the match by the `(agent, task_subject)` identity the event carries. Compute that identity with the shared `occupant_hash` function and not with a local reimplementation. An `agent_handoff` event carries no `occupant` field, so compute the identity from the event's own fields. The platform reuses task_ids across arcs, and a reused task_id carries one identity for each arc. When the group count is more than one, process each group as a distinct work unit. Do not pick one group.
 3. In each group take the **latest `ts`**, and take the **last in journal order on an equal `ts`** (journal events stamp `ts` at second granularity, so a same-second re-emit ties. The later line in journal order is the authoritative one, the same tie-break Step 3.1 uses).
-4. The task file belongs to at most one group. Union the task-file copy into the group with the identity `occupant_hash(owner, subject)` computed from the task record, and report `divergence check unavailable for task N` for each other group.
+4. The task file belongs to at most one group. Union the task-file copy into the group with the identity `occupant_hash(owner, subject)` computed from the task record, and report each other group through the two-message rule below.
+
+**DERIVE THE DISK-SIDE IDENTITY THE WAY THE EMIT PATHS DERIVE THEIRS.** The two emit paths SUBSTITUTE before they hash, and the task record carries the value the substitution replaced. Compute the disk identity from the SUBSTITUTED values. Without the substitution the identity of a substituted task cannot equal one group identity, so the union does not run on the very tasks it protects:
+
+1. **Subject term.** When the record subject is missing, empty, or whitespace-only, substitute the literal `(no subject)` before hashing. The two emit paths both apply this.
+2. **Agent term.** When the record owner is missing, empty, or whitespace-only, the `TaskCompleted` emit path hashes the platform teammate name for that task in place of the owner. The task record does not carry that name, so this one is NOT reproducible from the record. Report such a task through the two-message rule below and do not read it as a drain.
+
+🔴 **THIS RULE MIRRORS CODE, AND NOTHING ENFORCES THE MIRROR.** The two substitutions above are implemented in `agent_handoff_emitter` and in `task_lifecycle_gate._emit_lead_side_agent_handoff`. One rule thus lives at THREE sites: two emit paths IMPLEMENT it and this step DESCRIBES it. **A change to the identity derivation in either emit path MUST change this step in the SAME commit.** The coupling is stated because it cannot be removed here, and one rule at several sites with nothing to say the sites are coupled is what let a repaired rule and a stale rule stand together in this same file.
+
+**A NON-MATCHING GROUP IS NOT ALWAYS A DRAIN, AND THE TWO CASES MUST NOT SHARE ONE MESSAGE.** Report an ABSENT task file as `handoff divergence check unavailable for task N: task file absent`. When the task file is PRESENT and no group carries its identity, report `handoff identity mismatch for task N: task file present, no event group carries its identity`. One message for the two cases makes a present file read as a drained one, which is the strongest signal this workflow emits.
+
+**A SUBSTITUTION IS NOT THE ONLY CAUSE OF A MISMATCH, WHICH IS WHY THE SECOND MESSAGE IS NEEDED AND NOT MERELY TIDY.** The identity terms are the agent and the subject AS THEY STOOD AT EMIT TIME. An edit to either term after an emit leaves the record holding a value that no group carries. The subject term also reaches the `TaskCompleted` emit path from the platform payload rather than from the task record. So a mismatch on a present task file is an ordinary state, it is not evidence of a drain, and it is not always closable by the substitution rule above. Report it as itself, and process each group from the journal copy alone.
 
 **THIS WORKFLOW DOES NOT RE-SWEEP A TASK IT HAS PROCESSED BEFORE.** Step 2 skips each task_id in the processed list, the Incremental Harvest Workflow discovers the delta against that same list, and the Consolidation Harvest Workflow safety net reads only tasks that are not in it. **A COMPLETED TASK IS NOT A CLOSED TASK.** An agent writes content to a task after the pass that recorded that task as processed, and no trigger in this file collects it.
 
@@ -112,6 +123,26 @@ For each discovered task, read the HANDOFF from the two copies and combine them.
 Pseudocode for the read. It carries all three selection steps, because a task_id reused across arcs resolves to the wrong arc when any one of them is dropped:
 
 ```python
+def emit_side_subject(subject):
+    """Mirror of the sentinel BOTH emit paths apply before they hash.
+    Change this when either emit path changes, in the SAME commit."""
+    return subject if (subject and str(subject).strip()) else "(no subject)"
+
+
+def union_preferring_task_file(journal_handoff, disk_handoff):
+    """Task file wins each conflict, apart from present-and-empty. Three states."""
+    merged = {**journal_handoff}
+    for field, disk_value in disk_handoff.items():
+        # PRESENT AND EMPTY on the task file, with content in the journal:
+        # keep the journal value. Every other state: the task file wins.
+        # A field ABSENT from the task file does not reach this loop, so the
+        # journal value survives by construction.
+        if not disk_value and journal_handoff.get(field):
+            continue
+        merged[field] = disk_value
+    return merged
+
+
 for task_id in unprocessed:
     matches = [e for e in journal_events if e.task_id == task_id]
 
@@ -123,7 +154,14 @@ for task_id in unprocessed:
         groups.setdefault(occupant_hash(e.agent, e.task_subject), []).append(e)
 
     task = read_task_record(task_id)  # None once the drain removed it
-    disk_identity = occupant_hash(task.owner, task.subject) if task else None
+    # Hash the SUBSTITUTED subject, because that is what the emit paths
+    # hashed. The owner substitution (platform teammate name on an empty
+    # owner) is NOT reproducible from the record, so a task carrying it
+    # falls through to the identity-mismatch report below.
+    disk_identity = (
+        occupant_hash(task.owner, emit_side_subject(task.subject))
+        if task else None
+    )
     disk_handoff = (task.metadata.get("handoff") if task else None) or {}
 
     if not groups:
@@ -140,11 +178,17 @@ for task_id in unprocessed:
         journal_event = latest_by_ts_then_journal_order(events)
         handoff = journal_event.handoff  # content at the last emitting write
         if identity == disk_identity:
-            # UNION, and the task file wins each conflict.
-            handoff = {**handoff, **disk_handoff}
+            # UNION, task file first, apart from present-and-empty.
+            handoff = union_preferring_task_file(handoff, disk_handoff)
+        elif task is None:
+            report(f"handoff divergence check unavailable for task "
+                   f"{task_id}: task file absent")
         else:
-            # The task file belongs to at most one group.
-            report(f"divergence check unavailable for task {task_id}")
+            # The task file is PRESENT and belongs to at most one group.
+            # This is an identity mismatch, NOT a drain. Do not reuse the
+            # drain wording for it.
+            report(f"handoff identity mismatch for task {task_id}: task "
+                   f"file present, no event group carries its identity")
         process(handoff)
 ```
 
@@ -306,7 +350,7 @@ Triggered after remediation completes — processes only the delta since the las
 1. **Check processed task tracking**: Read **only your own** `## team={your team_id}` section of `session_processed_tasks.md`, in the agent-memory directory the platform gave you, for already-processed task IDs
 2. **Discover new completions**: Run all three Standard Harvest Step 1 sources — session journal `agent_handoff` events, `TaskList`, and the task-file metadata census — for completed tasks not in the processed set. Do not narrow to the journal: a new completion whose content sits only in a non-`handoff` key emits no `agent_handoff` event.
 3. **If no new completions**: Report "No new HANDOFFs since last harvest" and complete
-4. **Read new HANDOFFs** using the Standard Harvest Step 3 rule: take the union of the journal copy and the task-file copy, and prefer the task file on a conflict
+4. **Read new HANDOFFs** with the Standard Harvest Step 3 rule, in full: the identity derivation, the group selection, the union predicate and the two report messages. Do NOT restate that rule here. A summary of it here is a second statement that goes stale on its own
 5. **Extract and save** using Steps 4-7 from Standard Harvest (extract knowledge, organizational state, dedup protocol, save)
 6. **Update processed task tracking** — **append** the new task IDs to **your team's** `## team={your team_id}` section (do NOT overwrite — preserves the full session history for your team)
 7. **Do NOT delete the session journal** — it may still be accumulating entries from ongoing work
@@ -436,6 +480,7 @@ This is the Layer 4 fallback for completed handoffs left behind by sessions that
 
 1. Look for `session-journal.jsonl` in `~/.claude/pact-sessions/*/*/` directories. **Exclude the current session's directory** (available from the session context file at `~/.claude/pact-sessions/{slug}/{session_id}/pact-session-context.json`, or the session dir provided in your dispatch prompt) — that session's data is active, not orphaned.
 2. If found: report to team-lead "Found N orphaned HANDOFFs from prior session {session_dir}"
-3. Attempt to process them — prefer `agent_handoff` events from the session journal (full HANDOFF inline, read via `read_events_from(session_dir, 'agent_handoff')`); fall back to `TaskGet` (may fail for garbage-collected tasks). Where that session's task files survive under `~/.claude/tasks/{team_id}/`, run the Step 1 metadata census over them as well — the journal carries only tasks that emitted a HANDOFF, so a journal-only pass reports a count it cannot support.
+3. Read the HANDOFFs with the **Standard Harvest Step 3 rule, in full and without exception**: the identity derivation, the grouping, the latest-`ts` selection with its journal-order tie-break, the union predicate and the two report messages. **This path is NOT a fallback chain and MUST NOT become one.** Do not prefer one source and fall back to the other, and do not restate the Step 3 rule here. Read the prior session's events with `read_events_from(session_dir, 'agent_handoff')`, and resolve the task-file copy in `~/.claude/tasks/{team_id}/` where that session's task files survive. Run the Step 1 metadata census on those files also. The journal carries only the tasks that emitted a HANDOFF, so a journal-only pass reports a count it cannot support.
+   🔴 **THIS PATH NEEDS THE SELECTION RULE MORE THAN THE LIVE PATH DOES.** It runs across PRIOR sessions, where a task_id reused across arcs and several accumulated events for one task are most likely. Without the selection rule an implementer takes the first match. The first match is the FIRST emit, and the content-keyed marker makes the first emit the SUPERSEDED copy. The one path that exists to catch what each other layer missed then reports recovered knowledge that a later revision had replaced.
 4. Delete processed files after recovery (use `python3 -c "from pathlib import Path; Path(...).unlink(missing_ok=True)"` — not shell `rm`, to avoid sensitive-file permission prompts)
 5. Report summary of recovered knowledge (or gaps where all sources failed)
