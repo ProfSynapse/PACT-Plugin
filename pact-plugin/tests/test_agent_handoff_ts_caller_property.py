@@ -131,37 +131,65 @@ class TestTheInstrumentAndThePremise:
             "re-read together."
         )
 
-    def test_a_mixed_format_set_orders_by_bytes_and_not_by_time(self):
-        """The consequence, held as an executable fact rather than prose.
+    def test_the_first_byte_after_the_seconds_decides_the_order(self):
+        """THE RULE, ASSERTED AS A RULE AND NOT AS A LIST OF PAIRS.
 
-        🔴 AND THE BOUND IS TIGHTER THAN "AN OFFSET FORM SORTS AS OLDER",
-        WHICH IS THE FORM THIS HAZARD IS USUALLY STATED IN. MEASURED while
-        writing this arm, because the first draft of it FAILED: the suffix
-        decides nothing until every byte before it is equal. A string
-        compare walks left to right, so the DATETIME PREFIX dominates, and
-        `2026-08-19T21:00:00+00:00` sorts AFTER `2026-08-19T20:00:00Z` on
-        the hour, not before it on the suffix.
+        A list of spellings keeps growing, and an arm that pins five pairs
+        goes stale the moment a sixth spelling arrives while reporting
+        green. So this asserts the ORDERING FUNCTION: at ONE datetime
+        prefix, the string order of the stamps equals the order of the
+        FIRST BYTE AFTER THE SECONDS.
 
-        THE ACCURATE STATEMENT IS THAT A MIXED-FORMAT SET IS ORDERED BY
-        BYTES AND NOT BY TIME, and the error runs in EITHER direction:
-          - equal prefix, two spellings of ONE instant: `+` at 43 sorts
-            before `Z` at 90, so the offset form reads as OLDER.
-          - a non-UTC offset naming the SAME instant carries a DIFFERENT
-            hour, so it reads as NEWER.
-        Both are incorrect and neither raises.
+        WHY THE RULE IS STATED AT THAT BYTE AND CONDITIONED ON AN EQUAL
+        PREFIX. A string compare walks left to right, so the datetime
+        prefix decides first and the suffix byte is reached only when each
+        byte before it agrees. An earlier form of this record said an
+        offset form sorts as OLDER, without that condition, and it came
+        from a probe that compared ONE CHARACTER and no pair of stamps at
+        all. A single-byte fact cannot carry a claim about a whole-string
+        compare.
+
+        A missing suffix takes the key -1, because a shorter string that is
+        a prefix of a longer one sorts first.
         """
-        # Case one: one instant, two spellings, equal prefix.
-        z_form = "2026-08-19T20:00:00Z"
-        same_instant_offset = "2026-08-19T20:00:00+00:00"
-        assert same_instant_offset < z_form, (
-            "the offset spelling does not sort before the Z spelling at this time, for "
-            "one instant. The inversion this file guards has changed shape."
+        prefix = "2026-08-19T20:00:00"
+        # DELIBERATELY NOT IN BYTE ORDER. The guard at the end of this
+        # arm asserts the sort did work, and a fixture that is in byte
+        # order from the start makes the agreement free. My first draft of
+        # this tuple was in byte order and that guard caught it.
+        spellings = ("Z", "z", "", ".123456Z", "-05:00", "+00:00")
+
+        def first_suffix_byte(suffix: str) -> int:
+            return ord(suffix[0]) if suffix else -1
+
+        by_string = sorted(spellings, key=lambda suffix: prefix + suffix)
+        by_byte = sorted(spellings, key=first_suffix_byte)
+        assert by_string == by_byte, (
+            f"the string order and the first-suffix-byte order disagree, so "
+            f"the rule this file records is incorrect. By string: "
+            f"{by_string}. By byte: {by_byte}."
         )
-        # Case two: one instant, a non-UTC offset, so a different prefix.
-        later_looking_offset = "2026-08-19T21:00:00+01:00"
-        assert later_looking_offset > z_form, (
-            "a non-UTC offset naming the same instant does not sort "
-            "after the Z form. The second direction of the error is gone."
+        # The rule has content only if the two orders are not the input
+        # order by accident. This pins that the set is genuinely reordered.
+        assert by_string != list(spellings), (
+            "the fixture set arrived in byte order, so the agreement "
+            "above is free and this arm measures nothing."
+        )
+
+    def test_a_fraction_makes_the_later_instant_read_as_older(self):
+        """The most reachable case, kept as an illustration of the rule.
+
+        A bare `datetime.now(timezone.utc).isoformat()` emits MICROSECONDS
+        by default, so a caller reaches this by writing the obvious thing.
+        An offset takes a deliberate choice.
+        """
+        z_form = "2026-08-19T20:00:00Z"
+        later_instant_with_fraction = "2026-08-19T20:00:00.123456Z"
+        assert later_instant_with_fraction < z_form, (
+            "a fractional-second stamp does not sort before the Z form at "
+            "this time. `.` at 0x2E sorts before `Z` at 0x5A, so the LATER "
+            "instant reads as the older one and latest-wins keeps the "
+            "wrong event."
         )
 
     def test_the_scan_ignores_a_different_event_type(self):
