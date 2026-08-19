@@ -43,8 +43,55 @@ from shared.task_metadata_snapshot import (  # noqa: E402
     payload_hash8,
 )
 
+# What the allowance below bounds, stated because the bare number did not say.
+# THIS IS AN ENVELOPE ALLOWANCE AND NOT A FRACTION OF THE CAP. A journal line
+# is the capped payload PLUS the event envelope: the type, ts, task_id,
+# subject, occupant and owner fields, the JSON punctuation, and the escaping
+# growth of the payload under ensure_ascii. The allowance bounds THAT, so it
+# is an absolute size and the cap is not its denominator.
+# WHY THAT MATTERS: PAYLOAD_CAP doubled from 64 KiB to 128 KiB, so this
+# allowance fell from 25 percent of the cap to 12.5 percent. THAT DRIFT IS
+# NOT A WEAKENING, because the percentage was never the quantity. The
+# assertion catches its stated defect at either cap: a raw multi-megabyte
+# value reaching the journal line overruns this by two orders of magnitude.
+# Re-derive this number only if the ENVELOPE grows, and do not scale it with
+# the cap.
+# THE TWO MEASUREMENT FORMS IN THIS FAMILY CANNOT DISAGREE, AND THE CAUSE IS
+# STRUCTURAL RATHER THAN LUCKY. The three sites that hold this bound do not
+# all measure the same unit: one takes len() of the encoded bytes and two take
+# len() of the str, which is CHARACTERS. append_event serializes with the
+# json.dumps default ensure_ascii=True, so every non-ASCII character reaches
+# the line as an escape sequence and the line is PURE ASCII. For an ASCII
+# string the character count EQUALS the byte count, so the two forms return
+# one number. MEASURED on a line carrying accented text, CJK and an emoji:
+# 180 characters and 180 bytes. So this is not a repair and no site needs to
+# change. It is a record, and it is load-bearing for ONE case: a change to
+# ensure_ascii would separate the two units at these three sites in silence,
+# which is a fourth consequence of the parameter the serializer contract
+# enumerates at this time.
+_LINE_ENVELOPE_ALLOWANCE = 16 * 1024
+
 TEAM = "pact-advmatrix"
 SID = "cccccccc-3333-4444-5555-666666666666"
+
+
+def _pv(sixteenths: int) -> int:
+    """A canonical size, in sixteenths of the imported PER_VALUE_CAP.
+
+    EVERY FIXTURE SIZE IN THIS FILE IS A FRACTION OF A CAP, AND NOT AN
+    ABSOLUTE BYTE COUNT. The two forms look alike and behave differently
+    when a cap moves. An absolute size is chosen BY REFERENCE TO a cap and
+    then frozen, so the file reads as cap-driven because its ASSERTIONS use
+    the symbols, while its FIXTURES hold the arithmetic of the day. When a
+    cap then moves, the fixture stops building the state its own test
+    names, and the test fails to ASSEMBLE ITS SUBJECT rather than report a
+    behaviour change. No search for the cap value finds this, because the
+    frozen number is not the cap: it was merely picked against it.
+
+    Sixteenths keep the intent readable at a glance: _pv(15) sits just
+    below the per-value cap, and _pv(17) sits just above it.
+    """
+    return PER_VALUE_CAP * sixteenths // 16
 
 
 def _is_marker_shape(value: object) -> bool:
@@ -98,13 +145,13 @@ class TestPerValueCapExactBoundary:
 class TestPayloadCapExactBoundary:
     """Exact payload-cap arithmetic with every value under the per-value cap.
 
-    Four fixed 13KB values + one pad value sized so the WHOLE canonical
+    Four fixed 13/16-cap values + one pad value sized so the WHOLE canonical
     payload lands exactly at PAYLOAD_CAP (then +1). Sizes are measured with
     the substrate's own _canonical_bytes — the same yardstick stage 2 uses.
     """
 
     def _payload_at(self, total: int) -> dict:
-        fixed = {f"k{i}": "x" * (13 * 1024) for i in range(4)}
+        fixed = {f"k{i}": "x" * _pv(13) for i in range(4)}
         base = dict(fixed)
         base["pad"] = ""
         remainder = total - len(_canonical_bytes(base))
@@ -140,11 +187,21 @@ class TestPayloadCapExactBoundary:
 
 
 class TestDualCapInteraction:
-    """The five-15KB case: each value under PER_VALUE_CAP, total over
+    """The five-value case: each value under PER_VALUE_CAP, total over
     PAYLOAD_CAP — only the payload cap fires, with exact marker placement
     and insertion-order-independent bytes/hash."""
 
-    FIVE = {k: k * (15 * 1024) for k in ("a", "b", "c", "d", "e")}
+    FIVE = {k: k * _pv(15) for k in ("a", "b", "c", "d", "e")}
+
+    def test_the_fixture_reaches_the_state_this_class_names(self):
+        """PRECONDITION ARM. The four rows below are only meaningful when
+        each value sits BELOW the per-value cap and the five together sit
+        ABOVE the payload cap. Assert that here, so a cap move reports the
+        broken PREMISE on one named row instead of surfacing as four
+        confusing behaviour failures."""
+        for value in self.FIVE.values():
+            assert len(_canonical_bytes(value)) <= PER_VALUE_CAP
+        assert len(_canonical_bytes(self.FIVE)) > PAYLOAD_CAP
 
     def test_exactly_one_eviction_at_lexicographically_smallest_tie(self):
         payload, truncated = build_snapshot_payload(self.FIVE)
@@ -152,7 +209,7 @@ class TestDualCapInteraction:
         markers = [k for k, v in payload.items() if _is_marker_shape(v)]
         assert markers == ["a"], (
             "equal sizes tie -> ascending key order picks 'a'; exactly one "
-            "eviction suffices (15KB value -> ~1KB marker)"
+            "eviction suffices (a near-cap value -> ~1KB marker)"
         )
         for key in ("b", "c", "d", "e"):
             assert payload[key] == self.FIVE[key]
@@ -180,12 +237,13 @@ class TestDualCapInteraction:
         # the size criterion dominates and the key order is only the
         # tie-break.
         metadata = {
-            "a": "a" * (12 * 1024),
-            "m": "m" * (13 * 1024),
-            "z": "z" * (15 * 1024),
-            "q": "q" * (14 * 1024),
-            "f": "f" * (12 * 1024),
+            "a": "a" * _pv(12),
+            "m": "m" * _pv(13),
+            "z": "z" * _pv(15),
+            "q": "q" * _pv(14),
+            "f": "f" * _pv(12),
         }
+        assert len(_canonical_bytes(metadata)) > PAYLOAD_CAP
         payload, truncated = build_snapshot_payload(metadata)
         assert truncated is True
         markers = [k for k, v in payload.items() if _is_marker_shape(v)]
@@ -216,7 +274,7 @@ class TestJumboEmitLevel:
         lines = [ln for ln in
                  journal.read_text(encoding="utf-8").splitlines() if ln]
         assert len(lines) == 1
-        assert len(lines[0].encode("utf-8")) < PAYLOAD_CAP + 16 * 1024, (
+        assert len(lines[0].encode("utf-8")) < PAYLOAD_CAP + _LINE_ENVELOPE_ALLOWANCE, (
             "the event line must stay near the payload cap, never carry "
             "the raw 5MB value"
         )

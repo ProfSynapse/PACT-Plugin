@@ -46,6 +46,70 @@ TEAM = "pact-provenance"
 SID = "dddddddd-4444-5555-6666-777777777777"
 
 
+def _pv(sixteenths: int) -> int:
+    """A canonical size, in sixteenths of the imported PER_VALUE_CAP.
+
+    EVERY FIXTURE SIZE IN THIS FILE IS A FRACTION OF A CAP, AND NOT AN
+    ABSOLUTE BYTE COUNT. An absolute size is chosen BY REFERENCE TO a cap
+    and then frozen, so the file reads as cap-driven because its ASSERTIONS
+    use the symbols, while its FIXTURES hold the arithmetic of the day. A
+    cap move then breaks the fixtures in two different ways, and only one
+    of them is loud: a test can fail to ASSEMBLE ITS SUBJECT, or it can
+    keep passing while it drives a DIFFERENT STAGE than the one it names.
+    The second is the dangerous one and it announces nothing.
+
+    _pv(15) sits just below the per-value cap. _pv(17) sits just above it,
+    which is what puts a value through stage 1 rather than stage 2.
+    """
+    return PER_VALUE_CAP * sixteenths // 16
+
+
+def _floor_key_count(key_width: int) -> int:
+    """Keys needed to overrun PAYLOAD_CAP with EMPTY-HEAD markers.
+
+    Stage 3b is reachable only when the markers of this run, with their
+    heads emptied, are STILL above the payload cap. That count depends on
+    the two caps and on the key width, so derive it rather than freeze it:
+    an earlier version of these tests hardcoded 1500 against a 64 KB cap
+    and silently stopped reaching the floor when the cap moved.
+
+    KEEP THE KEY NAME NARROW. A wide key reaches the floor at a much lower
+    count, which is tempting because the count drives the runtime. It also
+    moves the test into a DIFFERENT REGIME. Stage 3b records each dropped
+    name in a "_dropped_keys" list, so a wide name inflates the marker cost
+    and the drop-list cost together, and the drop list itself then overruns
+    the cap. That overrun is a documented residual of stage 3b, and a
+    fixture that lands in it stops measuring ordinary floor behaviour.
+
+    THE RESIDUAL IS UNBOUNDED. DO NOT SIZE A DEFENCE AGAINST ANY ONE
+    OBSERVATION OF IT. Stage 3b keeps the NAME of each key it drops, so the
+    residual payload is the SUM OF ALL DROPPED KEY-NAME LENGTHS, and nothing
+    in the stage limits either factor: not the key count, and not the width
+    of a single name. The overrun therefore has no ceiling that this code
+    establishes. Two measurements, both at a 131072 cap, show the spread and
+    neither is the maximum: a 400-character key gave 233255 bytes, and a
+    later arm gave 836019 bytes, 6.4 times the cap, with ZERO keys kept in
+    all four arms. A reader given one number sizes a defence against that
+    number, which is why the property and not an observation is recorded
+    here. A narrow key keeps a wide margin between the two costs and holds
+    the test in the regime it names.
+    """
+    probe = {"k" * key_width: {
+        "_truncated": True, "original_bytes": PER_VALUE_CAP, "head": "",
+    }}
+    per_key = len(_canonical_bytes(probe)) - 2  # subtract the outer braces
+    return (PAYLOAD_CAP // per_key) * 3 // 2
+
+
+_FLOOR_KEY_WIDTH = 8
+_FLOOR_KEYS = _floor_key_count(_FLOOR_KEY_WIDTH)
+
+
+def _floor_key(index: int) -> str:
+    """A narrow key of the width the count derivation assumes."""
+    return f"key{index:05d}"
+
+
 def _lookalike(head_chars: int, original_bytes: object = 999_999_999) -> dict:
     """A caller value with EXACTLY the marker shape but caller-owned
     content: a bogus original_bytes and an arbitrary-size head."""
@@ -88,14 +152,14 @@ class TestLookalikeIsOrdinaryValue:
         # computed from ITS serialization, discarding the bogus
         # original_bytes. (Shape-tested candidacy left it exempt and evicted
         # the next-largest real value instead.)
-        look = _lookalike(15 * 1024)
+        look = _lookalike(_pv(15))
         look_size = len(_canonical_bytes(look))
         metadata = {
             "look": look,
-            "b": "b" * (13 * 1024),
-            "c": "c" * (13 * 1024),
-            "d": "d" * (13 * 1024),
-            "e": "e" * (13 * 1024),
+            "b": "b" * _pv(13),
+            "c": "c" * _pv(13),
+            "d": "d" * _pv(13),
+            "e": "e" * _pv(13),
         }
         assert len(_canonical_bytes(metadata)) > PAYLOAD_CAP
         payload, truncated = build_snapshot_payload(metadata)
@@ -115,7 +179,7 @@ class TestLookalikeIsOrdinaryValue:
             assert payload[key] == metadata[key]
 
     def test_lookalike_over_per_value_cap_marked_at_stage1(self):
-        look = _lookalike(20 * 1024)  # canonical > PER_VALUE_CAP
+        look = _lookalike(_pv(20))  # canonical > PER_VALUE_CAP
         look_size = len(_canonical_bytes(look))
         assert look_size > PER_VALUE_CAP
         payload, truncated = build_snapshot_payload({"look": look})
@@ -132,7 +196,7 @@ class TestLookalikeIsOrdinaryValue:
         assert payload["n"] == small
         assert truncated is False
 
-        big = {"inner": _lookalike(20 * 1024)}
+        big = {"inner": _lookalike(_pv(20))}
         payload, truncated = build_snapshot_payload({"n": big})
         assert _marker_shaped(payload["n"])
         assert payload["n"]["original_bytes"] == len(_canonical_bytes(big))
@@ -147,7 +211,7 @@ class TestStage3TotalityUnderLookalikes:
         # ordinary values: evicted normally, and stage 3 sees only this
         # run's own markers.
         metadata = {
-            f"k{i}": _lookalike(15 * 1024, original_bytes=999_999_999 - i)
+            f"k{i}": _lookalike(_pv(15), original_bytes=999_999_999 - i)
             for i in range(5)
         }
         assert len(_canonical_bytes(metadata)) > PAYLOAD_CAP
@@ -164,7 +228,7 @@ class TestStage3TotalityUnderLookalikes:
         # (Pre-provenance: stage 3a's sort hit TypeError on the str, the
         # hermetic emit swallowed it, and the snapshot vanished.)
         metadata = {
-            f"k{i}": _lookalike(15 * 1024, original_bytes="NOT-AN-INT")
+            f"k{i}": _lookalike(_pv(15), original_bytes="NOT-AN-INT")
             for i in range(5)
         }
         assert len(_canonical_bytes(metadata)) > PAYLOAD_CAP
@@ -187,10 +251,10 @@ class TestStage3TotalityUnderLookalikes:
         # (non-int original_bytes included): every input key must survive
         # in the payload or by name in _dropped_keys — never silently lost.
         metadata: dict = {
-            f"big{i:04d}": "x" * (17 * 1024) for i in range(1400)
+            _floor_key(i): "x" * _pv(17) for i in range(_FLOOR_KEYS)
         }
         metadata.update({
-            f"look{i:04d}": _lookalike(15 * 1024,
+            f"look{i:04d}": _lookalike(_pv(15),
                                        original_bytes="NOT-AN-INT")
             for i in range(100)
         })
@@ -216,11 +280,11 @@ class TestReadOnlyInputAcrossStages:
 
     def test_stage2_lookalike_eviction_leaves_caller_intact(self):
         metadata = {
-            "look": _lookalike(15 * 1024),
-            "b": "b" * (13 * 1024),
-            "c": "c" * (13 * 1024),
-            "d": "d" * (13 * 1024),
-            "e": "e" * (13 * 1024),
+            "look": _lookalike(_pv(15)),
+            "b": "b" * _pv(13),
+            "c": "c" * _pv(13),
+            "d": "d" * _pv(13),
+            "e": "e" * _pv(13),
         }
         before = copy.deepcopy(metadata)
         build_snapshot_payload(metadata)
@@ -228,9 +292,9 @@ class TestReadOnlyInputAcrossStages:
 
     def test_stage3_floor_with_lookalikes_leaves_caller_intact(self):
         metadata: dict = {
-            f"big{i:04d}": "x" * (17 * 1024) for i in range(1400)
+            _floor_key(i): "x" * _pv(17) for i in range(_FLOOR_KEYS)
         }
-        metadata["look"] = _lookalike(15 * 1024,
+        metadata["look"] = _lookalike(_pv(15),
                                       original_bytes="NOT-AN-INT")
         before = copy.deepcopy(metadata)
         build_snapshot_payload(metadata)
@@ -257,7 +321,7 @@ class TestDroppedKeysNameCollisionCharacterization:
 
     def test_floor_clobbers_caller_dropped_keys_value(self):
         metadata: dict = {
-            f"key{i:04d}": "x" * (17 * 1024) for i in range(1500)
+            _floor_key(i): "x" * _pv(17) for i in range(_FLOOR_KEYS)
         }
         metadata["_dropped_keys"] = ["caller", "data"]
         payload, truncated = build_snapshot_payload(metadata)
@@ -266,4 +330,6 @@ class TestDroppedKeysNameCollisionCharacterization:
         # caller's ["caller", "data"] is gone without a trace.
         assert payload["_dropped_keys"] != ["caller", "data"]
         assert "caller" not in payload["_dropped_keys"]
-        assert all(k.startswith("key") for k in payload["_dropped_keys"])
+        assert all(
+            k.startswith("key") for k in payload["_dropped_keys"]
+        )

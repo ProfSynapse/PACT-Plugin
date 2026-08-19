@@ -10,7 +10,11 @@ phantom-fire-revert sequence.
 """
 import pytest
 
-from fixtures.emitter import VALID_HANDOFF, _run_main
+from fixtures.emitter import (
+    VALID_HANDOFF,
+    VALID_HANDOFF_CONTENT_KEY,
+    _run_main,
+)
 
 
 class TestRaceShapeRegression:
@@ -150,11 +154,17 @@ class TestRaceShapeRegression:
             "(review-architect, PR #563) would resurface — empty-content "
             "marker would suppress the later genuine completion."
         )
-        # #887: marker is occupant-keyed — {task_id}-{occupant_hash}.
+        # The marker is composite-keyed: {task_id}-{occupant}-{content}.
+        # THE CONTENT TERM MATTERS TO THE FIRE-1 ASSERTION BELOW, and not only
+        # to fire 2. Fire 1 asserts the marker does NOT exist, and a
+        # not-exists assertion passes for free against ANY wrong path — so a
+        # stale expectation here would go VACUOUS rather than red, and only
+        # the fire-2 assertion would have reported the drift.
         occ = occupant_hash("probe-agent", "two-fire revert sequence probe")
         marker = (
             tmp_path / ".claude" / "teams" / "pact-test"
-            / ".agent_handoff_emitted" / f"two-fire-revert-{occ}"
+            / ".agent_handoff_emitted"
+            / f"two-fire-revert-{occ}-{VALID_HANDOFF_CONTENT_KEY}"
         )
         assert not marker.exists(), (
             "Fire 1: marker MUST NOT be created when handoff is absent. "
@@ -226,14 +236,24 @@ class TestRaceShapeRegression:
             "against B1; if any of the 5 fires emitted, the marker "
             "would be consumed with empty content."
         )
-        marker = (
+        # SCOPE THIS TO A PREFIX, NOT TO A BARE task_id PATH. The marker
+        # filename is f"{task_id}-{occupant}-{content}", so a path naming the
+        # task_id ALONE can never exist and its absence measures NOTHING.
+        # MEASURED: with the handoff-presence gate defeated, the emit writes
+        # a marker into this directory and a bare-path `not exists` assertion
+        # STILL PASSES. Match the prefix so this leg can go red.
+        marker_dir = (
             tmp_path / ".claude" / "teams" / "pact-test"
-            / ".agent_handoff_emitted" / "no-handoff-storm"
+            / ".agent_handoff_emitted"
         )
-        assert not marker.exists(), (
+        claimed = (
+            sorted(p.name for p in marker_dir.iterdir() if p.is_file())
+            if marker_dir.is_dir() else []
+        )
+        assert not [n for n in claimed if n.startswith("no-handoff-storm-")], (
             "marker created during a metadata-only storm — B1 root "
             "cause. The genuine completion's later fire would be "
-            "silently dropped."
+            f"silently dropped. Markers on disk: {claimed}"
         )
 
     def test_disk_status_fallback_when_hook_event_name_absent(

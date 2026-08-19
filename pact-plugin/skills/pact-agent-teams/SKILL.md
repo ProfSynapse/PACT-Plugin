@@ -246,7 +246,11 @@ If the team-lead rejects your teachback or HANDOFF, you wake on the inbound Send
    - Re-SET `intentional_wait{reason=awaiting_lead_completion, since=<fresh canonical_since() output>}`.
    - Idle.
 
-> **Revision visibility**: your revised content reaches institutional memory because of *when* the journal event is emitted, not because of `revision_number`. A rejection keeps your task `in_progress` and emits nothing; the only `agent_handoff` journal event fires at the team-lead's single completion — their acceptance — and captures whatever `metadata.handoff` holds at that moment, i.e. your revised content. So the journal carries the accepted, revised HANDOFF, and harvest reads it from there (drain-proof). Your job on revision is simply to rewrite `metadata.handoff` before the lead accepts.
+> **Revision visibility**: your revised content reaches institutional memory because of *when* the journal event is emitted, not because of `revision_number`. A rejection keeps your task `in_progress` and emits nothing. The team-lead's acceptance (their completion of your task) emits an `agent_handoff` journal event carrying whatever `metadata.handoff` holds at that moment, so a revision that lands BEFORE acceptance reaches the journal and harvest reads it there (drain-proof).
+>
+> **`agent_handoff` IS A MULTI-EVENT FAMILY. It is NOT one event for each task.** The emit marker is keyed on the handoff CONTENT together with the task and the occupant, so each DISTINCT handoff content for one task emits its own event. Do not read the journal copy as the accepted copy, and do not read the first match as the current one.
+>
+> **REWRITE `metadata.handoff` BEFORE the lead accepts.** A revision you write AFTER your task is completed emits again only when some later write fires an emit path on that task, and your own metadata write does not fire one. As a result, such a revision can reach the task file alone, and the task-store drain then removes it.
 
 ### HANDOFF Format
 

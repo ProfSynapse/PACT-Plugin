@@ -28,7 +28,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
 import task_lifecycle_gate as tlg  # noqa: E402
 from shared.agent_handoff_marker import occupant_hash  # noqa: E402
-from fixtures.emitter import VALID_HANDOFF  # noqa: E402
+from fixtures.emitter import (  # noqa: E402
+    VALID_HANDOFF,
+    VALID_HANDOFF_CONTENT_KEY,
+)
 
 TEAM = "pact-test"
 TASK_ID = "b2-unclaim-probe"
@@ -38,7 +41,7 @@ SUBJECT = "lead-side write fails"
 
 def _marker(home: Path) -> Path:
     occ = occupant_hash(OWNER, SUBJECT)
-    return home / ".claude" / "teams" / TEAM / ".agent_handoff_emitted" / f"{TASK_ID}-{occ}"
+    return home / ".claude" / "teams" / TEAM / ".agent_handoff_emitted" / f"{TASK_ID}-{occ}-{VALID_HANDOFF_CONTENT_KEY}"
 
 
 class TestB2CompensatingUnclaimTwin:

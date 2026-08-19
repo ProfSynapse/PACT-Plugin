@@ -468,16 +468,18 @@ class TestPathSanitization:
             # reach the guard). Patch the symbol bound in the hook module.
             import agent_handoff_emitter as _emitter
             from shared.agent_handoff_marker import (
-                already_emitted as _real_already_emitted,
+                handoff_already_emitted as _real_already_emitted,
             )
             seen_team_names: list[str] = []
 
-            def _spy_already_emitted(team_name, task_id, occupant):
+            def _spy_already_emitted(team_name, task_id, occupant, content_key):
                 seen_team_names.append(team_name)
-                return _real_already_emitted(team_name, task_id, occupant)
+                return _real_already_emitted(
+                team_name, task_id, occupant, content_key
+            )
 
             monkeypatch.setattr(
-                _emitter, "already_emitted", _spy_already_emitted
+                _emitter, "handoff_already_emitted", _spy_already_emitted
             )
             calls: list[dict] = []
             _run_main(
@@ -585,16 +587,18 @@ class TestPathSanitization:
             # marker-key derivation via the context channel (not a no-op).
             import agent_handoff_emitter as _emitter
             from shared.agent_handoff_marker import (
-                already_emitted as _real_already_emitted,
+                handoff_already_emitted as _real_already_emitted,
             )
             seen_team_names: list[str] = []
 
-            def _spy_already_emitted(team_name, task_id, occupant):
+            def _spy_already_emitted(team_name, task_id, occupant, content_key):
                 seen_team_names.append(team_name)
-                return _real_already_emitted(team_name, task_id, occupant)
+                return _real_already_emitted(
+                team_name, task_id, occupant, content_key
+            )
 
             monkeypatch.setattr(
-                _emitter, "already_emitted", _spy_already_emitted
+                _emitter, "handoff_already_emitted", _spy_already_emitted
             )
             calls: list[dict] = []
             _run_main(
@@ -651,7 +655,10 @@ class TestPathSanitization:
             self, attack_task_id, expected_sanitized, tmp_path, monkeypatch
         ):
             monkeypatch.setenv("HOME", str(tmp_path))
-            from shared.agent_handoff_marker import occupant_hash
+            from shared.agent_handoff_marker import (
+                handoff_content_key,
+                occupant_hash,
+            )
 
             calls: list[dict] = []
             _run_main(
@@ -670,14 +677,19 @@ class TestPathSanitization:
             )
             assert len(calls) == 1
             # Marker file (if created) lives at the sanitized basename —
-            # now occupant-keyed ({sanitized}-{occupant_hash}, #887) —
-            # INSIDE the team's .agent_handoff_emitted dir, never at an
-            # escape path. occupant = hash(owner + subject), fixed across
-            # the parametrized cases.
+            # now composite-keyed ({sanitized}-{occupant}-{content}) — INSIDE
+            # the team's .agent_handoff_emitted dir, never at an escape path.
+            # occupant = hash(owner + subject), fixed across the parametrized
+            # cases; content = hash of the emitted handoff, fixed because
+            # every case emits VALID_HANDOFF. The TASK_ID is the term under
+            # test here, and the other two are held constant so a change in
+            # the escape-path result cannot come from them.
             occ = occupant_hash("probe-agent", "path-traversal probe")
+            content = handoff_content_key(VALID_HANDOFF)
             expected_marker = (
                 tmp_path / ".claude" / "teams" / "pact-test"
-                / ".agent_handoff_emitted" / f"{expected_sanitized}-{occ}"
+                / ".agent_handoff_emitted"
+                / f"{expected_sanitized}-{occ}-{content}"
             )
             assert expected_marker.exists(), (
                 f"path-traversal attempt {attack_task_id!r} sanitized to "
@@ -749,7 +761,8 @@ class TestPostRebindMarkerKeyInvariants:
         monkeypatch.setenv("HOME", str(tmp_path))
         import agent_handoff_emitter as _emitter
         from shared.agent_handoff_marker import (
-            already_emitted as _real_already_emitted,
+            handoff_already_emitted as _real_already_emitted,
+            handoff_content_key,
             occupant_hash,
         )
 
@@ -758,11 +771,13 @@ class TestPostRebindMarkerKeyInvariants:
 
         seen_team_names: list[str] = []
 
-        def _spy_already_emitted(team_name, task_id, occupant):
+        def _spy_already_emitted(team_name, task_id, occupant, content_key):
             seen_team_names.append(team_name)
-            return _real_already_emitted(team_name, task_id, occupant)
+            return _real_already_emitted(
+                team_name, task_id, occupant, content_key
+            )
 
-        monkeypatch.setattr(_emitter, "already_emitted", _spy_already_emitted)
+        monkeypatch.setattr(_emitter, "handoff_already_emitted", _spy_already_emitted)
 
         calls: list[dict] = []
         _run_main(
@@ -793,9 +808,10 @@ class TestPostRebindMarkerKeyInvariants:
         # The marker landed inside the SAFE context team's scope, not at an
         # escape path derived from the hostile stdin value.
         occ = occupant_hash("probe-agent", "stdin-inert probe")
+        content = handoff_content_key(VALID_HANDOFF)
         safe_marker = (
             tmp_path / ".claude" / "teams" / safe_context_team
-            / ".agent_handoff_emitted" / f"42-{occ}"
+            / ".agent_handoff_emitted" / f"42-{occ}-{content}"
         )
         assert safe_marker.exists(), (
             f"marker must live under the safe context team dir at "
@@ -859,7 +875,7 @@ class TestPostRebindMarkerKeyInvariants:
         import agent_handoff_emitter as _emitter
         import shared.pact_context as _pc
         from shared.agent_handoff_marker import (
-            already_emitted as _real_already_emitted,
+            handoff_already_emitted as _real_already_emitted,
         )
 
         # Real _EMPTY_CONTEXT (all-empty-string keys) — what get_pact_context
@@ -869,11 +885,13 @@ class TestPostRebindMarkerKeyInvariants:
 
         reached_marker_claim = {"value": False}
 
-        def _spy_already_emitted(team_name, task_id, occupant):
+        def _spy_already_emitted(team_name, task_id, occupant, content_key):
             reached_marker_claim["value"] = True
-            return _real_already_emitted(team_name, task_id, occupant)
+            return _real_already_emitted(
+                team_name, task_id, occupant, content_key
+            )
 
-        monkeypatch.setattr(_emitter, "already_emitted", _spy_already_emitted)
+        monkeypatch.setattr(_emitter, "handoff_already_emitted", _spy_already_emitted)
 
         calls: list[dict] = []
 
@@ -1026,7 +1044,7 @@ class TestPostRebindMarkerKeyInvariants:
 
         import agent_handoff_emitter as _emitter
         from shared.agent_handoff_marker import (
-            already_emitted as _real_already_emitted,
+            handoff_already_emitted as _real_already_emitted,
         )
 
         context_team = "session-cafebabe"
@@ -1047,9 +1065,11 @@ class TestPostRebindMarkerKeyInvariants:
         read_team_names: list[str] = []
         calls: list[dict] = []
 
-        def _spy_already_emitted(team_name, task_id, occupant):
+        def _spy_already_emitted(team_name, task_id, occupant, content_key):
             marker_team_names.append(team_name)
-            return _real_already_emitted(team_name, task_id, occupant)
+            return _real_already_emitted(
+                team_name, task_id, occupant, content_key
+            )
 
         def _spy_read_task_json(task_id, team_name, *args, **kwargs):
             read_team_names.append(team_name)
@@ -1076,7 +1096,7 @@ class TestPostRebindMarkerKeyInvariants:
         ), patch.object(
             _emitter, "read_task_json", side_effect=_spy_read_task_json
         ), patch.object(
-            _emitter, "already_emitted", side_effect=_spy_already_emitted
+            _emitter, "handoff_already_emitted", side_effect=_spy_already_emitted
         ), patch.object(
             _emitter, "append_event", side_effect=_append_spy
         ), patch.object(

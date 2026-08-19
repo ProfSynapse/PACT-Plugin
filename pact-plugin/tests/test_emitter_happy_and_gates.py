@@ -187,14 +187,26 @@ class TestProductionShapeMetadataOnly:
             f"defense; if any status value emits without handoff, the "
             f"genuine completion's marker is at risk."
         )
-        marker = (
+        # SCOPE THIS TO A PREFIX, NOT TO A BARE task_id PATH. The marker
+        # filename is f"{task_id}-{occupant}-{content}", so a path naming the
+        # task_id ALONE can never exist and its absence measures NOTHING.
+        # The same construction sat at the sibling site in
+        # test_emitter_race_regression.py, where a probe MEASURED that a
+        # marker reaches disk while the bare-path assertion still passes.
+        # Match the prefix so this leg can go red.
+        marker_dir = (
             tmp_path / ".claude" / "teams" / "pact-test"
-            / ".agent_handoff_emitted" / f"no-handoff-{disk_status}"
+            / ".agent_handoff_emitted"
         )
-        assert not marker.exists(), (
+        claimed = (
+            sorted(p.name for p in marker_dir.iterdir() if p.is_file())
+            if marker_dir.is_dir() else []
+        )
+        prefix = f"no-handoff-{disk_status}-"
+        assert not [n for n in claimed if n.startswith(prefix)], (
             f"marker created with status={disk_status!r} despite no "
             f"handoff — B1 root cause; the genuine completion would be "
-            f"silently dropped."
+            f"silently dropped. Markers on disk: {claimed}"
         )
 
     def test_status_deleted_with_handoff_emits(

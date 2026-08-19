@@ -64,6 +64,34 @@ from shared.task_metadata_snapshot import (  # noqa: E402
     _canonical_bytes,
 )
 
+# What the allowance below bounds, stated because the bare number did not say.
+# THIS IS AN ENVELOPE ALLOWANCE AND NOT A FRACTION OF THE CAP. A journal line
+# is the capped payload PLUS the event envelope: the type, ts, task_id,
+# subject, occupant and owner fields, the JSON punctuation, and the escaping
+# growth of the payload under ensure_ascii. The allowance bounds THAT, so it
+# is an absolute size and the cap is not its denominator.
+# WHY THAT MATTERS: PAYLOAD_CAP doubled from 64 KiB to 128 KiB, so this
+# allowance fell from 25 percent of the cap to 12.5 percent. THAT DRIFT IS
+# NOT A WEAKENING, because the percentage was never the quantity. The
+# assertion catches its stated defect at either cap: a raw multi-megabyte
+# value reaching the journal line overruns this by two orders of magnitude.
+# Re-derive this number only if the ENVELOPE grows, and do not scale it with
+# the cap.
+# THE TWO MEASUREMENT FORMS IN THIS FAMILY CANNOT DISAGREE, AND THE CAUSE IS
+# STRUCTURAL RATHER THAN LUCKY. The three sites that hold this bound do not
+# all measure the same unit: one takes len() of the encoded bytes and two take
+# len() of the str, which is CHARACTERS. append_event serializes with the
+# json.dumps default ensure_ascii=True, so every non-ASCII character reaches
+# the line as an escape sequence and the line is PURE ASCII. For an ASCII
+# string the character count EQUALS the byte count, so the two forms return
+# one number. MEASURED on a line carrying accented text, CJK and an emoji:
+# 180 characters and 180 bytes. So this is not a repair and no site needs to
+# change. It is a record, and it is load-bearing for ONE case: a change to
+# ensure_ascii would separate the two units at these three sites in silence,
+# which is a fourth consequence of the parameter the serializer contract
+# enumerates at this time.
+_LINE_ENVELOPE_ALLOWANCE = 16 * 1024
+
 TEAM = "pact-perwrite-adv"
 LEAD = "PACT:pact-orchestrator"
 TEAMMATE = "pact-backend-coder"
@@ -195,19 +223,32 @@ class TestPerWriteCapEdges:
 
     def test_whole_overlay_over_payload_cap_bounded_marked(self, home):
         """disk ∪ delta over PAYLOAD_CAP: the overlay (not either half
-        alone) is what the substrate bounds. Four 13KB disk siblings +
-        a 15KB targeted delta ≈ 67KB > 64KB — the largest value (the
-        targeted key itself) is evicted to a marker, and the emitted
-        LINE stays near the cap."""
-        disk_md = {f"k{i}": "x" * (13 * 1024) for i in range(4)}
+        alone) is what the substrate bounds. Four 13/16-cap disk siblings
+        plus a 15/16-cap targeted delta overrun the payload cap, so the
+        largest value (the targeted key itself) is evicted to a marker,
+        and the emitted LINE stays near the cap.
+
+        SIZES ARE FRACTIONS OF THE IMPORTED CAPS, NEVER ABSOLUTE BYTES. An
+        absolute size is picked BY REFERENCE TO a cap and then frozen, so
+        the test reads as cap-driven through its assertions while its
+        fixture holds the arithmetic of the day, and a cap move leaves it
+        unable to ASSEMBLE ITS SUBJECT."""
+        sibling = PER_VALUE_CAP * 13 // 16
+        disk_md = {f"k{i}": "x" * sibling for i in range(4)}
         _seed_task(home, "42", metadata=disk_md)
-        big_scope = "s" * (15 * 1024)
+        big_scope = "s" * (PER_VALUE_CAP * 15 // 16)
+        # PRECONDITION: the overlay must overrun the payload cap while each
+        # value stays below the per-value cap, or this row measures stage 1.
+        assert len(_canonical_bytes(big_scope)) <= PER_VALUE_CAP
+        assert len(
+            _canonical_bytes({**disk_md, "scope_contract": big_scope})
+        ) > PAYLOAD_CAP
         tlg.evaluate_lifecycle(_open_write("42", {"scope_contract": big_scope}))
         snaps = _snapshots()
         assert len(snaps) == 1
         payload = snaps[0]["metadata"]
         assert _is_marker_shape(payload["scope_contract"]), (
-            "largest-first eviction picks the 15KB targeted value"
+            "largest-first eviction picks the largest targeted value"
         )
         assert payload["scope_contract"]["original_bytes"] == len(
             _canonical_bytes(big_scope)
@@ -217,7 +258,7 @@ class TestPerWriteCapEdges:
         assert len(_canonical_bytes(payload)) <= PAYLOAD_CAP
         lines = _journal_line_bytes(home)
         assert len(lines) == 1
-        assert len(lines[0]) < PAYLOAD_CAP + 16 * 1024
+        assert len(lines[0]) < PAYLOAD_CAP + _LINE_ENVELOPE_ALLOWANCE
 
     def test_jumbo_5mb_targeted_value_no_raise_bounded_line(self, home):
         _seed_task(home, "43")
@@ -232,7 +273,7 @@ class TestPerWriteCapEdges:
         assert marker["original_bytes"] == 5 * 1024 * 1024 + 2
         lines = _journal_line_bytes(home)
         assert len(lines) == 1
-        assert len(lines[0]) < PAYLOAD_CAP + 16 * 1024, (
+        assert len(lines[0]) < PAYLOAD_CAP + _LINE_ENVELOPE_ALLOWANCE, (
             "the raw 5MB value must never reach the journal line"
         )
 

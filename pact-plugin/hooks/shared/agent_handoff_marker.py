@@ -3,13 +3,16 @@
 Location: pact-plugin/hooks/shared/agent_handoff_marker.py
 Summary: SSOT for agent_handoff emission — the shape-agnostic emit-eligibility
          atom (is_signal_task) + occupant-identity marker key derivation +
+         the handoff CONTENT-key derivation (handoff_content_key) + the
+         composite claim/rollback twins (handoff_already_emitted,
+         handoff_unclaim) +
          the O_EXCL test-and-set (already_emitted) + the compensating-unclaim
          rollback (unclaim, #901) that removes a marker whose journal write
          failed, both resolving the marker path via one SSOT derivation.
          Imported by BOTH agent_handoff emit paths
          so they derive the SAME emit decision and the SAME marker key and
-         dedup to exactly one agent_handoff event per (team, task_id,
-         occupant):
+         dedup to one agent_handoff event for each distinct (team, task_id,
+         occupant, handoff content):
            - agent_handoff_emitter.py (TaskCompleted; the platform Stop-sweep
              dispatches this on every matching owner — "b1")
            - task_lifecycle_gate.py   (the lead's TaskUpdate(completed)
@@ -34,6 +37,29 @@ Re-scoped subject → one extra emit: because the subject is part of the key,
 a task whose subject changes mid-lifespan emits one additional agent_handoff
 event. This biases to HANDOFF preservation, never loss — the intended
 trade-off (see occupant_hash).
+
+Revised handoff → one extra emit, and this is a DELIBERATE CHANGE of an
+earlier property. The marker filename is f"{task_id}-{occupant}-{content}",
+where content comes from handoff_content_key. The occupant term STAYS,
+because it is the guard against a task_id reused by a different occupant.
+The content term is ADDED and is not a substitute for it. The sibling
+snapshot family passes a content key through the `occupant` parameter and
+keeps its occupant hash in an event field only, so a literal mirror of that
+shape would DROP the reuse guard from this family.
+
+WHAT THIS REPLACED: the key held no content term, so the first emit for an
+occupant claimed the marker and each later REVISION of the same handoff was
+suppressed for the lifespan of the team. A suppressed revision reached no
+carrier and left no record that it had been suppressed, so a reader cannot
+tell a suppressed revision from a revision nobody wrote. The two states
+agree in bytes on the journal, which is why the repair acts at the WRITE.
+
+FAIL DIRECTION, AND IT IS REASONED RATHER THAN MEASURED. If the two emit
+paths ever observe DIFFERENT handoff mappings for one task, this key gives
+TWO events where the occupant-only key gave one. That direction is chosen.
+A duplicate resolves by latest timestamp and a suppression does not resolve
+at all, and a suppressed emit leaves no record of what it would have
+carried, so the journals cannot report how frequently the two disagree.
 """
 
 from __future__ import annotations
@@ -44,6 +70,7 @@ import os
 import re
 from pathlib import Path
 
+from .canonical_json import canonical_bytes
 from .paths import get_claude_config_dir
 
 # Hex chars of the SHA-256 digest retained for the occupant component of the
@@ -51,6 +78,19 @@ from .paths import get_claude_config_dir
 # per-(team, task_id) occupant namespace (a handful of occupants per task at
 # most), while keeping the marker filename short.
 _OCCUPANT_HASH_LEN = 16
+
+# Hex chars of the SHA-256 digest retained for the CONTENT component of the
+# marker key. 8 hex chars = 32 bits, the same width the sibling snapshot
+# family uses for payload_hash8, and the two are kept equal deliberately:
+# one width for one purpose across the two families that share this
+# substrate. The namespace it discriminates is the distinct handoff contents
+# of ONE (team, task_id, occupant), which is a handful of revisions at most.
+_CONTENT_HASH_LEN = 8
+
+# Content term substituted when the handoff cannot be serialized. NOT hex, so
+# it cannot collide with a digest of any input. See handoff_content_key for
+# why a total function is required here rather than a raise.
+_UNSERIALIZABLE_CONTENT_KEY = "unserializable"
 
 # Default O_EXCL marker directory name — the agent_handoff event family's
 # namespace. Keyword-only `namespace` parameters below default to this so
@@ -105,6 +145,44 @@ def sanitize_path_component(value: str) -> str:
     characters (NUL, CR/LF, and the 0x00-0x1f range) at the producer
     boundary. Control-char stripping defends against log-injection and
     embedded-newline attacks on values that flow into filesystem paths.
+
+    THIS IS A DENYLIST AND A DENYLIST OVER UNBOUNDED INPUT IS NOT A SECURITY
+    BOUNDARY. What it does buy is stated below, and what it does NOT buy is
+    stated with it, because the two are easy to conflate and the conflation
+    ships a false assurance.
+
+    WHAT IT DOES NOT BUY: completeness. MEASURED, each of these survives into
+    the filename intact, and NONE of them traverses on this filesystem: the
+    C1 control U+0085, the separators U+2028 and U+2029, U+2024 ONE DOT
+    LEADER, the fullwidth solidus U+FF0F, and U+202E RIGHT-TO-LEFT OVERRIDE.
+    The single consequence measured for any of them is a filename that
+    RENDERS deceptively in a terminal listing. That is cosmetic. Traversal
+    itself is refused, measured across 8 arms with zero escapes, and the
+    refusal comes from the containment re-check and the pinned dir_fd in
+    _resolve_marker_target rather than from this character set. SO DO NOT
+    EXTEND THIS SET AND CALL THE SANITIZER SAFE, and do not read a longer set
+    as a stronger boundary.
+
+    WHAT THE REAL DEFECT IS, AND IT GETS WORSE AS THE SET GROWS. THIS
+    FUNCTION IS MANY-TO-ONE. MEASURED: 'a/b' and 'ab' both give 'ab', and
+    'x..y' and 'xy' both give 'xy'. So two DIFFERENT task ids that sanitize
+    alike produce ONE marker filename and COLLIDE, and the second one is
+    suppressed as a duplicate of the first. Each character added to the strip
+    set maps more inputs onto fewer outputs and WIDENS that collision. An
+    escape (percent-encoding the removed bytes rather than deleting them)
+    would be the construction that closes it, and that is a key-format change
+    for the whole family rather than an edit here.
+
+    🔴 IF YOU BUILD THAT ESCAPE, ENCODE THE ESCAPE CHARACTER ITSELF FIRST.
+    The sentence above is incomplete without this clause, and an implementer
+    who follows it word for word REPRODUCES the collision it closes. MEASURED,
+    encoding '/' and '..' alone: 'a/b' gives 'a%2Fb', and the LITERAL INPUT
+    'a%2Fb' also gives 'a%2Fb', so the two collide. 'x..y' collides with
+    'x%2E%2Ey' the same way. Encode '%' as '%25' BEFORE the other characters
+    and the pair separates: 'a/b' gives 'a%2Fb' while 'a%2Fb' gives
+    'a%252Fb'. AN ESCAPE SCHEME THAT DOES NOT ESCAPE ITS OWN ESCAPE
+    CHARACTER IS INJECTIVE IN APPEARANCE AND MANY-TO-ONE IN OPERATION,
+    which is the property this whole paragraph is about.
     """
     return re.sub(r"[/\\\x00-\x1f]|\.\.", "", value)
 
@@ -119,13 +197,23 @@ def occupant_hash(teammate_name: str, task_subject: str) -> str:
     - A reused task_id under a DIFFERENT occupant → different key → the new
       occupant's HANDOFF is NOT falsely suppressed by a stale marker left by
       a prior occupant of the same task_id (the team-name-reuse collision).
-    - The SAME occupant across re-fires / sessions → same key → the deliberate
-      standing-task fire-once-across-lifespan dedup is preserved (see the
-      _marker_dir docstring): a secretary standing task that spans sessions
-      still emits its agent_handoff exactly once.
+    - The SAME occupant across re-fires / sessions → the same occupant term.
 
     A subject that is re-scoped mid-lifespan changes the key → one extra emit.
     This biases to HANDOFF preservation, never loss — the intended trade-off.
+
+    THE FIRE-ONCE PROPERTY CHANGED AND THE CHANGE IS DELIBERATE. This
+    docstring recorded a fire-once-across-lifespan dedup: one occupant gave
+    one agent_handoff event for the full team lifespan, so a standing task
+    that spans sessions emitted once. The marker key now composes this
+    occupant term with a CONTENT term (handoff_content_key), so that task
+    emits one event for each DISTINCT handoff content, and a reader resolves
+    the group by latest timestamp. That is the intent of the change: a
+    post-completion HANDOFF revision was suppressed and left no record.
+
+    THIS FUNCTION IS UNCHANGED. The property named above belongs to the KEY
+    that uses this hash, and not to the hash. The occupant term is still the
+    task-id-reuse guard and it is still derived here alone.
 
     Stable across processes: hashlib, NOT the builtin hash(). CPython salts
     str hashing with PYTHONHASHSEED, so builtin hash() would differ across
@@ -134,6 +222,127 @@ def occupant_hash(teammate_name: str, task_subject: str) -> str:
     """
     payload = f"{teammate_name}\x00{task_subject}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:_OCCUPANT_HASH_LEN]
+
+
+def handoff_content_key(handoff: object) -> str:
+    """Return the CONTENT term of the agent_handoff marker key.
+
+    A sha256 prefix of the canonical bytes of the handoff mapping, at the
+    same width the sibling snapshot family uses for payload_hash8. Two emits
+    that carry the same handoff content derive the same term and dedup to one
+    event. A REVISED handoff derives a different term and emits again.
+
+    Serialization comes from shared.canonical_json, which is also what the
+    snapshot family hashes through. A second json.dumps here would be two
+    serializations that must agree with nothing that makes them agree, which
+    is the divergence class this module exists to prevent one layer up.
+
+    canonical_bytes sorts keys, and that property is load-bearing HERE rather
+    than merely convenient: b1 reads the handoff from the task file and b2
+    receives it from a caller, so a term that moved with insertion order
+    would split the two paths on content they agree about, and every such
+    split costs a duplicate event.
+
+    HASH THE VALUE YOU ARE ABOUT TO WRITE. Callers must pass the SAME mapping
+    they hand to make_event, and never a re-read of disk. That is what makes
+    the term a function of the emitted event rather than of a disk state
+    observed at a different moment.
+
+    TOTAL, AND THE HANDLER IS WIDE BECAUSE A NARROW ONE WAS NOT TOTAL.
+    The fail-open direction is deliberate: canonical_bytes raises on a value
+    it cannot serialize, and BOTH emit paths wrap their whole body in
+    `except Exception: pass`, so a raise that escapes THIS function makes the
+    event SILENTLY VANISH from the journal, which is the loss direction this
+    module is biased against. A value that cannot serialize therefore falls
+    back to a constant term: that task reverts to the occupant-only dedup
+    this term otherwise extends, which emits the first fire rather than
+    dropping it, and is no worse than the behavior before the content term
+    existed.
+
+    THE HANDLER CATCHES Exception, NOT A NAMED PAIR, AND THAT WIDTH IS THE
+    WHOLE POINT. A `(TypeError, ValueError)` handler stood here and was NOT
+    total. MEASURED: a deeply nested mapping makes canonical_bytes raise
+    RecursionError, which inherits RuntimeError, so it escaped that pair,
+    reached the emit path's bare handler, and the event vanished with no
+    record. The door is wider than the room: json.loads PARSES a deeply
+    nested object without error, so such a value ARRIVES through the
+    JSON-parsed metadata both emit paths receive and fails only at the hash.
+    THE DEPTH THAT REACHES THE RAISE CARRIES THREE PARAMETERS, AND THE
+    INTERPRETER VERSION IS NOT ONE OF THEM. MEASURED BY BISECTION: the
+    THREAD STACK is the axis (about 65000 deep on the main thread at its
+    default stack, about 1000 to 2500 deep on a 512 KiB thread stack), and
+    sys.getrecursionlimit() predicts none of those. The CONTAINER TYPE is
+    the third: a 100000-deep MAPPING raises where a 100000-deep LIST does
+    not. So do not read this raise as reachable only by an absurd payload.
+    On a 512 KiB stack about 6 KiB of JSON reaches it, which is ordinary.
+    So do NOT narrow this handler back to a named set. A serialization
+    failure this function does not absorb is a silent journal loss, in a
+    module of which the purpose is that a loss must be MARKED and not silent.
+    """
+    try:
+        canonical = canonical_bytes(handoff)
+    except Exception:
+        return _UNSERIALIZABLE_CONTENT_KEY
+    return hashlib.sha256(canonical).hexdigest()[:_CONTENT_HASH_LEN]
+
+
+def _handoff_marker_discriminator(occupant: str, content_key: str) -> str:
+    """Compose the occupant term and the content term into one discriminator.
+
+    SSOT for the composition, for the same cause _resolve_marker_target is
+    the SSOT for the path: handoff_already_emitted (the CLAIM) and
+    handoff_unclaim (the ROLLBACK) both derive their key HERE, so the two can
+    never disagree about what was claimed. A composition open-coded at two
+    sites is the parallel-path-rot class this module closed before.
+
+    COMPOSES, and does not substitute. Dropping the occupant term here would
+    regress the task-id-reuse collision that term exists to guard.
+    """
+    return f"{occupant}-{content_key}"
+
+
+def handoff_already_emitted(
+    team_name: str, task_id: str, occupant: str, content_key: str
+) -> bool:
+    """Test-and-set the agent_handoff marker on (occupant, content).
+
+    Thin wrapper over already_emitted that HARD-BINDS the composition of the
+    two key terms. The two emit paths call ONLY this wrapper and its
+    handoff_unclaim twin, never the raw marker functions: a site that
+    composed the key itself could claim under one discriminator and no-op
+    unclaim against another, leaving a marker that suppresses every later
+    fire for that key. The wrapper makes that impossible by construction.
+
+    Returns True iff a prior fire for the same (team, task_id, occupant,
+    handoff content) claimed the marker, so the caller suppresses its write.
+    Fail-open posture and the O_EXCL contract are unchanged; see
+    already_emitted.
+    """
+    return already_emitted(
+        team_name,
+        task_id,
+        _handoff_marker_discriminator(occupant, content_key),
+    )
+
+
+def handoff_unclaim(
+    team_name: str, task_id: str, occupant: str, content_key: str
+) -> None:
+    """Compensating rollback for a claim whose journal write failed.
+
+    Hard-bound twin of handoff_already_emitted: same composition site, same
+    resolver SSOT underneath, so the rollback can never target a key that
+    diverges from the claim.
+
+    Caller contract is inherited from unclaim: invoke ONLY when this process
+    OWNS the marker, meaning handoff_already_emitted returned False on THIS
+    fire.
+    """
+    unclaim(
+        team_name,
+        task_id,
+        _handoff_marker_discriminator(occupant, content_key),
+    )
 
 
 def _marker_dir(
@@ -148,9 +357,12 @@ def _marker_dir(
     directory (shutil.rmtree), so every namespace's marker dir is cleaned
     up automatically when the team ages out.
 
-    Kept task-scoped (not session-scoped) so fire-once semantics survive
-    pause/resume: a secretary standing task that spans sessions must emit
-    its agent_handoff event exactly once across the whole team lifespan.
+    Kept task-scoped (not session-scoped) so the dedup survives pause/resume:
+    a standing task that spans sessions emits one agent_handoff event for
+    each DISTINCT handoff content across the full team lifespan, rather than
+    one for each session. (This sentence recorded a fire-once-across-lifespan
+    dedup before the marker key gained its content term; see the module
+    docstring for the change and its cause.)
     """
     return get_claude_config_dir() / "teams" / team_name / namespace
 
@@ -379,6 +591,14 @@ def already_emitted(
 
     Marker filename: f"{task_id}-{occupant}" (occupant-identity keyed, #887).
 
+    The `occupant` parameter is an OPAQUE sanitized string to this function:
+    it is whatever discriminator the calling family derives. The agent_handoff
+    family passes a COMPOSITE of its occupant term and its handoff content
+    term, built by handoff_already_emitted / handoff_unclaim, and the sibling
+    snapshot family passes a content key alone. Callers in either family MUST
+    go through their own hard-bound wrapper pair rather than call this
+    directly, so a claim and its rollback cannot derive different keys.
+
     Inputs are sanitized internally (idempotent for already-clean callers like
     the emitter, which pre-sanitizes task_id/team_name for its read_task_json
     path) so a caller that has NOT pre-sanitized (the #869 lead-side gate)
@@ -392,6 +612,25 @@ def already_emitted(
     Data-integrity (preserving the HANDOFF in the journal) outweighs
     duplication-prevention when the marker subsystem itself breaks; worst case
     the caller falls back to per-fire emission for this one task.
+
+    THE FILENAME CEILING, AND IT IS RECORDED FOR A CHANGE NOBODY HAS MADE
+    YET. ENAMETOOLONG is an OSError that is NOT EEXIST, so it takes the
+    fail-open arm above. That arm is correct for a transient error and it is
+    the wrong shape for a LENGTH: a length does not vary between fires, so
+    this function returns False on EVERY fire for that key, and dedup is lost
+    for it PERMANENTLY rather than degraded once. Each fire then appends a
+    fresh journal event of up to PAYLOAD_CAP bytes.
+    MEASURED, exact boundary, re-derived on this filesystem: NAME_MAX is 255.
+    The handoff composite overhead is 26 characters (a hyphen, 16 hex of
+    occupant, a hyphen, 8 hex of content), so a task_id of 229 characters
+    creates and 230 gives ENAMETOOLONG.
+    INERT TODAY, and that is the point of writing it down rather than acting
+    on it: ordinary task ids are small integers and team names are about 16
+    characters, so nothing approaches the ceiling. THE NUMBER 229 IS THE
+    THING WORTH KEEPING, for a future change that makes task_id a UUID, a
+    slug, or a composite. Such a change needs a length check here, and the
+    check has to be a REFUSAL rather than a fail-open, because fail-open is
+    what makes this permanent.
 
     Graceful-degrade caveat: a pre-existing non-symlink file at the marker
     path (manually created, or stale state surviving an unclean cleanup) also
