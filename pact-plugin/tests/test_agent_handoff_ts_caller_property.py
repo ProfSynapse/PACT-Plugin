@@ -28,10 +28,16 @@ the family reddens.
 WHAT THIS FILE DOES AND DOES NOT DO. It converts correct-by-a-caller-property
 into the caller property ENFORCED: a future edit that passes a `ts` to either
 emit path turns this RED at the moment it is written. It does NOT make the
-comparison safe against a mixed set, and it is not a substitute for the prose
-in the harvest skill that tells a reader to parse the two forms before
-comparing them if a caller ever does pass one. The prose reaches the person
-who would make that change. This file catches them if the prose does not.
+comparison safe against a mixed set.
+
+🔴 THE LOAD-BEARING ASSERTION IN THIS FILE IS THE CALLER-PROPERTY ARM, AND
+THE BYTE-RULE ARM IS AN EXPLANATION OF WHAT IS LOST IF THAT PROPERTY GOES.
+Read them in that order. If a caller ever does pass a `ts`, the answer is to
+PARSE the two values, not to reach for a rule about which byte decides. That
+instruction is the one part of this warning that has needed no correction
+across three rounds of review: a claim, then a rule replacing the claim, then
+a precondition replacing the rule, each complete across its own list of
+spellings and each broken by the next probe.
 """
 
 import ast
@@ -151,6 +157,28 @@ class TestTheInstrumentAndThePremise:
 
         A missing suffix takes the key -1, because a shorter string that is
         a prefix of a longer one sorts first.
+
+        🔴 THE PRECONDITION, AND THE RULE IS INCORRECT OUTSIDE IT: THE
+        DATETIME PREFIX MUST BE FIXED-WIDTH AND THE SECONDS MUST BE PRESENT.
+        MEASURED, two forms that break it, and neither is chased into the
+        fixture above because adding them is the enumeration returning by
+        another route:
+          - `2026-08-19 20:00:00+00:00` decides at INDEX 10, a SPACE at 0x20
+            against `T` at 0x54, which is nine bytes before the position this
+            rule names. `str(datetime.now(timezone.utc))` produces it.
+          - `2026-08-19T20:00:00.123Z` against `2026-08-19T20:00:00.123456Z`
+            carries `.` as the byte after the seconds for BOTH, so the rule
+            answers NOTHING. The compare decides at INDEX 23, and the LATER
+            instant reads as older. Two ordinary calls in one codebase make
+            that pair.
+        A `timespec='minutes'` form has no seconds field, so the named
+        position does not exist at all.
+
+        THE BOUND: that list comes from a probe of the stdlib producers and
+        one hand-built form. A producer outside those is outside the check,
+        and NO RULE ABOUT WHICH BYTE DECIDES CAN BE MADE COMPLETE, because a
+        new spelling can move the deciding byte somewhere no rule anticipated.
+        THAT is why the parse instruction outranks this arm.
         """
         prefix = "2026-08-19T20:00:00"
         # DELIBERATELY NOT IN BYTE ORDER. The guard at the end of this
