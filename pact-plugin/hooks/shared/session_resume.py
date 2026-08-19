@@ -570,6 +570,21 @@ def _build_journal_resume_inner(session_dir: str) -> str | None:
     # .get() and type checks — `decisions[0]` is the single historical
     # crash site (BugF1 secondary), now funneled through the helper.
     handoffs = [e for e in all_events if e.get("type") == "agent_handoff"]
+    # agent_handoff is a MULTI-EVENT family: one task emits one event for
+    # each DISTINCT handoff content, so a revised HANDOFF reaches the journal
+    # adjacent to the copy it replaced. Rendering one bullet for each event shows
+    # the superseded copy and the current one together, indistinguishable.
+    # THIS IS A CONSUMER OF THE SELECTION RULE, NOT A SECOND STATEMENT OF IT.
+    # The rule is authored in skills/pact-handoff-harvest/SKILL.md, Step 3,
+    # in the SELECTION block. Read it there. If it changes, change this WITH it: the
+    # two are coupled and nothing compares them.
+    latest = {}
+    for h in handoffs:
+        key = (h.get("agent", "unknown"), h.get("task_subject", ""))
+        # `>=` keeps the LATER journal line on an equal ts. Same tie-break.
+        if key not in latest or h.get("ts", "") >= latest[key].get("ts", ""):
+            latest[key] = h
+    handoffs = list(latest.values())
     if handoffs:
         lines.append("## Completed Work")
         for h in handoffs:

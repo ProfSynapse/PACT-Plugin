@@ -2436,7 +2436,7 @@ Events are JSONL entries with common fields `v` (schema version), `type`, and `t
 **Cross-session recovery** (session resume via `restore_last_session`):
 
 1. Read previous session's journal via `prev_session_dir` extracted from CLAUDE.md (`- Session dir:` line, with fallback derivation from Resume line + project root)
-2. Filter `agent_handoff` events → completed work summary
+2. Filter `agent_handoff` events, then group by `(agent, task_subject)` and keep the latest for each group → completed work summary (the family is multi-event, so one group can hold a superseded copy)
 3. Filter `phase_transition` events → phase progress (completed, in-progress)
 4. Check `session_end` events → warnings from previous shutdown
 5. Truncate long decision summaries to 80 characters
