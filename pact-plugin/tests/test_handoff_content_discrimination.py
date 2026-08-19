@@ -602,6 +602,63 @@ class TestContentTermIsATotalFunction:
             f"collide with a digest"
         )
 
+    def test_a_raise_outside_typeerror_and_valueerror_still_emits(
+        self, tmp_path, monkeypatch
+    ):
+        """THE ARM ABOVE CANNOT SEE THE DEFECT THIS ONE PINS.
+
+        A set-valued handoff raises TypeError, and a handler named
+        `(TypeError, ValueError)` absorbs it, so that arm passes under EITHER
+        handler width and reports no difference between them. This arm drives
+        a raise from OUTSIDE that pair, which the named handler lets escape
+        into the emit path's bare except, where the event vanishes with no
+        record. It therefore separates the two handlers: wide gives 1 event,
+        named gives 0.
+
+        WHY THE RAISE IS PATCHED AND NOT BUILT FROM A DEEP OBJECT. The
+        genuine producer is RecursionError from a deeply nested mapping, and
+        json.loads parses such a mapping without error, so the value does
+        arrive through the JSON-parsed metadata the emit paths receive.
+        MEASURED, and this is the whole cause for patching: the depth needed
+        is INTERPRETER-DEPENDENT. On the interpreter of this measurement a
+        50000-deep mapping did NOT raise and a 100000-deep one DID, while the
+        Python recursion limit read 1000. A fixture pinned to a depth
+        therefore stops reaching the raise when the interpreter changes, and
+        it stops in the silent direction: the arm keeps passing while it
+        drives an ordinary serialization.
+
+        The patch targets the name bound in agent_handoff_marker, because
+        that module imports canonical_bytes by value and a patch of the
+        defining module would not be the object it calls.
+        """
+        monkeypatch.setenv("HOME", str(tmp_path))
+        calls = []
+        task_id = "deepnest"
+
+        def _raise_recursion(_value):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(
+            "shared.agent_handoff_marker.canonical_bytes", _raise_recursion
+        )
+        _run_main(_payload(task_id), _completed_task({"produced": ["x"]}), calls)
+
+        assert len(calls) == 1, (
+            "a serialization raise outside (TypeError, ValueError) must still "
+            "emit its first fire. A count of 0 means the raise escaped the "
+            "content-key handler into the emit path's bare except and the "
+            "event vanished from the journal with no record."
+        )
+        names = _marker_names(tmp_path)
+        assert len(names) == 1
+        occupant, content = _split_key(next(iter(names)), task_id)
+        assert len(occupant) == _OCCUPANT_WIDTH
+        assert set(occupant) <= _HEX
+        assert not set(content) <= _HEX, (
+            f"the fallback content term {content!r} must not be hex, or it can "
+            f"collide with a digest"
+        )
+
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))

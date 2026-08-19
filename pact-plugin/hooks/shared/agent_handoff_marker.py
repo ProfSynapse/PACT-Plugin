@@ -210,20 +210,32 @@ def handoff_content_key(handoff: object) -> str:
     the term a function of the emitted event rather than of a disk state
     observed at a different moment.
 
-    TOTAL BY CONSTRUCTION, and the fail-open direction is deliberate.
-    canonical_bytes raises TypeError on a non-JSON-serializable value, and
-    BOTH emit paths wrap their whole body in `except Exception: pass` — so a
-    raise here would make the event SILENTLY VANISH from the journal, which
-    is the loss direction this module is biased against. A value that cannot
-    serialize therefore falls back to a constant term: that task reverts to
-    the occupant-only dedup this term otherwise extends, which emits the
-    first fire rather than dropping it, and is no worse than the behavior
-    before the content term existed. Both emit paths receive JSON-parsed
-    metadata, so this is defense in depth and not an expected route.
+    TOTAL, AND THE HANDLER IS WIDE BECAUSE A NARROW ONE WAS NOT TOTAL.
+    The fail-open direction is deliberate: canonical_bytes raises on a value
+    it cannot serialize, and BOTH emit paths wrap their whole body in
+    `except Exception: pass`, so a raise that escapes THIS function makes the
+    event SILENTLY VANISH from the journal, which is the loss direction this
+    module is biased against. A value that cannot serialize therefore falls
+    back to a constant term: that task reverts to the occupant-only dedup
+    this term otherwise extends, which emits the first fire rather than
+    dropping it, and is no worse than the behavior before the content term
+    existed.
+
+    THE HANDLER CATCHES Exception, NOT A NAMED PAIR, AND THAT WIDTH IS THE
+    WHOLE POINT. A `(TypeError, ValueError)` handler stood here and was NOT
+    total. MEASURED: a deeply nested mapping makes canonical_bytes raise
+    RecursionError, which inherits RuntimeError, so it escaped that pair,
+    reached the emit path's bare handler, and the event vanished with no
+    record. The door is wider than the room: json.loads PARSES a deeply
+    nested object without error, so such a value ARRIVES through the
+    JSON-parsed metadata both emit paths receive and fails only at the hash.
+    So do NOT narrow this handler back to a named set. A serialization
+    failure this function does not absorb is a silent journal loss, in a
+    module of which the purpose is that a loss must be MARKED and not silent.
     """
     try:
         canonical = canonical_bytes(handoff)
-    except (TypeError, ValueError):
+    except Exception:
         return _UNSERIALIZABLE_CONTENT_KEY
     return hashlib.sha256(canonical).hexdigest()[:_CONTENT_HASH_LEN]
 
