@@ -80,9 +80,19 @@ def _floor_key_count(key_width: int) -> int:
     and the drop-list cost together, and the drop list itself then overruns
     the cap. That overrun is a documented residual of stage 3b, and a
     fixture that lands in it stops measuring ordinary floor behaviour.
-    MEASURED: at a 400-character key the payload came back at 233255 bytes
-    against a 131072 cap. A narrow key keeps a wide margin between the two
-    costs and holds the test in the regime it names.
+
+    THE RESIDUAL IS UNBOUNDED. DO NOT SIZE A DEFENCE AGAINST ANY ONE
+    OBSERVATION OF IT. Stage 3b keeps the NAME of each key it drops, so the
+    residual payload is the SUM OF ALL DROPPED KEY-NAME LENGTHS, and nothing
+    in the stage limits either factor: not the key count, and not the width
+    of a single name. The overrun therefore has no ceiling that this code
+    establishes. Two measurements, both at a 131072 cap, show the spread and
+    neither is the maximum: a 400-character key gave 233255 bytes, and a
+    later arm gave 836019 bytes, 6.4 times the cap, with ZERO keys kept in
+    all four arms. A reader given one number sizes a defence against that
+    number, which is why the property and not an observation is recorded
+    here. A narrow key keeps a wide margin between the two costs and holds
+    the test in the regime it names.
     """
     probe = {"k" * key_width: {
         "_truncated": True, "original_bytes": PER_VALUE_CAP, "head": "",
