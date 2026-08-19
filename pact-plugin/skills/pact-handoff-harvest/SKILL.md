@@ -93,7 +93,7 @@ Read your processed task list from your team's section of `session_processed_tas
 For each discovered task, read the HANDOFF from the two copies and combine them. This is **not** a fallback chain. Each copy can hold content the other does not.
 
 1. **Session journal** (GC-proof): If the task was discovered through `agent_handoff` journal events, the event's `handoff` field contains the full HANDOFF content inline. **The journal carries the HANDOFF as it stood at the LAST EMITTING WRITE.** Do not read it as the accepted HANDOFF. A revision that lands before completion reaches the journal. A revision that lands after completion can reach no journal event, so the journal copy can be the superseded one.
-2. **Task file** (freshest, and the task-store drain removes it): `read_task_record(task_id)`, the raw task JSON, which carries `owner`, `subject` and `metadata`. The HANDOFF is `metadata.handoff` (`TaskGet` is metadata-blind for `handoff` content).
+2. **Task file** (freshest, and the task-store drain removes it): `task_utils.read_task_json(task_id, team_name)`, the raw task JSON, which carries `owner`, `subject` and `metadata`. The HANDOFF is `metadata.handoff` (`TaskGet` is metadata-blind for `handoff` content). ⚠️ **THAT READER RETURNS AN EMPTY DICT ON A MISSING FILE, NOT `None`.** It is fail-open by design, so a drained task file, a malformed JSON file and an IO error all give `{}`. Test the drained case as EMPTINESS (`if not task:`), and do NOT test `task is None`, which is False for every one of those states.
 3. **Take the UNION of the two copies, and PREFER THE TASK FILE on a conflict, with ONE narrow exception.** Do not choose one copy. Content moves in the two directions between them, so a union is the safe operation and a choice is not. Keep each field that is in one copy alone. When the two hold different content for one field, keep the task-file content. **THE EXCEPTION HAS THREE STATES, NOT TWO.** When the task-file field is PRESENT AND EMPTY and the journal field holds content, keep the JOURNAL content. When the task-file field is ABSENT, or PRESENT AND NON-EMPTY, keep the task-file preference. A `TaskUpdate` metadata merge REPLACES a nested sub-object, so a partial re-write that carries an empty field makes the present-and-empty state, and an unconditional task-file preference then ERASES the journal content in silence. 🔴 **DO NOT restate this as a blanket prefer-the-non-empty-side rule.** The exception is per-field and applies to the present-and-empty state alone. A blanket rule makes the journal the default winner and the task file is the freshest copy, which INVERTS the precedence this step is built on.
 4. **When the task file is ABSENT, report `handoff divergence check unavailable for task N: task file absent`** and use the journal copy alone. Do not skip in silence. A drained task file is a reportable gap and not a clean single-source read.
 5. **Report gap**: If no source resolves, report the gap to the lead. Record the task_id, the agent name and the timestamp so that the team-lead has context.
@@ -109,6 +109,29 @@ For each discovered task, read the HANDOFF from the two copies and combine them.
 
 1. **Subject term.** When the record subject is missing, empty, or whitespace-only, substitute the literal `(no subject)` before hashing. The two emit paths both apply this.
 2. **Agent term.** When the record owner is missing, empty, or whitespace-only, the `TaskCompleted` emit path hashes the platform teammate name for that task in place of the owner. The task record does not carry that name, so this one is NOT reproducible from the record. Report such a task through the two-message rule below and do not read it as a drain.
+
+**HOW TO CALL THE TWO NAMES THIS STEP USES.** The step above names `occupant_hash` and the pseudocode below names `latest_by_ts_then_journal_order`. Neither is callable from a name alone, and the instruction to use the shared function rather than a local one is not followable without a route. **DO NOT reimplement either. Use these.**
+
+1. **`occupant_hash`**, the SHARED identity hash. This is the one runnable copy in this file. Step 3.1 uses the same command and points here.
+
+   ```bash
+   python3 -c "import sys; sys.path.insert(0, '{plugin_root}/hooks'); from shared.agent_handoff_marker import occupant_hash; print(occupant_hash(sys.argv[1], sys.argv[2]))" "$AGENT" "$TASK_SUBJECT"
+   ```
+
+2. **`latest_by_ts_then_journal_order`**, defined HERE because it is defined at no site in the repo. It takes the events of ONE group, in journal order, and returns the authoritative one:
+
+   ```python
+   def latest_by_ts_then_journal_order(events):
+       """Last write wins. `events` MUST arrive in journal order."""
+       winner = events[0]
+       for event in events[1:]:
+           # `>=` and not `>`: an equal ts keeps the LATER journal line.
+           if event["ts"] >= winner["ts"]:
+               winner = event
+       return winner
+   ```
+
+   🔴 **THE STRING COMPARE ON `ts` IS CORRECT BY A CALLER PROPERTY, NOT BY A SCHEMA PROPERTY, AND THE DIFFERENCE IS THE WHOLE OF THE RISK.** `make_event` stamps `%Y-%m-%dT%H:%M:%SZ`, and neither `agent_handoff` emit path passes a `ts` of its own, so each event of this family carries ONE format and a string compare orders them correctly TODAY. `make_event` HONOURS a caller-supplied `ts` through `setdefault`, so the one-format property belongs to the CALLERS and the schema does not enforce it. A second format defeats the compare in silence: `canonical_since()` emits an offset form, and `+` at 0x2B sorts BEFORE `Z` at 0x5A, so an offset-form event sorts as older than every Z-form event and the newest write loses. **If any caller ever passes a `ts`, parse the two forms before you compare them.** A sibling resolver in this repo carries the same warning for the same cause.
 
 🔴 **THIS RULE MIRRORS CODE, AND NOTHING ENFORCES THE MIRROR.** The two substitutions above are implemented in `agent_handoff_emitter` and in `task_lifecycle_gate._emit_lead_side_agent_handoff`. One rule thus lives at THREE sites: two emit paths IMPLEMENT it and this step DESCRIBES it. **A change to the identity derivation in either emit path MUST change this step in the SAME commit.** The coupling is stated because it cannot be removed here, and one rule at several sites with nothing to say the sites are coupled is what let a repaired rule and a stale rule stand together in this same file.
 
@@ -163,19 +186,21 @@ for task_id in unprocessed:
     for e in matches:
         groups.setdefault(occupant_hash(e.agent, e.task_subject), []).append(e)
 
-    task = read_task_record(task_id)  # None once the drain removed it
+    # EMPTY DICT once the drain removed it, and NOT None. read_task_json is
+    # fail-open: a missing file, a malformed file and an IO error all give {}.
+    task = read_task_json(task_id, team_name)
     # Hash the SUBSTITUTED subject, because that is what the emit paths
     # hashed. The owner substitution (platform teammate name on an empty
     # owner) is NOT reproducible from the record, so a task carrying it
     # falls through to the identity-mismatch report below.
     disk_identity = (
-        occupant_hash(task.owner, emit_side_subject(task.subject))
+        occupant_hash(task["owner"], emit_side_subject(task["subject"]))
         if task else None
     )
-    disk_handoff = (task.metadata.get("handoff") if task else None) or {}
+    disk_handoff = (task.get("metadata", {}).get("handoff") if task else None) or {}
 
     if not groups:
-        if task is None:
+        if not task:
             report_gap(task_id)
         else:
             process(disk_handoff)  # task file only, no journal copy to union
@@ -190,7 +215,7 @@ for task_id in unprocessed:
         if identity == disk_identity:
             # UNION, task file first, apart from present-and-empty.
             handoff = union_preferring_task_file(handoff, disk_handoff)
-        elif task is None:
+        elif not task:
             report(f"handoff divergence check unavailable for task "
                    f"{task_id}: task file absent")
         else:
@@ -208,7 +233,7 @@ Read all HANDOFFs before proceeding to extraction.
 
 A HANDOFF may reference sibling metadata keys on its task (verification records, parked analyses, teachback history, variety rationales). Those siblings die with the task file when the task store drains — but every completed task's non-handoff metadata is also mirrored into the journal as a `task_metadata_snapshot` event. Resolve sibling keys through this three-tier fallback:
 
-1. **Task file** (freshest, and it can be drained): `read_task_record(task_id).metadata`, the raw task JSON's `metadata` object, the same accessor the Step 3 pseudocode uses.
+1. **Task file** (freshest, and it can be drained): `task_utils.read_task_json(task_id, team_name).get("metadata", {})`, the raw task JSON's `metadata` object, the same accessor the Step 3 pseudocode uses. That reader returns an EMPTY DICT on a missing file, so a drained task gives `{}` rather than a raise, and the fallback below is what covers it.
 2. **Snapshot fallback** (GC-proof): read the mirrored snapshots via the existing subcommand (explicit `--session-dir`, masked-read-safe):
 
    ```bash
@@ -216,7 +241,7 @@ A HANDOFF may reference sibling metadata keys on its task (verification records,
                  --session-dir "$SESSION_DIR" --type task_metadata_snapshot)
    ```
 
-   As in Step 1, `read` prints a **JSON ARRAY** — parse the whole stdout once, then iterate. Each event carries `task_id`, `metadata` (the size-bounded sibling-key payload), `subject`, `occupant`, and optionally `owner` / `task_type` / `truncated`. **Selection**: filter to events with the matching `task_id`; because the platform reuses task_ids across arcs, when you are resolving siblings FOR an `agent_handoff` event, additionally filter to events whose `occupant` equals `occupant_hash(agent, task_subject)` computed from that handoff event's own fields with the SAME shared function (`python3 -c "import sys; sys.path.insert(0, '{plugin_root}/hooks'); from shared.agent_handoff_marker import occupant_hash; print(occupant_hash(sys.argv[1], sys.argv[2]))" "$AGENT" "$TASK_SUBJECT"`) — never a local reimplementation. Aggregate (whole-arc) reads apply the arc-scoped `--since` bound first, exactly as Step 10 does for `variety_assessed`. Take the **latest-`ts`** event within the match, **last-wins on an equal `ts`** (journal events stamp `ts` at second granularity, so a same-second re-emit ties; the later line in journal order is the authoritative one — the same tie-break the artifact-paths supersede uses) — a task may legally carry multiple snapshots (a changed payload after completion re-emits; the latest is the authoritative end-state). A value of shape `{"_truncated": true, ...}` or a top-level `_dropped_keys` list means the full value lived only in the task file — note the truncation in your synthesis, don't fake the missing content.
+   As in Step 1, `read` prints a **JSON ARRAY** — parse the whole stdout once, then iterate. Each event carries `task_id`, `metadata` (the size-bounded sibling-key payload), `subject`, `occupant`, and optionally `owner` / `task_type` / `truncated`. **Selection**: filter to events with the matching `task_id`; because the platform reuses task_ids across arcs, when you are resolving siblings FOR an `agent_handoff` event, additionally filter to events whose `occupant` equals `occupant_hash(agent, task_subject)` computed from that handoff event's own fields with the SAME shared function — never a local reimplementation. **The runnable command is in Step 3, under HOW TO CALL THE TWO NAMES THIS STEP USES.** It is stated once, there, and referenced here. Aggregate (whole-arc) reads apply the arc-scoped `--since` bound first, exactly as Step 10 does for `variety_assessed`. Take the **latest-`ts`** event within the match, **last-wins on an equal `ts`** (journal events stamp `ts` at second granularity, so a same-second re-emit ties; the later line in journal order is the authoritative one — the same tie-break the artifact-paths supersede uses) — a task may legally carry multiple snapshots (a changed payload after completion re-emits; the latest is the authoritative end-state). A value of shape `{"_truncated": true, ...}` or a top-level `_dropped_keys` list means the full value lived only in the task file — note the truncation in your synthesis, don't fake the missing content.
 3. **Graceful degrade**: neither source resolves → record the gap (task_id, key, timestamp) exactly as Step 3's report-gap tier does; never invent content.
 
 **SIBLING KEY NAMES CARRY NO ORDER.** A task commonly carries a family of related sibling keys, and their names do not record which one is newest. A key that names itself `final` can be the earlier of two. Do not sort sibling keys by name, and do not read a name as a position. Resolve the order in this priority:

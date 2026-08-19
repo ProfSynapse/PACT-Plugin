@@ -64,6 +64,21 @@ from shared.task_metadata_snapshot import (  # noqa: E402
     _canonical_bytes,
 )
 
+# What the allowance below bounds, stated because the bare number did not say.
+# THIS IS AN ENVELOPE ALLOWANCE AND NOT A FRACTION OF THE CAP. A journal line
+# is the capped payload PLUS the event envelope: the type, ts, task_id,
+# subject, occupant and owner fields, the JSON punctuation, and the escaping
+# growth of the payload under ensure_ascii. The allowance bounds THAT, so it
+# is an absolute size and the cap is not its denominator.
+# WHY THAT MATTERS: PAYLOAD_CAP doubled from 64 KiB to 128 KiB, so this
+# allowance fell from 25 percent of the cap to 12.5 percent. THAT DRIFT IS
+# NOT A WEAKENING, because the percentage was never the quantity. The
+# assertion catches its stated defect at either cap: a raw multi-megabyte
+# value reaching the journal line overruns this by two orders of magnitude.
+# Re-derive this number only if the ENVELOPE grows, and do not scale it with
+# the cap.
+_LINE_ENVELOPE_ALLOWANCE = 16 * 1024
+
 TEAM = "pact-perwrite-adv"
 LEAD = "PACT:pact-orchestrator"
 TEAMMATE = "pact-backend-coder"
@@ -230,7 +245,7 @@ class TestPerWriteCapEdges:
         assert len(_canonical_bytes(payload)) <= PAYLOAD_CAP
         lines = _journal_line_bytes(home)
         assert len(lines) == 1
-        assert len(lines[0]) < PAYLOAD_CAP + 16 * 1024
+        assert len(lines[0]) < PAYLOAD_CAP + _LINE_ENVELOPE_ALLOWANCE
 
     def test_jumbo_5mb_targeted_value_no_raise_bounded_line(self, home):
         _seed_task(home, "43")
@@ -245,7 +260,7 @@ class TestPerWriteCapEdges:
         assert marker["original_bytes"] == 5 * 1024 * 1024 + 2
         lines = _journal_line_bytes(home)
         assert len(lines) == 1
-        assert len(lines[0]) < PAYLOAD_CAP + 16 * 1024, (
+        assert len(lines[0]) < PAYLOAD_CAP + _LINE_ENVELOPE_ALLOWANCE, (
             "the raw 5MB value must never reach the journal line"
         )
 

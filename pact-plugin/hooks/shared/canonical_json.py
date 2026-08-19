@@ -27,13 +27,26 @@ THE IMPORT CONTRACT HAS THREE TERMS, AND ONLY TWO OF THEM FAIL LOUDLY:
 
   1. the module path             a change gives an ImportError. LOUD.
   2. the exported name           a change gives an ImportError. LOUD.
-  3. the three serialization parameters, below.    SILENT.
+  3. the four serialization parameters, below.    SILENT.
 
      sort_keys=True
      separators=(",", ":")        a comma and a colon, NO SPACES
      ensure_ascii                 LEFT AT ITS DEFAULT of true
+     allow_nan                    LEFT AT ITS DEFAULT of true
 
-A CHANGE TO ANY OF THE THREE PARAMETERS CHANGES EVERY DIGEST BOTH FAMILIES
+THAT PARAMETER LIST IS A CENSUS OF FOUR AND IT WAS PUBLISHED AS A CENSUS OF
+THREE. `allow_nan` was the omitted one, and an omitted term is worse here
+than an unlisted one, because a reader who trusts the list as complete does
+not hold what it leaves out. MEASURED: at its default, canonical_bytes
+returns b'{"n":NaN}' for a NaN value and b'{"i":Infinity}' for an infinity,
+and it RAISES for neither. So a content key IS derived from those bytes, and
+the bytes are NOT JSON: a strict reader such as jq returns null for that
+field. That is a silent VALUE change on the read path rather than a loud
+failure on the write path, which is why it belongs on this list. Setting
+allow_nan=False would convert it to a raise, and that is a CONTRACT CHANGE
+for both families rather than a repair, so it is recorded here and not made.
+
+A CHANGE TO ANY OF THE FOUR PARAMETERS CHANGES EVERY DIGEST BOTH FAMILIES
 PRODUCE, AND NOTHING ANNOUNCES IT. The module keeps importing. The callers
 keep running. A test suite that hashes through this same function agrees
 with itself and stays green, while the two families compute DIFFERENT keys

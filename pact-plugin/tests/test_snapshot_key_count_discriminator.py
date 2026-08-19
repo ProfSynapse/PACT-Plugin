@@ -151,7 +151,7 @@ def _equal_total_partner(total_bytes: int) -> tuple[int, int]:
     raise AssertionError("no exact equal-total partner is available")
 
 
-def _stage_split(payload: dict, cap: int = PER_VALUE_CAP) -> tuple[int, int]:
+def _stage_split(payload: dict) -> tuple[int, int]:
     """Marker counts for the two cut stages, computed APART.
 
     Stage 2 marks values that passed stage 1, so a stage-2 marker always
@@ -160,24 +160,45 @@ def _stage_split(payload: dict, cap: int = PER_VALUE_CAP) -> tuple[int, int]:
     marker and changes `head` alone, so this split stays readable below an
     emptied head.
 
-    THE CAP IS AN ARGUMENT AND NOT A GLOBAL READ. The builder reads the
-    module value at CALL time. An arm that patches a cap and a classifier
-    that reads the live constant give the same answer about different
-    worlds, and nothing raises.
+    THE `cap` PARAMETER WAS REMOVED FROM THIS FUNCTION AND FROM
+    _assert_not_mixed, AND REMOVAL IS THE HONEST CLOSE RATHER THAN THE CHEAP
+    ONE. It was justified by a cap-patching hazard: an arm that patches a cap
+    while a classifier reads the live constant gives the same answer about
+    different worlds. THREE FACTS RETIRE THAT DEFENCE AS BUILT.
+      1. MEASURED: ZERO call sites passed it, so it defended nothing.
+      2. MEASURED: ZERO arms in this file patch a cap. There is no
+         monkeypatch and no setattr here at all, so the hazard is not
+         reachable from this file as it stands.
+      3. DECISIVE, AND IT IS WHY PASSING IT AT THE CALL SITES WAS NOT THE
+         FIX: this module binds PER_VALUE_CAP BY VALUE at import. A patch of
+         task_metadata_snapshot.PER_VALUE_CAP moves the BUILDER, which reads
+         its module global at call time, and does NOT move this binding. The
+         default and every call site would therefore have supplied the SAME
+         stale value, so passing it changes no answer. A parameter that
+         cannot carry a different value than its default is a discipline in
+         appearance only.
+    WHAT A FUTURE CAP-PATCHING ARM MUST ACTUALLY DO, since that is the part
+    worth keeping: read the cap FRESHLY from the source module at call time
+    (`tms.PER_VALUE_CAP`, not the imported name) and give it to BOTH this
+    split AND `_classify_stage`, which reads the imported binding directly.
+    Restoring the parameter HERE alone would leave the classifier stale and
+    reproduce the half-fix this removal closes.
     """
     markers = [value for value in payload.values() if _is_marker(value)]
-    above = sum(1 for m in markers if m["original_bytes"] > cap)
+    above = sum(1 for m in markers if m["original_bytes"] > PER_VALUE_CAP)
     return above, len(markers) - above
 
 
-def _assert_not_mixed(payload: dict, cap: int = PER_VALUE_CAP) -> None:
+def _assert_not_mixed(payload: dict) -> None:
     """The scalar label is adequate for this file BECAUSE no arm is mixed.
 
     A property nobody checks decays in silence, so this checks it. A future
     arm that becomes mixed turns the suite RED rather than be silently
     mis-labelled. TestTheNoMixedArmGuard watches this guard fire.
+
+    The `cap` parameter is gone for the cause recorded on _stage_split.
     """
-    stage1_count, stage2_count = _stage_split(payload, cap)
+    stage1_count, stage2_count = _stage_split(payload)
     assert stage1_count == 0 or stage2_count == 0, (
         f"MIXED payload: {stage1_count} marked at stage 1 and "
         f"{stage2_count} at stage 2. One scalar label cannot carry that."
@@ -207,7 +228,7 @@ def _observe(source: dict) -> dict:
     fits lands at the cap by construction, so two arms that agree at the cap
     can agree through different mechanisms.
     """
-    payload, truncated = build_snapshot_payload(source)
+    payload, _ = build_snapshot_payload(source)
     markers = [value for value in payload.values() if _is_marker(value)]
     dropped = payload.get("_dropped_keys")
     dropped = dropped if isinstance(dropped, list) else []
@@ -220,7 +241,15 @@ def _observe(source: dict) -> dict:
         "markers": len(markers),
         "heads_kept": sum(1 for m in markers if m["head"] != ""),
         "dropped": len(dropped),
-        "truncated": truncated,
+        # `truncated` and `split` were REMOVED from this reading. MEASURED:
+        # ZERO assertions read either one, and `split` cost a second
+        # _stage_split on EACH observation in a file of which the header
+        # records a runtime of about 25 seconds, while each arm recomputed
+        # the same split through _assert_not_mixed. An unread key in a
+        # reading reads as coverage and is not coverage. The truncation flag
+        # stays available at no cost to an arm that wants it, because
+        # build_snapshot_payload returns it directly, which is how the
+        # determinism arm below already takes it.
         # SCOPE: KEY NAMES ALONE. Two payloads that keep the same names and
         # drop nothing share this digest while they differ in stage and in
         # bytes. That scope is CORRECT for the value-size flip, of which the
@@ -229,7 +258,6 @@ def _observe(source: dict) -> dict:
         "partition": hashlib.sha256(
             _canonical_bytes([kept, sorted(dropped)])
         ).hexdigest()[:16],
-        "split": _stage_split(payload),
         "shape": _shape_digest(payload),
     }
 

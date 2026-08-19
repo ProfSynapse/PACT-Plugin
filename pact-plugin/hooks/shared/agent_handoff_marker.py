@@ -145,6 +145,33 @@ def sanitize_path_component(value: str) -> str:
     characters (NUL, CR/LF, and the 0x00-0x1f range) at the producer
     boundary. Control-char stripping defends against log-injection and
     embedded-newline attacks on values that flow into filesystem paths.
+
+    THIS IS A DENYLIST AND A DENYLIST OVER UNBOUNDED INPUT IS NOT A SECURITY
+    BOUNDARY. What it does buy is stated below, and what it does NOT buy is
+    stated with it, because the two are easy to conflate and the conflation
+    ships a false assurance.
+
+    WHAT IT DOES NOT BUY: completeness. MEASURED, each of these survives into
+    the filename intact, and NONE of them traverses on this filesystem: the
+    C1 control U+0085, the separators U+2028 and U+2029, U+2024 ONE DOT
+    LEADER, the fullwidth solidus U+FF0F, and U+202E RIGHT-TO-LEFT OVERRIDE.
+    The single consequence measured for any of them is a filename that
+    RENDERS deceptively in a terminal listing. That is cosmetic. Traversal
+    itself is refused, measured across 8 arms with zero escapes, and the
+    refusal comes from the containment re-check and the pinned dir_fd in
+    _resolve_marker_target rather than from this character set. SO DO NOT
+    EXTEND THIS SET AND CALL THE SANITIZER SAFE, and do not read a longer set
+    as a stronger boundary.
+
+    WHAT THE REAL DEFECT IS, AND IT GETS WORSE AS THE SET GROWS. THIS
+    FUNCTION IS MANY-TO-ONE. MEASURED: 'a/b' and 'ab' both give 'ab', and
+    'x..y' and 'xy' both give 'xy'. So two DIFFERENT task ids that sanitize
+    alike produce ONE marker filename and COLLIDE, and the second one is
+    suppressed as a duplicate of the first. Each character added to the strip
+    set maps more inputs onto fewer outputs and WIDENS that collision. An
+    escape (percent-encoding the removed bytes rather than deleting them)
+    would be the construction that closes it, and that is a key-format change
+    for the whole family rather than an edit here.
     """
     return re.sub(r"[/\\\x00-\x1f]|\.\.", "", value)
 
@@ -574,6 +601,25 @@ def already_emitted(
     Data-integrity (preserving the HANDOFF in the journal) outweighs
     duplication-prevention when the marker subsystem itself breaks; worst case
     the caller falls back to per-fire emission for this one task.
+
+    THE FILENAME CEILING, AND IT IS RECORDED FOR A CHANGE NOBODY HAS MADE
+    YET. ENAMETOOLONG is an OSError that is NOT EEXIST, so it takes the
+    fail-open arm above. That arm is correct for a transient error and it is
+    the wrong shape for a LENGTH: a length does not vary between fires, so
+    this function returns False on EVERY fire for that key, and dedup is lost
+    for it PERMANENTLY rather than degraded once. Each fire then appends a
+    fresh journal event of up to PAYLOAD_CAP bytes.
+    MEASURED, exact boundary, re-derived on this filesystem: NAME_MAX is 255.
+    The handoff composite overhead is 26 characters (a hyphen, 16 hex of
+    occupant, a hyphen, 8 hex of content), so a task_id of 229 characters
+    creates and 230 gives ENAMETOOLONG.
+    INERT TODAY, and that is the point of writing it down rather than acting
+    on it: ordinary task ids are small integers and team names are about 16
+    characters, so nothing approaches the ceiling. THE NUMBER 229 IS THE
+    THING WORTH KEEPING, for a future change that makes task_id a UUID, a
+    slug, or a composite. Such a change needs a length check here, and the
+    check has to be a REFUSAL rather than a fail-open, because fail-open is
+    what makes this permanent.
 
     Graceful-degrade caveat: a pre-existing non-symlink file at the marker
     path (manually created, or stale state surviving an unclean cleanup) also

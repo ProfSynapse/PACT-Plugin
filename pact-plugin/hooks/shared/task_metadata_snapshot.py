@@ -135,8 +135,23 @@ PER_WRITE_MIRROR_KEYS: frozenset[str] = frozenset({
 
 # Size caps on the canonical serialization (see _canonical_bytes). Both are
 # anomaly paths: generous enough to leave observed real payloads whole,
-# bounded enough to protect journal growth and the read path's tail-window
-# scan.
+# bounded enough to protect journal growth.
+#
+# THE TAIL-WINDOW HALF OF THAT SENTENCE DID NOT SURVIVE THE DOUBLING, AND IT
+# IS CORRECTED HERE RATHER THAN CARRIED FORWARD. RE-DERIVED from the three
+# constants: session_journal._TAIL_WINDOW_BYTES is 32 * 1024, PAYLOAD_CAP is
+# 128 * 1024, and PER_VALUE_CAP is 32 * 1024. So PAYLOAD_CAP is FOUR times
+# the window where the value it replaced was two times, and PER_VALUE_CAP
+# EQUALS the window at one times. ONE AT-CAP EVENT IS THEREFORE ENOUGH to
+# make _read_last_event_at miss its fast path, so these caps no longer bound
+# the read to one window and it is incorrect to say that they do.
+# THE BOUND ON THAT, AND IT IS WHY THE CAPS DO NOT MOVE BACK: the tail window
+# is a PERFORMANCE fast path with a documented full-read fallback, so missing
+# it costs a larger read and returns the same answer. It is NOT a correctness
+# defect. NO LATENCY WAS MEASURED, by the reviewer who found this or by me,
+# so the cost is unquantified rather than known to be small. Reducing either
+# cap to restore the ratio would re-open the truncation loss the doubling
+# closed, which is the trade this comment exists to record.
 #
 # EACH CAP IS A DOUBLING OF THE VALUE IT REPLACES, AND THE MULTIPLE IS THE
 # POINT. The prior pair was calibrated against the largest value observed at

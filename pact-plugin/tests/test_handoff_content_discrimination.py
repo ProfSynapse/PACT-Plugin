@@ -574,17 +574,40 @@ class TestContentTermIsATotalFunction:
     back to a constant term instead, which reverts that one task to the
     occupant-only dedup and still emits the first fire.
 
-    TWO ARMS, TWO INPUT CLASSES, AND NEITHER COVERS THE OTHER. DO NOT REMOVE
-    EITHER ONE AS REDUNDANT.
-      - The set-valued arm drives the GENUINE route end to end: a value that
-        canonical_bytes AND append_event both reject, with nothing patched.
-      - The patched-raise arm drives a raise from OUTSIDE (TypeError,
-        ValueError), which the set-valued arm cannot reach because the narrow
-        handler absorbed TypeError. It is the only arm that separates the two
-        handler widths.
-    THE PATCHED ARM PATCHES THE SERIALIZER, SO IT CANNOT EXERCISE THE GENUINE
-    TypeError ROUTE AT ALL. Remove the set-valued arm and that route goes
-    untested, and the suite stays green while it happens.
+    THREE ARMS, THREE INPUT CLASSES, AND NO ONE OF THEM COVERS ANOTHER. DO
+    NOT REMOVE ANY OF THEM AS REDUNDANT.
+      - The SET-VALUED arm drives the genuine route with nothing patched,
+        and it shows NO CRASH rather than a preserved event. See the
+        correction below, which bounds what it establishes.
+      - The MIXED-TYPE-KEY arm is the only one that shows the fallback
+        PRESERVING an event, because it is the only input class where the
+        two serializers disagree.
+      - The PATCHED-RAISE arm drives a raise from OUTSIDE (TypeError,
+        ValueError), which no unpatched input reaches, because the narrow
+        handler absorbed TypeError. It is the only arm that separates the
+        two handler widths. It patches the serializer, so it cannot exercise
+        a genuine serialization route at all.
+
+    🔴 A CORRECTION TO WHAT THE SET-VALUED ARM ESTABLISHES, AND THE
+    OVERSTATEMENT WAS WRITTEN HERE BEFORE. MEASURED: for a set value,
+    canonical_bytes RAISES TypeError and json.dumps, the serializer inside
+    append_event, ALSO raises TypeError. So in production that event is lost
+    by the second route after the fallback saved it from the first, and the
+    fallback BUYS NOTHING for that input class. This arm reads as a
+    preservation only because the harness SPIES append_event, and a spy
+    accepts what production rejects. The arm is still worth keeping: it is
+    the only unpatched arm, and it shows the derivation does not crash. It
+    is NOT evidence that a handoff survives.
+
+    WHERE THE FALLBACK GENUINELY PRESERVES, WHICH IS WHY THE SECOND ARM
+    EXISTS. MEASURED, one input class: a mapping with MIXED-TYPE KEYS.
+    canonical_bytes raises TypeError through sort_keys=True, which cannot
+    order an int against a str, while append_event calls json.dumps WITHOUT
+    sort_keys, which coerces the int key to a string and SUCCEEDS. So
+    {"a": 1, 2: "b"} serializes to {"a": 1, "2": "b"} on the journal path
+    after the content key falls back. THAT is totality changing the outcome.
+    BOUND: both classes are unreachable from JSON-parsed metadata, which the
+    module docstring states correctly, so this branch is defense in depth.
     """
 
     def test_a_non_serializable_handoff_still_emits(
@@ -612,6 +635,53 @@ class TestContentTermIsATotalFunction:
         assert not set(content) <= _HEX, (
             f"the fallback content term {content!r} must not be hex, or it can "
             f"collide with a digest"
+        )
+
+    def test_a_mixed_key_handoff_is_preserved_by_the_fallback(self, tmp_path):
+        """THE ONLY ARM THAT SHOWS THE FALLBACK PRESERVING AN EVENT.
+
+        The set-valued arm above cannot show it: json.dumps rejects a set
+        too, so production loses that event at append_event whatever the
+        content key does. A MIXED-TYPE-KEY mapping is the one class where
+        the two serializers disagree. canonical_bytes raises TypeError
+        through sort_keys=True, which cannot order 2 against "produced",
+        and append_event's json.dumps carries no sort_keys, so it coerces
+        the int key and writes the event.
+
+        SO THIS ARM MEASURES THE PROPERTY THE FALLBACK EXISTS FOR: the
+        event reaches the journal WITH ITS CONTENT, and the marker key
+        carries the non-hex fallback term rather than a digest.
+        """
+        monkeypatch_free_home = tmp_path / ".claude"
+        assert not monkeypatch_free_home.exists()
+        calls = []
+        task_id = "mixedkey"
+        # An int key beside a str key. json.loads cannot build this, which
+        # is why the class is defense in depth, and it is REACHABLE from a
+        # caller that hands b2 a mapping it built in process.
+        handoff = {"produced": ["src/auth.ts"], 2: "an int key"}
+
+        _run_main(_payload(task_id), _completed_task(handoff), calls)
+
+        assert len(calls) == 1, (
+            "a mixed-type-key handoff must still emit. This is the one "
+            "input class where the content-key fallback preserves an event "
+            "that would otherwise vanish, so a count of 0 means the "
+            "fallback bought nothing where it was supposed to buy the most."
+        )
+        assert calls[0]["handoff"] == handoff, (
+            "the event must carry the handoff CONTENT, not a placeholder. "
+            "A preserved event with lost content is the loss this module "
+            "is biased against, one field along."
+        )
+        names = _marker_names(tmp_path)
+        assert len(names) == 1
+        occupant, content = _split_key(next(iter(names)), task_id)
+        assert len(occupant) == _OCCUPANT_WIDTH
+        assert set(occupant) <= _HEX
+        assert not set(content) <= _HEX, (
+            f"the fallback content term {content!r} must not be hex, or it "
+            f"can collide with a digest"
         )
 
     def test_a_raise_outside_typeerror_and_valueerror_still_emits(
