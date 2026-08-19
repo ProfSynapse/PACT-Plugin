@@ -985,6 +985,13 @@ def _emit_lead_side_agent_handoff(
         # claim rather than poisoning the marker. _is_teachback_subject above
         # already ran on the original subject (a blank subject is not a
         # teachback), so substituting here does not change the teachback gate.
+        #
+        # The "(no subject)" sentinel is MIRRORED IN PROSE by the harvest,
+        # which derives its disk-side identity for the same position — do not
+        # change this substitution without the paired edit to Step 3 of
+        # skills/pact-handoff-harvest/SKILL.md. Nothing enforces the mirror,
+        # and a divergence makes the harvest skip its union and report an
+        # identity mismatch on a task file that is present.
         if not subject or not subject.strip():
             subject = "(no subject)"
         # #917 symmetry: same writability precondition as b1

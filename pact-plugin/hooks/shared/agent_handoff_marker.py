@@ -229,6 +229,14 @@ def handoff_content_key(handoff: object) -> str:
     record. The door is wider than the room: json.loads PARSES a deeply
     nested object without error, so such a value ARRIVES through the
     JSON-parsed metadata both emit paths receive and fails only at the hash.
+    THE DEPTH THAT REACHES THE RAISE CARRIES THREE PARAMETERS, AND THE
+    INTERPRETER VERSION IS NOT ONE OF THEM. MEASURED BY BISECTION: the
+    THREAD STACK is the axis (about 65000 deep on the main thread at its
+    default stack, about 1000 to 2500 deep on a 512 KiB thread stack), and
+    sys.getrecursionlimit() predicts none of those. The CONTAINER TYPE is
+    the third: a 100000-deep MAPPING raises where a 100000-deep LIST does
+    not. So do not read this raise as reachable only by an absurd payload.
+    On a 512 KiB stack about 6 KiB of JSON reaches it, which is ordinary.
     So do NOT narrow this handler back to a named set. A serialization
     failure this function does not absorb is a silent journal loss, in a
     module of which the purpose is that a loss must be MARKED and not silent.

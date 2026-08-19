@@ -137,6 +137,13 @@ def main() -> None:
         # marker, then FAIL append_event — the claim-without-write poison the
         # writability gate only NARROWED. Substituting the sentinel here makes
         # the subject deterministically schema-valid before the claim.
+        # The "(no subject)" sentinel is MIRRORED IN PROSE by the harvest,
+        # which derives its disk-side identity for the same position — do not
+        # change this substitution without the paired edit to Step 3 of
+        # skills/pact-handoff-harvest/SKILL.md. The harvest reads the task
+        # RECORD while this path reads the platform payload, so the two must
+        # agree by convention: nothing enforces the mirror, and a divergence
+        # makes the harvest report an identity mismatch on a present file.
         task_subject_was_missing = not (
             raw_task_subject and str(raw_task_subject).strip()
         )
@@ -173,6 +180,13 @@ def main() -> None:
         # writability gate only narrowed). Treat it as ABSENT so the stdin
         # teammate_name fallback can still preserve the handoff; suppress only
         # when NEITHER source yields a non-whitespace name.
+        # This owner fallback is RECORDED IN PROSE by the harvest, at Step 3
+        # of skills/pact-handoff-harvest/SKILL.md, as the one substitution it
+        # CANNOT reproduce (the platform teammate_name is not in the task
+        # record), which is why the harvest routes such a task to its
+        # identity-mismatch report. Do not change this fallback without the
+        # paired SKILL.md edit: removing it would make that report unreachable
+        # while the skill continues to tell a reader to expect it.
         owner_value = task_data.get("owner")
         if isinstance(owner_value, str) and not owner_value.strip():
             owner_value = None

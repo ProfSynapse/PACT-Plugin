@@ -129,15 +129,25 @@ def emit_side_subject(subject):
     return subject if (subject and str(subject).strip()) else "(no subject)"
 
 
+# The values that count as EMPTY for the exception below. Test MEMBERSHIP,
+# not truthiness: `not disk_value` is also TRUE for `0` and for `False`, so a
+# task-file field that deliberately holds one of those would keep the journal
+# value and discard the disk value.
+# KEEP `None` IN THIS SET. Drop it and the narrowing itself opens the erasure
+# it was written to close: a field explicitly holding null would count as
+# CONTENT and overwrite the journal copy with null.
+_EMPTY_VALUES = (None, "", [], {})
+
+
 def union_preferring_task_file(journal_handoff, disk_handoff):
     """Task file wins each conflict, apart from present-and-empty. Three states."""
     merged = {**journal_handoff}
     for field, disk_value in disk_handoff.items():
         # PRESENT AND EMPTY on the task file, with content in the journal:
-        # keep the journal value. Every other state: the task file wins.
+        # keep the journal value. Each other state: the task file wins.
         # A field ABSENT from the task file does not reach this loop, so the
         # journal value survives by construction.
-        if not disk_value and journal_handoff.get(field):
+        if disk_value in _EMPTY_VALUES and journal_handoff.get(field):
             continue
         merged[field] = disk_value
     return merged

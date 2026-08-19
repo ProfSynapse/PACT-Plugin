@@ -573,6 +573,18 @@ class TestContentTermIsATotalFunction:
     content-key derivation would drop the event silently. The derivation falls
     back to a constant term instead, which reverts that one task to the
     occupant-only dedup and still emits the first fire.
+
+    TWO ARMS, TWO INPUT CLASSES, AND NEITHER COVERS THE OTHER. DO NOT REMOVE
+    EITHER ONE AS REDUNDANT.
+      - The set-valued arm drives the GENUINE route end to end: a value that
+        canonical_bytes AND append_event both reject, with nothing patched.
+      - The patched-raise arm drives a raise from OUTSIDE (TypeError,
+        ValueError), which the set-valued arm cannot reach because the narrow
+        handler absorbed TypeError. It is the only arm that separates the two
+        handler widths.
+    THE PATCHED ARM PATCHES THE SERIALIZER, SO IT CANNOT EXERCISE THE GENUINE
+    TypeError ROUTE AT ALL. Remove the set-valued arm and that route goes
+    untested, and the suite stays green while it happens.
     """
 
     def test_a_non_serializable_handoff_still_emits(
@@ -619,13 +631,38 @@ class TestContentTermIsATotalFunction:
         genuine producer is RecursionError from a deeply nested mapping, and
         json.loads parses such a mapping without error, so the value does
         arrive through the JSON-parsed metadata the emit paths receive.
-        MEASURED, and this is the whole cause for patching: the depth needed
-        is INTERPRETER-DEPENDENT. On the interpreter of this measurement a
-        50000-deep mapping did NOT raise and a 100000-deep one DID, while the
-        Python recursion limit read 1000. A fixture pinned to a depth
-        therefore stops reaching the raise when the interpreter changes, and
-        it stops in the silent direction: the arm keeps passing while it
-        drives an ordinary serialization.
+        THE DEPTH THAT REACHES THE RAISE CARRIES THREE PARAMETERS, AND ALL
+        THREE ARE NAMED HERE ON PURPOSE. A parameter left implicit reads as
+        a detail, and a reader who meets it as a detail does not check it.
+
+            INTERPRETER   NOT the axis. STRUCK. An earlier record here named
+                          the interpreter version, and a bisection falsified
+                          it. Do not restore that wording.
+            THREAD STACK  the axis, MEASURED BY BISECTION, moving the
+                          threshold by more than 50x:
+                            main thread, default   depth 64901 to 66460
+                            thread stack 512 KiB   depth 1000 to 2558
+                            thread stack 32 MiB    depth 130362 to 131921
+                          `sys.getrecursionlimit()` read 1000 in all three
+                          and predicted NONE of them, so do not size a
+                          fixture against the recursion limit either.
+            CONTAINER     MEASURED: a 100000-deep nested MAPPING raises, and
+                          a 100000-deep nested LIST does NOT raise on the
+                          same interpreter. The word "mapping" above is
+                          load-bearing and is not decoration. A reader who
+                          probes with a list fails to reproduce this record
+                          and can discard it as stale, which is worse than
+                          an absent record: the next reader re-derives it
+                          and trusts the re-derivation less.
+
+        A fixture pinned to a depth stops reaching the raise on a TOPOLOGY
+        change and not merely on a version change, and it stops in the
+        SILENT direction: the arm keeps passing while it drives an ordinary
+        serialization. The 512 KiB row is what makes that sharp. At that
+        stack the threshold falls to a few thousand, which is about 6 KiB of
+        JSON, an ORDINARY payload. Carry no size without its parameters: the
+        main-thread row is about 380 KiB of JSON at (main thread, default
+        stack, mapping).
 
         The patch targets the name bound in agent_handoff_marker, because
         that module imports canonical_bytes by value and a patch of the
