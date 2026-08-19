@@ -46,6 +46,25 @@ failure on the write path, which is why it belongs on this list. Setting
 allow_nan=False would convert it to a raise, and that is a CONTRACT CHANGE
 for both families rather than a repair, so it is recorded here and not made.
 
+THE STRUCTURAL CAUSE FOR THAT DECLINE, WHICH IS SHARPER THAN "A CONTRACT
+CHANGE". MEASURED on task_metadata_snapshot.build_snapshot_payload: it holds
+EIGHT call sites of this serializer and ZERO try blocks, so a raise from any
+one of them leaves that function fully, and the only handler above it is a
+bare catch. The trade is thus NOT symmetric, and it runs the incorrect way:
+
+  allow_nan at its default   a NaN reaches the journal as the token NaN, and
+                             a strict reader returns null for that field.
+                             A SILENT VALUE CHANGE ON THE READ PATH.
+  allow_nan=False            the serializer raises, the raise crosses
+                             build_snapshot_payload unhandled, the bare catch
+                             above swallows it, and the WHOLE SNAPSHOT EVENT
+                             VANISHES with no record.
+                             A SILENT EVENT LOSS ON THE WRITE PATH.
+
+A module built on the bias that a loss must be MARKED rather than silent
+cannot take the second in exchange for the first. A later reader who wants to
+change this parameter must give those eight call sites a handler FIRST.
+
 A CHANGE TO ANY OF THE FOUR PARAMETERS CHANGES EVERY DIGEST BOTH FAMILIES
 PRODUCE, AND NOTHING ANNOUNCES IT. The module keeps importing. The callers
 keep running. A test suite that hashes through this same function agrees

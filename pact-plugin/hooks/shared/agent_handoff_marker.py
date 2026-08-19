@@ -172,6 +172,17 @@ def sanitize_path_component(value: str) -> str:
     escape (percent-encoding the removed bytes rather than deleting them)
     would be the construction that closes it, and that is a key-format change
     for the whole family rather than an edit here.
+
+    🔴 IF YOU BUILD THAT ESCAPE, ENCODE THE ESCAPE CHARACTER ITSELF FIRST.
+    The sentence above is incomplete without this clause, and an implementer
+    who follows it word for word REPRODUCES the collision it closes. MEASURED,
+    encoding '/' and '..' alone: 'a/b' gives 'a%2Fb', and the LITERAL INPUT
+    'a%2Fb' also gives 'a%2Fb', so the two collide. 'x..y' collides with
+    'x%2E%2Ey' the same way. Encode '%' as '%25' BEFORE the other characters
+    and the pair separates: 'a/b' gives 'a%2Fb' while 'a%2Fb' gives
+    'a%252Fb'. AN ESCAPE SCHEME THAT DOES NOT ESCAPE ITS OWN ESCAPE
+    CHARACTER IS INJECTIVE IN APPEARANCE AND MANY-TO-ONE IN OPERATION,
+    which is the property this whole paragraph is about.
     """
     return re.sub(r"[/\\\x00-\x1f]|\.\.", "", value)
 

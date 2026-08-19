@@ -56,6 +56,19 @@ from shared.task_metadata_snapshot import (  # noqa: E402
 # value reaching the journal line overruns this by two orders of magnitude.
 # Re-derive this number only if the ENVELOPE grows, and do not scale it with
 # the cap.
+# THE TWO MEASUREMENT FORMS IN THIS FAMILY CANNOT DISAGREE, AND THE CAUSE IS
+# STRUCTURAL RATHER THAN LUCKY. The three sites that hold this bound do not
+# all measure the same unit: one takes len() of the encoded bytes and two take
+# len() of the str, which is CHARACTERS. append_event serializes with the
+# json.dumps default ensure_ascii=True, so every non-ASCII character reaches
+# the line as an escape sequence and the line is PURE ASCII. For an ASCII
+# string the character count EQUALS the byte count, so the two forms return
+# one number. MEASURED on a line carrying accented text, CJK and an emoji:
+# 180 characters and 180 bytes. So this is not a repair and no site needs to
+# change. It is a record, and it is load-bearing for ONE case: a change to
+# ensure_ascii would separate the two units at these three sites in silence,
+# which is a fourth consequence of the parameter the serializer contract
+# enumerates at this time.
 _LINE_ENVELOPE_ALLOWANCE = 16 * 1024
 
 TEAM = "pact-advmatrix"

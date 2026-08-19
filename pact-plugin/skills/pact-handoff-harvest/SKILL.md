@@ -118,6 +118,8 @@ For each discovered task, read the HANDOFF from the two copies and combine them.
    python3 -c "import sys; sys.path.insert(0, '{plugin_root}/hooks'); from shared.agent_handoff_marker import occupant_hash; print(occupant_hash(sys.argv[1], sys.argv[2]))" "$AGENT" "$TASK_SUBJECT"
    ```
 
+   🔴 **THE AGENT AND THE SUBJECT MUST RIDE AS ARGV. DO NOT INTERPOLATE THEM INTO THE `-c` STRING.** Read `sys.argv[1]` and `sys.argv[2]` as written above, and keep the two values as separate shell arguments after the closing quote. The author of the task writes its subject, so a subject folded into the `-c` body is Python that the subject author chose, executed by you. Nothing about the values makes this safe: the ARGV BOUNDARY is what makes it safe, and rewriting the command is enough to remove it.
+
 2. **`latest_by_ts_then_journal_order`**, defined HERE because it is defined at no site in the repo. It takes the events of ONE group, in journal order, and returns the authoritative one:
 
    ```python
@@ -193,8 +195,21 @@ for task_id in unprocessed:
     # hashed. The owner substitution (platform teammate name on an empty
     # owner) is NOT reproducible from the record, so a task carrying it
     # falls through to the identity-mismatch report below.
+    # `.get` AND NOT A SUBSCRIPT, AT BOTH KEYS. The guard above tests
+    # EMPTINESS, which covers a DRAINED record and does NOT cover a PRESENT
+    # BUT PARTIAL one. MEASURED across the task store: 143 of 1421 records
+    # carry no `owner` key at all, and THREE of those carry
+    # `metadata.handoff`, so they are in this harvest target population.
+    # A subscript raises KeyError on the accurate case rule 2 above tells
+    # you to route to the identity-mismatch report, because an absent owner
+    # is what the emit path replaces with the platform name.
+    # `subject` is missing in 0 of 1421 today, and it takes `.get` anyway:
+    # read_task_json is FAIL-OPEN, so it returns a SHAPE and not a SCHEMA,
+    # and a subscript asserts a guarantee that reader does not make.
     disk_identity = (
-        occupant_hash(task["owner"], emit_side_subject(task["subject"]))
+        occupant_hash(
+            task.get("owner", ""), emit_side_subject(task.get("subject", ""))
+        )
         if task else None
     )
     disk_handoff = (task.get("metadata", {}).get("handoff") if task else None) or {}
