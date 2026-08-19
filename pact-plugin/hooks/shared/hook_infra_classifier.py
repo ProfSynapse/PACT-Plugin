@@ -137,7 +137,8 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
         "session_registry", "session_state", "task_utils",
     }),
     "agent_handoff_emitter": frozenset({
-        "agent_handoff_marker", "constants", "pact_context", "paths",
+        "agent_handoff_marker", "canonical_json", "constants",
+        "pact_context", "paths",
         "session_journal", "session_registry", "session_state",
         "task_metadata_snapshot", "task_utils",
     }),  # task_metadata_snapshot reached via the teammate-frame snapshot
@@ -175,7 +176,8 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
          # (dispatch_gate -> shared.stale_session.detect_stale_session_block);
          # its own transitive pact_context edge was already in this closure.
     "task_lifecycle_gate": frozenset({
-        "agent_handoff_marker", "constants", "dispatch_helpers",
+        "agent_handoff_marker", "canonical_json", "constants",
+        "dispatch_helpers",
         "intentional_wait", "pact_context", "paths", "session_journal",
         "session_registry", "session_state", "task_metadata_snapshot",
         "task_utils", "teachback_schema", "tool_response", "variety_scorer",
@@ -240,7 +242,14 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
 # waiver path.
 SEAM_READING_HELPERS: frozenset[str] = frozenset().union(
     *_SEAM_HOOK_HELPER_CLOSURE.values()
-)  # 28 (25 shared helpers — incl. paths, the config-dir SSOT — + 3 top-level)
+)  # 30 = 28 modules under hooks/shared/ (including paths, the config-dir
+# SSOT) + 2 top-level hooks (pin_caps, staleness). COUNTING RULE, stated
+# because the number is not checkable without it: the union of the closure
+# values above, split by the directory each module file lives in. DERIVE this,
+# do not recall it. This comment read "28 (25 shared + 3 top-level)" while the
+# union was 29 and the top-level members were 2, so all three of its terms
+# were incorrect at once, and a repair of the total alone would have carried
+# the other two forward.
 
 
 # ─── Path predicates ────────────────────────────────────────────────────────

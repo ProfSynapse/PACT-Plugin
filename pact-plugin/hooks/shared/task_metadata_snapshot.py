@@ -7,6 +7,9 @@ Summary: SSOT substrate for task_metadata_snapshot journal emission — the
          mirrors). Owns the exclude set, the dual-cap three-stage
          size-bounding, the content-key hash, the hard-bound marker-namespace
          wrappers, and the ONE emit routine shared verbatim by every seam.
+         It does NOT own the canonical serialization: that lives in
+         shared/canonical_json.py, shared with the agent_handoff marker
+         family, and is re-exported here as _canonical_bytes.
 Used by: task_lifecycle_gate.py (lead-completion seam + post-completion
          backstop seam), agent_handoff_emitter.py (teammate-frame
          TaskCompleted seam), and the substrate unit-test suite.
@@ -46,7 +49,6 @@ single _canonical_bytes serialization).
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Mapping
 
 from .agent_handoff_marker import (
@@ -55,6 +57,18 @@ from .agent_handoff_marker import (
     sanitize_path_component,
     unclaim,
 )
+
+# RE-EXPORT, not a local definition. The canonical serialization now lives in
+# shared/canonical_json.py so that BOTH marker families compute the same bytes
+# for the same value. This module imports agent_handoff_marker, so the marker
+# family cannot import the serializer back from here without a cycle, and a
+# second json.dumps over there would be two serializations that must agree
+# with nothing that makes them agree. The historical module-private name is
+# kept as the alias because this module and its test files call it by that
+# name; the SHARED name is canonical_bytes and that is the one another module
+# imports. Do NOT re-add a local definition here: a second copy is the exact
+# drift the extraction removes.
+from .canonical_json import canonical_bytes as _canonical_bytes
 from .pact_context import get_session_dir
 from .session_journal import append_event, get_journal_path, make_event
 
@@ -64,6 +78,14 @@ from .session_journal import append_event, get_journal_path, make_event
 # rationales, ad-hoc analysis keys, lifecycle flags) is mirrored — a missed
 # key is silent institutional loss while a junk key is bounded bytes, so the
 # exclude set stays minimal by design.
+#
+# BEFORE YOU ADD A MEMBER HERE, WRITE THE TEST THAT PROVES THE CARRIER YOU
+# NAME HOLDS THE FULL VALUE. An exclusion is justified by a second carrier,
+# and a justification nobody tested is how each member of this set fails.
+# The test must compare the CARRIED value against a KNOWN SOURCE value, key
+# by key. A check that asks only "does the carrier fire" returns green for a
+# carrier that fires and drops half the value, which is the measured history
+# of this very set.
 SNAPSHOT_EXCLUDE: frozenset[str] = frozenset({"handoff"})
 
 # Keys whose WRITE (TaskCreate/TaskUpdate delta) triggers an immediate
@@ -73,9 +95,19 @@ SNAPSHOT_EXCLUDE: frozenset[str] = frozenset({"handoff"})
 # targeted-key-in-delta; the payload is always the full overlay (never a
 # projection), so cross-seam content-hash dedup stays coherent with the
 # completion-time seams. Disjoint from SNAPSHOT_EXCLUDE by test-pinned
-# invariant. NOT here: "variety" (already per-write-mirrored at its write
-# point by the dispatch_variety emit); "intentional_wait" (rides along in
-# the overlay; a wait-only write is not load-bearing alone).
+# invariant. NOT here: "intentional_wait" (rides along in the overlay; a
+# wait-only write is not load-bearing alone).
+#
+# "variety" IS here, and it was NOT before. The removed comment read that
+# variety was covered at its write point by the dispatch_variety emit. THAT
+# COVERAGE CLAIM FAILS AND NOTHING TESTED IT. dispatch_variety PROJECTS to
+# the canonical score keys and DROPS the four *_rationale strings, so the
+# carrier held the numbers and dropped what makes a number checkable. A
+# container task did reach two variety-carrying events, so the defect was
+# never a missing event: it was a missing HALF OF THE VALUE, which reads as
+# covered from the event count alone. A score is DERIVED FROM its rationale,
+# and the rationale is the half a reader of a calibration record needs. The
+# key rides the full overlay here, so this membership carries the rationales.
 #
 # The audit pair is targeted for the same reasons as teachback_submit:
 # audit_summary (the auditor's live verdict) and audit_summary_authored
@@ -98,15 +130,39 @@ PER_WRITE_MIRROR_KEYS: frozenset[str] = frozenset({
     "teachback_rejection",
     "audit_summary",
     "audit_summary_authored",
+    "variety",
 })
 
-# Size caps on the canonical serialization (see _canonical_bytes). Empirics
-# over the full journal/task-file population found the largest real value at
-# ~10 KB and no journal event ever ≥ 32 KB, so both caps are anomaly paths:
-# generous enough to never truncate observed real payloads, bounded enough
-# to protect journal growth and the read path's tail-window scan.
-PER_VALUE_CAP: int = 16 * 1024
-PAYLOAD_CAP: int = 64 * 1024
+# Size caps on the canonical serialization (see _canonical_bytes). Both are
+# anomaly paths: generous enough to leave observed real payloads whole,
+# bounded enough to protect journal growth and the read path's tail-window
+# scan.
+#
+# EACH CAP IS A DOUBLING OF THE VALUE IT REPLACES, AND THE MULTIPLE IS THE
+# POINT. The prior pair was calibrated against the largest value observed at
+# the time, about 10 KB. The corpus then grew and the per-value cap was
+# overrun: truncation markers fired in production, most of them on one key
+# that had reached nearly twice the cap. A CAP CHOSEN FROM THE CURRENT
+# MAXIMUM CARRIES NO GROWTH HEADROOM, because it is a property of one member
+# of a population that keeps growing, and it erodes the moment the next
+# member lands. So each value here is derived from the SHIPPED value rather
+# than from a measured maximum, which is the one basis that does not erode.
+#
+# DO NOT TIGHTEN EITHER CAP TOWARD THE LARGEST VALUE YOU CAN MEASURE. That
+# is the calibration method that failed, and repeating it re-opens the loss.
+# Raise by doubling again if a marker fires on real content.
+#
+# THE MEASUREMENT, RECORDED SO A LATER READER CAN RE-CHECK IT RATHER THAN
+# RE-DERIVE IT. Largest truncated value: 30339 bytes at the grain below
+# (len of the canonical serialization). Population: 103 truncation-marker
+# instances across the session journals, unit MARKER INSTANCES, read
+# 2026-08-19. 90 of the 103 were cut at the per-value stage and all of them
+# carried one key, the teachback payload. The other 13 sat below the
+# per-value cap and were cut at the payload stage, so a per-value raise
+# alone does not reach them. THE NUMBER IS HERE TO BE CHECKED AND NOT TO BE
+# TARGETED: the sentence above governs it.
+PER_VALUE_CAP: int = 32 * 1024
+PAYLOAD_CAP: int = 128 * 1024
 HEAD_BYTES: int = 1024
 
 # O_EXCL marker directory for snapshot dedup — a SEPARATE namespace from the
@@ -134,20 +190,6 @@ def _snapshot_marker_root(team_name: str) -> str | None:
 # Marker-dict key set used to recognize truncation markers this module
 # itself produced (stage-2 candidate filtering + stage-3 head emptying).
 _MARKER_KEYS = frozenset({"_truncated", "original_bytes", "head"})
-
-
-def _canonical_bytes(value: object) -> bytes:
-    """THE single serialization for sizing, truncation heads, and hashing.
-
-    sort_keys makes the byte form insertion-order-independent, which is what
-    grounds the determinism contract (identical mapping → identical hash).
-    Raises TypeError on non-JSON-serializable input; callers on the emit
-    path are hermetic, and task metadata is JSON-safe by construction
-    (it arrives through TaskUpdate's JSON payload).
-    """
-    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
 
 
 def _utf8_safe_head(data: bytes, limit: int) -> str:

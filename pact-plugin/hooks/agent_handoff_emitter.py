@@ -18,14 +18,16 @@ NOT responsible for:
 - memory_saved enforcement (advisory only at validate_handoff.py).
 - Stall / nag detection (not this hook's responsibility).
 
-Emission invariant: write exactly once iff
+Emission invariant: write ONE event for each distinct handoff content, iff
 ((1a) hook_event_name == "TaskCompleted" in stdin
       OR
  (1b) (fallback) disk-read task status == "completed")
 AND
 (2)  task_metadata.get("handoff") is truthy
 AND
-(3)  the per-(team, task_id, occupant) sidecar marker does not yet exist.
+(3)  the sidecar marker for this (team, task_id, occupant, handoff content)
+     does not yet exist. The CONTENT term is what makes a post-completion
+     HANDOFF revision emit again rather than be suppressed.
 
 The transition signal is `hook_event_name`. The disk-status read is a
 fallback only — used when stdin lacks `hook_event_name`. The disk-state
@@ -40,12 +42,13 @@ creation; only the fire with `metadata.handoff` populated claims the
 marker and writes the journal entry.
 
 Idempotency: sidecar O_EXCL marker at
-~/.claude/teams/{team}/.agent_handoff_emitted/{task_id}-{occupant_hash}.
-The platform's Stop flow dispatches TaskCompleted on every matching owner;
-the marker deduplicates these so the journal records exactly one entry per
-(team, task_id, occupant). Occupant-identity keying (vs. the prior bare
-{task_id}) fixes the #887 stale-marker collision on team-name reuse while
-preserving the standing-task fire-once-across-lifespan dedup. The marker
+~/.claude/teams/{team}/.agent_handoff_emitted/{task_id}-{occupant}-{content}.
+The platform's Stop flow dispatches TaskCompleted on every matching owner,
+and the marker deduplicates these so the journal records one entry for each
+distinct (team, task_id, occupant, handoff content). Occupant-identity
+keying (vs. the prior bare {task_id}) fixes the #887 stale-marker collision
+on team-name reuse. The CONTENT term carries a post-completion HANDOFF
+revision that the occupant-only key suppressed. The marker
 machinery lives in shared/agent_handoff_marker.py (SSOT shared with
 task_lifecycle_gate.py's #869 lead-side emit).
 
@@ -68,11 +71,12 @@ import sys
 
 import shared.pact_context as pact_context
 from shared.agent_handoff_marker import (
-    already_emitted,
+    handoff_already_emitted,
+    handoff_content_key,
+    handoff_unclaim,
     is_signal_task,
     occupant_hash,
     sanitize_path_component,
-    unclaim,
 )
 from shared.session_journal import append_event, get_journal_path, make_event
 from shared.task_metadata_snapshot import emit_task_metadata_snapshot
@@ -270,7 +274,8 @@ def main() -> None:
         # while its OWN session context may be unpersisted (teammate persist is
         # is_lead-gated, #877) -> get_journal_path() == "" -> the append below
         # would FAIL after the marker is claimed, poisoning it and permanently
-        # suppressing the lead-side b2 emit via already_emitted(). Gate the claim
+        # suppressing the lead-side b2 emit via handoff_already_emitted().
+        # Gate the claim
         # on writability so a non-writable fire DEFERS to a writable one (the
         # lead's b2) instead of poisoning. This is a PURE read (get_journal_path
         # does not create the marker); mark-then-write exactly-once below is
@@ -296,10 +301,17 @@ def main() -> None:
         # preserved — the claim is still taken FIRST, so two simultaneous fires
         # cannot both write; only the loser-on-write rolls back its own marker.)
         #
-        # Fix B (#887): occupant-identity marker key. A re-scoped subject →
-        # one extra emit (biases to HANDOFF preservation, never loss).
+        # Occupant-identity marker key (#887). A re-scoped subject → one
+        # extra emit (biases to HANDOFF preservation, never loss).
+        #
+        # The CONTENT term is hashed from the SAME `handoff` dict passed to
+        # make_event below, and never from a re-read of disk: that is what
+        # makes the key a function of the event this fire is about to write.
+        # A revised handoff derives a different key and emits again, where
+        # the occupant-only key suppressed it for the team lifespan.
         occupant = occupant_hash(teammate_name, task_subject)
-        if already_emitted(team_name, task_id, occupant):
+        content_key = handoff_content_key(handoff)
+        if handoff_already_emitted(team_name, task_id, occupant, content_key):
             print(_SUPPRESS_OUTPUT)
             sys.exit(0)
 
@@ -344,7 +356,7 @@ def main() -> None:
         except Exception:
             written = False
         if not written:
-            unclaim(team_name, task_id, occupant)
+            handoff_unclaim(team_name, task_id, occupant, content_key)
 
         print(_SUPPRESS_OUTPUT)
         sys.exit(0)

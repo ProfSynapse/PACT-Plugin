@@ -285,6 +285,9 @@ try:
     from shared.paths import get_claude_config_dir
     from shared.agent_handoff_marker import (
         already_emitted,
+        handoff_already_emitted,
+        handoff_content_key,
+        handoff_unclaim,
         is_signal_task,
         occupant_hash,
         sanitize_path_component,
@@ -933,9 +936,15 @@ def _emit_lead_side_agent_handoff(
     prefix gate would no-op. (A now-retired completion-time branch above once
     carried such a prefix gate; it was permanently dormant and was removed.)
 
-    Shares the occupant-keyed marker with b1: if a mid-turn TaskUpdate ALSO
-    dispatches TaskCompleted (R2 — open until the real-tmux smoke), b1 and b2
-    test-and-set the SAME marker and dedup to exactly one event.
+    Shares the marker with b1: if a mid-turn TaskUpdate ALSO dispatches
+    TaskCompleted (R2 — open until the real-tmux smoke), b1 and b2
+    test-and-set the SAME marker and dedup to one event for each distinct
+    handoff content. The key composes the occupant term with a content term
+    (handoff_content_key), so a post-completion REVISION emits again rather
+    than being suppressed. If the two paths ever observe DIFFERENT handoff
+    mappings for one task, that gives TWO events rather than zero, which is
+    the chosen direction: a duplicate resolves by latest timestamp and a
+    suppression does not resolve at all.
 
     Best-effort: fail-open on any error (matches append_event's policy and
     this hook's livelock-safe exit-0 posture; never raises to the caller).
@@ -991,8 +1000,13 @@ def _emit_lead_side_agent_handoff(
         # shared/agent_handoff_marker.already_emitted.
         if not get_journal_path():
             return
+        # The CONTENT term is hashed from the SAME `handoff` mapping passed
+        # to make_event below, and never from a re-read of disk. b2 receives
+        # its mapping from the caller, so hashing the value about to be
+        # written is what keeps this key aligned with b1's for one content.
         occupant = occupant_hash(owner, subject)
-        if already_emitted(team_name, task_id, occupant):
+        content_key = handoff_content_key(handoff)
+        if handoff_already_emitted(team_name, task_id, occupant, content_key):
             return
         # #917 R1 (compensating-unclaim): we OWN the marker here (already_emitted
         # returned False = fresh O_EXCL claim). Roll the claim back if the write
@@ -1014,7 +1028,7 @@ def _emit_lead_side_agent_handoff(
         except Exception:
             written = False
         if not written:
-            unclaim(team_name, task_id, occupant)
+            handoff_unclaim(team_name, task_id, occupant, content_key)
     except Exception:
         # Fail-open: a journal-emit failure must never break the gate's
         # advisory evaluation or its exit-0 contract.
@@ -2106,10 +2120,25 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         # metadata-only TaskUpdate setting handoff reaches this block). Re-call
         # the SAME b2 emitter; _emit_lead_side_agent_handoff owns all eligibility
         # (owner / not-teachback / not-signal / handoff-is-dict) AND the shared
-        # O_EXCL occupant marker, so this re-fire is idempotent — if b1/b2 already
-        # emitted, already_emitted() short-circuits it to a safe no-op. No new
-        # eligibility logic here; the backstop's only job is to CALL the emitter
-        # on the write event b1/b2 structurally cannot see.
+        # O_EXCL marker, which composes the occupant term with a CONTENT term.
+        #
+        # SO THIS RE-FIRE IS NOT IDEMPOTENT ON CHANGED CONTENT, AND THAT IS THE
+        # WHOLE POINT OF THE BACKSTOP. An UNCHANGED re-write derives the same
+        # key and handoff_already_emitted() short-circuits it to a safe no-op.
+        # A REVISED handoff derives a DIFFERENT key and EMITS AGAIN. That second
+        # event is the only route by which a post-completion revision reaches
+        # the journal at all, and the reader resolves a group of events for one
+        # task by latest timestamp.
+        #
+        # DO NOT "RESTORE" IDEMPOTENCY HERE, and the cause is worth the space
+        # because the change reads like a regression. An occupant-only key
+        # suppressed each revision for the lifespan of the team AND left no
+        # record that it had suppressed one, so no reader can separate a
+        # suppressed revision from a revision nobody wrote. The two states agree
+        # in the journal bytes, which is why the repair acts at the WRITE.
+        #
+        # No new eligibility logic here. The only job of the backstop is to CALL
+        # the emitter on the write event that b1 and b2 structurally cannot see.
         #
         # is_lead-gated (mirrors b2 at the completion surface): only the lead's
         # process resolves the canonical journal; a teammate frame self-drops

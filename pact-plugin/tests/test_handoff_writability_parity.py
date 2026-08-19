@@ -250,13 +250,17 @@ def test_writability_check_precedes_marker_claim_in_source():
     drops the gate from either path.
 
     Targets the executable CALL STATEMENTS (`if not get_journal_path():` and
-    `if already_emitted(`) rather than the bare symbol names — both functions
-    mention already_emitted in incidental earlier comments (e.g. the path-
-    sanitization note), so a bare `index("already_emitted")` would match the
-    comment, not the call. The two emit paths use the identical gate
-    statement, which is what makes this a true relational parity pin."""
+    `if handoff_already_emitted(`) rather than the bare symbol names — both
+    functions mention the marker helpers in incidental earlier comments (e.g.
+    the path-sanitization note), so a bare index() on a symbol name would
+    match the comment, not the call. The two emit paths use the identical gate
+    statement, which is what makes this a true relational parity pin.
+
+    The marker call is the hard-bound wrapper, never the raw already_emitted:
+    b2 also holds a raw already_emitted call in the SEPARATE dispatch-site
+    family, so pinning the raw name here would pass on the wrong call."""
     GATE_CALL = "if not get_journal_path():"
-    MARKER_CALL = "if already_emitted("
+    MARKER_CALL = "if handoff_already_emitted("
     for fn, name in (
         (b1.main, "agent_handoff_emitter.main (b1)"),
         (tlg._emit_lead_side_agent_handoff, "task_lifecycle_gate._emit_lead_side_agent_handoff (b2)"),
@@ -266,11 +270,12 @@ def test_writability_check_precedes_marker_claim_in_source():
             f"{name} lost its `{GATE_CALL}` writability gate (#917)."
         )
         assert MARKER_CALL in src, (
-            f"{name} no longer calls already_emitted() — test may be stale."
+            f"{name} no longer calls handoff_already_emitted() — test may be "
+            f"stale, or the path regressed to the raw marker function."
         )
         assert src.index(GATE_CALL) < src.index(MARKER_CALL), (
             f"{name}: the get_journal_path() writability check must precede the "
-            "already_emitted() marker claim — the gate must run BEFORE the "
+            "handoff_already_emitted() marker claim — the gate must run BEFORE the "
             "O_EXCL test-and-set so a non-writable fire defers without claiming "
             "(#917)."
         )
@@ -307,16 +312,17 @@ class TestMarkerKeyConvergence:
 
     def _capture_b1_marker_key(self, tmp_path, monkeypatch, pact_context):
         """Drive b1 with a writable journal + the shared context; return the
-        (team_name, task_id, occupant) tuple b1 passed to already_emitted."""
+        (team_name, task_id, occupant, content_key) tuple b1 passed to
+        handoff_already_emitted."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setenv("HOME", str(tmp_path))
         pact_context(team_name=TEAM, session_id="s1")
         captured: list[tuple] = []
-        real = b1.already_emitted
+        real = b1.handoff_already_emitted
 
-        def _spy(team_name, task_id, occupant):
-            captured.append((team_name, task_id, occupant))
-            return real(team_name, task_id, occupant)
+        def _spy(team_name, task_id, occupant, content_key):
+            captured.append((team_name, task_id, occupant, content_key))
+            return real(team_name, task_id, occupant, content_key)
 
         task_data = {"status": "completed", "owner": OWNER,
                      "metadata": {"handoff": HANDOFF}}
@@ -325,31 +331,34 @@ class TestMarkerKeyConvergence:
         with patch.object(b1, "get_journal_path",
                           return_value=str(tmp_path / "j.jsonl")), \
              patch.object(b1, "read_task_json", return_value=task_data), \
-             patch.object(b1, "already_emitted", side_effect=_spy), \
+             patch.object(b1, "handoff_already_emitted", side_effect=_spy), \
              patch.object(b1, "append_event", side_effect=lambda e: True), \
              patch("sys.stdin", io.StringIO(json.dumps(stdin))):
             with pytest.raises(SystemExit):
                 b1.main()
-        assert captured, "b1 never reached already_emitted (setup broke)."
+        assert captured, (
+            "b1 never reached handoff_already_emitted (setup broke)."
+        )
         return captured[0]
 
     def _capture_b2_marker_key(self, tmp_path, monkeypatch, pact_context):
         """Drive b2 (lead TaskUpdate-completed) with the shared context; return
-        the (team_name, task_id, occupant) tuple b2 passed to already_emitted."""
+        the (team_name, task_id, occupant, content_key) tuple b2 passed to
+        handoff_already_emitted."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setenv("HOME", str(tmp_path))
         pact_context(team_name=TEAM, session_id="s1")
         captured: list[tuple] = []
-        real = tlg.already_emitted
+        real = tlg.handoff_already_emitted
 
-        def _spy(team_name, task_id, occupant):
-            captured.append((team_name, task_id, occupant))
-            return real(team_name, task_id, occupant)
+        def _spy(team_name, task_id, occupant, content_key):
+            captured.append((team_name, task_id, occupant, content_key))
+            return real(team_name, task_id, occupant, content_key)
 
         monkeypatch.setattr(tlg, "get_journal_path",
                             lambda: str(tmp_path / "j.jsonl"))
         monkeypatch.setattr(tlg, "append_event", lambda e: True)
-        monkeypatch.setattr(tlg, "already_emitted", _spy)
+        monkeypatch.setattr(tlg, "handoff_already_emitted", _spy)
         task = {"id": TASK_ID, "subject": SUBJECT, "owner": OWNER,
                 "metadata": {"handoff": HANDOFF}}
         tlg.evaluate_lifecycle({
@@ -358,7 +367,9 @@ class TestMarkerKeyConvergence:
             "tool_input": {"taskId": TASK_ID, "status": "completed"},
             "tool_response": {"task": task},
         })
-        assert captured, "b2 never reached already_emitted (setup broke)."
+        assert captured, (
+            "b2 never reached handoff_already_emitted (setup broke)."
+        )
         return captured[0]
 
     def test_b1_b2_derive_identical_marker_key(
@@ -396,6 +407,14 @@ class TestMarkerKeyConvergence:
             f"occupant DIVERGENCE: b1={b1_key[2]!r} b2={b2_key[2]!r}. The "
             f"occupant_hash(owner, subject) derivation must be shared via "
             f"shared.agent_handoff_marker so the two paths cannot drift."
+        )
+        assert b1_key[3] == b2_key[3], (
+            f"content-key DIVERGENCE: b1={b1_key[3]!r} b2={b2_key[3]!r}. The "
+            f"handoff_content_key(handoff) derivation must be shared via "
+            f"shared.agent_handoff_marker AND both paths must hash the SAME "
+            f"handoff mapping. b1 reads the handoff from the task file and b2 "
+            f"receives it from its caller, so this is the term most able to "
+            f"split: a split here emits TWO events where one is correct."
         )
         assert b1_key == b2_key, (
             f"3-path marker-key convergence broken: b1={b1_key!r} b2={b2_key!r}."

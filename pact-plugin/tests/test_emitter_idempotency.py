@@ -20,7 +20,12 @@ from unittest.mock import patch
 
 import pytest
 
-from fixtures.emitter import VALID_HANDOFF, WRITABLE_TEST_JOURNAL, _run_main
+from fixtures.emitter import (
+    VALID_HANDOFF,
+    VALID_HANDOFF_CONTENT_KEY,
+    WRITABLE_TEST_JOURNAL,
+    _run_main,
+)
 
 
 class TestIdempotency:
@@ -85,7 +90,7 @@ class TestIdempotency:
         occ = occupant_hash("probe-agent", "probe")
         marker = (
             tmp_path / ".claude" / "teams" / "pact-test" / ".agent_handoff_emitted"
-            / f"marker-probe-{occ}"
+            / f"marker-probe-{occ}-{VALID_HANDOFF_CONTENT_KEY}"
         )
         assert marker.exists(), "fire-once marker must be created at team-scoped path"
 
@@ -256,7 +261,8 @@ class TestMarkerFailOpen:
         occ = occupant_hash("probe-agent", "journal write fails silently")
         marker = (
             tmp_path / ".claude" / "teams" / "pact-test"
-            / ".agent_handoff_emitted" / f"journal-fail-probe-{occ}"
+            / ".agent_handoff_emitted"
+            / f"journal-fail-probe-{occ}-{VALID_HANDOFF_CONTENT_KEY}"
         )
         assert not marker.exists(), (
             "#917 R1: a failed journal write must UNCLAIM the marker — the "

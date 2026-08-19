@@ -53,7 +53,10 @@ import task_lifecycle_gate as tlg  # noqa: E402
 from shared.agent_handoff_marker import occupant_hash  # noqa: E402
 from shared.pact_context import is_lead  # noqa: E402
 from shared.session_journal import get_journal_path  # noqa: E402
-from fixtures.emitter import VALID_HANDOFF  # noqa: E402
+from fixtures.emitter import (  # noqa: E402
+    VALID_HANDOFF,
+    VALID_HANDOFF_CONTENT_KEY,
+)
 from fixtures.role_frames import (  # noqa: E402
     captured_lead_posttooluse_taskupdate_completed,
     captured_lead_taskcompleted,
@@ -200,7 +203,7 @@ class TestSequence917CapturedRegression:
         lead["tool_input"]["taskId"] = TASK_ID  # align marker to the poisoned task
         _run_b2(lead, task_data, None, monkeypatch)
 
-        assert _marker_files(tmp_path) == [f"{TASK_ID}-{occupant}"], (
+        assert _marker_files(tmp_path) == [f"{TASK_ID}-{occupant}-{VALID_HANDOFF_CONTENT_KEY}"], (
             "b2 must claim the now-free marker (b1 deferred, so it was never "
             "poisoned)."
         )
@@ -236,7 +239,7 @@ class TestSequence917CapturedRegression:
         _run_b1(teammate, _task_data(subject), calls, monkeypatch)
 
         assert get_journal_path() != "", "model check: this context is writable"
-        assert _marker_files(tmp_path) == [f"{TASK_ID}-{occupant}"], (
+        assert _marker_files(tmp_path) == [f"{TASK_ID}-{occupant}-{VALID_HANDOFF_CONTENT_KEY}"], (
             "a WRITABLE teammate b1 fire must claim its marker."
         )
         assert len(calls) == 1, "a writable b1 fire emits exactly once."
@@ -361,7 +364,7 @@ class TestReverseOrderingBenign:
         pact_context(team_name=TEAM, session_id=LEAD_SESSION)
         _run_b1(teammate, task_data, calls, monkeypatch)
         assert get_journal_path() != "", "b1 model check: writable"
-        assert _marker_files(tmp_path) == [f"{TASK_ID}-{occupant}"], "b1 claims the marker"
+        assert _marker_files(tmp_path) == [f"{TASK_ID}-{occupant}-{VALID_HANDOFF_CONTENT_KEY}"], "b1 claims the marker"
         assert len(calls) == 1, "b1 emits once"
 
         # b2 UNWRITABLE (team_name resolves so it reads the handoff + reaches the
@@ -378,7 +381,7 @@ class TestReverseOrderingBenign:
             "the unwritable b2 must add NO event (C2 defer) — cannot poison a "
             "legitimately-claimed marker."
         )
-        assert _marker_files(tmp_path) == [f"{TASK_ID}-{occupant}"], (
+        assert _marker_files(tmp_path) == [f"{TASK_ID}-{occupant}-{VALID_HANDOFF_CONTENT_KEY}"], (
             "the legitimately-claimed marker is untouched by the deferred b2."
         )
 
@@ -403,7 +406,7 @@ class TestReverseOrderingBenign:
         pact_context(team_name=TEAM, session_id=LEAD_SESSION)
         lead["tool_input"]["taskId"] = TASK_ID
         _run_b2(lead, task_data, calls, monkeypatch)
-        assert _marker_files(tmp_path) == [f"{TASK_ID}-{occupant}"], "b2 claims the marker"
+        assert _marker_files(tmp_path) == [f"{TASK_ID}-{occupant}-{VALID_HANDOFF_CONTENT_KEY}"], "b2 claims the marker"
         assert len(calls) == 1, "b2 emits once"
 
         # b1 UNWRITABLE (teammate, unpersisted journal) for the SAME key → C1 defers
@@ -416,7 +419,7 @@ class TestReverseOrderingBenign:
             "TaskCompleted arriving after the lead's legitimate emit cannot "
             "poison."
         )
-        assert _marker_files(tmp_path) == [f"{TASK_ID}-{occupant}"], (
+        assert _marker_files(tmp_path) == [f"{TASK_ID}-{occupant}-{VALID_HANDOFF_CONTENT_KEY}"], (
             "the legitimately-claimed marker is untouched by the deferred b1."
         )
 

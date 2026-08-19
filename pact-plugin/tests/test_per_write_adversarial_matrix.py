@@ -195,19 +195,32 @@ class TestPerWriteCapEdges:
 
     def test_whole_overlay_over_payload_cap_bounded_marked(self, home):
         """disk ∪ delta over PAYLOAD_CAP: the overlay (not either half
-        alone) is what the substrate bounds. Four 13KB disk siblings +
-        a 15KB targeted delta ≈ 67KB > 64KB — the largest value (the
-        targeted key itself) is evicted to a marker, and the emitted
-        LINE stays near the cap."""
-        disk_md = {f"k{i}": "x" * (13 * 1024) for i in range(4)}
+        alone) is what the substrate bounds. Four 13/16-cap disk siblings
+        plus a 15/16-cap targeted delta overrun the payload cap, so the
+        largest value (the targeted key itself) is evicted to a marker,
+        and the emitted LINE stays near the cap.
+
+        SIZES ARE FRACTIONS OF THE IMPORTED CAPS, NEVER ABSOLUTE BYTES. An
+        absolute size is picked BY REFERENCE TO a cap and then frozen, so
+        the test reads as cap-driven through its assertions while its
+        fixture holds the arithmetic of the day, and a cap move leaves it
+        unable to ASSEMBLE ITS SUBJECT."""
+        sibling = PER_VALUE_CAP * 13 // 16
+        disk_md = {f"k{i}": "x" * sibling for i in range(4)}
         _seed_task(home, "42", metadata=disk_md)
-        big_scope = "s" * (15 * 1024)
+        big_scope = "s" * (PER_VALUE_CAP * 15 // 16)
+        # PRECONDITION: the overlay must overrun the payload cap while each
+        # value stays below the per-value cap, or this row measures stage 1.
+        assert len(_canonical_bytes(big_scope)) <= PER_VALUE_CAP
+        assert len(
+            _canonical_bytes({**disk_md, "scope_contract": big_scope})
+        ) > PAYLOAD_CAP
         tlg.evaluate_lifecycle(_open_write("42", {"scope_contract": big_scope}))
         snaps = _snapshots()
         assert len(snaps) == 1
         payload = snaps[0]["metadata"]
         assert _is_marker_shape(payload["scope_contract"]), (
-            "largest-first eviction picks the 15KB targeted value"
+            "largest-first eviction picks the largest targeted value"
         )
         assert payload["scope_contract"]["original_bytes"] == len(
             _canonical_bytes(big_scope)

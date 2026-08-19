@@ -40,6 +40,33 @@ def _jumbo_str(target_canonical_bytes: int) -> str:
     return "x" * target_canonical_bytes
 
 
+# ─── fixture COUNTS, derived from the caps ───────────────────────────────────
+# The value sizes below are expressed against PER_VALUE_CAP already. THE
+# COUNTS WERE NOT, and a count is the other half of the same arithmetic: a
+# stage fires when N values of a given size overrun a cap, so a frozen N
+# silently stops reaching its stage when a cap moves. That failure has two
+# faces and only one is loud. A test can fail to ASSEMBLE ITS SUBJECT, which
+# is loud. Or it can KEEP PASSING while it drives an earlier stage than the
+# one it names, which announces nothing: a guarded assertion of the form
+# `if emptied and kept_heads:` simply stops running its body.
+
+
+def _keys_to_overrun(entry_bytes: int, safety: int) -> int:
+    """Count of keys whose per-entry cost overruns PAYLOAD_CAP."""
+    return (PAYLOAD_CAP // entry_bytes) * safety // 2
+
+
+# Markers that KEEP their heads: each costs about HEAD_BYTES plus the marker
+# scaffolding and the key. Enough of them forces stage 3a to empty heads.
+_HEADED_MARKER_BYTES = HEAD_BYTES + 70
+_HEADS_KEYS = _keys_to_overrun(_HEADED_MARKER_BYTES, safety=3)
+
+# Markers with EMPTIED heads: about 60 bytes plus the key. Enough of them
+# survive stage 3a and force the stage-3b name-only floor.
+_EMPTY_MARKER_BYTES = 63
+_FLOOR_KEYS = _keys_to_overrun(_EMPTY_MARKER_BYTES, safety=3)
+
+
 class TestCanonicalBytes:
     def test_insertion_order_independent(self):
         """sort_keys makes canonical bytes identical for any dict order."""
@@ -215,11 +242,16 @@ class TestPathologicalFloor:
     def test_heads_emptied_descending_original_bytes(self):
         """So many over-cap values that all-markers-with-heads exceeds the
         payload cap: heads are emptied, biggest originals first."""
-        # Each marker with head ≈ 1KB+overhead; need > 64K of markers → 70+.
         metadata = {
             f"key{index:03d}": _jumbo_str(PER_VALUE_CAP + 1000 + index)
-            for index in range(70)
+            for index in range(_HEADS_KEYS)
         }
+        # PRECONDITION: stage 3a must actually run. Without this the two
+        # assertions below sit behind `if emptied and kept_heads:` and go
+        # quietly vacuous when the count stops reaching the cap.
+        assert _size({k: {"_truncated": True, "original_bytes": 1,
+                          "head": "h" * HEAD_BYTES}
+                      for k in metadata}) > PAYLOAD_CAP
         payload, truncated = build_snapshot_payload(metadata)
         assert truncated is True
         assert _size(payload) <= PAYLOAD_CAP
@@ -237,10 +269,9 @@ class TestPathologicalFloor:
     def test_dropped_keys_floor_names_survive(self):
         """Beyond all-markers-empty-heads capacity: keys survive name-only
         in _dropped_keys — existence is never silently lost."""
-        # Empty-head markers are ~60 bytes each; > 64K needs > ~1100 keys.
         metadata = {
             f"key{index:05d}": _jumbo_str(PER_VALUE_CAP + 100)
-            for index in range(1500)
+            for index in range(_FLOOR_KEYS)
         }
         payload, truncated = build_snapshot_payload(metadata)
         assert truncated is True
@@ -269,7 +300,7 @@ class TestPathologicalFloor:
         accident."""
         metadata = {
             ("k" * 200 + f"{index:05d}"): _jumbo_str(PER_VALUE_CAP + 10)
-            for index in range(400)
+            for index in range(_FLOOR_KEYS // 4)
         }
         payload, truncated = build_snapshot_payload(metadata)
         assert truncated is True
@@ -304,7 +335,7 @@ class TestReadOnlyAdversarialMarkerShapedInput:
         }
         # Enough genuinely over-cap values that the payload exceeds
         # PAYLOAD_CAP (~1KB marker head each) and stage 3a must run.
-        for index in range(70):
+        for index in range(_HEADS_KEYS):
             metadata[f"key{index:03d}"] = _jumbo_str(PER_VALUE_CAP + 100)
         return metadata
 
@@ -380,7 +411,7 @@ class TestProvenanceMarkerIdentity:
                 "head": "h",
             },
         }
-        for index in range(70):
+        for index in range(_HEADS_KEYS):
             metadata[f"key{index:03d}"] = _jumbo_str(PER_VALUE_CAP + 100)
         payload, truncated = build_snapshot_payload(metadata)
         assert truncated is True
@@ -395,7 +426,7 @@ class TestProvenanceMarkerIdentity:
             "lk_int": {"_truncated": True, "original_bytes": 7, "head": "h"},
             "lk_str": {"_truncated": True, "original_bytes": "x", "head": "h"},
         }
-        for index in range(1500):
+        for index in range(_FLOOR_KEYS):
             metadata[f"key{index:05d}"] = _jumbo_str(PER_VALUE_CAP + 100)
         payload, _ = build_snapshot_payload(metadata)
         assert _size(payload) <= PAYLOAD_CAP

@@ -17,6 +17,8 @@ from unittest.mock import patch
 
 import pytest
 
+from shared.agent_handoff_marker import handoff_content_key
+
 VALID_HANDOFF = {
     "produced": ["src/auth.ts"],
     "decisions": ["Used JWT"],
@@ -24,6 +26,20 @@ VALID_HANDOFF = {
     "integration": ["UserService"],
     "open_questions": [],
 }
+
+# The CONTENT term of the agent_handoff marker key for VALID_HANDOFF, defined
+# ONCE here because five test modules assert a marker filename built from it.
+#
+# DERIVED, NOT PINNED, and the limit of that choice is stated rather than left
+# for a reader to find: because this calls the same function the emit paths
+# call, it AGREES WITH A MUTATED handoff_content_key. Measured: a mutant that
+# makes the content term a constant, and a mutant that swaps the serialization
+# for a key-order-sensitive one, both leave every consumer of this value GREEN.
+# So these filename assertions guard the SHAPE of the key (that a content term
+# is present and composed with the occupant term) and they do NOT guard that
+# the term DISCRIMINATES. A test that writes a DIFFERENT handoff on a second
+# write is what covers that, and it does not live here.
+VALID_HANDOFF_CONTENT_KEY = handoff_content_key(VALID_HANDOFF)
 
 # Shared non-empty sentinel for the in-hook get_journal_path() return (F2 —
 # the single source of truth, imported by every harness site + the

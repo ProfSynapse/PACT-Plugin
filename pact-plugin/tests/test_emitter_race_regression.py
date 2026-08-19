@@ -10,7 +10,11 @@ phantom-fire-revert sequence.
 """
 import pytest
 
-from fixtures.emitter import VALID_HANDOFF, _run_main
+from fixtures.emitter import (
+    VALID_HANDOFF,
+    VALID_HANDOFF_CONTENT_KEY,
+    _run_main,
+)
 
 
 class TestRaceShapeRegression:
@@ -150,11 +154,17 @@ class TestRaceShapeRegression:
             "(review-architect, PR #563) would resurface — empty-content "
             "marker would suppress the later genuine completion."
         )
-        # #887: marker is occupant-keyed — {task_id}-{occupant_hash}.
+        # The marker is composite-keyed: {task_id}-{occupant}-{content}.
+        # THE CONTENT TERM MATTERS TO THE FIRE-1 ASSERTION BELOW, and not only
+        # to fire 2. Fire 1 asserts the marker does NOT exist, and a
+        # not-exists assertion passes for free against ANY wrong path — so a
+        # stale expectation here would go VACUOUS rather than red, and only
+        # the fire-2 assertion would have reported the drift.
         occ = occupant_hash("probe-agent", "two-fire revert sequence probe")
         marker = (
             tmp_path / ".claude" / "teams" / "pact-test"
-            / ".agent_handoff_emitted" / f"two-fire-revert-{occ}"
+            / ".agent_handoff_emitted"
+            / f"two-fire-revert-{occ}-{VALID_HANDOFF_CONTENT_KEY}"
         )
         assert not marker.exists(), (
             "Fire 1: marker MUST NOT be created when handoff is absent. "
