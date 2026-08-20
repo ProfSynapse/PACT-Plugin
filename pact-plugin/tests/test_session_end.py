@@ -1119,7 +1119,7 @@ class TestCleanupOldSessions:
     A2 (handoff plus consolidation reaps) pins that a durable second carrier
     releases the directory.
 
-    ARMS A6 TO A9 EACH REDDEN ON ONE FAULT THAT NO OTHER ARM HERE CATCHES,
+    ARMS A6 TO A10 EACH REDDEN ON ONE FAULT THAT NO OTHER ARM HERE CATCHES,
     and that is the property to keep when editing them:
 
     * A6 (payload mention reaps) is the only arm that separates a verdict
@@ -1133,21 +1133,29 @@ class TestCleanupOldSessions:
     * A9 (consolidation ABOVE the handoff) is the only arm that separates "a
       consolidation anywhere releases" from "a consolidation releases only
       what came before it". A2 writes the handoff first, so it cannot.
+    * A10 (JSON-escaped ``type`` value) is the only arm that reddens if the
+      predicate decides from the RAW BYTES of a line rather than from the
+      value the line parses to. A6 pins the same distinction from the other
+      side, on a line that mentions the name and is not the event. A10 pins
+      it on a line that IS the event and does not mention the name.
 
-    A7 and A8 are PROTECTION arms and belong with A1 and A4: each reddens
-    when the guard stops protecting a carrier. A6 and A9 are release arms
-    and belong with A2, A3 and A5.
+    A7, A8 and A10 are PROTECTION arms and belong with A1 and A4: each
+    reddens when the guard stops protecting a carrier. A6 and A9 are release
+    arms and belong with A2, A3 and A5.
 
     THESE ARMS COVER THE EXECUTABLE HALF ONLY. The step 4 instruction in
     ``skills/pact-handoff-harvest/SKILL.md`` is the non-executable half and
     carries its own presence pin in ``test_skills_structure.py``. The two
     gates do not cross-cover.
 
-    ONE FAULT NO ARM HERE CATCHES, recorded so a green is not read wider
-    than it is: the substring filter tests the RAW line, so a line that
-    carries the event name in a JSON escape parses to the correct name and
-    is dropped before the parse. That is the fail-open direction. No arm
-    below pins it, because pinning it would pin behaviour that is incorrect.
+    A10 IS A REGRESSION PIN ON A DEFECT THAT WAS FIXED, NOT ON A DESIGN
+    CHOICE. The predicate carried a cheap substring test above the parse. It
+    read the RAW line, so a line of which the ``type`` value used a JSON
+    escape parsed to the correct event name and was dropped BEFORE the
+    parse. The guard then answered "no carrier" for a journal that held a
+    handoff, and the reaper removed the only copy. THE FAIL-OPEN DIRECTION.
+    A10 is red against that shape and green without it. Do not re-introduce
+    a pre-parse test on the raw line to save the parse cost.
     """
 
     def _create_session_dir(self, slug_dir, session_id, age_days=0):
@@ -1655,6 +1663,68 @@ class TestCleanupOldSessions:
             "survived, the guard now requires the consolidation to follow "
             "the handoff, and every session that harvested early is "
             "retained for good."
+        )
+
+    def test_carrier_guard_a10_json_escaped_type_is_a_carrier(self, tmp_path):
+        """A10: a ``type`` value written with a JSON escape is still an
+        agent_handoff event, so the directory survives.
+
+        The line below carries no literal ``agent_handoff`` text. It parses
+        to that event name, which is the only thing that decides the verdict.
+        A predicate that tests the RAW BYTES of a line before it parses drops
+        this line, answers "no carrier", and lets the reaper remove the only
+        copy of the HANDOFF it holds. THAT IS THE FAIL-OPEN DIRECTION, and it
+        is the shape this arm exists to keep out.
+
+        `json.dumps` does not escape an ASCII letter, so no shipped writer
+        emits this form today. A hand-edited journal or a different writer
+        can. THE ARM DOES NOT DEPEND ON THE FORM BEING REACHABLE: it pins
+        that the verdict comes from the parsed value, and the escape is the
+        cheapest input that separates the parsed value from the raw bytes.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        # `a` is the letter `a`. The rendered line reads
+        # {"type": "agent_handoff"} and holds no literal `agent_handoff`.
+        self._write_journal_raw(
+            old_dir, ['{"type": "\\u0061gent_handoff", "task": "10"}']
+        )
+        self._age_dir(old_dir, 10)
+
+        # Guard the fixture itself: if either half of this stops holding, the
+        # arm below measures something other than what it names.
+        import json as _json
+
+        raw = (old_dir / "session-journal.jsonl").read_text(encoding="utf-8")
+        assert "agent_handoff" not in raw, (
+            "FIXTURE BROKEN: the raw line must NOT contain the literal event "
+            "name, or this arm cannot separate a raw-bytes read from a "
+            "parsed-value read."
+        )
+        assert _json.loads(raw.strip())["type"] == "agent_handoff", (
+            "FIXTURE BROKEN: the line must PARSE to the event name, or this "
+            "arm asserts survival for a journal that holds no handoff."
+        )
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert old_dir.exists(), (
+            "This journal HOLDS an agent_handoff event: the line parses to "
+            "that name. Reaping it destroys the only copy. If this arm is "
+            "red, the predicate decided from the raw bytes of the line "
+            "rather than from the value it parses to, which fails OPEN on a "
+            "guard that exists to fail safe."
         )
 
 

@@ -314,13 +314,13 @@ def _journal_carries_unharvested_handoffs(session_dir: str) -> bool | None:
         has_handoff = False
         with journal.open(encoding="utf-8", errors="replace") as fh:
             for line in fh:
-                # Cheap substring filter before the parse: only a line that
-                # names one of the two events can change the verdict.
-                if (
-                    "agent_handoff" not in line
-                    and "session_consolidated" not in line
-                ):
-                    continue
+                # Parse each line. DO NOT add a substring pre-filter on the
+                # raw line as a speed measure. A `type` value written with a
+                # JSON escape sequence parses to the correct name and does
+                # NOT contain the literal text, so such a filter drops the
+                # line and the verdict reads as if the event were absent,
+                # which removes the directory. The verdict keys on the
+                # PARSED `type` field and on nothing else.
                 try:
                     event = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
