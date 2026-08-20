@@ -1,7 +1,7 @@
 ---
 name: pact-handoff-harvest
 description: |
-  HANDOFF discovery, review, save, and cleanup workflow for the PACT secretary.
+  HANDOFF discovery, review, save, and ledger-record workflow for the PACT secretary.
   Use when: processing agent HANDOFFs after workflow phases, running session
   consolidation, or recovering orphaned completed handoffs from prior sessions.
   Triggers: harvest HANDOFFs, process HANDOFFs, incremental, consolidation, handoff recovery.
@@ -12,7 +12,7 @@ description: |
 This skill provides the complete workflow for discovering, reviewing, and saving agent HANDOFFs as institutional knowledge. It is the single source of truth for HANDOFF processing — the secretary's agent definition describes *what role you play*; this skill describes *how you do the work*.
 
 Three workflow variants:
-- **Standard Harvest** — discover, review, save, cleanup. Triggered by workflow commands (orchestrate, comPACT, peer-review) after phases complete.
+- **Standard Harvest** — discover, review, save, record the processed ids. Triggered by workflow commands (orchestrate, comPACT, peer-review) after phases complete.
 - **Incremental Harvest** — delta-only pass after remediation. Processes only new completions since last harvest.
 - **Consolidation Harvest** — safety-net + deep-clean pass. Triggered by wrap-up/pause at session end.
 

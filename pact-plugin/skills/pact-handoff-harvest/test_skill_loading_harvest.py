@@ -16,6 +16,35 @@ SKILL_FILE = SKILL_DIR / "SKILL.md"
 AGENTS_DIR = SKILL_DIR.parent.parent / "agents"
 SECRETARY_FILE = AGENTS_DIR / "pact-secretary.md"
 
+ORPHAN_HEADING = "## Orphaned Handoff Recovery"
+
+# A known sentence of the Orphaned Handoff Recovery section, used as the
+# anchor of the non-vacuity guard. It must sit in that section and in no
+# other.
+ORPHAN_ANCHOR = "Layer 4 fallback"
+
+# Call spellings that remove a file from disk. THIS LIST IS A FLOOR AND NOT
+# A PROOF OF ABSENCE: prose can authorise a removal in words no list
+# anticipates. The POSITIVE assertion carries the contract. This list catches
+# the machine-shaped forms an editor pastes back in.
+REMOVAL_CALL_TOKENS = ("unlink", "shutil.rmtree", "os.remove", "os.rmdir", "rm -")
+
+
+def orphan_recovery_section(content):
+    """Return the Orphaned Handoff Recovery section of the skill.
+
+    The slice runs from the section heading to the next `## ` heading, or to
+    the end of the file when that section is the last one. THE SLICE RULE IS
+    THE PARAMETER OF THE ARM BELOW, so the arm asserts the slice terminated
+    correctly before it reads anything out of it.
+    """
+    start = content.find(ORPHAN_HEADING)
+    if start == -1:
+        return ""
+    rest = content[start + len(ORPHAN_HEADING):]
+    end = rest.find("\n## ")
+    return rest if end == -1 else rest[:end]
+
 
 @pytest.fixture
 def skill_content():
@@ -181,11 +210,81 @@ class TestCriticalProtocolReferences:
         """Skill must reference CalibrationRecord for variety scoring feedback."""
         assert "CalibrationRecord" in skill_content
 
-    def test_has_file_cleanup_guidance(self, skill_content):
-        """Skill must include Path.unlink cleanup guidance for orphaned files."""
-        assert "unlink" in skill_content, (
-            "Skill must reference Path.unlink for orphaned file cleanup"
+    def test_orphan_recovery_records_and_removes_nothing(self, skill_content):
+        """The recovery step must RECORD the processed ids and remove no file.
+
+        THIS ARM REPLACES A PIN ON THE OPPOSITE CONTRACT. It used to assert
+        that the skill referenced `Path.unlink`, because step 4 told the
+        agent how to remove the files it had read. Either of the two file
+        classes that step reads can be the ONLY carrier of a HANDOFF, so the
+        step was changed to record the ids into the Step 8 ledger and to
+        remove nothing. A pin demanding the removed instruction is a pin on
+        a defect.
+
+        Deleting the assertion was the other option and it is worse. This
+        class is colocated with the skill, so it is the arm a reader of the
+        skill directory meets, and a member that asserts nothing reads as
+        coverage while it gives none.
+
+        THE THREE PARTS RUN IN THIS ORDER AND THE ORDER IS LOAD-BEARING.
+        The non-vacuity guard runs FIRST: a negative assertion on an empty
+        or mis-sliced section passes forever while it measures nothing.
+        Then the positive assertion carries the contract. Then the negative
+        assertion catches a machine-shaped removal pasted back in.
+
+        WHAT THIS CANNOT CATCH: the token list is a FLOOR. An instruction
+        that says erase the file in plain words passes the negative part.
+        The positive part is what pins the contract itself.
+
+        A sibling arm, `TestOrphanRecoveryCarrierGuard` in
+        `tests/test_skills_structure.py`, pins three carrier-test phrases of
+        the same section. This arm deliberately does NOT repeat them. It
+        carries the SECTION-SCOPED ABSENCE term, which no other arm covers.
+        """
+        section = orphan_recovery_section(skill_content)
+
+        # --- NON-VACUITY GUARD. Four checks, and each must pass before the
+        # --- assertions below can mean anything.
+        assert section.strip(), (
+            f"The {ORPHAN_HEADING!r} section is empty or absent, so the "
+            f"assertions below would pass while measuring nothing. Either "
+            f"the section was removed from the skill, or the slice rule in "
+            f"orphan_recovery_section no longer finds its heading."
         )
+        assert len(section) < len(skill_content), (
+            "The section slice is the whole file, so the scope of this arm "
+            "ran away and the absence check below covers text it must not."
+        )
+        assert ORPHAN_ANCHOR in section, (
+            f"The section slice does not contain {ORPHAN_ANCHOR!r}, so it is "
+            f"not the section this arm targets. Update ORPHAN_ANCHOR only "
+            f"after checking the sentence moved rather than the slice."
+        )
+        assert "\n## " not in section, (
+            "The section slice contains a later heading, so it did not "
+            "terminate at the section boundary."
+        )
+
+        # --- POSITIVE. The contract the step carries now.
+        assert "Do NOT remove the files you read them from" in section, (
+            "The Orphaned Handoff Recovery step must tell the agent to "
+            "record the processed ids and to remove no file. Its absence "
+            "means the step could have reverted to a removal, and either "
+            "file class it reads can be the ONLY carrier of a recovered "
+            "HANDOFF. If a deliberate rewording changed the phrase, update "
+            "it here and state in the update that the step removes nothing."
+        )
+
+        # --- NEGATIVE. A floor, not a proof of absence.
+        for token in REMOVAL_CALL_TOKENS:
+            assert token not in section, (
+                f"The Orphaned Handoff Recovery step contains {token!r}, "
+                f"which removes a file. That step reads the session journal "
+                f"and the task files, and either can be the only carrier of "
+                f"a HANDOFF, so it must record the ids and remove nothing. "
+                f"REMOVAL_CALL_TOKENS is a floor: seeing one is proof of a "
+                f"regression, and seeing none is not proof of safety."
+            )
 
     def test_has_processed_tasks_tracking(self, skill_content):
         """Skill must reference processed task tracking for dedup."""
