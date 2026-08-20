@@ -274,6 +274,74 @@ def _is_checkpointed_session(session_dir: str) -> bool:
             or read_last_event_from(session_dir, "session_refreshed") is not None)
 
 
+def _journal_carries_unharvested_handoffs(session_dir: str) -> bool | None:
+    """
+    Tri-state carrier test on one session journal.
+
+    This does NOT call `read_last_event_from`. That helper ends in a bare
+    `except Exception: return None`, so "the event is absent" and "the
+    journal could not be read" give it the same value, and a caller cannot
+    separate them. A guard built on it removes the directory on an
+    unreadable journal, which is the fail-open direction this predicate
+    closes. This function opens the file itself, so a read failure reaches
+    its own `except` and becomes the third state.
+
+    The event name comes from the `type` field, because that is where the
+    journal writer puts it. A read keyed on `event` matches no line and
+    gives a confident absence rather than an error.
+
+    This catches `OSError` only. A bare `except Exception` can swallow a
+    programming error and give the refuse value, which keeps the bytes and
+    hides the defect.
+
+    Args:
+        session_dir: Absolute path to the session directory.
+
+    Returns:
+        True: at least one `agent_handoff` event is present AND no
+            `session_consolidated` event is present. The journal holds
+            HANDOFF knowledge that reached no durable second carrier.
+        False: no `agent_handoff` event is present, OR a
+            `session_consolidated` event is present, OR the journal file
+            is absent.
+        None: the journal file is present and the read raised. The carrier
+            question is un-evaluable, and the caller must refuse.
+    """
+    journal = Path(session_dir) / "session-journal.jsonl"
+    try:
+        if not journal.exists():
+            return False
+        has_handoff = False
+        with journal.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                # Cheap substring filter before the parse: only a line that
+                # names one of the two events can change the verdict.
+                if (
+                    "agent_handoff" not in line
+                    and "session_consolidated" not in line
+                ):
+                    continue
+                try:
+                    event = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    # Parity with `_scan_lines_for_event`: a corrupt line
+                    # must not decide the verdict.
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                event_type = event.get("type")
+                if event_type == "session_consolidated":
+                    # The only early return. A consolidation can land on a
+                    # line after the last handoff, so the scan cannot exit
+                    # early on `agent_handoff`.
+                    return False
+                if event_type == "agent_handoff":
+                    has_handoff = True
+        return has_handoff
+    except OSError:
+        return None
+
+
 def cleanup_old_sessions(
     project_slug: str,
     current_session_id: str,
@@ -292,6 +360,13 @@ def cleanup_old_sessions(
     protects in-progress user work across the pause→resume and
     refresh→resume workflows without retaining checkpoint state forever —
     checkpointed sessions still age out past 180 days.
+
+    A directory past its TTL is removed ONLY when
+    `_journal_carries_unharvested_handoffs` returns False. A journal that
+    holds an `agent_handoff` event with no `session_consolidated` event can
+    be the sole carrier of that knowledge, and nothing regenerates it. An
+    un-evaluable journal (the file is present and the read raised) refuses
+    the same way, so the guard keeps the bytes on each missing-writer path.
 
     Best-effort cleanup — never raises. Skips the current session's
     directory and any entry that doesn't look like a UUID directory.
@@ -340,7 +415,18 @@ def cleanup_old_sessions(
                     else max_age_days
                 )
                 if age_days > threshold:
-                    shutil.rmtree(entry, ignore_errors=True)
+                    # Carrier guard, below the age test so the added read
+                    # runs only for an entry that is about to be removed.
+                    # `is False` is load-bearing: True (the journal holds
+                    # un-harvested HANDOFFs) and None (the carrier question
+                    # is un-evaluable) must EACH skip the removal. A truth
+                    # test on the negation removes on None, which is the
+                    # fail-open direction. `is False` also skips on a
+                    # future return value outside the contract.
+                    if _journal_carries_unharvested_handoffs(
+                        str(entry)
+                    ) is False:
+                        shutil.rmtree(entry, ignore_errors=True)
             except OSError:
                 continue
     except OSError:

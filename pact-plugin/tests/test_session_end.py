@@ -1103,7 +1103,27 @@ class TestCheckUnpausedPr:
 # =============================================================================
 
 class TestCleanupOldSessions:
-    """Tests for session_end.cleanup_old_sessions() — stale session directory removal."""
+    """Tests for session_end.cleanup_old_sessions() — stale session directory removal.
+
+    CARRIER-GUARD ARMS A1 to A5 (`test_carrier_guard_*`) COME IN TWO PAIRS,
+    AND A LATER EDITOR MUST NOT REMOVE ONE HALF:
+
+    * A1 (un-harvested handoff survives) and A4 (unreadable journal
+      survives) are the arms that a mutant returning ``False``
+      unconditionally must redden. They pin the protection itself.
+    * A3 (no handoff reaps) and A5 (no journal reaps) are the VACUITY arms,
+      and they are not optional. Without them a mutant that refuses to reap
+      anything passes the suite, and the reaper looks guarded while it has
+      stopped working.
+
+    A2 (handoff plus consolidation reaps) pins that a durable second carrier
+    releases the directory.
+
+    THESE ARMS COVER THE EXECUTABLE HALF ONLY. The step 4 instruction in
+    ``skills/pact-handoff-harvest/SKILL.md`` is the non-executable half and
+    carries its own presence pin in ``test_skills_structure.py``. The two
+    gates do not cross-cover.
+    """
 
     def _create_session_dir(self, slug_dir, session_id, age_days=0):
         """Helper: create a session directory with controlled mtime."""
@@ -1117,6 +1137,36 @@ class TestCleanupOldSessions:
             import os as _os
             _os.utime(str(session_dir), (old_time, old_time))
         return session_dir
+
+    def _age_dir(self, session_dir, age_days):
+        """Helper: backdate a directory's mtime.
+
+        Separate from _create_session_dir because writing the journal into
+        the directory bumps the parent mtime. The age must be applied AFTER
+        every child write, or the entry looks fresh and the age test skips
+        it before the carrier guard is ever reached.
+        """
+        import os as _os
+        import time as _time
+        old_time = _time.time() - (age_days * 86400)
+        _os.utime(str(session_dir), (old_time, old_time))
+
+    def _write_journal(self, session_dir, event_types):
+        """Helper: write one journal line for each event type given.
+
+        The event name goes in the ``type`` field, because that is where the
+        journal writer puts it. A fixture seeding an ``event`` field matches
+        no line, so every arm below would pass against a predicate that
+        reads nothing at all.
+        """
+        import json as _json
+        lines = [
+            _json.dumps({"type": t, "ts": "2026-01-01T00:00:00Z"})
+            for t in event_types
+        ]
+        (session_dir / "session-journal.jsonl").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
 
     def test_removes_old_session_directories(self, tmp_path):
         from session_end import cleanup_old_sessions
@@ -1249,6 +1299,160 @@ class TestCleanupOldSessions:
             project_slug="my-project",
             current_session_id="",
             sessions_dir=str(tmp_path),
+        )
+
+    # -------------------------------------------------------------------
+    # Carrier guard, arms A1 to A5. See the class docstring for the pairing
+    # rule: A1 and A4 pin the protection, A3 and A5 are the vacuity arms.
+    # -------------------------------------------------------------------
+
+    def test_carrier_guard_a1_unharvested_handoff_survives(self, tmp_path):
+        """A1: a journal with agent_handoff and no session_consolidated is
+        the sole known carrier of that knowledge, so the directory survives
+        past its TTL. A mutant returning False unconditionally reddens here.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        self._write_journal(old_dir, ["session_start", "agent_handoff"])
+        self._age_dir(old_dir, 10)
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert old_dir.exists(), (
+            "A session directory whose journal holds an agent_handoff event "
+            "with no session_consolidated event is the sole known carrier "
+            "of that HANDOFF. Reaping it destroys the only copy."
+        )
+        assert (old_dir / "session-journal.jsonl").is_file()
+
+    def test_carrier_guard_a2_consolidated_handoff_reaps(self, tmp_path):
+        """A2: session_consolidated says the knowledge reached memory, so a
+        durable second carrier exists and the directory reaps normally.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        self._write_journal(
+            old_dir, ["agent_handoff", "session_consolidated"]
+        )
+        self._age_dir(old_dir, 10)
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert not old_dir.exists(), (
+            "A consolidated session has a durable second carrier, so the "
+            "guard must release it to the normal TTL."
+        )
+
+    def test_carrier_guard_a3_no_handoff_reaps(self, tmp_path):
+        """A3, VACUITY ARM: a journal carrying neither event holds no
+        HANDOFF knowledge, so the reaper keeps working. Without this arm a
+        mutant that refuses to reap anything passes the suite.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        self._write_journal(old_dir, ["session_start", "session_end"])
+        self._age_dir(old_dir, 10)
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert not old_dir.exists(), (
+            "A journal with no agent_handoff event carries nothing this "
+            "guard protects. The reaper must keep reaping it, or the guard "
+            "has become an unbounded-retention policy."
+        )
+
+    def test_carrier_guard_a4_unreadable_journal_survives(self, tmp_path):
+        """A4: the journal path is present and the read raises, so the
+        carrier question is un-evaluable and the guard refuses.
+
+        The fixture makes ``session-journal.jsonl`` a DIRECTORY, so open()
+        raises IsADirectoryError, which is an OSError for every user. A
+        chmod-000 fixture is a silent no-op when the suite runs as root,
+        which converts this arm into a green that measures nothing.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        (old_dir / "session-journal.jsonl").mkdir()
+        self._age_dir(old_dir, 10)
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert old_dir.exists(), (
+            "An unreadable journal is not an empty one. Reaping on a failed "
+            "read is the fail-open direction this guard exists to close."
+        )
+
+    def test_carrier_guard_a5_no_journal_reaps(self, tmp_path):
+        """A5, VACUITY ARM: a session directory with no journal file at all
+        carries no HANDOFF knowledge, so it reaps. This is the shape every
+        pre-existing arm in this class seeds, so it also pins that the guard
+        did not change the behaviour those arms measure.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=10)
+
+        assert not (old_dir / "session-journal.jsonl").exists()
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert not old_dir.exists(), (
+            "A session directory with no journal carries nothing this guard "
+            "protects, and an absent journal must not read as un-evaluable."
         )
 
 
