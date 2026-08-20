@@ -158,9 +158,14 @@ class TestMirrorBothModes:
     ):
         """Auditor TEST-FOCUS (b): the author-time MIRROR fires in the auditor's
         TEAMMATE (non-lead) process in BOTH topologies. Task JSON is team-dir-
-        scoped → writable from a teammate process (unlike the journal, which
-        self-drops there, #877). A fail-open author-time write would leave no
-        RECOVER protection later, so this persistence is load-bearing."""
+        scoped → writable from a teammate process. The journal EMIT SEAMS are
+        different: they are frame-gated, so an emit drops in a tmux teammate
+        frame and it fires in an in-process teammate frame, which shares the
+        lead's session. This test does not drive that gate. The parametrized
+        value sets the CONTEXT file and not the frame, and the topology leg
+        needs a frame session_id AND a leadSessionId team config. A fail-open
+        author-time write would leave no RECOVER protection later, so this
+        persistence is load-bearing."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         pact_context(team_name=TEAM, session_id=session_id)
         _seed(tmp_path, metadata={"audit_summary": RED})

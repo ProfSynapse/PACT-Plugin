@@ -286,9 +286,17 @@ class TestBothModesCaptured:
     def test_b2_gate_suppresses_captured_teammate_spelling(
         self, tmp_path, monkeypatch, pact_context
     ):
-        """The b2 emit is is_lead-gated: the REAL captured teammate agent_type
-        spelling ('pact-architect') applied to a b2-shaped frame is SUPPRESSED,
-        while the lead spelling on the same frame EMITS (positive control).
+        """The b2 emit is is_canonical_journal_frame-gated: the REAL captured
+        teammate agent_type spelling ('pact-architect') applied to a b2-shaped
+        frame is SUPPRESSED, while the lead spelling on the same frame EMITS
+        (positive control).
+
+        THE SUPPRESSION IS NARROWER THAN IT LOOKS. This frame DOES carry a
+        session_id equal to LEAD_SESSION, so it supplies the frame half of the
+        topology leg. It is suppressed only because no team config carrying a
+        leadSessionId is seeded, so _read_lead_session_id returns the empty
+        string and the leg answers False. Seed that config and this same
+        teammate spelling EMITS, because it is then the in-process teammate.
 
         Frame STRUCTURE is the captured lead PostToolUse(TaskUpdate, completed);
         only agent_type is varied — the captured-grounded analog of
@@ -301,7 +309,7 @@ class TestBothModesCaptured:
         teammate_spelling = captured_teammate_taskcompleted()["agent_type"]
         subject = captured_teammate_taskcompleted()["task_subject"]
 
-        # teammate spelling → is_lead False → b2 suppressed
+        # teammate spelling + no leadSessionId config → frame gate False → b2 skips
         suppressed = captured_lead_posttooluse_taskupdate_completed()
         suppressed["tool_input"]["taskId"] = TASK_ID
         suppressed["agent_type"] = teammate_spelling

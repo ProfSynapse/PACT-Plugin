@@ -4,7 +4,9 @@ dispatch_variety + teachback_ack mirror per-dispatch variety and the teammate's
 variety_acknowledgment into the GC-immune journal so wrap-up Q5/Q6 survive the
 teams/tasks reaper (the task store goes false-empty after GC).
 
-Both emit from the existing PostToolUse task_lifecycle_gate, is_lead-gated:
+Both emit from the existing PostToolUse task_lifecycle_gate, gated on
+is_canonical_journal_frame (the lead frame in either teammateMode, AND the
+in-process teammate frame; the tmux teammate frame skips):
   - dispatch_variety: on the TaskCreate of a Task-B carrying metadata.variety.
     The new Task-B id comes from tool_response.task.id (the create-result
     post-state), falling back to tool_input.taskId. Keyed on metadata.variety
@@ -14,7 +16,10 @@ Both emit from the existing PostToolUse task_lifecycle_gate, is_lead-gated:
     reads variety_acknowledgment off the DISK Task-A (the accept TaskUpdate
     carries only status).
 
-Both-modes matrix (M9-M11): lead frame emits; teammate frame self-drops (#877).
+Both-modes matrix (M9-M11): the lead frame emits, and the teammate frames below
+do not. Their silence is the frame gate acting on fixtures that carry no
+session_id and seed no leadSessionId team config, so the topology leg cannot
+resolve. These arms do NOT cover the in-process teammate frame, which emits.
 Drives tlg.evaluate_lifecycle with tlg.append_event spied to capture events.
 """
 import sys
@@ -135,7 +140,9 @@ class TestM9DispatchVariety:
         assert len(dv) == 1 and dv[0]["task_id"] == "77"
 
     def test_teammate_frame_no_emit(self, emit_events):
-        """M9 dual-mode: teammate frame self-drops (no canonical journal)."""
+        """M9 dual-mode: this teammate frame does not emit. The suppression is
+        the frame gate: the frame carries no session_id, so the topology leg
+        cannot resolve. This arm does NOT cover the in-process teammate."""
         tlg.evaluate_lifecycle({
             "tool_name": "TaskCreate",
             "agent_type": TEAMMATE,
@@ -216,7 +223,9 @@ class TestM10TeachbackAck:
         assert ta[0]["concern"] == "risk rationale understated"
 
     def test_teammate_frame_no_emit(self, emit_events):
-        """M10 dual-mode: teammate frame self-drops."""
+        """M10 dual-mode: this teammate frame does not emit. The suppression is
+        the frame gate: the frame carries no session_id, so the topology leg
+        cannot resolve. This arm does NOT cover the in-process teammate."""
         tlg.evaluate_lifecycle(self._ack_payload(agent_type=TEAMMATE))
         assert _typed(emit_events, "teachback_ack") == []
 

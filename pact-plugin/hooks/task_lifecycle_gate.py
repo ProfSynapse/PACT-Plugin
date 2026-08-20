@@ -445,13 +445,16 @@ def _artifact_paths_event_present(workflow: str, feature: str) -> bool:
     """Return True iff an artifact_paths journal event exists for this
     (workflow, feature) in the CURRENT session's journal.
 
-    Uses the IMPLICIT read_events() (lead-frame): this backstop is is_lead-gated
-    at its single call site, so get_session_dir() resolves the canonical journal
-    in the lead's process. The off-lead masked-read hazard (read_events()
+    Uses the IMPLICIT read_events() (canonical-journal frame): this backstop is
+    is_canonical_journal_frame-gated at its single call site, so
+    get_session_dir() resolves the canonical journal in each frame that reaches
+    it (the lead in either teammateMode, and the in-process teammate, which
+    shares the lead session). The off-lead masked-read hazard (read_events()
     false-returning [] for a teammate frame) is strictly the SECRETARY HARVEST
-    reader's concern — that reader runs off-lead and MUST use
-    read_events_from(session_dir); this backstop does not, because it never runs
-    off-lead. The hook frame carries no worktree/session_dir to pass anyway.
+    reader's concern: that reader runs off-lead and MUST use
+    read_events_from(session_dir). This backstop does not, because the frame
+    gate excludes the tmux teammate, the only frame that reads off-session.
+    The hook frame carries no worktree/session_dir to pass anyway.
 
     Fail-OPEN by construction: read_events swallows its own errors and returns []
     (treated as "absent" → the nudge fires). A false nudge is non-blocking and
@@ -589,8 +592,10 @@ def _writeback_audit_recovery(task_id: str, updates: dict) -> bool:
       - RECOVER : updates={"lead_close_note": <lead's overwriting value>}
 
     Task JSON lives in the team dir (~/.claude/tasks/{team}/), which is writable
-    from ANY teammate process — unlike the session journal, which self-drops in
-    a teammate context (#877). That is precisely why the auditor's verdict can
+    from ANY teammate process. The journal EMIT SEAMS are different: they are
+    frame-gated, so an emit drops in a tmux teammate frame and it fires in an
+    in-process teammate frame, which shares the lead's session. That is why the
+    auditor's verdict can
     be captured at AUTHOR time (the MIRROR), sidestepping the post-overwrite
     read-of-a-clobbered-value problem.
 
@@ -799,7 +804,7 @@ def _emit_dispatch_site(
     an owner gate there "would never fire". An owner-wiring predicate placed in
     that branch would return False forever: Q5 would stay exactly as dark as it
     is today with every test still green, and it would additionally inherit
-    that block's ``is_lead`` gate. The owner-wiring write is only observable on
+    that block's frame gate. The owner-wiring write is only observable on
     TaskUpdate, so that is where this lives.
 
     THE ORDER BELOW IS LOAD-BEARING, NOT STYLISTIC, and is kept in ONE ladder
@@ -929,8 +934,9 @@ def _emit_lead_side_agent_handoff(
     task, not a signal task, handoff present). The divergence-critical atoms
     (is_signal_task, occupant_hash, already_emitted) are SHARED via
     shared.agent_handoff_marker so the two paths cannot drift on signal-task
-    exclusion or the dedup key (#887 class). The b2-specific topology gate
-    (is_lead) is applied by the caller. Eligibility keys on handoff PRESENCE
+    exclusion or the dedup key (#887 class). The b2-specific frame gate
+    (is_canonical_journal_frame) is applied by the caller. Eligibility keys on
+    handoff PRESENCE
     (owner / not-teachback / not-signal / handoff-present), never on an
     owner-name prefix — bare owner names are the convention, so a `pact-`
     prefix gate would no-op. (A now-retired completion-time branch above once
@@ -1404,8 +1410,9 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
     #   MIRROR (non-lead writes audit_summary): durably snapshot the authored
     #     verdict → metadata.audit_summary_authored so a later lead overwrite of
     #     the live audit_summary key cannot lose it. Task JSON is team-dir-scoped
-    #     → writable from the auditor's teammate process (unlike the session
-    #     journal, which self-drops in a teammate context, #877). Capturing at
+    #     → writable from the auditor's teammate process. The journal EMIT SEAMS
+    #     are different: they are frame-gated, so an emit drops in a tmux
+    #     teammate frame and fires in an in-process teammate frame. Capturing at
     #     AUTHOR time is what sidesteps the post-overwrite read-of-a-clobbered-
     #     value problem (the prior is saved BEFORE the lead can clobber it).
     #   RECOVER (lead overwrites a DIVERGENT authored verdict): the prior is
@@ -1573,7 +1580,7 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
 
         # #955 dispatch_variety emit — GC-immune mirror of the per-dispatch
         # variety stamp. Fires on the TaskCreate of a Task-B carrying
-        # metadata.variety (one per dispatch, D3). Keyed on is_lead +
+        # metadata.variety (one per dispatch, D3). Keyed on the frame gate +
         # metadata.variety PRESENCE — NOT on owner (per orchestrate.md the
         # TaskCreate(B) sets metadata.variety but leaves owner empty; owner is
         # wired by a SEPARATE later TaskUpdate, so an owner gate here would never
@@ -1583,7 +1590,16 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         # a missing id or an append failure skips the emit (coverage degrades by
         # one dispatch) but never breaks the gate's advisory evaluation or its
         # exit-0 contract.
-        if pact_context.is_lead(input_data):
+        #
+        # FRAME GATE - is_canonical_journal_frame, NOT is_lead. The emit must run
+        # in a process that writes the canonical journal: the lead frame in
+        # either teammateMode, AND the in-process teammate frame (session_id ==
+        # leadSessionId, one process one session). A tmux teammate frame skips,
+        # because an emit there can silo the event and poison the shared marker
+        # namespace. DO NOT restore is_lead: it returns False for a lead
+        # launched with no --agent flag, and that frame DOES write the canonical
+        # journal.
+        if pact_context.is_canonical_journal_frame(input_data):
             create_variety = (
                 incoming_metadata.get("variety")
                 if isinstance(incoming_metadata, dict)
@@ -1632,9 +1648,11 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         # (PER_WRITE_MIRROR_KEYS) mirrors the whole payload immediately —
         # the create IS the first write of the open-task-consumed class.
         # SIBLING of the dispatch_variety block above, deliberately NOT
-        # nested under its is_lead gate: this leg carries its own frame
-        # gate (canonical-journal-frame) because targeted keys include
-        # teammate-written classes. The platform-assigned id exists only in
+        # nested under its gate: this leg carries its OWN frame gate. The
+        # two now use the SAME predicate (is_canonical_journal_frame), so
+        # the split is structural rather than a difference of predicate:
+        # each leg fires on its own eligibility. The platform-assigned id
+        # exists only in
         # the create response, so resolution goes through _created_task_id;
         # a missing id skips the emit (coverage degrades by one write,
         # never breaks the gate — the dispatch_variety posture). The
@@ -1691,12 +1709,17 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         # owner names are the convention; cf. the retired branch above):
         # _emit_lead_side_agent_handoff applies the b1-mirrored emit-eligibility
         # (owner / not-teachback / not-signal / handoff-present) + the shared
-        # occupant-keyed dedup. Gated on
-        # is_lead so the emit only runs in the lead's process, where
-        # get_session_dir() resolves the canonical journal; a teammate
-        # self-completion (carve-out / disputed) has no populated context and
-        # is correctly skipped (it would no-op AND must not be double-counted).
-        if pact_context.is_lead(input_data):
+        # occupant-keyed dedup.
+        #
+        # FRAME GATE - is_canonical_journal_frame, NOT is_lead. The emit must run
+        # in a process that writes the canonical journal: the lead frame in
+        # either teammateMode, AND the in-process teammate frame (session_id ==
+        # leadSessionId, one process one session). A tmux teammate frame skips,
+        # because an emit there can silo the event and poison the shared marker
+        # namespace (it would no-op AND must not be double-counted). DO NOT
+        # restore is_lead: it returns False for a lead launched with no --agent
+        # flag, and that frame DOES write the canonical journal.
+        if pact_context.is_canonical_journal_frame(input_data):
             _emit_lead_side_agent_handoff(
                 team_name, task_id, owner, subject, metadata
             )
@@ -1746,14 +1769,22 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         # the secretary distill the disk artifact at harvest; without it, that
         # phase degrades to HANDOFF-only recovery (the #927 failure path).
         #
-        # is_lead-gated, mirroring the lead-side emit above: only the lead's
-        # process resolves the canonical journal via the implicit read, and only
-        # the lead is the writer the nudge is aimed at. A teammate self-
-        # completion has no populated context and is correctly skipped.
+        # FRAME GATE - is_canonical_journal_frame, NOT is_lead. The emit must run
+        # in a process that writes the canonical journal: the lead frame in
+        # either teammateMode, AND the in-process teammate frame (session_id ==
+        # leadSessionId, one process one session). A tmux teammate frame skips,
+        # because an emit there can silo the event and poison the shared marker
+        # namespace. DO NOT restore is_lead: it returns False for a lead
+        # launched with no --agent flag, and that frame DOES write the canonical
+        # journal.
+        # The advisory reaches the same output surface in the in-process
+        # teammate frame (one process, one session), so the nudge is not
+        # misdirected there.
         #
         # This hook canNOT glob (no worktree path in the PostToolUse frame) — it
         # only DETECTS the missing emit (the journal read is path-independent in
-        # the lead frame) and nudges; it never blocks the TaskUpdate. EXEMPT:
+        # a canonical-journal frame) and nudges; it never blocks the TaskUpdate.
+        # EXEMPT:
         #   - CODE:/TEST:/ATOMIZE:/CONSOLIDATE:/other subjects → not in the
         #     phase→workflow map → _phase_artifact_requirement returns None →
         #     silent (their artifacts are git-tracked or non-existent).
@@ -1766,7 +1797,10 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         # phase-output validation BEFORE the lead completes the phase task, so by
         # this PostToolUse(completed) the event is already on disk (a synchronous
         # journal append). Fail-open covers any residual race.
-        if pact_context.is_lead(input_data) and metadata.get("skipped") is not True:
+        if (
+            metadata.get("skipped") is not True
+            and pact_context.is_canonical_journal_frame(input_data)
+        ):
             requirement = _phase_artifact_requirement(subject)
             if requirement is not None:
                 workflow, feature = requirement
@@ -1827,11 +1861,20 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
             # completed) accepting the teachback. The ack lives on the DISK
             # Task-A (the teammate wrote teachback_submit earlier; the lead's
             # accept TaskUpdate carries only status), so read it from `metadata`
-            # (the on-disk post-state resolved above). is_lead-gated (mirrors b2):
-            # only the lead's process resolves the canonical journal; a teammate
-            # frame self-drops (#877). Best-effort: any malformed/absent ack or an
-            # append failure skips the emit without breaking the gate.
-            if pact_context.is_lead(input_data) and isinstance(teachback_submit, dict):
+            # (the on-disk post-state resolved above).
+            # FRAME GATE (mirrors b2) - is_canonical_journal_frame, NOT is_lead.
+            # The emit must run in a process that writes the canonical journal:
+            # the lead frame in either teammateMode, AND the in-process teammate
+            # frame (session_id == leadSessionId, one process one session). A
+            # tmux teammate frame skips, because an emit there can silo the
+            # event and poison the shared marker namespace. DO NOT restore
+            # is_lead: it returns False for a lead launched with no --agent
+            # flag, and that frame DOES write the canonical journal.
+            # Best-effort: any malformed/absent ack or an append failure skips
+            # the emit without breaking the gate.
+            if isinstance(teachback_submit, dict) and pact_context.is_canonical_journal_frame(
+                input_data
+            ):
                 ack = teachback_submit.get("variety_acknowledgment")
                 if isinstance(ack, dict):
                     flag = ack.get("rationale_articulates_this_dispatch")
@@ -2147,9 +2190,15 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         # No new eligibility logic here. The only job of the backstop is to CALL
         # the emitter on the write event that b1 and b2 structurally cannot see.
         #
-        # is_lead-gated (mirrors b2 at the completion surface): only the lead's
-        # process resolves the canonical journal; a teammate frame self-drops
-        # (#877). The in-process/lead branch is the fail-safe default.
+        # FRAME GATE (mirrors b2 at the completion surface) -
+        # is_canonical_journal_frame, NOT is_lead. The emit must run in a
+        # process that writes the canonical journal: the lead frame in either
+        # teammateMode, AND the in-process teammate frame (session_id ==
+        # leadSessionId, one process one session). A tmux teammate frame skips,
+        # because an emit there can silo the event and poison the shared marker
+        # namespace. DO NOT restore is_lead: it returns False for a lead
+        # launched with no --agent flag, and that frame DOES write the canonical
+        # journal.
         #
         # ACCEPTED RESIDUAL: if this fires-open on a hard crash AND the handoff
         # is then never set in a later TaskUpdate, exactly one agent_handoff
@@ -2159,12 +2208,12 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         # journal-emit failure must never break completion. One lost durable
         # record is strictly better than a stranded completion.
         if (
-            pact_context.is_lead(input_data)
-            and isinstance(incoming_handoff, dict)
+            isinstance(incoming_handoff, dict)
             and incoming_handoff
             and isinstance(task_a, dict)
             and task_a
             and task_a.get("status") == "completed"
+            and pact_context.is_canonical_journal_frame(input_data)
         ):
             owner_bs = task_a.get("owner") or ""
             subject_bs = task_a.get("subject") or ""
@@ -2194,15 +2243,22 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         # removes the key), so the overlay drops it rather than mirroring a
         # phantom null the disk state no longer carries; a delete-ONLY write
         # therefore mirrors the disk state as-is (deduping if unchanged).
-        # is_lead-gated like every lead-frame emit: only the lead's process
-        # resolves the canonical journal; a teammate frame self-drops.
+        # FRAME GATE like every canonical-frame emit -
+        # is_canonical_journal_frame, NOT is_lead. The emit must run in a
+        # process that writes the canonical journal: the lead frame in either
+        # teammateMode, AND the in-process teammate frame (session_id ==
+        # leadSessionId, one process one session). A tmux teammate frame skips,
+        # because an emit there can silo the event and poison the shared marker
+        # namespace. DO NOT restore is_lead: it returns False for a lead
+        # launched with no --agent flag, and that frame DOES write the canonical
+        # journal.
         if (
-            pact_context.is_lead(input_data)
-            and isinstance(incoming_metadata, dict)
+            isinstance(incoming_metadata, dict)
             and incoming_metadata
             and isinstance(task_a, dict)
             and task_a
             and task_a.get("status") == "completed"
+            and pact_context.is_canonical_journal_frame(input_data)
         ):
             try:
                 disk_md = (
@@ -2333,6 +2389,11 @@ def main() -> None:
         sys.exit(0)
 
     try:
+        # ORDERING IS LOAD-BEARING: init() must run BEFORE evaluate_lifecycle().
+        # The frame gates below resolve the team through get_team_name(), and an
+        # unpopulated context makes the topology leg unresolvable. The gate then
+        # degrades SILENTLY to is_lead and a canonical-frame emit is lost with no
+        # record. Do not move this call and do not make it lazy.
         pact_context.init(input_data)
         advisories = evaluate_lifecycle(input_data)
     except Exception as e:  # noqa: BLE001 — runtime catch-all → advisory

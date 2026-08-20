@@ -391,7 +391,9 @@ class TestSeamASubprocess:
 
     def test_teammate_frame_no_snapshot_in_real_journal(self, tmp_path):
         # Both-modes: the same frame under a teammate agent_type must not
-        # fire the lead-completion seam (is_lead structural signal).
+        # fire the lead-completion seam. The frame gate answers False here
+        # because no leadSessionId team config is seeded, so the topology
+        # leg cannot resolve.
         home, session_dir, tasks_dir = _seed_home(tmp_path)
         _write_task(tasks_dir, "42", status="completed",
                     metadata=dict(SIBLINGS))

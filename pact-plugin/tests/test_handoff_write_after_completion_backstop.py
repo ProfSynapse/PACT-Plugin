@@ -19,8 +19,9 @@ true reachability canary even if the backstop logic regresses).
 
 Driving pattern mirrors test_lead_side_handoff_emit.py: spy on tlg.append_event to
 capture emitted events; seed a real on-disk task.json so the gate's read_task_json
-resolves the completed-task post-state; key is_lead on agent_type (the only tmux-safe
-discriminator).
+resolves the completed-task post-state; key is_canonical_journal_frame on the frame
+(agent_type OR session_id == leadSessionId), which admits the lead frame in either
+teammateMode AND the in-process teammate frame, and excludes the tmux teammate.
 """
 import json
 import sys
@@ -139,10 +140,12 @@ class TestBackstopFires:
     def test_backstop_both_modes_teammate_frame_no_emit(
         self, tmp_path, monkeypatch, pact_context, emit_events
     ):
-        """M7 dual-mode variant: the identical race under a TEAMMATE frame
-        (is_lead False) does NOT emit — a teammate process has no canonical
-        journal and self-drops (#877). is_lead is the only tmux-safe
-        discriminator."""
+        """M7 dual-mode variant: the identical race under a TEAMMATE frame does
+        NOT emit. The suppression is the frame gate: this fixture frame seeds no
+        team config carrying a leadSessionId, so the topology leg cannot resolve
+        and is_canonical_journal_frame returns False. This arm does NOT cover the
+        in-process teammate frame, which DOES write the canonical journal and
+        DOES emit."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         pact_context(team_name=TEAM, session_id="s1")
         _seed_task(
@@ -153,7 +156,10 @@ class TestBackstopFires:
         tlg.evaluate_lifecycle(
             _metadata_only_handoff_update("42", agent_type=TEAMMATE)
         )
-        assert len(emit_events) == 0, "teammate frame must self-drop the backstop emit"
+        assert len(emit_events) == 0, (
+            "a frame that cannot resolve the canonical-journal topology must not "
+            "emit the backstop (this fixture seeds no leadSessionId team config)"
+        )
 
 
 # =============================================================================

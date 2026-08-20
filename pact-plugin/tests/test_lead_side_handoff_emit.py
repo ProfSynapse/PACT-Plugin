@@ -11,7 +11,8 @@ a populated context.
 
 This file drives tlg.evaluate_lifecycle(payload) with tlg.append_event spied to
 capture emitted events, exercising the b2 emit-eligibility discriminator (which
-MIRRORS agent_handoff_emitter's b1 gates) + the is_lead topology gate. Every
+MIRRORS agent_handoff_emitter's b1 gates) + the is_canonical_journal_frame
+gate, which reads the agent_type role leg AND the session_id topology leg. Every
 SUPPRESS row carries a same-fixture POSITIVE CONTROL proving the suppression is
 the intended discriminator firing, not an unrelated missing precondition.
 
@@ -108,7 +109,7 @@ class TestLeadEmits:
 
 
 # =============================================================================
-# Topology gate (is_lead) — SUPPRESS rows + same-fixture positive controls
+# Frame gate (is_canonical_journal_frame) — SUPPRESS rows + positive controls
 # =============================================================================
 class TestIsLeadTopologyGate:
     def test_teammate_frame_no_emit(self, tmp_path, monkeypatch, pact_context, emit_events):
@@ -116,15 +117,15 @@ class TestIsLeadTopologyGate:
         pact_context(team_name=TEAM, session_id="s1")
         tlg.evaluate_lifecycle(_payload(agent_type="pact-devops-engineer"))
         assert len(emit_events) == 0, (
-            "a teammate process (is_lead False) must NOT emit — its context "
-            "has no canonical journal; only the lead's process emits"
+            "a frame that cannot resolve the canonical-journal topology must "
+            "not emit (this fixture seeds no leadSessionId team config)"
         )
 
     def test_teammate_frame_positive_control_lead_same_fixture_emits(
         self, tmp_path, monkeypatch, pact_context, emit_events
     ):
         """Positive control: the identical fixture under the LEAD frame DOES
-        emit — proving the suppression above is the is_lead gate, not a
+        emit — proving the suppression above is the frame gate, not a
         missing handoff/owner."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         pact_context(team_name=TEAM, session_id="s1")
