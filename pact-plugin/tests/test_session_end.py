@@ -1119,8 +1119,8 @@ class TestCleanupOldSessions:
     A2 (handoff plus consolidation reaps) pins that a durable second carrier
     releases the directory.
 
-    ARMS A6 TO A10 EACH REDDEN ON ONE FAULT THAT NO OTHER ARM HERE CATCHES,
-    and that is the property to keep when editing them:
+    ARMS A6 TO A13 EACH REDDEN ON ONE FAULT THAT FEW OR NO OTHER ARMS HERE
+    CATCH, and that is the property to keep when editing them:
 
     * A6 (payload mention reaps) is the only arm that separates a verdict
       taken from the parsed ``type`` field from one taken from the raw text
@@ -1130,18 +1130,63 @@ class TestCleanupOldSessions:
       and fails. Every other arm writes well-formed JSON.
     * A8 (JSON array line) is the only arm that reaches the type check with
       a parsed value that has no ``.get`` method.
-    * A9 (consolidation ABOVE the handoff) is the only arm that separates "a
-      consolidation anywhere releases" from "a consolidation releases only
-      what came before it". A2 writes the handoff first, so it cannot.
+    * A9 (a handoff BELOW the consolidation) is the only arm that separates
+      "a consolidation anywhere releases" from "a consolidation releases what
+      came before it". A2 writes the handoff first, so it cannot.
     * A10 (JSON-escaped ``type`` value) is the only arm that reddens if the
       predicate decides from the RAW BYTES of a line rather than from the
       value the line parses to. A6 pins the same distinction from the other
       side, on a line that mentions the name and is not the event. A10 pins
       it on a line that IS the event and does not mention the name.
+    * A11 (handoff, consolidation, handoff) carries work on the two sides of
+      the consolidation, so it holds when a reader asks if the guard ignores
+      order rather than reads it.
+    * A12 (a handoff below 50 filler lines) is the only arm of which the
+      deciding event sits away from the head of the file. Each other arm
+      decides in its first three lines, so ALL of them are blind to a
+      predicate that reads only the head. SEE THE NOTE BELOW.
+    * A13 (a byte that is not valid UTF-8) is the only arm that reaches the
+      decode layer. A7 covers a line that decodes and does not parse. A13
+      covers bytes that do not reach the parser.
 
-    A7, A8 and A10 are PROTECTION arms and belong with A1 and A4: each
-    reddens when the guard stops protecting a carrier. A6 and A9 are release
-    arms and belong with A2, A3 and A5.
+    A7, A8, A9, A10, A11, A12 and A13 are PROTECTION arms and belong with A1
+    and A4: each reddens when the guard stops protecting a carrier. A6 is a
+    release arm and belongs with A2, A3 and A5.
+
+    🔴 COUNT THE INDEPENDENT CONDITIONS, NOT THE ARMS. Nine arms redden
+    when the guard always permits removal (A1, A4, A7, A8, A9, A10, A11,
+    A12, A13). THAT COUNT OVERSTATES THE PROTECTION, and two measurements
+    say so. A mutant that renames the compared ``agent_handoff`` literal
+    reddens EIGHT of the nine together, because each of them seeds that
+    event and depends on the same recognition. A4 is the ONLY one of the
+    nine independent of it, because its journal is unreadable and the
+    verdict never reaches a type comparison. AND ALL NINE ASSERT THAT THE
+    DIRECTORY SURVIVES, so a fault that stops an entry reaching the removal
+    branch leaves ALL NINE GREEN: measured with a mutant that makes the age
+    test never pass, the red set was A2, A3, A5 and A6 alone, and no
+    protection arm fired. THE RELEASE ARMS ARE WHAT CATCHES THAT, which is
+    why they are not optional. Each arm adds one further condition beyond
+    the shared one, and the mutants each arm alone kills are the honest
+    measure of what this class detects.
+
+    🔴 A7, A8 AND A13 ASSERT ON THE PREDICATE AS WELL AS END TO END, AND
+    THE PREDICATE LEG IS THE ONE THAT DISCRIMINATES. The caller wraps each
+    entry in ``except Exception: continue``, which is correct: it keeps the
+    bytes and keeps the reaper loop alive. IT ALSO MAKES A RAISE LOOK
+    EXACTLY LIKE CORRECT BEHAVIOUR from outside, because the directory
+    survives either way. MEASURED on isolated copies: removing the parse
+    guard, the ``isinstance`` guard, or ``errors="replace"`` each makes the
+    predicate raise, and each left an end-to-end-only arm GREEN. A DEFECT
+    CLASS THAT MAKES THE PREDICATE RAISE IS INVISIBLE FROM THE REAPER
+    OUTCOME. Do not weaken those three arms to an end-to-end check.
+
+    🔴 A12 GUARDS THE CLASS OF A DEFECT THIS FILE ONCE LOCKED IN. The
+    predicate used to return "safe to remove" at the FIRST consolidation and
+    stop, so a handoff written below it was unseen. That is an EARLY EXIT.
+    A9 pins the specific shape, and A12 pins the class, because a suite that
+    cannot detect an early exit cannot detect the return of that defect in a
+    new form. Keep an arm of which the deciding event sits far from the head
+    of the file.
 
     THESE ARMS COVER THE EXECUTABLE HALF ONLY. The step 4 instruction in
     ``skills/pact-handoff-harvest/SKILL.md`` is the non-executable half and
@@ -1505,13 +1550,13 @@ class TestCleanupOldSessions:
         """A6: the event name in a PAYLOAD, with a different ``type``, is
         not a carrier, so the directory reaps.
 
-        The predicate tests the raw line for the two names only to skip a
-        parse it does not need. The verdict comes from the parsed ``type``
-        field. This arm is the one that separates those two readings. A
-        predicate that takes its verdict from the substring answers "carrier"
-        here and refuses to reap, and NO OTHER ARM IN THIS CLASS reddens on
-        that mutant: A1, A2, A3 and A5 each put the name in ``type`` as well
-        as in the line, so the two readings agree on all of them.
+        The verdict comes from the parsed ``type`` field and from nothing
+        else. This arm is the one that separates that reading from a reading
+        taken off the raw text of the line. A predicate that takes its
+        verdict from the raw text answers "carrier" here and refuses to reap,
+        and NO OTHER ARM IN THIS CLASS reddens on that mutant: A1, A2, A3 and
+        A5 each put the name in ``type`` as well as in the line, so the two
+        readings agree on all of them.
         """
         from session_end import cleanup_old_sessions
 
@@ -1551,11 +1596,19 @@ class TestCleanupOldSessions:
         """A7: a line that fails to parse must not decide the verdict, and
         must not stop the scan reaching a real handoff below it.
 
-        The corrupt line carries the name, so it passes the substring filter
-        and reaches ``json.loads``. This is a PROTECTION arm: it joins A1 and
-        A4 as an arm that reddens when the guard stops protecting.
+        The corrupt line reaches ``json.loads`` and fails there. This is a
+        PROTECTION arm: it joins A1 and A4 as an arm that reddens when the
+        guard stops protecting. A13 covers the layer below this one, where
+        the bytes do not reach the JSON parser at all.
+
+        It asserts on the PREDICATE as well as end to end, for the cause the
+        A13 docstring states in full: the caller swallows a raise, so the
+        reaper outcome cannot separate a correct read from one that raises.
         """
-        from session_end import cleanup_old_sessions
+        from session_end import (
+            _journal_carries_unharvested_handoffs,
+            cleanup_old_sessions,
+        )
 
         slug_dir = tmp_path / "my-project"
         current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -1571,6 +1624,14 @@ class TestCleanupOldSessions:
             ],
         )
         self._age_dir(old_dir, 10)
+
+        answer = _journal_carries_unharvested_handoffs(str(old_dir))
+        assert answer is True, (
+            "The torn line must be skipped and the real agent_handoff below "
+            "it must decide. Got %r. If this raised, the parse guard is gone "
+            "and the caller swallows the raise, so the reaper stops "
+            "protecting by accident rather than by decision." % (answer,)
+        )
 
         cleanup_old_sessions(
             project_slug="my-project",
@@ -1592,11 +1653,20 @@ class TestCleanupOldSessions:
         """A8: a line that parses to something other than an object must be
         skipped, and must not stop the scan reaching a real handoff below it.
 
-        The line is a JSON ARRAY carrying the name, so it passes the
-        substring filter, parses cleanly, and reaches the type check with no
-        ``.get`` method. This is a PROTECTION arm.
+        The line is a JSON ARRAY, so it parses cleanly and reaches the type
+        check with no ``.get`` method. This is a PROTECTION arm.
+
+        It asserts on the PREDICATE as well as end to end, for the cause the
+        A13 docstring states in full: the caller swallows a raise, so the
+        reaper outcome cannot separate a correct read from one that raises.
+        MEASURED: with the ``isinstance`` guard removed, the predicate raises
+        ``AttributeError``, the caller swallows it, and an end-to-end-only
+        arm stays GREEN.
         """
-        from session_end import cleanup_old_sessions
+        from session_end import (
+            _journal_carries_unharvested_handoffs,
+            cleanup_old_sessions,
+        )
 
         slug_dir = tmp_path / "my-project"
         current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -1613,6 +1683,15 @@ class TestCleanupOldSessions:
         )
         self._age_dir(old_dir, 10)
 
+        answer = _journal_carries_unharvested_handoffs(str(old_dir))
+        assert answer is True, (
+            "A JSON array line has no `type` field and must be skipped, so "
+            "the handoff below it decides. Got %r. If this raised, the "
+            "`isinstance` guard is gone and the caller swallows the raise, "
+            "so the reaper skips this entry rather than protects it on "
+            "purpose." % (answer,)
+        )
+
         cleanup_old_sessions(
             project_slug="my-project",
             current_session_id=current_id,
@@ -1626,16 +1705,21 @@ class TestCleanupOldSessions:
             "the entries below this one were never tested at all."
         )
 
-    def test_carrier_guard_a9_consolidation_before_handoff_reaps(
+    def test_carrier_guard_a9_handoff_after_consolidation_survives(
         self, tmp_path
     ):
-        """A9: a consolidation ABOVE the handoff line still releases the
-        directory.
+        """A9: a handoff written BELOW the last consolidation is un-harvested,
+        so the directory survives.
 
-        A2 writes the handoff first, so it cannot separate "a consolidation
-        anywhere releases" from "a consolidation only releases what came
-        before it". This arm writes the reverse order and pins the first
-        reading, which is the one the predicate documents.
+        The consolidation says the work above it reached a durable second
+        carrier. It says nothing about work that arrived after it. A session
+        that consolidated and then kept going holds knowledge that no second
+        carrier has, and that is the population this guard exists to protect.
+
+        A2 writes the handoff first and reaps, so A2 cannot separate "a
+        consolidation anywhere releases" from "a consolidation releases what
+        came before it". This arm writes the reverse order and pins the
+        second reading.
         """
         from session_end import cleanup_old_sessions
 
@@ -1657,12 +1741,209 @@ class TestCleanupOldSessions:
             max_age_days=7,
         )
 
-        assert not old_dir.exists(), (
-            "A session that consolidated has a durable second carrier, and "
-            "the line order does not change that. If this directory "
-            "survived, the guard now requires the consolidation to follow "
-            "the handoff, and every session that harvested early is "
-            "retained for good."
+        assert old_dir.exists(), (
+            "The agent_handoff below the consolidation reached no second "
+            "carrier, so reaping this directory destroys the only copy of "
+            "it. A consolidation covers the work ABOVE it and makes no "
+            "claim about work written after it. THIS DOES NOT RETAIN A "
+            "SESSION THAT HARVESTED EARLY: A2 writes handoff-then-"
+            "consolidation and reaps, which is the same session with "
+            "nothing written after the harvest."
+        )
+
+    def test_carrier_guard_a11_handoff_after_consolidation_in_sequence(
+        self, tmp_path
+    ):
+        """A11: handoff, consolidation, handoff. The last handoff is
+        un-harvested, so the directory survives.
+
+        A9 has no handoff above the consolidation, so a reader can still ask
+        whether the guard simply ignores order. This arm carries work on BOTH
+        sides of the consolidation. The one below it decides, because the
+        consolidation covers what came before it and nothing after it.
+
+        The sibling shape `[handoff, consolidation, handoff, consolidation]`
+        gets no arm on purpose: it reaps under the shipped predicate AND
+        under the corrected one, so it cannot discriminate them.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        self._write_journal(
+            old_dir,
+            ["agent_handoff", "session_consolidated", "agent_handoff"],
+        )
+        self._age_dir(old_dir, 10)
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert old_dir.exists(), (
+            "The consolidation harvested the FIRST handoff. The second one "
+            "came after it and reached no second carrier. If this directory "
+            "was reaped, the guard stopped reading at the consolidation and "
+            "destroyed the only copy of everything written below it."
+        )
+
+    def test_carrier_guard_a12_handoff_far_below_the_first_lines(
+        self, tmp_path
+    ):
+        """A12: a handoff deep in a long journal is found.
+
+        MEASURED, and this is the parameter that makes the arm necessary:
+        with this arm removed, THE DEEPEST JOURNAL ANY ARM IN THIS CLASS
+        WRITES IS 3 LINES (A11). Each other arm writes 2 lines or fewer, A10
+        writes 1, A5 writes no journal, and A4 writes a directory. SO THE
+        ARM SET CANNOT EXPRESS DEPTH AT ALL, and a scan cap of 3 or more is
+        invisible to every one of them. This arm puts the handoff below 50
+        filler lines, so it reddens against each early-exit cap.
+
+        THIS IS THE CLASS OF THE DEFECT THE COMMIT REPAIRS. That defect was
+        an early exit at the first consolidation. An arm suite blind to early
+        exits cannot detect the return of the shape it exists to guard, which
+        is why this arm ships with the repair rather than after it.
+
+        A real journal is thousands of lines and the handoff is rarely near
+        the top, so this fixture is the ordinary case, not an extreme one.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        filler = [
+            '{"type": "tool_use", "seq": %d}' % n for n in range(50)
+        ]
+        self._write_journal_raw(
+            old_dir, filler + ['{"type": "agent_handoff", "task": "12"}']
+        )
+        self._age_dir(old_dir, 10)
+
+        # Guard the fixture: the deciding event must NOT sit in the head of
+        # the file, or this arm silently becomes a duplicate of A1.
+        lines = (old_dir / "session-journal.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        assert len(lines) == 51, "FIXTURE BROKEN: expected 51 journal lines"
+        assert "agent_handoff" not in "\n".join(lines[:10]), (
+            "FIXTURE BROKEN: the handoff must sit well below the head of "
+            "the file, or this arm cannot detect an early-exit cap."
+        )
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert old_dir.exists(), (
+            "The handoff on line 51 is un-harvested knowledge and the guard "
+            "must find it. If this directory was reaped, the scan stopped "
+            "before the end of the journal, so ANY session whose handoff is "
+            "not near the top of its journal is now unprotected."
+        )
+
+    def test_carrier_guard_a13_undecodable_byte_does_not_hide_a_carrier(
+        self, tmp_path
+    ):
+        """A13: a byte that is not valid UTF-8 must not stop the scan.
+
+        The journal is opened with ``errors="replace"``, so a stray byte
+        becomes a replacement character and the read continues. Without that
+        argument the read raises ``UnicodeDecodeError``, which is a
+        ``ValueError`` and NOT an ``OSError``, so it passes through the
+        handler of the predicate AND the handler of the caller. The reaper
+        then stops part way through its own loop.
+
+        A7 covers a line that is valid UTF-8 and invalid JSON. This arm
+        covers the layer BELOW that: bytes that never reach the JSON parser.
+        No other arm writes a byte outside ASCII.
+
+        🔴 THIS ARM ASSERTS ON THE PREDICATE DIRECTLY, AND THAT IS NOT
+        OPTIONAL. The caller wraps each entry in ``except Exception:
+        continue``, which is correct and deliberate: it keeps the bytes and
+        keeps the reaper loop alive. IT ALSO MAKES THE END-TO-END OUTCOME
+        IDENTICAL for a correct read and for a read that raises. The
+        directory survives either way. MEASURED: with ``errors="replace"``
+        removed, the predicate raises ``UnicodeDecodeError``, the caller
+        swallows it, the directory survives, and an arm that checks only the
+        reaper outcome stays GREEN. So the end-to-end assertion below cannot
+        detect this defect and the predicate assertion can.
+
+        THE GENERAL SHAPE, for a future editor: any defect that makes the
+        predicate RAISE is invisible from the reaper outcome, because the
+        safety mechanism converts a raise into the same survival that
+        correct behaviour produces. Assert on the predicate for that class.
+        """
+        from session_end import (
+            _journal_carries_unharvested_handoffs,
+            cleanup_old_sessions,
+        )
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        # A lone 0x80 is a continuation byte with no lead byte, so it is not
+        # valid UTF-8 in any position. Written as BYTES, because a str write
+        # would encode it as valid UTF-8 and the arm would measure nothing.
+        (old_dir / "session-journal.jsonl").write_bytes(
+            b'{"type": "tool_use", "text": "\x80"}\n'
+            b'{"type": "agent_handoff", "task": "13"}\n'
+        )
+        self._age_dir(old_dir, 10)
+
+        # Guard the fixture: the file must actually be undecodable as strict
+        # UTF-8, or this arm passes for the wrong cause.
+        raw = (old_dir / "session-journal.jsonl").read_bytes()
+        try:
+            raw.decode("utf-8")
+            raise AssertionError(
+                "FIXTURE BROKEN: the journal decodes as strict UTF-8, so "
+                "this arm cannot detect the loss of errors='replace'."
+            )
+        except UnicodeDecodeError:
+            pass
+
+        # THE DISCRIMINATING ASSERTION. Read the class note above before you
+        # weaken this to an end-to-end check.
+        answer = _journal_carries_unharvested_handoffs(str(old_dir))
+        assert answer is True, (
+            "The journal HOLDS an agent_handoff and the stray byte must not "
+            "hide it. Got %r. If this raised UnicodeDecodeError, the journal "
+            "open lost errors='replace', and the caller would swallow the "
+            "raise and skip the entry, so the reaper stops protecting by "
+            "accident rather than by decision." % (answer,)
+        )
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert old_dir.exists(), (
+            "A stray byte above a real agent_handoff must not hide it. This "
+            "end-to-end leg pins the reaper outcome. It CANNOT separate a "
+            "correct read from a read that raises, because the caller "
+            "swallows the raise and the directory survives either way. The "
+            "predicate assertion above is the leg that separates them."
         )
 
     def test_carrier_guard_a10_json_escaped_type_is_a_carrier(self, tmp_path):

@@ -292,27 +292,54 @@ def _journal_carries_unharvested_handoffs(session_dir: str) -> bool | None:
 
     This catches `OSError` only. A bare `except Exception` can swallow a
     programming error and give the refuse value, which keeps the bytes and
-    hides the defect.
+    hides the defect. The caller carries the never-raises contract.
+
+    `session_consolidated` RESETS the flag. It does not end the scan. A
+    refresh emits that event mid-journal and the workstream CONTINUES in
+    the same session and the same file, so a handoff written after it is
+    un-harvested. The question is POSITIONAL: is a handoff present after
+    the last consolidation, and not merely present somewhere.
+
+    A torn line makes the answer UN-EVALUABLE rather than absent, but only
+    when one other line of the file parses as an event. A file of which no
+    line parses is not a journal this predicate can read, and it keeps the
+    False answer that the shipped reaper depends on.
 
     Args:
         session_dir: Absolute path to the session directory.
 
     Returns:
-        True: at least one `agent_handoff` event is present AND no
-            `session_consolidated` event is present. The journal holds
-            HANDOFF knowledge that reached no durable second carrier.
-        False: no `agent_handoff` event is present, OR a
-            `session_consolidated` event is present, OR the journal file
-            is absent.
-        None: the journal file is present and the read raised. The carrier
-            question is un-evaluable, and the caller must refuse.
+        True: an `agent_handoff` event is present after the last
+            `session_consolidated` event, or with no such event in the
+            file. The knowledge reached no durable second carrier.
+        False: no such handoff is present, OR the journal file is absent,
+            OR no line in the file parses as an event.
+            KNOWN BOUND, and it is a decision rather than an oversight: a
+            file of which the ONLY line is torn answers False, and the
+            caller REMOVES it, because `saw_event` stays False. That is
+            the degenerate end of the crashed-session shape this guard
+            protects. The alternative refuses for each file that is not a
+            journal, which retains any non-journal file forever, so this
+            bound is accepted.
+        None: the read raised, OR the file holds a torn line together with
+            at least one well-formed event. The carrier question is
+            un-evaluable, and the caller must refuse.
     """
     journal = Path(session_dir) / "session-journal.jsonl"
     try:
         if not journal.exists():
             return False
         has_handoff = False
-        with journal.open(encoding="utf-8", errors="replace") as fh:
+        saw_event = False
+        saw_torn_line = False
+        # `utf-8-sig` strips a leading byte-order mark. Decoded as plain
+        # utf-8 the mark reaches `json.loads` on the first line and makes
+        # THAT LINE unparseable. The outcome then splits. If one other line
+        # of the file parses, the answer is None and the caller refuses. If
+        # no other line parses, the answer is False and the caller REMOVES
+        # a journal that holds a handoff. The two answers are incorrect and
+        # one of them erases.
+        with journal.open(encoding="utf-8-sig", errors="replace") as fh:
             for line in fh:
                 # Parse each line. DO NOT add a substring pre-filter on the
                 # raw line as a speed measure. A `type` value written with a
@@ -324,20 +351,35 @@ def _journal_carries_unharvested_handoffs(session_dir: str) -> bool | None:
                 try:
                     event = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
-                    # Parity with `_scan_lines_for_event`: a corrupt line
-                    # must not decide the verdict.
+                    # A torn line is NOT an absent event. The writer takes
+                    # an exclusive lock and does no fsync, so a crash mid
+                    # write leaves a partial line, and that is the crashed
+                    # session this guard exists for. Record it and decide
+                    # at the end of the file.
+                    if line.strip():
+                        saw_torn_line = True
                     continue
                 if not isinstance(event, dict):
                     continue
+                saw_event = True
                 event_type = event.get("type")
                 if event_type == "session_consolidated":
-                    # The only early return. A consolidation can land on a
-                    # line after the last handoff, so the scan cannot exit
-                    # early on `agent_handoff`.
-                    return False
-                if event_type == "agent_handoff":
+                    # RESET, and NOT an early return. A refresh emits this
+                    # mid-journal and the workstream continues in the same
+                    # file, so a handoff below this line is un-harvested.
+                    # Clear the flag and let the rest of the file decide.
+                    has_handoff = False
+                elif event_type == "agent_handoff":
                     has_handoff = True
-        return has_handoff
+        if has_handoff:
+            return True
+        if saw_torn_line and saw_event:
+            # The file is a journal AND one line of it is unreadable, so
+            # the carrier question cannot be answered. Refuse. A file of
+            # which NO line parses keeps the False answer, which the
+            # shipped malformed-journal behaviour depends on.
+            return None
+        return False
     except OSError:
         return None
 
@@ -361,12 +403,17 @@ def cleanup_old_sessions(
     refresh→resume workflows without retaining checkpoint state forever —
     checkpointed sessions still age out past 180 days.
 
-    A directory past its TTL is removed ONLY when
-    `_journal_carries_unharvested_handoffs` returns False. A journal that
-    holds an `agent_handoff` event with no `session_consolidated` event can
-    be the sole carrier of that knowledge, and nothing regenerates it. An
-    un-evaluable journal (the file is present and the read raised) refuses
-    the same way, so the guard keeps the bytes on each missing-writer path.
+    A directory older than its TTL is removed ONLY when
+    `_journal_carries_unharvested_handoffs` returns False. It answers True
+    for a journal that holds an `agent_handoff` event AFTER its last
+    `session_consolidated` event. The test is POSITIONAL, so a session that
+    consolidated and then kept working counts as a carrier. That knowledge
+    reached no durable second carrier and nothing regenerates it. It
+    answers None when the carrier question cannot be answered at all, which
+    covers a read that raised AND a torn line together with at least one
+    well-formed event. True and None each KEEP the directory, so this
+    reaper holds the bytes on every path where the answer is protect or
+    unknown.
 
     Best-effort cleanup — never raises. Skips the current session's
     directory and any entry that doesn't look like a UUID directory.
@@ -427,7 +474,16 @@ def cleanup_old_sessions(
                         str(entry)
                     ) is False:
                         shutil.rmtree(entry, ignore_errors=True)
-            except OSError:
+            except Exception:
+                # Wider than OSError, and the width is load-bearing HERE
+                # rather than in the predicate. A pathological journal line
+                # can make the carrier test raise something that is not an
+                # OSError, for example a RecursionError from deeply nested
+                # JSON. Catching it at the predicate would hide a
+                # programming error in the predicate itself. Catching it
+                # for each ENTRY keeps the never-raises contract of this
+                # function, skips the one bad entry, and lets the loop and
+                # the cleanup_summary event that follows it continue.
                 continue
     except OSError:
         pass
