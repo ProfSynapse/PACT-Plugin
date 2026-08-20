@@ -381,3 +381,66 @@ class TestHarvestPerTeamSectionDirective:
             f"the phrase, update REQUIRED_PHRASES — but confirm the per-team "
             f"scoping (not whole-file overwrite) is still expressed."
         )
+
+
+class TestOrphanRecoveryCarrierGuard:
+    """Content-presence pin for the carrier guard at Orphaned Handoff
+    Recovery step 4 of the harvest skill.
+
+    Step 4 used to instruct an unguarded removal of the files the recovery
+    pass had read. Either of the two file classes it names can be the ONLY
+    carrier of a given HANDOFF: the session journal holds the tasks that
+    emitted an ``agent_handoff`` event, and the task files hold a quiescent
+    completed task of which the key reached no journal. The repaired step
+    removes nothing, and its carrier test gates the Step 5 report instead.
+
+    That instruction is LLM-read prose with no runtime path, so no
+    behavioural test reaches it. This pin closes that gap. Each of the three
+    phrases pins a different property: the first pins the instruction, the
+    second pins the processed-is-not-removable inference, and the third pins
+    the carrier test. A single phrase lets two of the three go missing
+    behind a green suite.
+
+    WHAT THIS CANNOT CATCH, stated so that a green is read no wider than it
+    is: a rewording that keeps a phrase and defeats it in the next
+    paragraph, a contradicting instruction added elsewhere in the file, and
+    a phrase moved into a section it does not govern. It also cannot
+    separate a deliberate rewording from a regression.
+
+    THIS PIN COVERS THE NON-EXECUTABLE HALF ONLY. The reaper guard in
+    ``hooks/session_end.py`` is the executable half and carries its own arms
+    in ``test_session_end.py``. The two gates do not cross-cover, so a green
+    from one says nothing about the other.
+
+    Pin style mirrors TestHarvestPerTeamSectionDirective above.
+    """
+
+    REL_PATH = "pact-handoff-harvest/SKILL.md"
+
+    # Verbatim load-bearing substrings of the step 4 carrier guard. If a
+    # deliberate rewording changes these, update them here with a comment
+    # that states step 4 removes nothing and that the carrier test with its
+    # un-evaluable row is expressed.
+    REQUIRED_PHRASES = (
+        "Do NOT remove the files you read them from",
+        "It does not follow that you may remove them",
+        "the journal is the ONLY carrier of what you recovered",
+    )
+
+    @pytest.mark.parametrize("phrase", REQUIRED_PHRASES, ids=lambda p: p[:32])
+    def test_carrier_guard_phrase_present(self, phrase):
+        skill_md = SKILLS_DIR / self.REL_PATH
+        assert skill_md.is_file(), f"{self.REL_PATH} must exist"
+        text = skill_md.read_text(encoding="utf-8")
+        assert phrase in text, (
+            f"{self.REL_PATH} must contain the Orphaned Handoff Recovery "
+            f"carrier-guard phrase {phrase!r}. Its absence means step 4 "
+            f"could have reverted to an unguarded removal of the files the "
+            f"recovery pass read, and either of those file classes can be "
+            f"the ONLY carrier of a recovered HANDOFF. A journal removed "
+            f"once costs every HANDOFF, lifecycle event and snapshot that "
+            f"only it held, and nothing regenerates them. If a deliberate "
+            f"rewording changed the phrase, update REQUIRED_PHRASES, and "
+            f"state in that update that step 4 removes nothing and that the "
+            f"carrier test is expressed."
+        )

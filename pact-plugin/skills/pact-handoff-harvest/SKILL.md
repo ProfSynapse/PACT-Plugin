@@ -1,7 +1,7 @@
 ---
 name: pact-handoff-harvest
 description: |
-  HANDOFF discovery, review, save, and cleanup workflow for the PACT secretary.
+  HANDOFF discovery, review, save, and ledger-record workflow for the PACT secretary.
   Use when: processing agent HANDOFFs after workflow phases, running session
   consolidation, or recovering orphaned completed handoffs from prior sessions.
   Triggers: harvest HANDOFFs, process HANDOFFs, incremental, consolidation, handoff recovery.
@@ -12,7 +12,7 @@ description: |
 This skill provides the complete workflow for discovering, reviewing, and saving agent HANDOFFs as institutional knowledge. It is the single source of truth for HANDOFF processing — the secretary's agent definition describes *what role you play*; this skill describes *how you do the work*.
 
 Three workflow variants:
-- **Standard Harvest** — discover, review, save, cleanup. Triggered by workflow commands (orchestrate, comPACT, peer-review) after phases complete.
+- **Standard Harvest** — discover, review, save, record the processed ids. Triggered by workflow commands (orchestrate, comPACT, peer-review) after phases complete.
 - **Incremental Harvest** — delta-only pass after remediation. Processes only new completions since last harvest.
 - **Consolidation Harvest** — safety-net + deep-clean pass. Triggered by wrap-up/pause at session end.
 
@@ -541,5 +541,15 @@ This is the Layer 4 fallback for completed handoffs left behind by sessions that
 2. If found: report to team-lead "Found N orphaned HANDOFFs from prior session {session_dir}"
 3. Read the HANDOFFs with the **Standard Harvest Step 3 rule, in full and without exception**: the identity derivation, the grouping, the latest-`ts` selection with its journal-order tie-break, the union predicate and the two report messages. **This path is NOT a fallback chain and MUST NOT become one.** Do not prefer one source and fall back to the other, and do not restate the Step 3 rule here. Read the prior session's events with `read_events_from(session_dir, 'agent_handoff')`, and resolve the task-file copy in `~/.claude/tasks/{team_id}/` where that session's task files survive. Run the Step 1 metadata census on those files also. The journal carries only the tasks that emitted a HANDOFF, so a journal-only pass reports a count it cannot support.
    🔴 **THIS PATH NEEDS THE SELECTION RULE MORE THAN THE LIVE PATH DOES.** It runs across PRIOR sessions, where a task_id reused across arcs and several accumulated events for one task are most likely. Without the selection rule an implementer takes the first match. The first match is the FIRST emit, and the content-keyed marker makes the first emit the SUPERSEDED copy. The one path that exists to catch what each other layer missed then reports recovered knowledge that a later revision had replaced.
-4. Delete processed files after recovery (use `python3 -c "from pathlib import Path; Path(...).unlink(missing_ok=True)"` — not shell `rm`, to avoid sensitive-file permission prompts)
-5. Report summary of recovered knowledge (or gaps where all sources failed)
+4. **Record the recovered task ids. Do NOT remove the files you read them from.** Add the ids to your team's `## team={your team_id}` section of `session_processed_tasks.md` with the Step 8 rule. That ledger is what stops a later pass reprocessing this session, and Step 2 reads it. No removal is needed to reach that outcome.
+
+   **Two file classes carry this session's content, and either one can be the only carrier of a given HANDOFF.** The journal at `{session_dir}/session-journal.jsonl` carries the tasks that emitted an `agent_handoff` event. The task files under `~/.claude/tasks/{team_id}/` carry a quiescent completed task whose key never reached the journal. Neither class is a copy of the other, so neither is safe to remove because the other was read.
+
+   **Run the carrier test and report its result at Step 5.**
+
+   1. Read `~/.claude/tasks/{team_id}/`. Directory absent, or present with no task files → the journal is the ONLY carrier of what you recovered. Task files present → a second carrier exists.
+   2. Read raised, or the path did not resolve → record ONE carrier. An unreadable directory is not an empty one, and the error does not tell you which you have.
+   3. Re-fetch what you saved in Step 7 by its returned `memory_id` and compare it against what you recovered. Present and in agreement → a durable second copy exists. Save reported success but the re-fetch does not find it, or either step raised → NO durable second copy exists.
+
+   **You have processed these files. It does not follow that you may remove them.** A file processed twice costs a duplicate paragraph, and the Step 2 ledger skip pays even that cost only once. A journal removed once costs every HANDOFF, lifecycle event and snapshot that only it held, and nothing regenerates them. The cleanup this recovery needs is the ledger entry above, and that entry takes no bytes with it. A later reader who wants this workspace tidy is looking at the wrong step.
+5. Report summary of recovered knowledge (or gaps where all sources failed). State the carrier test result from step 4 with it: how many carriers held the recovered content, and whether a durable second copy was verified.
