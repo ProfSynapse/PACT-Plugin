@@ -1119,10 +1119,35 @@ class TestCleanupOldSessions:
     A2 (handoff plus consolidation reaps) pins that a durable second carrier
     releases the directory.
 
+    ARMS A6 TO A9 EACH REDDEN ON ONE FAULT THAT NO OTHER ARM HERE CATCHES,
+    and that is the property to keep when editing them:
+
+    * A6 (payload mention reaps) is the only arm that separates a verdict
+      taken from the parsed ``type`` field from one taken from the raw text
+      of the line. A1, A2, A3 and A5 put the name in BOTH, so the two
+      readings agree on all of them.
+    * A7 (corrupt line) is the only arm where a line reaches ``json.loads``
+      and fails. Every other arm writes well-formed JSON.
+    * A8 (JSON array line) is the only arm that reaches the type check with
+      a parsed value that has no ``.get`` method.
+    * A9 (consolidation ABOVE the handoff) is the only arm that separates "a
+      consolidation anywhere releases" from "a consolidation releases only
+      what came before it". A2 writes the handoff first, so it cannot.
+
+    A7 and A8 are PROTECTION arms and belong with A1 and A4: each reddens
+    when the guard stops protecting a carrier. A6 and A9 are release arms
+    and belong with A2, A3 and A5.
+
     THESE ARMS COVER THE EXECUTABLE HALF ONLY. The step 4 instruction in
     ``skills/pact-handoff-harvest/SKILL.md`` is the non-executable half and
     carries its own presence pin in ``test_skills_structure.py``. The two
     gates do not cross-cover.
+
+    ONE FAULT NO ARM HERE CATCHES, recorded so a green is not read wider
+    than it is: the substring filter tests the RAW line, so a line that
+    carries the event name in a JSON escape parses to the correct name and
+    is dropped before the parse. That is the fail-open direction. No arm
+    below pins it, because pinning it would pin behaviour that is incorrect.
     """
 
     def _create_session_dir(self, slug_dir, session_id, age_days=0):
@@ -1166,6 +1191,19 @@ class TestCleanupOldSessions:
         ]
         (session_dir / "session-journal.jsonl").write_text(
             "\n".join(lines) + "\n", encoding="utf-8"
+        )
+
+    def _write_journal_raw(self, session_dir, raw_lines):
+        """Helper: write journal lines VERBATIM, with no JSON encode step.
+
+        ``_write_journal`` can only produce well-formed objects that carry
+        the event name in ``type``. The arms below need three shapes it
+        cannot make: the name in a payload with a different ``type``, a line
+        that fails to parse, and a line that parses to something other than
+        an object. Each of those reaches a different branch of the predicate.
+        """
+        (session_dir / "session-journal.jsonl").write_text(
+            "\n".join(raw_lines) + "\n", encoding="utf-8"
         )
 
     def test_removes_old_session_directories(self, tmp_path):
@@ -1453,6 +1491,170 @@ class TestCleanupOldSessions:
         assert not old_dir.exists(), (
             "A session directory with no journal carries nothing this guard "
             "protects, and an absent journal must not read as un-evaluable."
+        )
+
+    def test_carrier_guard_a6_payload_mention_is_not_a_carrier(self, tmp_path):
+        """A6: the event name in a PAYLOAD, with a different ``type``, is
+        not a carrier, so the directory reaps.
+
+        The predicate tests the raw line for the two names only to skip a
+        parse it does not need. The verdict comes from the parsed ``type``
+        field. This arm is the one that separates those two readings. A
+        predicate that takes its verdict from the substring answers "carrier"
+        here and refuses to reap, and NO OTHER ARM IN THIS CLASS reddens on
+        that mutant: A1, A2, A3 and A5 each put the name in ``type`` as well
+        as in the line, so the two readings agree on all of them.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        self._write_journal_raw(
+            old_dir,
+            [
+                '{"type": "tool_result", "text": "wrote agent_handoff to disk"}',
+                '{"type": "session_start"}',
+            ],
+        )
+        self._age_dir(old_dir, 10)
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert not old_dir.exists(), (
+            "The name `agent_handoff` in a payload is not an agent_handoff "
+            "EVENT. If this directory survived, the guard took its verdict "
+            "from the raw text of the line rather than from the parsed "
+            "`type` field, and it now retains every session that merely "
+            "mentions the name."
+        )
+
+    def test_carrier_guard_a7_corrupt_line_does_not_hide_a_carrier(
+        self, tmp_path
+    ):
+        """A7: a line that fails to parse must not decide the verdict, and
+        must not stop the scan reaching a real handoff below it.
+
+        The corrupt line carries the name, so it passes the substring filter
+        and reaches ``json.loads``. This is a PROTECTION arm: it joins A1 and
+        A4 as an arm that reddens when the guard stops protecting.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        self._write_journal_raw(
+            old_dir,
+            [
+                '{"type": "agent_handoff", "truncated": ',
+                '{"type": "agent_handoff", "task": "7"}',
+            ],
+        )
+        self._age_dir(old_dir, 10)
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert old_dir.exists(), (
+            "A truncated line above a real agent_handoff must be skipped, "
+            "not treated as the end of the journal and not allowed to raise. "
+            "A half-written journal is the shape a crashed session leaves, "
+            "which is the population this guard exists to protect."
+        )
+
+    def test_carrier_guard_a8_non_dict_line_does_not_hide_a_carrier(
+        self, tmp_path
+    ):
+        """A8: a line that parses to something other than an object must be
+        skipped, and must not stop the scan reaching a real handoff below it.
+
+        The line is a JSON ARRAY carrying the name, so it passes the
+        substring filter, parses cleanly, and reaches the type check with no
+        ``.get`` method. This is a PROTECTION arm.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        self._write_journal_raw(
+            old_dir,
+            [
+                '["agent_handoff", "session_consolidated"]',
+                '{"type": "agent_handoff", "task": "8"}',
+            ],
+        )
+        self._age_dir(old_dir, 10)
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert old_dir.exists(), (
+            "A JSON array line has no `type` field and must be skipped. If "
+            "it raised, the reaper stopped part way through its own loop and "
+            "the entries below this one were never tested at all."
+        )
+
+    def test_carrier_guard_a9_consolidation_before_handoff_reaps(
+        self, tmp_path
+    ):
+        """A9: a consolidation ABOVE the handoff line still releases the
+        directory.
+
+        A2 writes the handoff first, so it cannot separate "a consolidation
+        anywhere releases" from "a consolidation only releases what came
+        before it". This arm writes the reverse order and pins the first
+        reading, which is the one the predicate documents.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        self._write_journal(
+            old_dir, ["session_consolidated", "agent_handoff"]
+        )
+        self._age_dir(old_dir, 10)
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert not old_dir.exists(), (
+            "A session that consolidated has a durable second carrier, and "
+            "the line order does not change that. If this directory "
+            "survived, the guard now requires the consolidation to follow "
+            "the handoff, and every session that harvested early is "
+            "retained for good."
         )
 
 
