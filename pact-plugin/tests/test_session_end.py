@@ -1119,7 +1119,7 @@ class TestCleanupOldSessions:
     A2 (handoff plus consolidation reaps) pins that a durable second carrier
     releases the directory.
 
-    ARMS A6 TO A13 EACH REDDEN ON ONE FAULT THAT FEW OR NO OTHER ARMS HERE
+    ARMS A6 TO A15 EACH REDDEN ON ONE FAULT THAT FEW OR NO OTHER ARMS HERE
     CATCH, and that is the property to keep when editing them:
 
     * A6 (payload mention reaps) is the only arm that separates a verdict
@@ -1148,10 +1148,26 @@ class TestCleanupOldSessions:
     * A13 (a byte that is not valid UTF-8) is the only arm that reaches the
       decode layer. A7 covers a line that decodes and does not parse. A13
       covers bytes that do not reach the parser.
+    * A14 (handoff, consolidation, handoff, consolidation) is the only arm
+      that holds the RELEASE half of the high-water rule. A9 and A11 hold
+      the keep half. MEASURED: a mutant of which only the FIRST
+      consolidation resets agrees with the shipped predicate on each shape
+      the other arms seed and diverges on A14 alone.
+    * A15 (handoff, consolidation, one other event) is the only arm of
+      which the consolidation is NOT the last line. It says that the reset
+      applies where it is written. MEASURED: a mutant of which only a
+      consolidation on the LAST event line resets diverges on A15 alone,
+      and A14 is green against it.
+
+    A14 AND A15 ARE TWO ARMS ON ONE RULE AND NEITHER COVERS THE OTHER. A14
+    kills a one-shot reset and is blind to a last-line reset. A15 kills a
+    last-line reset and is blind to a one-shot reset. Each was found after
+    the rule looked complete, so treat a third arm on this rule as likely
+    rather than as excess.
 
     A7, A8, A9, A10, A11, A12 and A13 are PROTECTION arms and belong with A1
-    and A4: each reddens when the guard stops protecting a carrier. A6 is a
-    release arm and belongs with A2, A3 and A5.
+    and A4: each reddens when the guard stops protecting a carrier. A6, A14
+    and A15 are release arms and belong with A2, A3 and A5.
 
     🔴 COUNT THE INDEPENDENT CONDITIONS, NOT THE ARMS. Nine arms redden
     when the guard always permits removal (A1, A4, A7, A8, A9, A10, A11,
@@ -1163,8 +1179,10 @@ class TestCleanupOldSessions:
     verdict never reaches a type comparison. AND ALL NINE ASSERT THAT THE
     DIRECTORY SURVIVES, so a fault that stops an entry reaching the removal
     branch leaves ALL NINE GREEN: measured with a mutant that makes the age
-    test never pass, the red set was A2, A3, A5 and A6 alone, and no
-    protection arm fired. THE RELEASE ARMS ARE WHAT CATCHES THAT, which is
+    test never pass, the red set was A2, A3, A5, A6, A14 and A15, and no
+    protection arm fired. RE-MEASURE THIS SET WHEN YOU ADD A RELEASE ARM.
+    It moved from four to five to six as A14 and A15 landed, and a recorded
+    set goes stale the moment a member joins it. THE RELEASE ARMS ARE WHAT CATCHES THAT, which is
     why they are not optional. Each arm adds one further condition beyond
     the shared one, and the mutants each arm alone kills are the honest
     measure of what this class detects.
@@ -1763,8 +1781,13 @@ class TestCleanupOldSessions:
         consolidation covers what came before it and nothing after it.
 
         The sibling shape `[handoff, consolidation, handoff, consolidation]`
-        gets no arm on purpose: it reaps under the shipped predicate AND
-        under the corrected one, so it cannot discriminate them.
+        IS ARMED, at A14, and this paragraph records why it once was not.
+        The ground given here was that the shape reaps below the shipped
+        predicate AND below the superseded one, so it separates neither.
+        THAT WAS CORRECT FOR THOSE TWO CANDIDATES AND INCOMPLETE FOR A
+        THIRD. A shape that separates nothing between two candidates can
+        separate a third, and this one separates a one-shot-reset mutant
+        that no other arm here reddens. See A14.
         """
         from session_end import cleanup_old_sessions
 
@@ -1792,6 +1815,141 @@ class TestCleanupOldSessions:
             "came after it and reached no second carrier. If this directory "
             "was reaped, the guard stopped reading at the consolidation and "
             "destroyed the only copy of everything written below it."
+        )
+
+    def test_carrier_guard_a14_second_consolidation_releases(
+        self, tmp_path
+    ):
+        """A14: handoff, consolidation, handoff, consolidation. The last
+        consolidation harvested the second handoff, so the directory reaps.
+
+        THIS IS THE RELEASE HALF OF THE HIGH-WATER RULE AND A11 IS THE KEEP
+        HALF. A11 stops at [h, c, h] and asserts survival. This arm adds one
+        more consolidation and asserts removal. Together the two say that
+        the reset applies to EACH consolidation and not to the first one
+        alone. A9 and A11 hold the keep half already, so a suite without
+        this arm holds one half of a two-sided rule.
+
+        MEASURED, AND IT IS WHY THE ARM EXISTS. Take a mutant of which only
+        the FIRST consolidation resets and a later one is ignored. It gives
+        the SAME answer as the shipped predicate on [h], [h, c], [c, h],
+        [h, c, h], [h, c, h, c, h] and [h, c, other event]. It diverges on
+        THIS SHAPE ALONE, where it answers "carrier" and the shipped
+        predicate answers "no carrier". With this arm absent that mutant
+        passed the touched-file suite with no failure at all.
+
+        THE DIRECTION IS AN OVER-BLOCK. The mutant RETAINS where the rule
+        releases, so no wrongful deletion follows from it. The arm ships
+        because the release property is what the A9 failure text argues
+        for in prose, and prose that no arm holds can be falsified by a
+        later edit with a green suite.
+
+        A11 RECORDED THAT THIS SHAPE DISCRIMINATES NOTHING, AND THAT WAS
+        CORRECT FOR THE TWO PREDICATES IT COMPARED: the shape reaps below
+        the superseded existential rule and below the shipped positional
+        rule. "Discriminates nothing" is always relative to a candidate
+        set, and the candidate set is rarely written down with the claim.
+
+        WHAT THIS ARM DOES NOT CATCH, recorded so that a green is not read
+        wider than it is. A mutant of which only a consolidation on the LAST
+        event line resets agrees with the shipped predicate here and on each
+        shape listed above. It diverges on [handoff, consolidation, other
+        event]. A15 SEEDS THAT SHAPE AND KILLS THAT MUTANT. A14 and A15 are
+        two arms on one rule, and each one alone leaves a live mutant.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        self._write_journal(
+            old_dir,
+            [
+                "agent_handoff",
+                "session_consolidated",
+                "agent_handoff",
+                "session_consolidated",
+            ],
+        )
+        self._age_dir(old_dir, 10)
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert not old_dir.exists(), (
+            "The SECOND consolidation harvested the second handoff, so "
+            "nothing in this journal reached no second carrier and the "
+            "directory must reap. If it survived, the reset stopped "
+            "applying after the first consolidation, and each session that "
+            "harvests more than one time is retained with no limit."
+        )
+
+    def test_carrier_guard_a15_consolidation_then_other_event_reaps(
+        self, tmp_path
+    ):
+        """A15: handoff, consolidation, one other event. The consolidation
+        harvested the handoff above it, so the directory reaps.
+
+        THE RESET APPLIES AT THE CONSOLIDATION LINE. It does not wait for
+        the end of the file, and the consolidation does not have to be the
+        last line to count. This arm is the only one that says so. A2 puts
+        the consolidation on the last line and A14 does the same, so neither
+        can separate "the reset applies where it is written" from "the reset
+        applies only when the consolidation ends the file".
+
+        MEASURED, AND IT IS WHY THE ARM EXISTS. Take a mutant of which only
+        a consolidation on the LAST event line resets. It gives the SAME
+        answer as the shipped predicate on [h], [h, c], [c, h], [h, c, h],
+        [h, c, h, c] and [h, c, h, c, h]. It diverges on THIS SHAPE ALONE,
+        where it answers "carrier" and the shipped predicate answers "no
+        carrier". A14 is green against that mutant, measured.
+
+        A14 AND A15 ARE TWO ARMS ON ONE RULE AND EACH ONE ALONE LEAVES A
+        LIVE MUTANT. A14 kills a one-shot reset and is blind to a last-line
+        reset. A15 kills a last-line reset and is blind to a one-shot reset.
+        Do not remove one because the other looks like it covers the rule.
+
+        THE DIRECTION IS AN OVER-BLOCK, as with A14. The mutant RETAINS
+        where the rule releases, so no wrongful deletion follows from it.
+
+        THE OTHER EVENT IS `session_end` because it is a real event type
+        that carries no carrier meaning. Any type outside the two the
+        predicate compares gives the same reading.
+        """
+        from session_end import cleanup_old_sessions
+
+        slug_dir = tmp_path / "my-project"
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+
+        self._create_session_dir(slug_dir, current_id, age_days=0)
+        old_dir = self._create_session_dir(slug_dir, old_id, age_days=0)
+        self._write_journal(
+            old_dir,
+            ["agent_handoff", "session_consolidated", "session_end"],
+        )
+        self._age_dir(old_dir, 10)
+
+        cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+        )
+
+        assert not old_dir.exists(), (
+            "The consolidation harvested the handoff above it, and the line "
+            "below it carries no handoff, so the directory must reap. If it "
+            "survived, the reset now waits for the end of the file, and "
+            "each session that writes one more event after its harvest is "
+            "retained with no limit."
         )
 
     def test_carrier_guard_a12_handoff_far_below_the_first_lines(
