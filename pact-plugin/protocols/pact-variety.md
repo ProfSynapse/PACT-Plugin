@@ -142,7 +142,7 @@ The feature-level CalibrationRecord above coexists with per-dispatch variety sta
 }
 ```
 
-> The canonical total key is `total`. The lifecycle hook's band resolver additionally tolerates non-canonical `score` / top-level `variety_score`, or the sum of the four dimension scores, as fallbacks for stamps seen in the field — but orchestrators MUST stamp `total`.
+> The canonical total key is `total`. The lifecycle hook's band resolver additionally tolerates non-canonical `score` / top-level `variety_score`, or the sum of the four dimension scores, as fallbacks for stamps seen in the field — but orchestrators MUST stamp `total`. The stated `total` MUST equal the sum of the four dimension scores, at the first stamp and at each re-stamp.
 
 > **Inheritance fallback (resolver-side, not stamp-side).** If a Task B is dispatched WITHOUT a resolvable `metadata.variety` despite the requirement above, the band resolver inherits the band from the PARENT (Plan/feature/umbrella) task that Task B blocks — so `reasoning_reconstruction` stays resolvable rather than silently mis-resolving as `skipped` (consultation Task Bs are frequently 11-13). This is a read-time SAFETY NET for an omission, NOT a license to skip stamping: orchestrators still stamp each Task B afresh per the directive above. Inheritance fires only when the parent pointer is unambiguous (Task B blocks exactly one task) and that parent is itself stamped; otherwise the resolver fails open to `unresolvable`.
 
