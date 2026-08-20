@@ -17,6 +17,11 @@ Functions:
   total_pact_dispatch_count=None, threshold=2) -> dict
 - extract_dispatch_coverage(dispatch_site_events) -> (variety_totals,
   total, malformed) — BOTH Q5 terms from ONE pass over ONE input list.
+- extract_final_dispatch_coverage(dispatch_site_events, snapshot_events)
+  -> dict. The Q5 join: MEMBERSHIP comes from the `dispatch_site` stream,
+  and the VALUE comes from the latest `task_metadata_snapshot` of the same
+  task, so the distribution holds the FINAL total rather than the
+  as-dispatched one.
 
 Return shape (stable keys):
 - `coverage`:  float — fraction of pact-* dispatches with variety stamped;
@@ -85,6 +90,28 @@ from .teachback_schema import resolve_variety_total
 # Threshold default
 # ---------------------------------------------------------------------------
 DEFAULT_THRESHOLD = 2  # see pact-variety.md §Variety Calibration Record
+
+
+# ---------------------------------------------------------------------------
+# Timestamp parse — ONE implementation, two call sites in this module
+# ---------------------------------------------------------------------------
+def _parse_ts(value: object) -> datetime:
+    """Normalize a journal `ts` and parse it into an instant.
+
+    `make_event` stamps `ts` as `...Z` and `canonical_since()` emits
+    `...+00:00`, so the two forms must be compared as INSTANTS and not as
+    strings. A lexical compare is decided by the first byte after the
+    seconds, and `+` (0x2B) sorts before `Z` (0x5A), so a `+00:00` stamp
+    sorts before an equal-instant `Z` stamp.
+
+    This is a local copy rather than an import of
+    `session_journal._parse_ts`, which keeps this module decoupled. It is
+    ONE implementation shared by the two callers below, so the count of
+    implementations in the codebase stays at two.
+
+    RAISES on an unparseable value. Each caller owns its own fail-open.
+    """
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
 def compute_variety_divergence(
@@ -341,6 +368,191 @@ def extract_dispatch_coverage(
     return variety_totals, len(dispatch_site_events), malformed
 
 
+def _latest_snapshot_by_task(snapshot_events: list[dict]) -> dict[str, dict]:
+    """Index `task_metadata_snapshot` events by task id, keeping the LATEST.
+
+    LATEST means the greatest PARSED instant. On an equal instant the LATER
+    element in list order wins, which is why the compare is `>=`. Journal
+    events stamp `ts` at second granularity, so a tie is ordinary, and the
+    later line in journal order is the authoritative one for this stream.
+
+    THIS TIE-BREAK IS THE OPPOSITE OF `resolve_arc_start`, which compares
+    with `>` and keeps the FIRST of two equal instants. That function picks
+    an arc BOUNDARY, where first-wins is the safe direction. This one picks
+    the FINAL value, where last-wins is the definition of final.
+
+    An event that is not a dict, that carries no `task_id`, or that carries
+    a missing or unparseable `ts`, is skipped. A `task_id` of None is
+    skipped rather than keyed, so it cannot join to a member that carries no
+    task id either. The compare sits INSIDE the try, so a naive `ts`
+    compared against an aware one raises TypeError and fails open.
+
+    The caller passes the list in journal order, because the tie-break is
+    positional. Pure function, and it does not raise.
+    """
+    latest: dict[str, tuple[datetime, dict]] = {}
+    if not isinstance(snapshot_events, list):
+        return {}
+    for event in snapshot_events:
+        if not isinstance(event, dict):
+            continue
+        task_id = event.get("task_id")
+        if task_id is None:
+            continue
+        ts = event.get("ts")
+        if not ts:
+            continue
+        key = str(task_id)
+        try:
+            parsed = _parse_ts(ts)
+            current = latest.get(key)
+            # `>=` is last-wins on an equal instant. See the docstring above
+            # for why this direction is the opposite of resolve_arc_start.
+            if current is None or parsed >= current[0]:
+                latest[key] = (parsed, event)
+        except (ValueError, TypeError):
+            continue
+    return {key: value[1] for key, value in latest.items()}
+
+
+def extract_final_dispatch_coverage(
+    dispatch_site_events: list[dict],
+    snapshot_events: list[dict],
+) -> dict:
+    """Q5 coverage terms, carrying the FINAL variety total of each member.
+
+    MEMBERSHIP comes from `dispatch_site_events` and from nothing else. The
+    VALUE comes from the latest `task_metadata_snapshot` of the same task.
+    So the distribution holds the total as it stands at read time, rather
+    than the total as it stood at dispatch.
+
+    **THE NON-MEMBER EXCLUSION IS STRUCTURAL.** The loop iterates
+    `dispatch_site_events`, so a snapshot for a task that no member names is
+    unreachable. The snapshot stream holds far more units than the
+    `dispatch_site` stream. A REDIRECT that sourced membership there would
+    widen the population and break the one-member-means-one-dispatch
+    property. This is a property of the iteration, and not a filter that a
+    later edit can weaken by accident.
+
+    Returns a dict with FIVE keys:
+
+    - `variety_totals` (list[int]) — the FINAL total of each member that
+      resolved one. This list IS the distribution.
+    - `sites` (int) — `len(dispatch_site_events)`. It counts the EXISTENCE
+      of each event, and it is identical to the `total` term of
+      `extract_dispatch_coverage`.
+    - `malformed` (list[dict]) — the `dispatch_site` events that resolve no
+      total on either stream AND carry a PRESENT `variety` key.
+    - `fallback_used` (int) — members of which the final value did NOT come
+      from a snapshot. State that definition adjacent to the number wherever
+      it is reported.
+    - `superseded` (int) — members of which the final value DIFFERS from the
+      as-dispatched one, counted only where the two values each resolve.
+
+    **THE TWO ACCESSORS DIFFER, and that is the trap in this join.** A
+    `dispatch_site` event holds the stamp at the TOP level. A snapshot holds
+    it NESTED at `metadata.variety`. The snapshot side passes `metadata` as
+    the second argument to `resolve_variety_total`, which keeps the
+    non-canonical `metadata["variety_score"]` candidate reachable. To omit
+    it narrows the resolver on one side of the join and not on the other.
+
+    **THE FALLBACK, in order:**
+
+    1. The latest snapshot value resolves. Use it. It is the FINAL value.
+    2. It does not resolve, and the `dispatch_site` value resolves. Use the
+       `dispatch_site` value and add one to `fallback_used`.
+    3. Neither resolves. The member contributes no value, and add one to
+       `fallback_used`.
+
+    `fallback_used` counts arms 2 AND 3 together. Arm 2 alone answers a
+    narrower question and keeps arm 3 unobserved, which is the failure this
+    counter is here to prevent.
+
+    **`fallback_used` AND `superseded` ARE DISJOINT BY CONSTRUCTION.** A
+    member that took the fallback has no second value to compare against, so
+    it cannot reach `superseded`. A reader can add the two counts together
+    without a double count.
+
+    **MALFORMED IS CLASSIFIED BY THE VALUE THE JOIN FINALLY USES.** After
+    arm 3, a member is malformed if and only if `variety` is present on its
+    `dispatch_site` event. ONE CELL READS DIFFERENTLY FROM A CAREFUL HUMAN:
+    a member with NO `variety` on its `dispatch_site` event, and a
+    present-but-unresolvable one on its latest snapshot, reports an absent
+    stamp rather than a data-quality defect. Revisit that cell if it fills,
+    rather than pre-solve it with a third rule.
+
+    **TWO PRECONDITIONS THIS FUNCTION CANNOT CHECK, so the caller owns
+    them.** The two lists must be scoped to the SAME arc with the SAME
+    `--since` value, because the platform reuses task ids across arcs. And
+    `snapshot_events` must arrive in journal order, because the tie-break is
+    positional.
+
+    Pure function, and it does not raise. A non-list `dispatch_site_events`
+    yields the empty result. A non-dict element counts as a site and joins
+    to nothing, which mirrors `extract_dispatch_coverage`.
+    """
+    if not isinstance(dispatch_site_events, list):
+        return {
+            "variety_totals": [],
+            "sites": 0,
+            "malformed": [],
+            "fallback_used": 0,
+            "superseded": 0,
+        }
+
+    latest_snapshots = _latest_snapshot_by_task(snapshot_events)
+
+    variety_totals: list[int] = []
+    malformed: list[dict] = []
+    fallback_used = 0
+    superseded = 0
+
+    for event in dispatch_site_events:
+        site_value = None
+        snapshot_value = None
+        has_variety = False
+
+        if isinstance(event, dict):
+            # Membership is tested before resolution, so an ABSENT stamp and
+            # a PRESENT-but-unresolvable one stay different findings.
+            has_variety = "variety" in event
+            site_value = resolve_variety_total(event.get("variety"))
+            task_id = event.get("task_id")
+            if task_id is not None:
+                snapshot = latest_snapshots.get(str(task_id))
+                if snapshot is not None:
+                    metadata = snapshot.get("metadata")
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    # The snapshot nests the stamp, and `metadata` is the
+                    # resolver's second argument, so candidate 3 stays live.
+                    snapshot_value = resolve_variety_total(
+                        metadata.get("variety"), metadata
+                    )
+
+        # Arm 1: the snapshot carries the FINAL value.
+        if snapshot_value is not None:
+            variety_totals.append(snapshot_value)
+            if site_value is not None and site_value != snapshot_value:
+                superseded += 1
+            continue
+
+        # Arms 2 and 3: the final value did NOT come from a snapshot.
+        fallback_used += 1
+        if site_value is not None:
+            variety_totals.append(site_value)
+        elif has_variety:
+            malformed.append(event)
+
+    return {
+        "variety_totals": variety_totals,
+        "sites": len(dispatch_site_events),
+        "malformed": malformed,
+        "fallback_used": fallback_used,
+        "superseded": superseded,
+    }
+
+
 def resolve_arc_start(
     variety_assessed_events: list[dict],
     feature_task_id: str,
@@ -370,9 +582,10 @@ def resolve_arc_start(
     Timestamps are PARSED for the max, never lexically compared: `make_event`
     stamps `ts` as `...Z` while `canonical_since()` emits `...+00:00`, and a
     lexical compare across the two is wrong (`'+'` 0x2B sorts before `'Z'`
-    0x5A). The 2-line normalize-and-parse is duplicated locally (rather than
-    importing `session_journal._parse_ts`) to keep this module decoupled; if
-    a third ts-parse site ever appears, extract a shared util. The RETURN
+    0x5A). The normalize-and-parse is the module-level `_parse_ts`, a local
+    copy rather than an import of `session_journal._parse_ts`, which keeps
+    this module decoupled. It is ONE implementation with two call sites in
+    this module, so the extract-a-shared-util trigger does not fire. The RETURN
     value is the original `ts` STRING of the latest event, so the caller
     passes it to `--since`, which `_ts_ge` re-parses. The parse AND the
     max-comparison both run inside one try/except, so an entry that is
@@ -392,9 +605,6 @@ def resolve_arc_start(
 
     Pure function — no disk reads, no mutation.
     """
-    def _parse(value: object) -> datetime:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-
     latest_ts: str | None = None
     latest_dt: datetime | None = None
     for event in variety_assessed_events:
@@ -404,7 +614,7 @@ def resolve_arc_start(
         if not ts:
             continue
         try:
-            dt = _parse(ts)
+            dt = _parse_ts(ts)
             # The comparison is INSIDE the try (mirroring _ts_ge): comparing
             # a parseable-but-naive ts against an aware one raises TypeError
             # — fail open (skip the entry) instead of crashing the read.

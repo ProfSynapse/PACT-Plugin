@@ -48,6 +48,7 @@ from shared.session_journal import make_event  # noqa: E402
 from shared.variety_divergence import (  # noqa: E402
     compute_variety_divergence,
     extract_dispatch_coverage,
+    extract_final_dispatch_coverage,
     resolve_arc_start,
 )
 
@@ -365,3 +366,277 @@ class TestResolveArcStart:
                 f"(the try-scope regression resurfaced): {exc}"
             )
         assert result == "2026-06-15T12:00:00Z"
+
+
+class TestExtractFinalDispatchCoverage:
+    """The Q5 join: MEMBERSHIP from `dispatch_site`, VALUE from the latest
+    `task_metadata_snapshot` of the same task.
+
+    The defect this replaces: Q5 read the AS-DISPATCHED total, so a stamp
+    revised after the dispatch was invisible to the calibration figure.
+
+    Non-vacuity: `extract_final_dispatch_coverage` is a NET-NEW symbol, so a
+    source-only revert removes it (ImportError at collection, not a clean
+    assertion fail). The guards that DO fail cleanly are the non-member
+    exclusion, the kept-member fallback, and the disjointness of the two
+    counters, each asserted below on values that a broken implementation
+    cannot reproduce by accident.
+    """
+
+    def _site(self, task_id, variety=None):
+        """A `dispatch_site` event. `variety=None` means the key is ABSENT."""
+        fields = {"task_id": task_id}
+        if variety is not None:
+            fields["variety"] = variety
+        return make_event("dispatch_site", **fields)
+
+    def _snap(self, task_id, metadata, ts=_TS):
+        return make_event(
+            "task_metadata_snapshot",
+            task_id=task_id,
+            metadata=metadata,
+            ts=ts,
+        )
+
+    # -- The structural exclusion ------------------------------------------
+
+    def test_non_member_snapshots_cannot_enter_the_distribution(self):
+        """A snapshot for a task that NO dispatch_site names is unreachable,
+        because the loop iterates the member list.
+
+        The extras carry totals DISTINCT from each member value, which is
+        what makes this arm able to FAIL: with a shared value, an
+        implementation that admits non-members yields a list that looks
+        correct. A REDIRECT that sourced membership from the snapshot stream
+        would widen the population and break one-member-means-one-dispatch.
+        """
+        sites = [
+            self._site("1", {"total": 9}),
+            self._site("2", {"total": 10}),
+        ]
+        snapshots = [
+            self._snap("1", {"variety": {"total": 9}}),
+            self._snap("2", {"variety": {"total": 10}}),
+            self._snap("90", {"variety": {"total": 15}}),  # non-member
+            self._snap("91", {"variety": {"total": 16}}),  # non-member
+        ]
+        result = extract_final_dispatch_coverage(sites, snapshots)
+        assert result["sites"] == 2
+        assert len(result["variety_totals"]) <= result["sites"]
+        assert sorted(result["variety_totals"]) == [9, 10]
+        assert 15 not in result["variety_totals"]
+        assert 16 not in result["variety_totals"]
+
+    def test_member_with_no_snapshot_keeps_its_dispatch_site_value(self):
+        """The opposite direction. An implementation that DROPS an
+        un-snapshotted member passes the exclusion arm above and silently
+        shrinks the denominator, which is the failure this design prevents.
+        """
+        result = extract_final_dispatch_coverage(
+            [self._site("1", {"total": 9})], []
+        )
+        assert result["variety_totals"] == [9]
+        assert result["sites"] == 1
+        assert result["fallback_used"] == 1
+        assert result["superseded"] == 0
+
+    # -- Which value wins --------------------------------------------------
+
+    def test_snapshot_value_wins_and_the_member_counts_as_superseded(self):
+        """The whole point of the join: the FINAL total, not the
+        as-dispatched one. 9 and 11 sit in different bands, so a reader can
+        see which value the distribution carries."""
+        result = extract_final_dispatch_coverage(
+            [self._site("1", {"total": 9})],
+            [self._snap("1", {"variety": {"total": 11}})],
+        )
+        assert result["variety_totals"] == [11]
+        assert result["superseded"] == 1
+        assert result["fallback_used"] == 0
+
+    def test_agreeing_streams_do_not_count_as_superseded(self):
+        """`superseded` counts DISAGREEMENT, not the presence of a snapshot.
+        Counting each snapshot-sourced member would report the corrected
+        defect as universal and make the counter useless."""
+        result = extract_final_dispatch_coverage(
+            [self._site("1", {"total": 9})],
+            [self._snap("1", {"variety": {"total": 9}})],
+        )
+        assert result["variety_totals"] == [9]
+        assert result["superseded"] == 0
+        assert result["fallback_used"] == 0
+
+    def test_snapshot_reaches_the_nested_variety_score_candidate(self):
+        """The snapshot side passes `metadata` as the resolver's SECOND
+        argument, so the non-canonical `metadata["variety_score"]` candidate
+        stays reachable.
+
+        Non-vacuity: drop that argument and the snapshot resolves nothing,
+        the member falls back to 9, and `fallback_used` becomes 1. So the
+        two assertions below both move under that mutation.
+        """
+        result = extract_final_dispatch_coverage(
+            [self._site("1", {"total": 9})],
+            [self._snap("1", {"variety_score": 12})],
+        )
+        assert result["variety_totals"] == [12]
+        assert result["fallback_used"] == 0
+
+    # -- The two counters --------------------------------------------------
+
+    def test_fallback_and_superseded_are_disjoint(self):
+        """A member that took the fallback has no second value to compare
+        against, so it cannot reach `superseded`. A reader can add the two
+        counts together without a double count.
+
+        Member 1 is superseded. Members 2 and 3 take the fallback, one for
+        each arm: an unresolvable snapshot, and no snapshot at all.
+        """
+        sites = [
+            self._site("1", {"total": 9}),
+            self._site("2", {"total": 10}),
+            self._site("3", {"total": 11}),
+        ]
+        snapshots = [
+            self._snap("1", {"variety": {"total": 13}}),
+            self._snap("2", {"variety": {"total": "junk"}}),
+        ]
+        result = extract_final_dispatch_coverage(sites, snapshots)
+        assert result["superseded"] == 1
+        assert result["fallback_used"] == 2
+        assert result["superseded"] + result["fallback_used"] <= result["sites"]
+        assert sorted(result["variety_totals"]) == [10, 11, 13]
+
+    def test_fallback_counts_arm_three_where_neither_stream_resolves(self):
+        """`fallback_used` is "the final value did NOT come from a
+        snapshot", which covers arm 3 as well as arm 2. Counting arm 2 alone
+        answers a narrower question and keeps arm 3 unobserved."""
+        result = extract_final_dispatch_coverage(
+            [self._site("1", {"total": "junk"})],
+            [self._snap("1", {"variety": {"total": "junk"}})],
+        )
+        assert result["variety_totals"] == []
+        assert result["fallback_used"] == 1
+        assert result["superseded"] == 0
+
+    # -- The latest-picker -------------------------------------------------
+
+    def test_latest_snapshot_is_chosen_by_parsed_instant_not_by_position(self):
+        """`make_event` stamps `ts` as `...Z` and `canonical_since()` emits
+        `...+00:00`. A lexical compare is decided by the first byte after the
+        seconds, and `+` (0x2B) sorts before `Z` (0x5A).
+
+        The LATER instant is placed FIRST in the list, so a picker that takes
+        the last element returns 11 and fails here.
+        """
+        snapshots = [
+            self._snap(
+                "1", {"variety": {"total": 12}}, ts="2026-06-15T00:00:00+00:00"
+            ),
+            self._snap(
+                "1", {"variety": {"total": 11}}, ts="2026-06-14T12:00:00Z"
+            ),
+        ]
+        result = extract_final_dispatch_coverage(
+            [self._site("1", {"total": 9})], snapshots
+        )
+        assert result["variety_totals"] == [12]
+
+    def test_equal_instant_tie_break_takes_the_later_element(self):
+        """Journal events stamp `ts` at second granularity, so a tie is
+        ordinary. LAST-WINS, because this function picks the FINAL value.
+        `resolve_arc_start` keeps the FIRST of two equal instants, and it is
+        correct for a different question: an arc BOUNDARY."""
+        snapshots = [
+            self._snap("1", {"variety": {"total": 11}}, ts=_TS),
+            self._snap("1", {"variety": {"total": 12}}, ts=_TS),
+        ]
+        result = extract_final_dispatch_coverage(
+            [self._site("1", {"total": 9})], snapshots
+        )
+        assert result["variety_totals"] == [12]
+
+    def test_unparseable_and_missing_ts_snapshots_are_skipped(self):
+        """Fail-open, mirroring `resolve_arc_start`. The usable snapshot
+        wins rather than the whole member falling back."""
+        snapshots = [
+            self._snap("1", {"variety": {"total": 11}}, ts="not-a-timestamp"),
+            self._snap("1", {"variety": {"total": 12}}, ts=""),
+            self._snap("1", {"variety": {"total": 13}}, ts=_TS),
+        ]
+        result = extract_final_dispatch_coverage(
+            [self._site("1", {"total": 9})], snapshots
+        )
+        assert result["variety_totals"] == [13]
+        assert result["fallback_used"] == 0
+
+    # -- Classification ----------------------------------------------------
+
+    def test_absent_stamp_is_a_coverage_gap_and_a_junk_stamp_is_malformed(self):
+        """The partition the old helper pins, preserved through the join and
+        classified by the value the join FINALLY uses. The two findings have
+        opposite remedies and are never merged."""
+        absent = self._site("1")
+        junk = self._site("2", {"total": "junk"})
+        result = extract_final_dispatch_coverage([absent, junk], [])
+        assert result["variety_totals"] == []
+        assert result["sites"] == 2
+        assert result["malformed"] == [junk]
+        assert result["fallback_used"] == 2
+
+    # -- Hostile input -----------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "hostile",
+        [None, "string", 42, {"not": "a list"}, object()],
+    )
+    def test_non_list_members_yield_the_empty_result(self, hostile):
+        assert extract_final_dispatch_coverage(hostile, []) == {
+            "variety_totals": [],
+            "sites": 0,
+            "malformed": [],
+            "fallback_used": 0,
+            "superseded": 0,
+        }
+
+    @pytest.mark.parametrize(
+        "hostile",
+        [None, "string", 42, {"not": "a list"}, object()],
+    )
+    def test_non_list_snapshots_leave_each_member_on_its_fallback(self, hostile):
+        """The join degrades to the old behaviour rather than raising. This
+        runs inside a wrap-up that the session depends on."""
+        result = extract_final_dispatch_coverage(
+            [self._site("1", {"total": 9})], hostile
+        )
+        assert result["variety_totals"] == [9]
+        assert result["fallback_used"] == 1
+
+    def test_non_dict_member_is_a_site_that_joins_to_nothing(self):
+        """It existed, so it counts as a site. It carries nothing resolvable
+        and it is not malformed, which mirrors `extract_dispatch_coverage`."""
+        result = extract_final_dispatch_coverage(
+            ["not-a-dict", None, self._site("1", {"total": 9})],
+            [self._snap("1", {"variety": {"total": 11}})],
+        )
+        assert result["variety_totals"] == [11]
+        assert result["sites"] == 3
+        assert result["malformed"] == []
+        assert result["fallback_used"] == 2
+
+    def test_a_member_without_a_task_id_joins_to_nothing(self):
+        """A `task_id` of None is skipped rather than keyed, so two events
+        that each lack one cannot join to each other on the string "None"."""
+        member = {"v": 1, "type": "dispatch_site", "variety": {"total": 9}}
+        snapshots = [
+            {
+                "v": 1,
+                "type": "task_metadata_snapshot",
+                "metadata": {"variety": {"total": 14}},
+                "ts": _TS,
+            }
+        ]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [9]
+        assert result["fallback_used"] == 1
+        assert result["superseded"] == 0
