@@ -19,7 +19,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
 from shared.teachback_schema import resolve_variety_total  # noqa: E402
-from shared.variety_divergence import extract_dispatch_coverage  # noqa: E402
+from shared.variety_divergence import (  # noqa: E402
+    extract_dispatch_coverage,
+    extract_final_dispatch_coverage,
+)
 
 WRAPUP_PATH = Path(__file__).parent.parent / "commands" / "wrap-up.md"
 
@@ -79,21 +82,37 @@ def _backticked_expression(line, prefix):
     raise AssertionError(f"no backticked expression starting with {prefix!r}")
 
 
-def _run_extraction(expression, events):
-    """Execute a documented extraction expression against `events` and return
-    the resulting namespace.
+def _run_extraction(expressions, events, snapshot_events=None):
+    """Execute the documented extraction chain against `events` and return the
+    resulting namespace.
 
     `exec` is the point, not a shortcut: wrap-up.md is executed by an LLM at
     runtime, so the only way to pin the instruction's BEHAVIOUR (rather than
     grep its wording) is to run the expression the file actually carries. The
     input is repo-controlled markdown.
+
+    ACCEPTS A SEQUENCE, and that is load-bearing since the Q5 join. The join
+    carries the helper CALL and the unpack as two separate backticked spans,
+    so a lift of the unpack alone execs a statement that reads nothing from
+    `events` and raises NameError. Running the spans IN ORDER pins the whole
+    documented path rather than one line of it.
+
+    `snapshot_events` defaults to EMPTY, which exercises the fallback arm: a
+    member with no snapshot keeps its `dispatch_site` value. A caller that
+    means to pin the snapshot-sourced arm passes its own list.
     """
+    if isinstance(expressions, str):
+        expressions = [expressions]
     namespace = {
         "events": events,
+        "snapshot_events": [] if snapshot_events is None else snapshot_events,
         "resolve_variety_total": resolve_variety_total,
         "extract_dispatch_coverage": extract_dispatch_coverage,
+        "extract_final_dispatch_coverage": extract_final_dispatch_coverage,
     }
-    exec(expression, namespace)  # noqa: S102 — repo-controlled instruction text
+    for expression in expressions:
+        # noqa: S102 — repo-controlled instruction text
+        exec(expression, namespace)  # noqa: S102
     return namespace
 
 
@@ -170,8 +189,13 @@ class TestRetroReadHardening:
         """Successor to the retired-helper pin. The NEGATIVE half is the
         load-bearing one: it is what fails if someone reinstates
         `count_task_b_dispatch_sites` in the prose, which would leave the
-        retirement silently incomplete."""
-        assert "extract_dispatch_coverage" in q5
+        retirement silently incomplete.
+
+        The positive half names `extract_final_dispatch_coverage` since the
+        Q5 join: MEMBERSHIP continues to come from the `dispatch_site`
+        stream, and the VALUE comes from the latest `task_metadata_snapshot`
+        of the same task."""
+        assert "extract_final_dispatch_coverage" in q5
         assert "count_task_b_dispatch_sites" not in q5, (
             "the retired 3-marker helper must not be named in Q5 — a "
             "reinstated mention means the denominator was not actually moved"
@@ -340,8 +364,12 @@ class TestTotalExtraction:
         resolved rather than direct-indexed — did not go away; it moved into
         code, and is pinned behaviourally by
         `test_variety_divergence.py::TestExtractDispatchCoverage`. A prose pin
-        satisfiable by an import line is weaker than a behavioural one."""
-        assert "extract_dispatch_coverage" in q5
+        satisfiable by an import line is weaker than a behavioural one.
+
+        The helper is `extract_final_dispatch_coverage` since the Q5 join,
+        and the behavioural pin moved with it, to
+        `test_variety_divergence.py::TestExtractFinalDispatchCoverage`."""
+        assert "extract_final_dispatch_coverage" in q5
         assert "shared.variety_divergence" in q5
 
     def test_q5_does_not_direct_index_the_total(self, q5):
@@ -449,7 +477,16 @@ class TestQ5ExtractionDependsOnTheDimensionSumCandidate:
 
     @pytest.fixture
     def q5_expression(self, q5):
-        return _backticked_expression(q5, "variety_totals, ")
+        """The documented chain, IN ORDER: the helper call, then the unpack.
+
+        Q5 carries the join as two spans. Lifting the unpack alone runs a
+        statement that reads nothing from `events`, so the pair is the unit
+        that pins the extraction path.
+        """
+        return [
+            _backticked_expression(q5, "coverage = "),
+            _backticked_expression(q5, "variety_totals, "),
+        ]
 
     def test_higher_candidates_cannot_fire_on_the_corpus_shape(self):
         """Fixture control. Without it, a shape that candidate 1 resolved would
