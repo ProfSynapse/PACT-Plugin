@@ -154,6 +154,7 @@ def frame_rig(tmp_path, monkeypatch, pact_context):
     emit_calls: list[str] = []
     real_handoff = tlg._emit_lead_side_agent_handoff
     real_snapshot = tlg.emit_task_metadata_snapshot
+    real_per_write = tlg._emit_per_write_snapshot
 
     def spy_handoff(*args, **kwargs):
         emit_calls.append("_emit_lead_side_agent_handoff")
@@ -163,8 +164,18 @@ def frame_rig(tmp_path, monkeypatch, pact_context):
         emit_calls.append("emit_task_metadata_snapshot")
         return real_snapshot(*args, **kwargs)
 
+    def spy_per_write(*args, **kwargs):
+        # The OPEN-task per-write mirror is the only caller of this helper,
+        # so its presence NAMES the site. The helper then reaches
+        # emit_task_metadata_snapshot through the module global above, so
+        # one mirror fire records TWO entries and a backstop fire records
+        # ONE. That difference is what separates the two sites.
+        emit_calls.append("_emit_per_write_snapshot")
+        return real_per_write(*args, **kwargs)
+
     monkeypatch.setattr(tlg, "_emit_lead_side_agent_handoff", spy_handoff)
     monkeypatch.setattr(tlg, "emit_task_metadata_snapshot", spy_snapshot)
+    monkeypatch.setattr(tlg, "_emit_per_write_snapshot", spy_per_write)
 
     class Drive:
         def __init__(self, records, advisories, calls):
@@ -634,6 +645,66 @@ class TestSnapshotBackstopSite:
             "A write with no incoming handoff must not drive the handoff "
             "backstop, or the two backstops share one observable and no arm "
             "can name which site a revert broke."
+        )
+
+    def test_the_two_snapshot_sites_are_disjoint_on_the_disk_status(
+            self, frame_rig):
+        """This backstop and the OPEN-task per-write mirror are a disjoint
+        pair, split on one on-disk status read. The backstop fires when the
+        disk task reads completed. The mirror fires when it does not.
+
+        🔴 READ THIS BEFORE YOU SIMPLIFY THE ASSERTIONS BELOW. THE JOURNAL
+        RECORD CANNOT ANSWER THIS QUESTION. The two sites write the SAME
+        record kind, the record carries NO FIELD NAMING ITS SITE, and the
+        content-key dedup collapses a second write to one record. MEASURED:
+        the record count is 1 in all four cells of (open, completed) by
+        (base, both-sites-firing). So a record-count assertion looks
+        equivalent to the calls below and carries NO INFORMATION. That
+        equality is invisible from this arm, and it is why this pin lived
+        as a docstring until it was measured.
+
+        THE CALL LAYER IS THE ONLY CHANNEL THAT SEPARATES THEM. The mirror
+        is the only caller of `_emit_per_write_snapshot`, so its presence
+        names the site, and it reaches the substrate through the module
+        global, so one mirror fire records two entries.
+
+        MEASURED KILL, and the numbers here are read from a run and not
+        from the source: force the `task_a.get("status") == "completed"`
+        conjunct of the backstop to True. THE RECORD COUNT STAYS AT 1. The
+        substrate call count on the OPEN task moves from 1 to 2, and the
+        call order shows the backstop firing before the mirror. The
+        COMPLETED cell holds at 1 in the two worlds, which is what makes
+        the moved cell attributable to that conjunct.
+        """
+        open_task = {
+            "id": "7", "owner": "devops", "subject": "devops: implement",
+            "status": "in_progress", "metadata": {},
+        }
+        opened = frame_rig(_arm_b(**self.FRAME_EXTRA), disk_task=open_task)
+        assert "_emit_per_write_snapshot" in opened.emit_calls, (
+            "THE MIRROR MUST OWN AN OPEN TASK. If this is absent the "
+            "open-task write reached neither site, and the counts below "
+            "measure an unreached surface rather than a disjoint pair."
+        )
+        assert opened.emit_calls.count("emit_task_metadata_snapshot") == 1, (
+            "THE BACKSTOP FIRED ON AN OPEN TASK. Its status conjunct no "
+            "longer holds the split, so the two sites now double-fire on "
+            "one write. The journal hides it, because the content-key "
+            "dedup keeps the record count at 1."
+        )
+
+        completed = frame_rig(
+            _arm_b(**self.FRAME_EXTRA), disk_task=_completed_task(metadata={})
+        )
+        assert "_emit_per_write_snapshot" not in completed.emit_calls, (
+            "THE MIRROR FIRED ON A COMPLETED TASK. The pair is disjoint in "
+            "one direction only, which is not disjoint."
+        )
+        assert completed.emit_calls.count("emit_task_metadata_snapshot") == 1, (
+            "POSITIVE CONTROL, and it is what proves the arm above reads a "
+            "live surface. The completed cell must stay at one substrate "
+            "call in the two worlds, so a mutation that moves the open "
+            "cell alone is attributable to the backstop status conjunct."
         )
 
 
