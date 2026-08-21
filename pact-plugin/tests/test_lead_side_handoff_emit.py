@@ -111,7 +111,7 @@ class TestLeadEmits:
 # =============================================================================
 # Frame gate (is_canonical_journal_frame) — SUPPRESS rows + positive controls
 # =============================================================================
-class TestIsLeadTopologyGate:
+class TestCanonicalJournalFrameGate:
     def test_teammate_frame_no_emit(self, tmp_path, monkeypatch, pact_context, emit_events):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         pact_context(team_name=TEAM, session_id="s1")
@@ -133,7 +133,13 @@ class TestIsLeadTopologyGate:
         assert len(emit_events) == 1
 
     def test_empty_agent_type_no_emit(self, tmp_path, monkeypatch, pact_context, emit_events):
-        """is_lead('') is False (empty agent_type fail-safe)."""
+        """An empty agent_type makes the ROLE leg False, so the gate falls
+        to the TOPOLOGY leg. THIS FIXTURE SEEDS NO leadSessionId TEAM CONFIG,
+        so that leg cannot resolve either and the emit is suppressed. DO NOT
+        READ THIS AS A FAIL-SAFE PROPERTY OF THE EMPTY agent_type: the same
+        value with a resolvable topology DOES emit, which is the lead
+        launched with no --agent flag. See
+        test_canonical_journal_frame_gate.py for that arm."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         pact_context(team_name=TEAM, session_id="s1")
         tlg.evaluate_lifecycle(_payload(agent_type=""))
