@@ -640,3 +640,148 @@ class TestExtractFinalDispatchCoverage:
         assert result["variety_totals"] == [9]
         assert result["fallback_used"] == 1
         assert result["superseded"] == 0
+
+    # -- The join key ------------------------------------------------------
+    #
+    # EACH ARM BELOW FEEDS THE TWO STREAMS DISAGREEING VALUES, and that is
+    # what makes the arm able to fail. The site carries 9 and the snapshot
+    # carries 12, so a join that MISSES returns [9] with `fallback_used` 1,
+    # and a join that HITS returns [12] with `fallback_used` 0. On agreeing
+    # values the two outcomes are one list and the arm measures nothing.
+
+    def test_an_int_snapshot_id_joins_a_str_member_id(self):
+        """The `str()` normalize sits on the TWO sides of the join, so the
+        streams align when one of them emits a bare int.
+
+        DIRECTION MATTERS AND THIS IS THE FIRST OF TWO. Here the SNAPSHOT
+        carries the int. An index that keys on the raw value cannot be found
+        by a stringified member lookup, so this arm fails when the normalize
+        is removed from the INDEX side alone, and also when it is removed
+        from the two sides together.
+        """
+        member = self._site("7", {"total": 9})
+        snapshots = [self._snap(7, {"variety": {"total": 12}})]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [12]
+        assert result["fallback_used"] == 0
+        assert result["superseded"] == 1
+
+    def test_an_int_member_id_joins_a_str_snapshot_id(self):
+        """The opposite direction, and it is a DIFFERENT condition.
+
+        Here the MEMBER carries the int. A lookup that keys on the raw value
+        misses a stringified index, so this arm fails when the normalize is
+        removed from the two sides together. It PASSES when the normalize is
+        removed from the index side alone, which is what separates the two
+        defects rather than merging them into one finding.
+        """
+        member = self._site(7, {"total": 9})
+        snapshots = [self._snap("7", {"variety": {"total": 12}})]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [12]
+        assert result["fallback_used"] == 0
+        assert result["superseded"] == 1
+
+    def test_a_member_with_no_task_id_does_not_join_the_string_none_key(self):
+        """`emit_task_metadata_snapshot` writes the id through
+        `sanitize_path_component(str(task_id))`, so a snapshot for a task
+        with no id lands on the LITERAL STRING "None". A member with no id
+        must not join it.
+
+        This is the collision the member-side None guard prevents, and it is
+        a shape the emit path can produce rather than an adversarial one. The
+        sibling arm above covers the case where NEITHER side carries an id.
+        This arm covers the mixed case, where the guard is the only thing
+        holding the two apart.
+        """
+        member = self._site(None, {"total": 9})
+        snapshots = [self._snap("None", {"variety": {"total": 12}})]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [9]
+        assert result["fallback_used"] == 1
+        assert result["superseded"] == 0
+
+    def test_a_snapshot_with_no_task_id_does_not_join_the_string_none_key(self):
+        """The mirror of the arm above, and the guard is on the other side.
+
+        A snapshot that carries no id is skipped rather than keyed, so a
+        member carrying the literal string "None" as its id cannot reach it.
+        """
+        member = self._site("None", {"total": 9})
+        snapshots = [self._snap(None, {"variety": {"total": 12}})]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [9]
+        assert result["fallback_used"] == 1
+        assert result["superseded"] == 0
+
+    # -- The latest-picker -------------------------------------------------
+
+    def test_equal_instant_z_and_offset_forms_are_ordered_as_instants(self):
+        """THE TWO STAMPS NAME ONE INSTANT IN TWO SPELLINGS, which is the
+        case a byte compare gets incorrect.
+
+        `make_event` stamps `...Z` and `canonical_since()` emits `...+00:00`.
+        `+` (0x2B) sorts before `Z` (0x5A), so a byte compare finds the
+        `+00:00` element SMALLER than an equal-instant `Z` element and keeps
+        the earlier one. Last-wins on an equal instant says the later element
+        wins, so the correct answer is 12 and a byte compare returns 11.
+
+        THE SIBLING ARM THAT NAMES THE PARSE CANNOT REACH THIS. It separates
+        its two stamps by a DAY, and a byte compare orders different dates
+        correctly, so it returns the same answer for a parsed compare and for
+        a byte compare. Equal instants are the only inputs that discriminate
+        the two.
+        """
+        snapshots = [
+            self._snap(
+                "1", {"variety": {"total": 11}}, ts="2026-06-15T12:00:00Z"
+            ),
+            self._snap(
+                "1", {"variety": {"total": 12}}, ts="2026-06-15T12:00:00+00:00"
+            ),
+        ]
+        result = extract_final_dispatch_coverage(
+            [self._site("1", {"total": 9})], snapshots
+        )
+        assert result["variety_totals"] == [12]
+
+    def test_the_only_snapshot_having_no_ts_sends_the_member_to_the_fallback(
+        self,
+    ):
+        """A snapshot with no `ts` is SKIPPED, and it is not dated to an
+        early instant and kept.
+
+        THE SIBLING SKIP ARM CANNOT REACH THIS, because it puts a usable
+        snapshot LAST and greatest, so a picker that keeps a ts-less snapshot
+        at the epoch returns the same answer. Here the ts-less snapshot is
+        the ONLY one, so keeping it changes the result from the fallback
+        value to the snapshot value.
+        """
+        member = self._site("1", {"total": 9})
+        snapshots = [self._snap("1", {"variety": {"total": 12}}, ts="")]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [9]
+        assert result["fallback_used"] == 1
+        assert result["superseded"] == 0
+
+    def test_a_non_dict_snapshot_element_does_not_raise(self):
+        """The docstring says the function is pure and does not raise. A
+        snapshot LIST holding a non-dict element is the input that tests it.
+
+        The sibling hostile arms pass a non-list `snapshot_events` and a
+        non-dict MEMBER. Neither reaches the element read inside the snapshot
+        loop, so this arm covers the one remaining shape. The usable snapshot
+        sits after the junk, so the arm fails on a raise and also on a loop
+        that abandons the rest of the list.
+        """
+        member = self._site("1", {"total": 9})
+        snapshots = [
+            "not-a-dict",
+            42,
+            None,
+            self._snap("1", {"variety": {"total": 12}}),
+        ]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [12]
+        assert result["fallback_used"] == 0
+        assert result["superseded"] == 1

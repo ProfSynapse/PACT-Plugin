@@ -185,6 +185,53 @@ class TestRetroReadHardening:
             "no dispatch sites recorded"
         )
 
+    def test_q5_stops_on_a_failed_snapshot_read_rather_than_passing_empty(
+        self, q5
+    ):
+        """THE ONE PLACE IN THIS QUESTION WHERE AN INCORRECT FALLBACK READS
+        AS A CLEAN GREEN.
+
+        A failed snapshot read that degrades to an empty list sends EVERY
+        member to the fallback. Q5 then reports the OLD as-dispatched numbers
+        carrying the NEW name, and the surface shows a plausible figure with
+        a correct label. No count moves and no error prints, so the reader
+        has nothing to notice.
+
+        The instruction must therefore carry FOUR parts, and each assertion
+        below is one of them: the stop rule, the explicit ban on the empty
+        list, the consequence that explains WHY the ban is not optional, and
+        the carve-out that keeps a genuine zero usable. The consequence half
+        is what stops a reader reasoning back to the empty list as a
+        harmless default.
+        """
+        assert "A FAILED snapshot read STOPS this question" in q5
+        assert "the same as a failed `dispatch_site` read" in q5
+        assert "Do NOT fall back to an empty list" in q5
+        assert "report the OLD as-dispatched numbers under the new name" in q5
+        assert "with nothing on the surface to show it" in q5
+        # The carve-out: an empty read that survives the masked-empty guard
+        # is a legitimate zero, so the stop rule cannot swallow it.
+        assert "legitimate zero" in q5
+        assert "report `fallback_used` equal to `sites`" in q5
+
+    def test_q5_states_the_stop_rule_before_it_calls_the_join_helper(self, q5):
+        """ORDERING, and it is load-bearing rather than cosmetic. A stop rule
+        stated AFTER the helper call reaches a reader who has called the
+        helper. The ban must precede the call it applies to."""
+        assert q5.index("A FAILED snapshot read STOPS this question") < q5.index(
+            "extract_final_dispatch_coverage"
+        )
+
+    def test_q5_scopes_the_snapshot_read_to_the_same_arc_as_the_site_read(
+        self, q5
+    ):
+        """The platform reuses task ids across arcs, so an unscoped snapshot
+        read can supply a prior arc's value for a current arc's member. The
+        helper cannot check this, so the instruction owns it."""
+        assert "read --type task_metadata_snapshot" in q5
+        assert "the SAME `--since` value" in q5
+        assert "BOTH reads omit `--since`" in q5
+
     def test_q5_denominator_comes_from_the_one_pass_helper(self, q5):
         """Successor to the retired-helper pin. The NEGATIVE half is the
         load-bearing one: it is what fails if someone reinstates
@@ -557,3 +604,70 @@ class TestQ6ExtractionSurvivesAnUnreadableAck:
         `len(events)` form could never produce — the case Q6's prose must (and
         does) tell the reader not to divide by."""
         assert _run_extraction(q6_expression, [{"task_id": "1"}])["flags"] == []
+
+
+class TestQ5DocumentedChainReadsTheSnapshotStream:
+    """THE DOCUMENTED CHAIN MUST BE EXERCISED WITH A NON-EMPTY SNAPSHOT LIST,
+    and nothing else in this file does that.
+
+    `_run_extraction` defaults `snapshot_events` to EMPTY, which is correct
+    for the arms that pin the fallback. The consequence is that every other
+    caller in this file drives the join along the fallback path only, where
+    the snapshot stream is not read at all. On that path the documented chain
+    returns the same numbers as the pre-join helper, so a change that stops
+    the join reading the snapshot stream leaves each of those arms green.
+
+    The two arms below feed the streams DISAGREEING values through the
+    expressions the file actually carries, so they fail if the documented
+    chain stops taking the value from the snapshot.
+    """
+
+    SITE_TOTAL = 9
+    SNAPSHOT_TOTAL = 12
+
+    @pytest.fixture
+    def q5_expression(self, q5):
+        """The documented chain, IN ORDER: the helper call, then the unpack."""
+        return [
+            _backticked_expression(q5, "coverage = "),
+            _backticked_expression(q5, "variety_totals, "),
+        ]
+
+    def _events(self):
+        return [{"task_id": "1", "variety": {"total": self.SITE_TOTAL}}]
+
+    def _snapshots(self):
+        return [
+            {
+                "task_id": "1",
+                "ts": "2026-06-15T12:00:00Z",
+                "metadata": {"variety": {"total": self.SNAPSHOT_TOTAL}},
+            }
+        ]
+
+    def test_the_chain_takes_the_value_from_the_snapshot_not_the_site(
+        self, q5_expression
+    ):
+        """The whole cause of the join. The site says 9 and the snapshot says
+        12, so the distribution must carry 12."""
+        namespace = _run_extraction(
+            q5_expression, self._events(), self._snapshots()
+        )
+        assert namespace["variety_totals"] == [self.SNAPSHOT_TOTAL]
+
+    def test_the_chain_keeps_membership_from_the_dispatch_site_stream(
+        self, q5_expression
+    ):
+        """MEMBERSHIP does not widen. The extra snapshot names a task that no
+        member names, and it carries a total DISTINCT from each member value,
+        which is what makes this arm able to fail."""
+        snapshots = self._snapshots() + [
+            {
+                "task_id": "99",
+                "ts": "2026-06-15T12:00:00Z",
+                "metadata": {"variety": {"total": 15}},
+            }
+        ]
+        namespace = _run_extraction(q5_expression, self._events(), snapshots)
+        assert namespace["sites"] == 1
+        assert namespace["variety_totals"] == [self.SNAPSHOT_TOTAL]
