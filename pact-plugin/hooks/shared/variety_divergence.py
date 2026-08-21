@@ -18,10 +18,13 @@ Functions:
 - extract_dispatch_coverage(dispatch_site_events) -> (variety_totals,
   total, malformed) — BOTH Q5 terms from ONE pass over ONE input list.
 - extract_final_dispatch_coverage(dispatch_site_events, snapshot_events)
-  -> dict. The Q5 join: MEMBERSHIP comes from the `dispatch_site` stream,
-  and the VALUE comes from the latest `task_metadata_snapshot` of the same
-  task, so the distribution holds the FINAL total rather than the
-  as-dispatched one.
+  -> dict of NINE keys. The Q5 join: MEMBERSHIP comes from the
+  `dispatch_site` stream, and the VALUE comes from the latest
+  `task_metadata_snapshot` of the same task, so the distribution holds the
+  FINAL total rather than the as-dispatched one. Four of the nine keys
+  report what the join OBSERVED about the as-dispatched side, so a value
+  taken from a snapshot cannot silently absorb a stamping gap, a producer
+  defect, or a revision that left the total where it was.
 
 Return shape (stable keys):
 - `coverage`:  float — fraction of pact-* dispatches with variety stamped;
@@ -83,7 +86,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from .teachback_schema import resolve_variety_total
+from .teachback_schema import (
+    MAX_DIMENSION,
+    MIN_DIMENSION,
+    _is_in_range_int,
+    _VARIETY_DIMENSIONS,
+    resolve_variety_total,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +424,32 @@ def _latest_snapshot_by_task(snapshot_events: list[dict]) -> dict[str, dict]:
     return {key: value[1] for key, value in latest.items()}
 
 
+def _dimension_vector(variety: object) -> tuple[int, ...] | None:
+    """The four dimension scores as a tuple, or None when the vector is not COMPLETE.
+
+    COMPLETE means all four dimensions are present as non-bool ints inside
+    [MIN_DIMENSION, MAX_DIMENSION]. A partial or out-of-range vector yields
+    None rather than a shorter tuple, because a shorter tuple compares
+    unequal to a full one and would report a revision that did not happen.
+
+    The dimension NAMES and the range come from `teachback_schema`, which
+    derives its dispatch projection from the same tuple. Importing them keeps
+    the names in ONE place: a dimension rename edits that tuple and this
+    function follows. A local copy of the four names is what would drift.
+
+    Pure function, and it does not raise. A non-dict input yields None.
+    """
+    if not isinstance(variety, dict):
+        return None
+    values: list[int] = []
+    for name in _VARIETY_DIMENSIONS:
+        value = variety.get(name)
+        if not _is_in_range_int(value, MIN_DIMENSION, MAX_DIMENSION):
+            return None
+        values.append(value)
+    return tuple(values)
+
+
 def extract_final_dispatch_coverage(
     dispatch_site_events: list[dict],
     snapshot_events: list[dict],
@@ -434,7 +469,7 @@ def extract_final_dispatch_coverage(
     property. This is a property of the iteration, and not a filter that a
     later edit can weaken by accident.
 
-    Returns a dict with FIVE keys:
+    Returns a dict with NINE keys:
 
     - `variety_totals` (list[int]) — the FINAL total of each member that
       resolved one. This list IS the distribution.
@@ -445,9 +480,65 @@ def extract_final_dispatch_coverage(
       total on either stream AND carry a PRESENT `variety` key.
     - `fallback_used` (int) — members of which the final value did NOT come
       from a snapshot. State that definition adjacent to the number wherever
-      it is reported.
-    - `superseded` (int) — members of which the final value DIFFERS from the
-      as-dispatched one, counted only where the two values each resolve.
+      it is reported. IT COUNTS ARMS 2 AND 3 TOGETHER, so an arm-3 member is
+      inside this number and has no final value at all.
+    - `superseded` (int) — members of which the final TOTAL DIFFERS from the
+      as-dispatched one, counted only where the two totals each resolve.
+    - `late_stamped` (int) — members that took a snapshot value and carry NO
+      `variety` key on their `dispatch_site` event. THE DISPATCH WAS NOT
+      STAMPED AT DISPATCH TIME and a later write supplied the value.
+    - `dispatch_malformed` (int) — members that took a snapshot value and
+      carry a PRESENT but unresolvable `variety` on their `dispatch_site`
+      event. A producer defect that the snapshot value would otherwise hide.
+    - `superseded_dimensions_only` (int) — members of which the two totals
+      each resolve and are EQUAL, and the two dimension vectors are each
+      complete and DIFFER. A revision that moved dimensions and left the
+      total where it was.
+    - `dimensions_incomparable` (int) — members of which the two totals each
+      resolve and are EQUAL, and at least one dimension vector is not
+      complete. The vector comparison could not run, so these members are
+      REPORTED rather than absorbed into the agreeing population.
+
+    **WHY `late_stamped` AND `dispatch_malformed` ARE TWO NUMBERS AND NOT
+    ONE.** An ABSENT stamp and a PRESENT-but-unresolvable one are different
+    findings with opposite remedies, and merging them is what the `malformed`
+    term already exists to prevent on the fallback path. One counter across
+    the two would re-merge them on the snapshot path, so the split here
+    mirrors the split there.
+
+    **THE NINE KEYS ARE DISJOINT WHERE IT MATTERS, AND HERE IS THE ARGUMENT.**
+    A member reaches arm 1 or it does not, and `fallback_used` counts exactly
+    the members that do not, so `fallback_used` shares no member with the
+    five arm-1 counters. Arm 1 then partitions SIX ways with no overlap,
+    keyed first on the as-dispatched value:
+
+      1. it does not resolve and no `variety` key is present → `late_stamped`
+      2. it does not resolve and a `variety` key is present → `dispatch_malformed`
+      3. it resolves and the totals DIFFER                  → `superseded`
+      4. it resolves, the totals agree, a vector is partial → `dimensions_incomparable`
+      5. it resolves, the totals agree, vectors differ      → `superseded_dimensions_only`
+      6. it resolves, the totals agree, vectors agree       → counted nowhere
+
+    Cells 1 and 2 need the as-dispatched value to be None and cells 3 to 6
+    need it to resolve, so no member reaches both groups. Cells 1 and 2 split
+    on `"variety" in event`, which is one predicate with two outcomes. Cell 3
+    needs the totals DIFFERENT and cells 4 to 6 need them EQUAL. Cells 4 and 5
+    split on whether the two vectors are each complete. So a reader can add
+    `superseded` and `superseded_dimensions_only` for a corrections count
+    without a double count, and `malformed` stays a fallback-path term that
+    shares no member with any of the five.
+
+    **THE VECTOR COMPARISON DOES NOT REACH THE MOST FREQUENT CORRECTION
+    CLASS, AND A READER MUST NOT TAKE THESE COUNTS FOR A CORRECTION COUNT.**
+    A RATIONALE-ONLY CORRECTION IS STRUCTURALLY INVISIBLE HERE. The
+    `dispatch_site` projection carries the four dimensions and their total
+    and DROPS the `*_rationale` strings by design, so a corrected rationale
+    has nothing on the dispatch side to compare against. Field evidence says
+    rationales are corrected MORE frequently than totals, so the class these
+    counters cannot see is larger than the class they can. Report
+    `superseded` and `superseded_dimensions_only` as what they are, a count
+    of corrections that moved a total or a dimension, and never as the number
+    of corrections that occurred.
 
     **THE TWO ACCESSORS DIFFER, and that is the trap in this join.** A
     `dispatch_site` event holds the stamp at the TOP level. A snapshot holds
@@ -468,10 +559,11 @@ def extract_final_dispatch_coverage(
     narrower question and keeps arm 3 unobserved, which is the failure this
     counter is here to prevent.
 
-    **`fallback_used` AND `superseded` ARE DISJOINT BY CONSTRUCTION.** A
-    member that took the fallback has no second value to compare against, so
-    it cannot reach `superseded`. A reader can add the two counts together
-    without a double count.
+    **`fallback_used` IS DISJOINT FROM EACH ARM-1 COUNTER BY CONSTRUCTION.**
+    A member that took the fallback did not reach arm 1, so it cannot reach
+    `superseded`, `late_stamped`, `dispatch_malformed`,
+    `superseded_dimensions_only` or `dimensions_incomparable`. The six-cell
+    argument above states the rest of the partition.
 
     **MALFORMED IS CLASSIFIED BY THE VALUE THE JOIN FINALLY USES.** After
     arm 3, a member is malformed if and only if `variety` is present on its
@@ -498,6 +590,10 @@ def extract_final_dispatch_coverage(
             "malformed": [],
             "fallback_used": 0,
             "superseded": 0,
+            "late_stamped": 0,
+            "dispatch_malformed": 0,
+            "superseded_dimensions_only": 0,
+            "dimensions_incomparable": 0,
         }
 
     latest_snapshots = _latest_snapshot_by_task(snapshot_events)
@@ -506,17 +602,25 @@ def extract_final_dispatch_coverage(
     malformed: list[dict] = []
     fallback_used = 0
     superseded = 0
+    late_stamped = 0
+    dispatch_malformed = 0
+    superseded_dimensions_only = 0
+    dimensions_incomparable = 0
 
     for event in dispatch_site_events:
         site_value = None
         snapshot_value = None
         has_variety = False
+        site_vector = None
+        snapshot_vector = None
 
         if isinstance(event, dict):
             # Membership is tested before resolution, so an ABSENT stamp and
             # a PRESENT-but-unresolvable one stay different findings.
             has_variety = "variety" in event
-            site_value = resolve_variety_total(event.get("variety"))
+            site_variety = event.get("variety")
+            site_value = resolve_variety_total(site_variety)
+            site_vector = _dimension_vector(site_variety)
             task_id = event.get("task_id")
             if task_id is not None:
                 snapshot = latest_snapshots.get(str(task_id))
@@ -524,17 +628,36 @@ def extract_final_dispatch_coverage(
                     metadata = snapshot.get("metadata")
                     if not isinstance(metadata, dict):
                         metadata = {}
+                    snapshot_variety = metadata.get("variety")
                     # The snapshot nests the stamp, and `metadata` is the
                     # resolver's second argument, so candidate 3 stays live.
                     snapshot_value = resolve_variety_total(
-                        metadata.get("variety"), metadata
+                        snapshot_variety, metadata
                     )
+                    snapshot_vector = _dimension_vector(snapshot_variety)
 
-        # Arm 1: the snapshot carries the FINAL value.
+        # Arm 1: the snapshot carries the FINAL value. The six cells below
+        # are the partition the docstring argues; each member reaches one.
         if snapshot_value is not None:
             variety_totals.append(snapshot_value)
-            if site_value is not None and site_value != snapshot_value:
+            if site_value is None:
+                # The dispatch contributed no total. Which of the two
+                # findings this is depends on the KEY, not on the value:
+                # an absent stamp and an unresolvable one have opposite
+                # remedies, so they are counted apart.
+                if has_variety:
+                    dispatch_malformed += 1
+                else:
+                    late_stamped += 1
+            elif site_value != snapshot_value:
                 superseded += 1
+            elif site_vector is None or snapshot_vector is None:
+                # The totals agree and no vector comparison can run. Counted
+                # rather than absorbed, because an uncounted member here
+                # would read as agreement it was not measured to have.
+                dimensions_incomparable += 1
+            elif site_vector != snapshot_vector:
+                superseded_dimensions_only += 1
             continue
 
         # Arms 2 and 3: the final value did NOT come from a snapshot.
@@ -550,6 +673,10 @@ def extract_final_dispatch_coverage(
         "malformed": malformed,
         "fallback_used": fallback_used,
         "superseded": superseded,
+        "late_stamped": late_stamped,
+        "dispatch_malformed": dispatch_malformed,
+        "superseded_dimensions_only": superseded_dimensions_only,
+        "dimensions_incomparable": dimensions_incomparable,
     }
 
 

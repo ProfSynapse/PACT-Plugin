@@ -573,9 +573,27 @@ class TestExtractFinalDispatchCoverage:
     # -- Classification ----------------------------------------------------
 
     def test_absent_stamp_is_a_coverage_gap_and_a_junk_stamp_is_malformed(self):
-        """The partition the old helper pins, preserved through the join and
-        classified by the value the join FINALLY uses. The two findings have
-        opposite remedies and are never merged."""
+        """The partition the old helper pins, ON THE FALLBACK PATH ONLY. The
+        two findings have opposite remedies and are never merged.
+
+        THE SNAPSHOT LIST IS EMPTY AND THAT IS DELIBERATE. DO NOT GIVE THIS
+        ARM A NON-EMPTY ONE. With no snapshots each member takes the
+        fallback, so this arm reaches the fallback partition and NOT the
+        join. An earlier docstring here claimed the partition is preserved
+        "through the join", which its fixture cannot show.
+
+        THE EMPTY LIST IS LOAD-BEARING RATHER THAN INCIDENTAL. This arm is
+        the only detector of the rule that `malformed` is classified from the
+        value the join FINALLY uses rather than from the `dispatch_site`
+        value alone. An implementation that classifies early agrees with a
+        correct one for EVERY input that has no snapshots, so only a
+        classify-early mutation separates them, and this arm is what catches
+        it. Widening the fixture can take that detection to zero and the
+        suite would stay green.
+
+        THE JOIN PATH IS COVERED BY ITS OWN SIBLING, which is the arm
+        directly below. Add to that one, not to this one.
+        """
         absent = self._site("1")
         junk = self._site("2", {"total": "junk"})
         result = extract_final_dispatch_coverage([absent, junk], [])
@@ -584,6 +602,197 @@ class TestExtractFinalDispatchCoverage:
         assert result["malformed"] == [junk]
         assert result["fallback_used"] == 2
 
+    def test_a_resolving_snapshot_reports_the_dispatch_side_it_replaced(self):
+        """THE SIBLING OF THE ARM ABOVE, on the path where the join RUNS.
+
+        The two members here are the same two shapes as the arm above, an
+        ABSENT stamp and a JUNK one, and each now has a snapshot that
+        RESOLVES. That is the input the empty-list fixture cannot produce and
+        it is where the two implementations diverge.
+
+        The value is taken from the snapshot in each case, so `malformed`
+        empties and `fallback_used` falls to zero. WITHOUT THE TWO COUNTERS
+        BELOW that is all a reader would see, and a dispatch that carried no
+        stamp would be indistinguishable from one that carried a good one.
+
+        EACH SIDE IS ASSERTED. The counters alone would pass against an
+        implementation that drops the members entirely, so the resolved
+        totals are asserted to land in the distribution as well.
+        """
+        absent = self._site("1")
+        junk = self._site("2", {"total": "junk"})
+        absent_two = self._site("3")
+        snapshots = [
+            self._snap("1", {"variety": {"total": 9}}),
+            self._snap("2", {"variety": {"total": 11}}),
+            self._snap("3", {"variety": {"total": 7}}),
+        ]
+        result = extract_final_dispatch_coverage(
+            [absent, junk, absent_two], snapshots
+        )
+        # The positive half: the members are kept and carry snapshot values.
+        assert sorted(result["variety_totals"]) == [7, 9, 11]
+        assert result["sites"] == 3
+        # The join emptied the fallback-path terms.
+        assert result["malformed"] == []
+        assert result["fallback_used"] == 0
+        # THE TWO COUNTS ARE ASYMMETRIC ON PURPOSE, 2 AGAINST 1, AND THE
+        # ASYMMETRY IS THE WHOLE POINT. Equal expected values would constrain
+        # the MULTISET of the two counts and NOT THE MAPPING from counter to
+        # value, so a transposition of the two counters would map 1 and 1 onto
+        # 1 and 1 and pass. No additional assertion on these two cells can
+        # repair that, because the blindness lives in the VALUES rather than
+        # in the number of assertions. With 2 and 1 a transposition reads 1
+        # and 2, so this pins WHICH counter carries WHICH finding.
+        assert result["late_stamped"] == 2
+        assert result["dispatch_malformed"] == 1
+
+    def test_a_dimension_revision_that_holds_the_total_is_counted(self):
+        """A correction that moved dimensions and left the total is REPORTED.
+
+        This is the shape measured on real session data: a stamp went from
+        novelty 2 and risk 3 to novelty 3 and risk 2, and the total stayed
+        11 on each side. A counter that compares TOTALS reads zero on it.
+
+        The two totals agreeing is asserted here as well. Without that, an
+        implementation that counted a MOVED total would also pass.
+        """
+        member = self._site(
+            "1", {"novelty": 2, "scope": 3, "uncertainty": 3, "risk": 3, "total": 11}
+        )
+        snapshots = [
+            self._snap(
+                "1",
+                {
+                    "variety": {
+                        "novelty": 3,
+                        "scope": 3,
+                        "uncertainty": 3,
+                        "risk": 2,
+                        "total": 11,
+                    }
+                },
+            )
+        ]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [11]
+        assert result["superseded"] == 0
+        assert result["superseded_dimensions_only"] == 1
+        assert result["dimensions_incomparable"] == 0
+
+    def test_agreeing_vectors_are_not_a_dimension_revision(self):
+        """The CONTROL for the arm above. Same shape, nothing revised.
+
+        Without this arm, an implementation that counted every agreeing-total
+        member as a dimension revision would pass the arm above.
+        """
+        stamp = {"novelty": 2, "scope": 3, "uncertainty": 3, "risk": 3, "total": 11}
+        member = self._site("1", dict(stamp))
+        snapshots = [self._snap("1", {"variety": dict(stamp)})]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [11]
+        assert result["superseded"] == 0
+        assert result["superseded_dimensions_only"] == 0
+        assert result["dimensions_incomparable"] == 0
+
+    def test_an_incomplete_vector_is_reported_not_absorbed(self):
+        """A partial dimension vector cannot be compared, and it SAYS SO.
+
+        The dispatch projection is tolerant of a partial stamp, so a member
+        can carry a total and fewer than four dimensions. The totals agree
+        here, so the member would otherwise read as full agreement that
+        nothing measured.
+
+        `superseded_dimensions_only` is asserted to be ZERO, which is what
+        separates this from an implementation that treats a partial vector as
+        a difference.
+        """
+        member = self._site("1", {"novelty": 2, "total": 11})
+        snapshots = [
+            self._snap(
+                "1",
+                {
+                    "variety": {
+                        "novelty": 3,
+                        "scope": 3,
+                        "uncertainty": 3,
+                        "risk": 2,
+                        "total": 11,
+                    }
+                },
+            )
+        ]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [11]
+        assert result["dimensions_incomparable"] == 1
+        assert result["superseded_dimensions_only"] == 0
+        assert result["superseded"] == 0
+
+    def test_an_out_of_range_dimension_makes_the_vector_incomparable(self):
+        """The dimension guard checks the RANGE, and not only the TYPE.
+
+        A dimension of 9 is an int, so a type-only guard accepts it and the
+        vector reads as complete. The two vectors then DIFFER and the member
+        reads as a dimension revision, which this data cannot support.
+
+        The two totals are equal here, so the member reaches the cell where
+        the vector comparison decides the answer. The two counters are each
+        asserted, because a type-only guard MOVES the member from one to the
+        other, and an assertion on one alone would not see the move.
+        """
+        member = self._site(
+            "1", {"novelty": 9, "scope": 3, "uncertainty": 3, "risk": 3, "total": 11}
+        )
+        snapshots = [
+            self._snap(
+                "1",
+                {
+                    "variety": {
+                        "novelty": 2,
+                        "scope": 3,
+                        "uncertainty": 3,
+                        "risk": 3,
+                        "total": 11,
+                    }
+                },
+            )
+        ]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [11]
+        assert result["dimensions_incomparable"] == 1
+        assert result["superseded_dimensions_only"] == 0
+
+    def test_a_moved_total_is_superseded_and_not_a_dimension_revision(self):
+        """The two superseded counters are DISJOINT, asserted on one member.
+
+        The vectors differ here AND the total moved. The docstring argues
+        that a moved total takes the member before any vector comparison
+        runs, so a reader can add the two counts without a double count.
+        This arm is that argument executed.
+        """
+        member = self._site(
+            "1", {"novelty": 2, "scope": 3, "uncertainty": 3, "risk": 3, "total": 11}
+        )
+        snapshots = [
+            self._snap(
+                "1",
+                {
+                    "variety": {
+                        "novelty": 3,
+                        "scope": 3,
+                        "uncertainty": 3,
+                        "risk": 3,
+                        "total": 12,
+                    }
+                },
+            )
+        ]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [12]
+        assert result["superseded"] == 1
+        assert result["superseded_dimensions_only"] == 0
+        assert result["dimensions_incomparable"] == 0
+
     # -- Hostile input -----------------------------------------------------
 
     @pytest.mark.parametrize(
@@ -591,12 +800,23 @@ class TestExtractFinalDispatchCoverage:
         [None, "string", 42, {"not": "a list"}, object()],
     )
     def test_non_list_members_yield_the_empty_result(self, hostile):
+        """The empty result carries EVERY key the populated result carries.
+
+        The equality is against a whole dict on purpose. A reader that pulls
+        a counter off this result must find it here too, so a key added to
+        the populated return and forgotten here would raise a KeyError in a
+        wrap-up rather than in a test.
+        """
         assert extract_final_dispatch_coverage(hostile, []) == {
             "variety_totals": [],
             "sites": 0,
             "malformed": [],
             "fallback_used": 0,
             "superseded": 0,
+            "late_stamped": 0,
+            "dispatch_malformed": 0,
+            "superseded_dimensions_only": 0,
+            "dimensions_incomparable": 0,
         }
 
     @pytest.mark.parametrize(
