@@ -762,6 +762,70 @@ class TestExtractFinalDispatchCoverage:
         assert result["dimensions_incomparable"] == 1
         assert result["superseded_dimensions_only"] == 0
 
+    def test_the_dimension_guard_holds_its_two_bounds_and_rejects_a_bool(self):
+        """The guard is tested AT its bounds, and one member carries each case.
+
+        A VALUE FAR FROM A BOUND TESTS THE REJECTION AND NOT THE BOUND. The
+        sibling arm above feeds a 9, which the shipped guard and a guard
+        moved by one BOTH reject, so that arm cannot see a moved bound. The
+        discriminating value for a threshold moved by one is the single value
+        that changes verdict, so this arm feeds 1 and 5 and not 0 and 9.
+
+        THE THREE CASES NEED THREE MEMBERS AND CANNOT SHARE ONE. The low
+        bound case needs the shipped vector COMPLETE, because the shipped
+        answer is a dimension revision. The high bound case and the bool case
+        need the shipped vector INCOMPLETE. Those are contradictory, so one
+        member holding a 1, a 5 and a True is rejected under the shipped
+        guard AND under each mutant, and it separates nothing.
+
+        - member 1 carries a dimension of 1, the LOW bound. Its vector is
+          complete and differs, so it is a dimension revision. A guard that
+          rejects below 2 makes it incomparable.
+        - member 2 carries a dimension of 5, one above the HIGH bound. It is
+          incomparable. A guard that accepts up to 5 makes it a revision.
+        - member 3 carries True against a 1. It is incomparable, because the
+          guard rejects a bool. A guard that accepts a bool makes the two
+          vectors AGREE, since True equals 1, so the member counts nowhere.
+          A JSON `true` parses to a Python True, so this shape reaches the
+          journal rather than being adversarial.
+
+        THE TWO COUNTS ARE ASSERTED TOGETHER AND THEY ARE ASYMMETRIC, 1
+        against 2. Each mutation MOVES one member between the two counters,
+        or out of both, so an assertion on one counter alone would not see
+        the move, and equal counts could not see a transposition.
+        """
+        low = self._site(
+            "1", {"novelty": 1, "scope": 3, "uncertainty": 3, "risk": 3, "total": 11}
+        )
+        high = self._site(
+            "2", {"novelty": 5, "scope": 3, "uncertainty": 3, "risk": 3, "total": 11}
+        )
+        flag = self._site(
+            "3", {"novelty": True, "scope": 3, "uncertainty": 3, "risk": 3, "total": 11}
+        )
+        ordinary = {"novelty": 2, "scope": 3, "uncertainty": 3, "risk": 3, "total": 11}
+        snapshots = [
+            self._snap("1", {"variety": dict(ordinary)}),
+            self._snap("2", {"variety": dict(ordinary)}),
+            self._snap(
+                "3",
+                {
+                    "variety": {
+                        "novelty": 1,
+                        "scope": 3,
+                        "uncertainty": 3,
+                        "risk": 3,
+                        "total": 11,
+                    }
+                },
+            ),
+        ]
+        result = extract_final_dispatch_coverage([low, high, flag], snapshots)
+        assert result["variety_totals"] == [11, 11, 11]
+        assert result["superseded_dimensions_only"] == 1
+        assert result["dimensions_incomparable"] == 2
+        assert result["superseded"] == 0
+
     def test_a_moved_total_is_superseded_and_not_a_dimension_revision(self):
         """The two superseded counters are DISJOINT, asserted on one member.
 

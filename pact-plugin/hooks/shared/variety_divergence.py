@@ -433,9 +433,12 @@ def _dimension_vector(variety: object) -> tuple[int, ...] | None:
     unequal to a full one and would report a revision that did not happen.
 
     The dimension NAMES and the range come from `teachback_schema`, which
-    derives its dispatch projection from the same tuple. Importing them keeps
-    the names in ONE place: a dimension rename edits that tuple and this
-    function follows. A local copy of the four names is what would drift.
+    derives its dispatch projection from the same tuple. THE IMPORT IS
+    DELIBERATE AND THIS PARAGRAPH RECORDS THE INTENT, so a reader who meets a
+    cross-module private import does not replace it with a tidier local
+    tuple. The intent is that the four names are stated in one list. Nothing
+    in this module enforces that, and no arm here can, so read this as the
+    reason for the import and not as a guarantee about a future edit.
 
     Pure function, and it does not raise. A non-dict input yields None.
     """
