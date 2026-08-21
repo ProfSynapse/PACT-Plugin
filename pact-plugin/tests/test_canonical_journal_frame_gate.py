@@ -687,10 +687,15 @@ class TestSnapshotBackstopSite:
             "measure an unreached surface rather than a disjoint pair."
         )
         assert opened.emit_calls.count("emit_task_metadata_snapshot") == 1, (
-            "THE BACKSTOP FIRED ON AN OPEN TASK. Its status conjunct no "
-            "longer holds the split, so the two sites now double-fire on "
-            "one write. The journal hides it, because the content-key "
-            "dedup keeps the record count at 1."
+            "TWO DIRECTIONS REDDEN THIS ASSERTION AND THEY HAVE DIFFERENT "
+            "CAUSES. READ THE COUNT BEFORE YOU READ THE DIFF. A COUNT OF 2 "
+            "IS THE PRODUCTION FAULT: the backstop fired on an open task, "
+            "its status conjunct does not hold the split at this time, and "
+            "the two sites double-fire on one write. The journal hides "
+            "that, because the content-key dedup keeps the record count at "
+            "1. A COUNT OF 0 IS A HARNESS FAULT AND THE PRODUCTION CODE IS "
+            "CORRECT: somebody removed the spy on "
+            "emit_task_metadata_snapshot, or the mirror did not fire."
         )
 
         completed = frame_rig(

@@ -460,18 +460,29 @@ class TestBackstopBothModes:
             "not nudge (this fixture seeds no leadSessionId team config)"
         )
 
-    def test_teammate_then_lead_same_fixture_proves_gate_is_the_frame(
+    def test_teammate_then_lead_same_fixture_attributes_the_silence_to_the_gate(
             self, live_env):
         """Non-vacuity for the boundary seal: the SAME (subject, no-emit)
-        fixture that is SILENT under the teammate frame FIRES under the lead
-        frame, proving the suppression is the frame gate and not a missing
-        precondition.
+        fixture that is SILENT at the teammate frame FIRES at the lead
+        frame. So the gate causes the silence when it rejects the frame. A
+        missing precondition does not cause it, because this fixture holds
+        the subject and the no-emit state fixed across the two drives.
 
-        THE NAME SAYS FRAME AND NOT ROLE, and the difference is load-bearing.
-        The teammate frame here is silent because this fixture seeds no
-        leadSessionId team config, so the TOPOLOGY leg cannot resolve. A
-        teammate frame that shares the lead session resolves it and DOES
-        nudge, so role is not what decides."""
+        🔴 WHAT THIS ARM CANNOT PROVE, AND ITS NAME MUST NOT CLAIM IT. The
+        arm does NOT separate the ROLE leg from the TOPOLOGY leg. Its two
+        inputs are a teammate frame with no team config, and a lead frame.
+        `is_lead` and `is_canonical_journal_frame` AGREE at each of them, so
+        a revert of the gate to `is_lead` keeps this arm GREEN. MEASURED:
+        the arm is missing from the failing set of that revert.
+
+        THE ARM THAT DOES PROVE IT is cell 2 of the agent_type matrix
+        below, `test_empty_or_missing_agent_type_resolvable_topology_nudges`.
+        That arm seeds the two topology halves, so the two predicates
+        DISAGREE there and the revert reddens it. Read the two together.
+
+        THE NAME OF THIS ARM SAID `proves_gate_is_the_frame` and before that
+        `proves_gate_is_role`. Each named a discrimination the fixture
+        cannot make. Do not restore either one."""
         _tmp, _session_dir = live_env
         teammate = tlg.evaluate_lifecycle(
             _payload(agent_type=TEAMMATE, subject=PREPARE_SUBJECT))
