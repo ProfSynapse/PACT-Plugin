@@ -10,13 +10,17 @@ Covers the four committed seams of the artifact_paths durability mechanism:
                              artifact_paths event for its (workflow, feature).
 
 DISCIPLINE (per the locked plan + this session's plan-mode strategy):
-  - BOTH-MODES AXIS = is_lead / agent_type, NOT session_id. The emit/handoff/
-    backstop path keys on agent_type (LEAD = 'PACT:pact-orchestrator' /
-    'pact-orchestrator'; TEAMMATE = a pact-* type). The teammate-frame leg
-    asserts the backstop is ABSENT (the by-design lead-process-only boundary),
-    never present. Constructing a session_id-topology fixture here would test a
-    gate input this surface does not read (see the both-modes-axis-is-surface-
-    specific lesson banked in plan-mode).
+  - BOTH-MODES AXIS = agent_type AND session_id. The backstop keys on
+    is_canonical_journal_frame, which reads BOTH: the role leg on agent_type
+    (LEAD = 'PACT:pact-orchestrator' / 'pact-orchestrator'; TEAMMATE = a pact-*
+    type), and the topology leg on session_id against the leadSessionId of the
+    team config. The teammate-frame arms below assert the backstop is ABSENT,
+    and that absence holds ONLY because those fixtures seed no leadSessionId
+    team config, so the topology leg cannot resolve. A session_id-topology
+    fixture DOES test a gate input this surface reads, and the arms it makes
+    possible are BUILT BELOW: `_seed_lead_topology` writes the second half,
+    and the two-arm matrix on agent_type drives the same agent_type value on
+    both sides of a resolvable topology.
   - PHANTOM-GREEN GUARD: phase-task subjects + owners are seeded from THIS
     session's real on-disk task shapes ('PREPARE: handoff-artifact-durability',
     'ARCHITECT: handoff-artifact-durability', bare owner 'devops-engineer'),
@@ -41,6 +45,7 @@ Run with the 3.13.7 interpreter (default python3 has no pytest):
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -99,7 +104,13 @@ def live_env(tmp_path, monkeypatch, pact_context):
     Mirrors test_pr4_drain_survival_harvest.live_env — the canonical non-mocked
     seam harness. Returns (tmp_path, session_dir) where session_dir is the
     absolute on-disk session directory the explicit reader resolves.
+
+    CLAUDE_CONFIG_DIR IS REMOVED, not merely unused. It takes precedence over
+    home in get_claude_config_dir, so an operator who exports it would send
+    the team-config read outside the temp tree. The topology arms below read
+    that config, and the failure would look like a gate decision.
     """
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     pact_context(team_name=TEAM, session_id=SID, project_dir=PROJECT_DIR)
     slug = Path(PROJECT_DIR).name
@@ -116,11 +127,18 @@ def _journal_file(tmp_path: Path) -> Path:
     return matches[0]
 
 
-def _payload(*, agent_type, subject, task_id="40", skipped=None, owner=None):
+def _payload(*, agent_type, subject, task_id="40", skipped=None, owner=None,
+             session_id=None):
     """Build a TaskUpdate(status=completed) PostToolUse frame for
-    evaluate_lifecycle. The both-modes axis is agent_type (is_lead reads it
-    directly); session_id is supplied by the live_env pact_context only for
-    journal-seam resolution, never as the gate discriminator."""
+    evaluate_lifecycle. The both-modes axis is agent_type AND session_id:
+    is_canonical_journal_frame reads the role leg on agent_type and the
+    topology leg on session_id against the leadSessionId of the team config.
+
+    A frame built with session_id=None carries NO topology half, so the leg
+    cannot resolve whatever the team config says. Pass session_id AND call
+    _seed_lead_topology to build the two halves together. Either one alone
+    gives False, which is the answer the retired predicate gives.
+    """
     metadata: dict = {}
     if skipped is not None:
         metadata["skipped"] = skipped
@@ -132,11 +150,32 @@ def _payload(*, agent_type, subject, task_id="40", skipped=None, owner=None):
     }
     if agent_type is not None:
         payload["agent_type"] = agent_type
+    if session_id is not None:
+        payload["session_id"] = session_id
     return payload
 
 
 def _has_backstop_advisory(advisories) -> bool:
     return any(code == "artifact_paths_emit_missing" for code, _ in advisories)
+
+
+def _seed_lead_topology(tmp_path: Path, lead_session_id: str = SID) -> Path:
+    """Write the SECOND half of the topology leg: the team config carrying
+    leadSessionId.
+
+    THE TWO HALVES LIVE IN DIFFERENT FILES. The live_env fixture writes the
+    CONTEXT file, which supplies get_team_name(). The leadSessionId lives in
+    the TEAM CONFIG. A fixture that seeds only the first carries one half,
+    and one half gives the SAME verdict as the retired predicate, so an arm
+    built on it is green either way and reads as tested.
+    """
+    teams_dir = tmp_path / ".claude" / "teams" / TEAM
+    teams_dir.mkdir(parents=True, exist_ok=True)
+    config = teams_dir / "config.json"
+    config.write_text(
+        json.dumps({"leadSessionId": lead_session_id}), encoding="utf-8"
+    )
+    return config
 
 
 # =============================================================================
@@ -368,11 +407,11 @@ class TestMaskedReadSeam:
 
 
 # =============================================================================
-# P0-1 BOUNDARY SEAL + P1-5 BACKSTOP — both-modes (is_lead/agent_type) matrix.
+# P0-1 BOUNDARY SEAL + P1-5 BACKSTOP — both-modes (frame-gate) matrix.
 #   The backstop fires a FAIL-OPEN advisory when a PREPARE/ARCHITECT phase
 #   completes with no artifact_paths event for its (workflow,feature).
-#   The teammate-frame leg asserts the backstop is ABSENT (lead-process-only
-#   boundary — the by-design self-drop; doubles as the empirical seal).
+#   The teammate-frame leg asserts the backstop is ABSENT, and that absence is
+#   the frame gate acting on a fixture that seeds no leadSessionId team config.
 # =============================================================================
 class TestBackstopBothModes:
     @pytest.mark.parametrize("subject,workflow", [
@@ -407,23 +446,43 @@ class TestBackstopBothModes:
         assert _has_backstop_advisory(advisories)
 
     def test_teammate_frame_no_advisory_boundary_seal(self, live_env):
-        """BOUNDARY SEAL (P0-1): a teammate (off-lead) frame self-completing the
-        SAME PREPARE phase with NO emit produces NO backstop advisory — the
-        lead-process-only boundary. The teammate frame has no resolvable journal;
-        the backstop is is_lead-gated and correctly self-drops. This is the
-        accepted by-design boundary, asserted ABSENT (not present)."""
+        """BOUNDARY SEAL (P0-1): a teammate frame self-completing the SAME
+        PREPARE phase with NO emit produces NO backstop advisory. The
+        suppression is the frame gate: this fixture frame seeds no team config
+        carrying a leadSessionId, so the topology leg cannot resolve and
+        is_canonical_journal_frame returns False. This arm does NOT cover the
+        in-process teammate frame, which DOES nudge."""
         _tmp, _session_dir = live_env
         advisories = tlg.evaluate_lifecycle(
             _payload(agent_type=TEAMMATE, subject=PREPARE_SUBJECT))
         assert not _has_backstop_advisory(advisories), (
-            "teammate frame must NOT nudge — lead-process-only boundary"
+            "a frame that cannot resolve the canonical-journal topology must "
+            "not nudge (this fixture seeds no leadSessionId team config)"
         )
 
-    def test_teammate_then_lead_same_fixture_proves_gate_is_role(self, live_env):
-        """Non-vacuity for the boundary seal: the SAME (subject, no-emit) fixture
-        that is SILENT under the teammate frame FIRES under the lead frame —
-        proving the suppression is the is_lead role gate, not a missing
-        precondition."""
+    def test_teammate_then_lead_same_fixture_attributes_the_silence_to_the_gate(
+            self, live_env):
+        """Non-vacuity for the boundary seal: the SAME (subject, no-emit)
+        fixture that is SILENT at the teammate frame FIRES at the lead
+        frame. So the gate causes the silence when it rejects the frame. A
+        missing precondition does not cause it, because this fixture holds
+        the subject and the no-emit state fixed across the two drives.
+
+        🔴 WHAT THIS ARM CANNOT PROVE, AND ITS NAME MUST NOT CLAIM IT. The
+        arm does NOT separate the ROLE leg from the TOPOLOGY leg. Its two
+        inputs are a teammate frame with no team config, and a lead frame.
+        `is_lead` and `is_canonical_journal_frame` AGREE at each of them, so
+        a revert of the gate to `is_lead` keeps this arm GREEN. MEASURED:
+        the arm is missing from the failing set of that revert.
+
+        THE ARM THAT DOES PROVE IT is cell 2 of the agent_type matrix
+        below, `test_empty_or_missing_agent_type_resolvable_topology_nudges`.
+        That arm seeds the two topology halves, so the two predicates
+        DISAGREE there and the revert reddens it. Read the two together.
+
+        THE NAME OF THIS ARM SAID `proves_gate_is_the_frame` and before that
+        `proves_gate_is_role`. Each named a discrimination the fixture
+        cannot make. Do not restore either one."""
         _tmp, _session_dir = live_env
         teammate = tlg.evaluate_lifecycle(
             _payload(agent_type=TEAMMATE, subject=PREPARE_SUBJECT))
@@ -432,14 +491,74 @@ class TestBackstopBothModes:
         assert not _has_backstop_advisory(teammate)
         assert _has_backstop_advisory(lead)
 
+    # -------------------------------------------------------------------
+    # THE agent_type TWO-ARM MATRIX. The two arms hold the SAME agent_type
+    # value and differ ONLY in whether the topology leg resolves.
+    #
+    # 🔴 WHY THE MATRIX AND NOT ONE ARM. A single silent arm pins the
+    # OUTCOME of an unresolvable topology as if it were a property of the
+    # agent_type value. A reader then reads "empty agent_type does not
+    # nudge" as a fail-safe default and defends it. It is not a default. It
+    # is one cell of a matrix, and the OTHER cell is the lead launched with
+    # no --agent flag, which carries the same absent agent_type AND writes
+    # the canonical journal, so it MUST nudge.
+    # -------------------------------------------------------------------
     @pytest.mark.parametrize("agent_type", ["", None])
-    def test_empty_or_missing_agent_type_no_advisory(self, live_env, agent_type):
-        """is_lead('') and is_lead(missing) are False (fail-safe default) → the
-        backstop self-drops, never nudges a non-lead frame."""
+    def test_empty_or_missing_agent_type_unresolvable_topology_no_advisory(
+            self, live_env, agent_type):
+        """CELL 1 of the matrix. An empty or absent agent_type makes the ROLE
+        leg False, so the frame gate falls to the TOPOLOGY leg. This arm
+        seeds NEITHER half, so that leg cannot resolve and the backstop stays
+        silent. Read this cell only with cell 2, which holds the same
+        agent_type value against a resolvable topology."""
         _tmp, _session_dir = live_env
         advisories = tlg.evaluate_lifecycle(
             _payload(agent_type=agent_type, subject=PREPARE_SUBJECT))
         assert not _has_backstop_advisory(advisories)
+
+    @pytest.mark.parametrize("agent_type", ["", None])
+    def test_empty_or_missing_agent_type_resolvable_topology_nudges(
+            self, live_env, agent_type):
+        """CELL 2 of the matrix, AND IT IS THE ONE THE DEFECT HID. The SAME
+        agent_type value, with BOTH halves of the topology leg seeded, MUST
+        nudge. This is the lead launched with no --agent flag: is_lead
+        answers False for it and the frame DOES write the canonical journal.
+
+        A REVERT OF THE GATE TO is_lead MAKES THIS ARM RED. Cell 1 stays
+        green under that revert, which is the whole cause the matrix exists.
+        """
+        tmp, _session_dir = live_env
+        _seed_lead_topology(tmp)
+        advisories = tlg.evaluate_lifecycle(
+            _payload(agent_type=agent_type, subject=PREPARE_SUBJECT,
+                     session_id=SID))
+        assert _has_backstop_advisory(advisories), (
+            "A lead launched with no --agent flag writes the canonical "
+            "journal, so the artifact-paths check must run for it. If this "
+            "arm is red, the gate answered on ROLE and the missing "
+            "durability pointer goes unreported for every such lead."
+        )
+
+    def test_the_two_cells_differ_only_in_the_topology_half(self, live_env):
+        """NON-VACUITY OF THE MATRIX. The two cells above sit in different
+        test functions, so nothing forces them to hold one variable fixed. If
+        a later edit changes the agent_type of one cell, the matrix silently
+        becomes two unrelated arms and stops discriminating. This arm drives
+        BOTH cells in one function with ONE agent_type value."""
+        tmp, _session_dir = live_env
+        silent = tlg.evaluate_lifecycle(
+            _payload(agent_type=None, subject=PREPARE_SUBJECT))
+        assert not _has_backstop_advisory(silent)
+
+        _seed_lead_topology(tmp)
+        nudged = tlg.evaluate_lifecycle(
+            _payload(agent_type=None, subject=PREPARE_SUBJECT,
+                     session_id=SID))
+        assert _has_backstop_advisory(nudged), (
+            "ONE agent_type value, two topology states, two outcomes. If "
+            "this fails, the suppression in cell 1 is not the topology leg "
+            "and the matrix names the wrong cause."
+        )
 
 
 # =============================================================================

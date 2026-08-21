@@ -27,8 +27,10 @@ sent, would already have landed.
 
 WHY LEAD-SIDE (is_lead-gated): the missed wake is a LEAD failure (the lead wrote
 completion metadata but forgot the paired wake), and only the lead can ACT on
-the alarm AND write the canonical journal (journal-resolvability is
-process-scoped). Teammate / plain frames no-op — the in-process-default
+the alarm. The journal is NOT the cause: an in-process teammate frame reaches
+the canonical journal too (see is_canonical_journal_frame), so the ROLE is what
+makes this hook lead-side. Journal-resolvability stays process-scoped.
+Teammate / plain frames no-op — the in-process-default
 fail-safe branch. Activation keys on a RUNTIME STRUCTURAL signal (is_lead via
 agent_type), never a mode flag. UserPromptSubmit has no Agent()-spawned-teammate
 fire path, so the surfacer is single-writer (the lead's process) by construction.

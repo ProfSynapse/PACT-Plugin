@@ -5,7 +5,9 @@ Summary: Seam tests for the task_metadata_snapshot emission points inside
          the lead-side agent_handoff emit) and the post-completion backstop
          seam (the any-metadata generalization of the handoff backstop).
          Covers the both-modes matrix (lead vs teammate frames — the
-         is_lead runtime structural signal), signal-task INCLUSION with the
+         is_canonical_journal_frame runtime signal, which combines the
+         agent_type role leg with the session_id topology leg), signal-task
+         INCLUSION with the
          unconditional agent_handoff-suppression leg, eligibility
          (handoff-only → no snapshot), ownerless emission, incoming-metadata
          merge, and content-key dedup/supersession across re-fires.
@@ -168,9 +170,12 @@ class TestSeamALeadCompletion:
     def test_teammate_frame_no_snapshot(
         self, tmp_path, monkeypatch, pact_context, snapshot_events
     ):
-        """Both-modes matrix, teammate leg: a non-lead frame must not emit —
-        its context has no canonical journal (the tmux-mode teammate
-        completion is covered by the TaskCompleted seam instead)."""
+        """Both-modes matrix, teammate leg: this teammate frame must not emit.
+        The suppression is the frame gate: this fixture frame seeds no team
+        config carrying a leadSessionId, so the topology leg cannot resolve and
+        is_canonical_journal_frame returns False. This arm does NOT cover the
+        in-process teammate frame, which DOES emit. The tmux-mode teammate
+        completion is covered by the TaskCompleted seam instead."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         pact_context(team_name=TEAM, session_id="s1")
         tlg.evaluate_lifecycle(_completion_payload(agent_type=TEAMMATE))
@@ -180,7 +185,7 @@ class TestSeamALeadCompletion:
         self, tmp_path, monkeypatch, pact_context, snapshot_events
     ):
         """The identical fixture under the LEAD frame emits — the
-        suppression above is the is_lead gate, nothing else."""
+        suppression above is the frame gate, nothing else."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         pact_context(team_name=TEAM, session_id="s1")
         tlg.evaluate_lifecycle(_completion_payload(agent_type=LEAD))

@@ -206,8 +206,8 @@ class TestGateEmitFailOpen:
 
     def test_fail_open_does_not_suppress_unrelated_advisories(self, tmp_path, monkeypatch, pact_context):
         """The emit failure must not swallow the gate's normal advisory
-        evaluation. A teammate self-completion (no is_lead → emit not reached,
-        but an unrelated advisory path) still evaluates — sanity that the emit
+        evaluation. A teammate self-completion (the frame gate answers False, so the
+        emit is not reached, but an unrelated advisory path) still evaluates — sanity that the emit
         try/except is scoped to the emit, not the whole gate."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         pact_context(team_name=TEAM, session_id="s")
