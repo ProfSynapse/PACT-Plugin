@@ -501,6 +501,16 @@ def extract_final_dispatch_coverage(
       resolve and are EQUAL, and at least one dimension vector is not
       complete. The vector comparison could not run, so these members are
       REPORTED rather than absorbed into the agreeing population.
+      **A MISSING VECTOR AND A JUNK VECTOR ARE MERGED HERE ON PURPOSE, AND
+      THAT IS THE OPPOSITE CHOICE FROM `late_stamped` AGAINST
+      `dispatch_malformed`, SO THE GROUND IS STATED.** Those two report a
+      PRODUCER state, where the cause IS the remedy: an absent stamp is
+      stamped and a junk stamp is repaired at its writer. This one reports
+      the REACH OF AN INSTRUMENT. It answers how many members the vector
+      comparison could not reach, and a reader acts on it by re-examining
+      the comparison rather than the stamp, which is one action whatever the
+      cause. Revisit the merge if this counter fills, because a reader who
+      must act on a non-zero value will then want the cause.
 
     **WHY `late_stamped` AND `dispatch_malformed` ARE TWO NUMBERS AND NOT
     ONE.** An ABSENT stamp and a PRESENT-but-unresolvable one are different

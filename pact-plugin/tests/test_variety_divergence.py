@@ -257,6 +257,41 @@ class TestCoverageExceedsUnityAdvisory:
 # =============================================================================
 
 
+class TestDenominatorOmittedIsTheLegacyFailOpen:
+    """The DEFAULT of `total_pact_dispatch_count` is a supported input.
+
+    The docstring of `compute_variety_divergence` calls a None denominator
+    the legacy path, and says it fails open to the all-stamped assumption
+    rather than tripping the advisory. NO OTHER ARM IN THIS FILE CALLS THAT
+    FUNCTION WITHOUT A DENOMINATOR, so the default value it ships with was
+    unexercised.
+
+    WHY A DEFAULT ARGUMENT IS WORTH ITS OWN ARM. Every caller that omits the
+    parameter takes this path, and a caller that omits it writes nothing at
+    the call site for a reader to notice. The branch is reached by SILENCE,
+    which is the hardest kind of reach to remember to test.
+    """
+
+    def test_an_omitted_denominator_fails_open_and_does_not_divide(self):
+        """Call it the way a legacy caller does, with the argument left out.
+
+        The three assertions are one each on the three things the fail-open
+        branch decides. `total` stays None, so the absent denominator is
+        REPORTED rather than invented. `coverage` is 1.0, the all-stamped
+        assumption. `surfaced` is False, so the advisory does not trip.
+
+        THIS ARM ALSO GUARDS THE LADDER SHAPE ABOVE IT. The fail-open branch
+        and the zero-denominator branch are one `if`/`elif`/`else` chain. If
+        that `elif` became an `if`, the trailing `else` would rebind to it,
+        and a None denominator would take the fail-open branch AND THEN reach
+        the division, which raises a TypeError rather than returning at all.
+        """
+        result = compute_variety_divergence(8, [9, 8])
+        assert result["total"] is None
+        assert result["coverage"] == 1.0
+        assert result["surfaced"] is False
+
+
 class TestResolveArcStart:
     """resolve_arc_start(variety_assessed_events, feature_task_id): the LATEST
     variety_assessed.ts matching feature_task_id (the arc-start for --since),
@@ -438,6 +473,14 @@ class TestExtractFinalDispatchCoverage:
         assert result["variety_totals"] == [9]
         assert result["sites"] == 1
         assert result["fallback_used"] == 1
+        # A MEMBER TAKES ONE CELL, NOT TWO. This member resolves a value, so
+        # it belongs in `variety_totals` and NOWHERE else. `malformed` is the
+        # cell it must NOT reach, and the assertions above cannot see it
+        # arriving there, because they count the cells it DOES reach. A
+        # `site_value` resolves only when the `variety` key is present, so
+        # EVERY member on this path carries the flag the malformed branch
+        # reads, and an `elif` turned into an `if` would report all of them.
+        assert result["malformed"] == []
         assert result["superseded"] == 0
 
     # -- Which value wins --------------------------------------------------
@@ -646,6 +689,14 @@ class TestExtractFinalDispatchCoverage:
         # and 2, so this pins WHICH counter carries WHICH finding.
         assert result["late_stamped"] == 2
         assert result["dispatch_malformed"] == 1
+        # THE SIX CELLS ARE DISJOINT AND THESE TWO ZEROS ARE WHAT HOLD IT.
+        # The arm-1 chain is a single `if`/`elif` ladder, so each member
+        # reaches ONE cell. An edit that turns an `elif` into an `if` lets one
+        # member land in TWO cells at once, and the counts above would not
+        # move, because they count the cells the member DID reach. These two
+        # assert the cells it must NOT reach.
+        assert result["superseded"] == 0
+        assert result["dimensions_incomparable"] == 0
 
     def test_a_dimension_revision_that_holds_the_total_is_counted(self):
         """A correction that moved dimensions and left the total is REPORTED.
