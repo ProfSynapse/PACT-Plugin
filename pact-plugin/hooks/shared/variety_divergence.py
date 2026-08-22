@@ -637,17 +637,19 @@ def extract_final_dispatch_coverage(
     positional.
 
     **A STATED LIMIT: THE VALUE IS THE LATEST USABLE SNAPSHOT, NOT THE LATEST
-    SNAPSHOT.** `_latest_snapshot_by_task` skips a snapshot with a missing or
-    unparseable `ts`, because an event with no instant has no position in the
-    order this function sorts by. So if a task carries a NEWER snapshot that
-    the skip removed, an EARLIER one supplies the value and the result is
-    reported as final. NO COUNTER REPORTS THAT, and `fallback_used` does not,
-    because a snapshot DID resolve.
+    SNAPSHOT.** `_latest_snapshot_by_task` skips a snapshot on THREE causes: a
+    missing `ts`, an unparseable `ts`, and a `ts` that PARSES and does not
+    COMPARE, which is the naive-against-aware TypeError that function names.
+    The ground covers all three: an event with no COMPARABLE instant has no
+    position in the order this function sorts by. So if a task carries a NEWER
+    snapshot that the skip removed, an EARLIER one supplies the value and the
+    result is reported as final. NO COUNTER REPORTS THAT, and `fallback_used`
+    does not, because a snapshot DID resolve.
 
     THIS LIMIT IS STATED RATHER THAN COUNTED, AND THE CHOICE HAS A GROUND. A
     counter here can report SKIPS and cannot report STALENESS, because a
-    skipped event has no instant and so cannot be shown to be newer than the
-    one used. A skipped event can equally be OLDER, in which case nothing is
+    skipped event cannot be ORDERED against the one used and cannot be shown
+    to be newer. A skipped event can equally be OLDER, in which case nothing is
     stale, so such a counter over-reports. A reader who meets a skip count
     adjacent to this paragraph reads it as a staleness count, which is worse
     than the limit stated plainly. Journal POSITION is an order this module

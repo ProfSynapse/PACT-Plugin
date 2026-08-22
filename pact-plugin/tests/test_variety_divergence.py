@@ -46,6 +46,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
 from shared.session_journal import make_event  # noqa: E402
 from shared.variety_divergence import (  # noqa: E402
+    _latest_snapshot_by_task,
+    _parse_ts,
     compute_variety_divergence,
     extract_dispatch_coverage,
     extract_final_dispatch_coverage,
@@ -1081,11 +1083,19 @@ class TestExtractFinalDispatchCoverage:
         does not, because a snapshot DID resolve.
 
         THE HELPER DOCSTRING STATES THAT LIMIT AND DECLINES A COUNTER FOR IT,
-        on the ground that a skip count cannot show staleness: a dropped
-        event has no instant, so it can equally be older. THIS ARM PINS THE
-        BEHAVIOUR THAT LIMIT DESCRIBES, so a later edit that starts counting
-        the drop, or that sends the whole member to the fallback instead,
-        goes RED here and becomes a decision rather than a drift.
+        on the ground that a skip count cannot show staleness. A skipped
+        event cannot be ORDERED against the one used, so it cannot be shown
+        to be newer than it, AND IT CAN BE THE OLDER ONE, in which case
+        nothing is stale and a count of skips OVER-REPORTS. THE TWO HALVES
+        ARE DIFFERENT CLAIMS AND THE DECLINE RESTS ON EACH: the first says
+        such a count cannot ESTABLISH staleness, the second says it INFLATES
+        the number it reports. THAT GROUND IS ABOUT ORDER AND NOT ABOUT AN
+        ENUMERATION OF CAUSES, so it holds for a missing `ts`, for an
+        unparseable one, and for one that parses and does not compare. THIS
+        ARM PINS THE BEHAVIOUR THAT LIMIT DESCRIBES, so a later edit that
+        starts counting the drop, or that sends the full member to the
+        fallback as an alternative, goes RED here and becomes a decision
+        rather than a drift.
 
         EACH COUNTER IS ASSERTED AT ZERO ON PURPOSE. The claim is that
         NOTHING reports the substitution, and a claim about the absence of a
@@ -1158,33 +1168,45 @@ class TestExtractFinalDispatchCoverage:
         `fallback_used` and `total_unresolved` DOUBLE-COUNTS and gets a
         plausible number with no error, so the nesting needs an arm.
 
-        THE THREE EXPECTED VALUES ARE DIFFERENT ON PURPOSE, 4 against 3
+        THE THREE EXPECTED VALUES ARE DIFFERENT ON PURPOSE, 8 against 3
         against 1. TWO CELLS AT THE SAME EXPECTED VALUE CONSTRAIN THE
-        MULTISET AND NOT THE MAPPING, so an equality among the three would
+        MULTISET AND NOT THE MAPPING, so an equality in the three would
         hide a transposition of two of them.
 
-        The members, one for each layer of the nesting:
-        - member 1 is arm 2. It resolved its own value, so it reaches
-          `fallback_used` alone.
-        - members 2 and 3 are arm 3 with NO `variety` key. They reach
+        The members, grouped by the layer of the nesting they reach:
+        - `arm_two` is FIVE members. Each resolved its own value, so each
+          reaches `fallback_used` alone.
+        - `arm_three_plain` is TWO members with NO `variety` key. They reach
           `total_unresolved` and are not malformed.
-        - member 4 is arm 3 with a PRESENT but unresolvable `variety`. It
-          reaches all three layers.
+        - `arm_three_malformed` is ONE member with a PRESENT but
+          unresolvable `variety`. It reaches all three layers.
+
+        ARM 2 IS FIVE MEMBERS AND NOT ONE, AND THE SIZE IS LOAD-BEARING. At
+        one member, an edit that makes `fallback_used` disjoint from
+        `total_unresolved` drives the outer count BELOW the inner one, so
+        the fixture cannot host the case where the layers come apart and the
+        counts stay in order. At five it can, so the assertions below are
+        measured against the case they exist for.
         """
-        sites = [
-            self._site("1", {"total": 9}),
-            self._site("2"),
-            self._site("3"),
-            self._site("4", {"total": "junk"}),
-        ]
+        arm_two = [self._site(str(n), {"total": 9}) for n in range(1, 6)]
+        arm_three_plain = [self._site("6"), self._site("7")]
+        arm_three_malformed = [self._site("8", {"total": "junk"})]
+        sites = arm_two + arm_three_plain + arm_three_malformed
         result = extract_final_dispatch_coverage(sites, [])
-        assert result["fallback_used"] == 4
-        assert result["total_unresolved"] == 3
-        assert len(result["malformed"]) == 1
-        # THE NESTING STATED AS THE INEQUALITY IT IS, so a later edit that
-        # makes the three disjoint breaks here rather than in a reader.
-        assert result["fallback_used"] > result["total_unresolved"]
-        assert result["total_unresolved"] > len(result["malformed"])
+        # CONTAINMENT WRITTEN AS AN ACCOUNTING, WHICH IS WHAT AN ORDERING
+        # CANNOT CARRY. Each line says an OUTER count equals its own extra
+        # members PLUS THE MEASURED INNER COUNT, so an edit that makes two
+        # layers disjoint drops the inner term from the outer sum and goes
+        # RED here rather than in a reader. `a > b > c` does NOT prove
+        # containment: disjoint layers satisfy it when the outer group
+        # is the larger one, which is why no ordering appears below.
+        assert len(result["malformed"]) == len(arm_three_malformed)
+        assert result["total_unresolved"] == len(arm_three_plain) + len(
+            result["malformed"]
+        )
+        assert result["fallback_used"] == len(arm_two) + result[
+            "total_unresolved"
+        ]
 
     # -- Hostile input -----------------------------------------------------
 
@@ -1404,3 +1426,128 @@ class TestExtractFinalDispatchCoverage:
         assert result["variety_totals"] == [12]
         assert result["fallback_used"] == 0
         assert result["superseded"] == 1
+
+
+class TestTheThirdSkipCauseOfTheSnapshotPicker:
+    """`_latest_snapshot_by_task` SKIPS ON THREE CAUSES, AND THIS PINS THE
+    THIRD: a `ts` that PARSES and does NOT COMPARE.
+
+    THE MECHANISM. `_parse_ts` is
+    `datetime.fromisoformat(str(value).replace("Z", "+00:00"))`. A `ts` with
+    NO timezone designator has no `Z` to replace, so it parses and returns a
+    NAIVE datetime. The try block in the picker wraps the parse AND the
+    compare, so `parsed >= current[0]` on a naive-against-aware pair raises
+    TypeError and the event is skipped. THAT EVENT HAS A PARSED INSTANT AND
+    NO COMPARABLE ONE, which is why the stated limit is about ORDER and not
+    about instants.
+
+    WHY THESE ARMS ARE HERE. The F4 stated limit in the helper docstring
+    RESTS ON that parser property, and no arm pinned it. If a later edit
+    makes `_parse_ts` attach UTC to a bare value, the third cause disappears
+    and the shipped ground goes stale with nothing red.
+
+    THE BOUND, SO A READER DOES NOT TAKE `THIS CAN HAPPEN` AS `THIS
+    HAPPENS`. The path is reachable BY CONSTRUCTION of the parser. NO naive
+    `ts` was found in a live journal, so THESE ARMS MAKE NO FIELD CLAIM.
+    They pin that the path EXISTS and not that it occurs. A field claim is a
+    journal census and a different question.
+
+    THE ARMS IMPORT TWO PRIVATE NAMES. Other suite modules import private
+    names from a `shared` module, so the pattern is established, and this is
+    the first use of it for this module.
+    """
+
+    AWARE_EARLY = "2026-08-22T01:00:00Z"
+    AWARE_LATE = "2026-08-22T02:00:00Z"
+    NAIVE_EARLY = "2026-08-22T01:00:00"
+    NAIVE_LATE = "2026-08-22T02:00:00"
+
+    @staticmethod
+    def _ev(task_id, ts, tag):
+        """`tag` is a probe field. The picker carries the event through
+        untouched, so a read of it back names WHICH event was selected."""
+        return {"task_id": task_id, "ts": ts, "tag": tag}
+
+    @staticmethod
+    def _pick(events):
+        return _latest_snapshot_by_task(events).get("1", {}).get("tag")
+
+    def test_a_bare_ts_parses_naive_and_the_compare_raises(self):
+        """THE MECHANISM, ISOLATED. This is the ONLY arm that does not call
+        the picker, and it is what makes the two ordering arms below
+        PREDICTIVE rather than observed.
+
+        The `else` branch is the non-vacuity guard: if the compare stops
+        raising, the arm says the path is UNREACHABLE rather than pass.
+        """
+        assert _parse_ts(self.AWARE_LATE).tzinfo is not None
+        assert _parse_ts(self.NAIVE_LATE).tzinfo is None
+        try:
+            _ = _parse_ts(self.NAIVE_LATE) >= _parse_ts(self.AWARE_LATE)
+        except TypeError as exc:
+            assert "offset-naive and offset-aware" in str(exc)
+        else:
+            raise AssertionError("the compare did not raise: path UNREACHABLE")
+
+    def test_positive_control_two_aware_instants_take_the_later_event(self):
+        """CONTROL. With two aware instants the LATER event wins, so the
+        picker orders correctly when no naive value is present."""
+        assert (
+            self._pick(
+                [
+                    self._ev("1", self.AWARE_EARLY, "early-aware"),
+                    self._ev("1", self.AWARE_LATE, "late-aware"),
+                ]
+            )
+            == "late-aware"
+        )
+
+    def test_an_aware_first_and_a_later_naive_second_keeps_the_aware(self):
+        """The naive SECOND event is skipped, so the aware first one is
+        returned. This covers the order the strong arm below does not: the
+        naive event arrives SECOND rather than first."""
+        assert (
+            self._pick(
+                [
+                    self._ev("1", self.AWARE_EARLY, "first-aware"),
+                    self._ev("1", self.NAIVE_LATE, "second-naive"),
+                ]
+            )
+            == "first-aware"
+        )
+
+    def test_a_naive_first_and_a_later_aware_second_keeps_the_naive(self):
+        """THE STRONG ARM. A LATER snapshot is DROPPED and an EARLIER one is
+        reported as final. THIS IS THE F4 STATED LIMIT, reached through the
+        third skip cause.
+
+        Read this arm WITH the negative control below. On its own the
+        outcome is compatible with an ordering defect.
+        """
+        assert (
+            self._pick(
+                [
+                    self._ev("1", self.NAIVE_EARLY, "first-naive-EARLIER"),
+                    self._ev("1", self.AWARE_LATE, "second-aware-LATER"),
+                ]
+            )
+            == "first-naive-EARLIER"
+        )
+
+    def test_negative_control_the_same_order_all_aware_takes_the_later(self):
+        """THE CONTROL THAT NAMES THE CAUSE. The SAME order with all aware
+        values returns the LATER event.
+
+        So the arm above is caused by the naive-against-aware MIX and NOT by
+        the ordering. WITHOUT THIS ARM THAT DISTINCTION IS NOT MEASURED, and
+        the strong arm would read as a possible ordering defect.
+        """
+        assert (
+            self._pick(
+                [
+                    self._ev("1", self.AWARE_EARLY, "first-aware-EARLIER"),
+                    self._ev("1", self.AWARE_LATE, "second-aware-LATER"),
+                ]
+            )
+            == "second-aware-LATER"
+        )
