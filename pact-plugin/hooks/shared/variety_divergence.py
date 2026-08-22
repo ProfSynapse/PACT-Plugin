@@ -17,6 +17,14 @@ Functions:
   total_pact_dispatch_count=None, threshold=2) -> dict
 - extract_dispatch_coverage(dispatch_site_events) -> (variety_totals,
   total, malformed) — BOTH Q5 terms from ONE pass over ONE input list.
+- extract_final_dispatch_coverage(dispatch_site_events, snapshot_events)
+  -> dict of TEN keys. The Q5 join: MEMBERSHIP comes from the
+  `dispatch_site` stream, and the VALUE comes from the latest
+  `task_metadata_snapshot` of the same task, so the distribution holds the
+  FINAL total rather than the as-dispatched one. Four of the ten keys
+  report what the join OBSERVED about the as-dispatched side, so a value
+  taken from a snapshot cannot silently absorb a stamping gap, a producer
+  defect, or a revision that left the total where it was.
 
 Return shape (stable keys):
 - `coverage`:  float — fraction of pact-* dispatches with variety stamped;
@@ -78,13 +86,41 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from .teachback_schema import resolve_variety_total
+from .teachback_schema import (
+    MAX_DIMENSION,
+    MIN_DIMENSION,
+    _is_in_range_int,
+    _VARIETY_DIMENSIONS,
+    resolve_variety_total,
+)
 
 
 # ---------------------------------------------------------------------------
 # Threshold default
 # ---------------------------------------------------------------------------
 DEFAULT_THRESHOLD = 2  # see pact-variety.md §Variety Calibration Record
+
+
+# ---------------------------------------------------------------------------
+# Timestamp parse — ONE implementation, two call sites in this module
+# ---------------------------------------------------------------------------
+def _parse_ts(value: object) -> datetime:
+    """Normalize a journal `ts` and parse it into an instant.
+
+    `make_event` stamps `ts` as `...Z` and `canonical_since()` emits
+    `...+00:00`, so the two forms must be compared as INSTANTS and not as
+    strings. A lexical compare is decided by the first byte after the
+    seconds, and `+` (0x2B) sorts before `Z` (0x5A), so a `+00:00` stamp
+    sorts before an equal-instant `Z` stamp.
+
+    This is a local copy rather than an import of
+    `session_journal._parse_ts`, which keeps this module decoupled. It is
+    ONE implementation shared by the two callers below, so the count of
+    implementations in the codebase stays at two.
+
+    RAISES on an unparseable value. Each caller owns its own fail-open.
+    """
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
 def compute_variety_divergence(
@@ -341,6 +377,409 @@ def extract_dispatch_coverage(
     return variety_totals, len(dispatch_site_events), malformed
 
 
+def _latest_snapshot_by_task(snapshot_events: list[dict]) -> dict[str, dict]:
+    """Index `task_metadata_snapshot` events by task id, keeping the LATEST.
+
+    LATEST means the greatest PARSED instant. On an equal instant the LATER
+    element in list order wins, which is why the compare is `>=`. Journal
+    events stamp `ts` at second granularity, so a tie is ordinary, and the
+    later line in journal order is the authoritative one for this stream.
+
+    THIS TIE-BREAK IS THE OPPOSITE OF `resolve_arc_start`, which compares
+    with `>` and keeps the FIRST of two equal instants. That function picks
+    an arc BOUNDARY, where first-wins is the safe direction. This one picks
+    the FINAL value, where last-wins is the definition of final.
+
+    An event that is not a dict, that carries no `task_id`, or that carries
+    a missing or unparseable `ts`, is skipped. A `task_id` of None is
+    skipped rather than keyed, so it cannot join to a member that carries no
+    task id either. The compare sits INSIDE the try, so a naive `ts`
+    compared against an aware one raises TypeError and fails open.
+
+    The caller passes the list in journal order, because the tie-break is
+    positional. Pure function, and it does not raise.
+    """
+    latest: dict[str, tuple[datetime, dict]] = {}
+    if not isinstance(snapshot_events, list):
+        return {}
+    for event in snapshot_events:
+        if not isinstance(event, dict):
+            continue
+        task_id = event.get("task_id")
+        if task_id is None:
+            continue
+        ts = event.get("ts")
+        if not ts:
+            continue
+        key = str(task_id)
+        try:
+            parsed = _parse_ts(ts)
+            current = latest.get(key)
+            # `>=` is last-wins on an equal instant. See the docstring above
+            # for why this direction is the opposite of resolve_arc_start.
+            if current is None or parsed >= current[0]:
+                latest[key] = (parsed, event)
+        except (ValueError, TypeError):
+            continue
+    return {key: value[1] for key, value in latest.items()}
+
+
+def _dimension_vector(variety: object) -> tuple[int, ...] | None:
+    """The four dimension scores as a tuple, or None when the vector is not COMPLETE.
+
+    COMPLETE means all four dimensions are present as non-bool ints inside
+    [MIN_DIMENSION, MAX_DIMENSION]. A partial or out-of-range vector yields
+    None rather than a shorter tuple, because a shorter tuple compares
+    unequal to a full one and would report a revision that did not happen.
+
+    The dimension NAMES and the range come from `teachback_schema`, which
+    derives its dispatch projection from the same tuple. THE IMPORT IS
+    DELIBERATE AND THIS PARAGRAPH RECORDS THE INTENT, so a reader who meets a
+    cross-module private import does not replace it with a tidier local
+    tuple. The intent is that the four names are stated in one list. Nothing
+    in this module enforces that, and no arm here can, so read this as the
+    reason for the import and not as a guarantee about a future edit.
+
+    Pure function, and it does not raise. A non-dict input yields None.
+    """
+    if not isinstance(variety, dict):
+        return None
+    values: list[int] = []
+    for name in _VARIETY_DIMENSIONS:
+        value = variety.get(name)
+        if not _is_in_range_int(value, MIN_DIMENSION, MAX_DIMENSION):
+            return None
+        values.append(value)
+    return tuple(values)
+
+
+def extract_final_dispatch_coverage(
+    dispatch_site_events: list[dict],
+    snapshot_events: list[dict],
+) -> dict:
+    """Q5 coverage terms, carrying the FINAL variety total of each member.
+
+    MEMBERSHIP comes from `dispatch_site_events` and from nothing else. The
+    VALUE comes from the latest `task_metadata_snapshot` of the same task.
+    So the distribution holds the total as it stands at read time, rather
+    than the total as it stood at dispatch.
+
+    **THE NON-MEMBER EXCLUSION IS STRUCTURAL.** The loop iterates
+    `dispatch_site_events`, so a snapshot for a task that no member names is
+    unreachable. The snapshot stream holds far more units than the
+    `dispatch_site` stream. A REDIRECT that sourced membership there would
+    widen the population and break the one-member-means-one-dispatch
+    property. This is a property of the iteration, and not a filter that a
+    later edit can weaken by accident.
+
+    Returns a dict with TEN keys:
+
+    - `variety_totals` (list[int]) — the FINAL total of each member that
+      resolved one. This list IS the distribution.
+    - `sites` (int) — `len(dispatch_site_events)`. It counts the EXISTENCE
+      of each event, and it is identical to the `total` term of
+      `extract_dispatch_coverage`.
+    - `malformed` (list[dict]) — the `dispatch_site` events that resolve no
+      total on either stream AND carry a PRESENT `variety` key.
+    - `fallback_used` (int) — members of which the final value did NOT come
+      from a snapshot. State that definition adjacent to the number wherever
+      it is reported. IT COUNTS ARMS 2 AND 3 TOGETHER, so an arm-3 member is
+      inside this number and has no final value at all.
+    - `superseded` (int) — members of which the final TOTAL DIFFERS from the
+      as-dispatched one, counted only where the two totals each resolve.
+    - `late_stamped` (int) — members that took a snapshot value and carry NO
+      `variety` key on their `dispatch_site` event. THE DISPATCH WAS NOT
+      STAMPED AT DISPATCH TIME and a later write supplied the value.
+    - `dispatch_malformed` (int) — members that took a snapshot value and
+      carry a PRESENT but unresolvable `variety` on their `dispatch_site`
+      event. A producer defect that the snapshot value would otherwise hide.
+    - `superseded_dimensions_only` (int) — members of which the two totals
+      each resolve and are EQUAL, and the two dimension vectors are each
+      complete and DIFFER. A revision that moved dimensions and left the
+      total where it was.
+    - `dimensions_incomparable` (int) — members of which the two totals each
+      resolve and are EQUAL, and at least one dimension vector is not
+      complete. The vector comparison could not run, so these members are
+      REPORTED rather than absorbed into the agreeing population.
+    - `total_unresolved` (int) — members that resolved NO total on EITHER
+      stream. Arm 3 alone. `fallback_used` counts arms 2 and 3 together and
+      keeps that union on purpose, so this term is the arm-3 half named
+      separately and NOT a split of it. See the nesting statement below,
+      because this count is CONTAINED IN `fallback_used` and CONTAINS
+      `len(malformed)`.
+      **A MISSING VECTOR AND A JUNK VECTOR ARE MERGED HERE ON PURPOSE, AND
+      THAT IS THE OPPOSITE CHOICE FROM `late_stamped` AGAINST
+      `dispatch_malformed`, SO THE GROUND IS STATED.** Those two report a
+      PRODUCER state, where the cause IS the remedy: an absent stamp is
+      stamped and a junk stamp is repaired at its writer. This one reports
+      the REACH OF AN INSTRUMENT. It answers how many members the vector
+      comparison could not reach, and a reader acts on it by re-examining
+      the comparison rather than the stamp, which is one action whatever the
+      cause. Revisit the merge if this counter fills, because a reader who
+      must act on a non-zero value will then want the cause.
+
+    **WHY `late_stamped` AND `dispatch_malformed` ARE TWO NUMBERS AND NOT
+    ONE.** An ABSENT stamp and a PRESENT-but-unresolvable one are different
+    findings with opposite remedies, and merging them is what the `malformed`
+    term already exists to prevent on the fallback path. One counter across
+    the two would re-merge them on the snapshot path, so the split here
+    mirrors the split there.
+
+    **ARM 1 PARTITIONS, AND HERE IS THE ARGUMENT. THE FALLBACK-PATH TERMS DO
+    NOT PARTITION, AND THE NESTING STATEMENT BELOW IS WHERE THEY ARE STATED.**
+    A member reaches arm 1 or it does not, and `fallback_used` counts exactly
+    the members that do not, so `fallback_used` shares no member with the
+    five arm-1 counters. Arm 1 then partitions SIX ways with no overlap,
+    keyed first on the as-dispatched value:
+
+      1. it does not resolve and no `variety` key is present → `late_stamped`
+      2. it does not resolve and a `variety` key is present → `dispatch_malformed`
+      3. it resolves and the totals DIFFER                  → `superseded`
+      4. it resolves, the totals agree, a vector is partial → `dimensions_incomparable`
+      5. it resolves, the totals agree, vectors differ      → `superseded_dimensions_only`
+      6. it resolves, the totals agree, vectors agree       → counted nowhere
+
+    Cells 1 and 2 need the as-dispatched value to be None and cells 3 to 6
+    need it to resolve, so no member reaches both groups. Cells 1 and 2 split
+    on `"variety" in event`, which is one predicate with two outcomes. Cell 3
+    needs the totals DIFFERENT and cells 4 to 6 need them EQUAL. Cells 4 and 5
+    split on whether the two vectors are each complete. So a reader can add
+    `superseded` and `superseded_dimensions_only` for a corrections count
+    without a double count, and `malformed` stays a fallback-path term that
+    shares no member with any of the five.
+
+    **THE VECTOR COMPARISON DOES NOT REACH THE MOST FREQUENT CORRECTION
+    CLASS, AND A READER MUST NOT TAKE THESE COUNTS FOR A CORRECTION COUNT.**
+    A RATIONALE-ONLY CORRECTION IS STRUCTURALLY INVISIBLE HERE. The
+    `dispatch_site` projection carries the four dimensions and their total
+    and DROPS the `*_rationale` strings by design, so a corrected rationale
+    has nothing on the dispatch side to compare against. Field evidence says
+    rationales are corrected MORE frequently than totals, so the class these
+    counters cannot see is larger than the class they can. Report
+    `superseded` and `superseded_dimensions_only` as what they are, a count
+    of corrections that moved a total or a dimension, and never as the number
+    of corrections that occurred.
+
+    **THE TWO ACCESSORS DIFFER, and that is the trap in this join.** A
+    `dispatch_site` event holds the stamp at the TOP level. A snapshot holds
+    it NESTED at `metadata.variety`. The snapshot side passes `metadata` as
+    the second argument to `resolve_variety_total`, which keeps the
+    non-canonical `metadata["variety_score"]` candidate reachable. The
+    dispatch side passes no second argument, so that candidate is
+    unreachable there.
+
+    **THE CAUSE THAT MAKES THAT SAFE IS THE EMITTER PAYLOAD SHAPE, AND NOT
+    THE RESOLVER ARGUMENT.** `_emit_dispatch_site` in `task_lifecycle_gate`
+    builds its payload as a `task_id` plus an OPTIONAL `variety`, and it
+    writes NO `metadata` key of any kind. So there is no input on the
+    dispatch side for that candidate to read, and the asymmetry is INERT
+    rather than merely tolerable. Read this paragraph before you change the
+    call: if a `metadata` key is ever added to the `dispatch_site` payload,
+    the protection stated here is gone and the two sides diverge for real.
+
+    **A SECOND ASYMMETRY IS LIVE, AND IT IS THE ONE WITH A REACHABLE INPUT.**
+    `_dispatch_site_variety` projects only `DISPATCH_VARIETY_KEYS`, the four
+    dimensions plus the total, and its own docstring says a non-canonical
+    `score` key is a legal candidate that the projection DELIBERATELY DROPS.
+    So the `variety["score"]` candidate is unreachable on the dispatch side
+    and reachable on the snapshot side. A task stamped with `score` alone and
+    no `total` therefore emits a `dispatch_site` carrying NO `variety` key at
+    all, and its snapshot resolves a value. That member is counted in
+    `late_stamped`, which is the correct cell for it, and this note is here
+    so a reader meets the cause rather than infers a defect.
+
+    **THE FALLBACK, in order:**
+
+    1. The latest snapshot value resolves. Use it. It is the FINAL value.
+    2. It does not resolve, and the `dispatch_site` value resolves. Use the
+       `dispatch_site` value and add one to `fallback_used`.
+    3. Neither resolves. The member contributes no value, and add one to
+       `fallback_used`.
+
+    `fallback_used` counts arms 2 AND 3 together. Arm 2 alone answers a
+    narrower question and keeps arm 3 unobserved, which is the failure this
+    counter is here to prevent.
+
+    **`fallback_used` IS DISJOINT FROM EACH ARM-1 COUNTER BY CONSTRUCTION.**
+    A member that took the fallback did not reach arm 1, so it cannot reach
+    `superseded`, `late_stamped`, `dispatch_malformed`,
+    `superseded_dimensions_only` or `dimensions_incomparable`. The six-cell
+    argument above states the rest of the partition.
+
+    **THE RETURNED SET IS A PARTITION PLUS A NESTING, AND A READER CANNOT
+    TREAT ALL TEN KEYS ALIKE.** The six arm-1 cells PARTITION arm 1, so their
+    counts add. The three fallback-path counts NEST, so their counts do not:
+
+        `fallback_used`  CONTAINS  `total_unresolved`  CONTAINS  `malformed`
+
+    - `fallback_used` minus `total_unresolved` is the ARM-2 count, the
+      members that fell back to a usable `dispatch_site` value.
+    - `total_unresolved` minus `len(malformed)` is the arm-3 members that
+      carry NO `variety` key, which is the honest un-stamped dispatch on the
+      fallback path.
+
+    **A READER WHO ADDS `fallback_used` AND `total_unresolved` DOUBLE-COUNTS**
+    and gets a plausible total with no error to warn them. Report the two as
+    a containment and never as an addition.
+
+    **MALFORMED IS CLASSIFIED BY THE VALUE THE JOIN FINALLY USES.** After
+    arm 3, a member is malformed if and only if `variety` is present on its
+    `dispatch_site` event. ONE CELL READS DIFFERENTLY FROM A CAREFUL HUMAN:
+    a member with NO `variety` on its `dispatch_site` event, and a
+    present-but-unresolvable one on its latest snapshot, reports an absent
+    stamp rather than a data-quality defect. Revisit that cell if it fills,
+    rather than pre-solve it with a third rule.
+
+    **TWO PRECONDITIONS THIS FUNCTION CANNOT CHECK, so the caller owns
+    them.** The two lists must be scoped to the SAME arc with the SAME
+    `--since` value, because the platform reuses task ids across arcs. And
+    `snapshot_events` must arrive in journal order, because the tie-break is
+    positional.
+
+    **A STATED LIMIT: THE VALUE IS THE LATEST USABLE SNAPSHOT, NOT THE LATEST
+    SNAPSHOT.** `_latest_snapshot_by_task` skips a snapshot on THREE causes: a
+    missing `ts`, an unparseable `ts`, and a `ts` that PARSES and does not
+    COMPARE, which is the naive-against-aware TypeError that function names.
+    The ground covers all three: an event with no COMPARABLE instant has no
+    position in the order this function sorts by. So if a task carries a NEWER
+    snapshot that the skip removed, an EARLIER one supplies the value and the
+    result is reported as final. NO COUNTER REPORTS THAT, and `fallback_used`
+    does not, because a snapshot DID resolve.
+
+    THIS LIMIT IS STATED RATHER THAN COUNTED, AND THE CHOICE HAS A GROUND. A
+    counter here can report SKIPS and cannot report STALENESS, because a
+    skipped event cannot be ORDERED against the one used and cannot be shown
+    to be newer. A skipped event can equally be OLDER, in which case nothing is
+    stale, so such a counter over-reports. A reader who meets a skip count
+    adjacent to this paragraph reads it as a staleness count, which is worse
+    than the limit stated plainly. Journal POSITION is an order this module
+    uses, and only as a TIE-BREAK between equal instants: making position the
+    primary order for one counter would put a second ordering rule into a
+    function that has one, and a reader could not tell which rule produced
+    the number. A counter named `snapshots_skipped_unusable_ts` was
+    considered for this and DECLINED on those grounds.
+
+    **ONE MEMBER FOR EACH DISPATCH IS A GUARANTEE THIS FUNCTION DOES NOT
+    MAKE.** The loop iterates `dispatch_site_events`, so two events naming the
+    same task contribute their final value TWICE and can count twice in
+    `superseded`. What prevents that is NOT here: `_emit_dispatch_site` in
+    `hooks/task_lifecycle_gate.py` takes an O_EXCL marker claim on
+    `(team_name, task_id)` at step 7 of its ladder, so a repeated
+    owner-bearing write yields one site rather than two. That claim is in a
+    different file and this function inherits it. If it is ever relaxed, the
+    double count appears here and no term in the returned dict names it.
+
+    Pure function, and it does not raise. A non-list `dispatch_site_events`
+    yields the empty result. A non-dict element counts as a site and joins
+    to nothing, which mirrors `extract_dispatch_coverage`.
+    """
+    if not isinstance(dispatch_site_events, list):
+        return {
+            "variety_totals": [],
+            "sites": 0,
+            "malformed": [],
+            "fallback_used": 0,
+            "superseded": 0,
+            "late_stamped": 0,
+            "dispatch_malformed": 0,
+            "superseded_dimensions_only": 0,
+            "dimensions_incomparable": 0,
+            "total_unresolved": 0,
+        }
+
+    latest_snapshots = _latest_snapshot_by_task(snapshot_events)
+
+    variety_totals: list[int] = []
+    malformed: list[dict] = []
+    fallback_used = 0
+    superseded = 0
+    late_stamped = 0
+    dispatch_malformed = 0
+    superseded_dimensions_only = 0
+    dimensions_incomparable = 0
+    total_unresolved = 0
+
+    for event in dispatch_site_events:
+        site_value = None
+        snapshot_value = None
+        has_variety = False
+        site_vector = None
+        snapshot_vector = None
+
+        if isinstance(event, dict):
+            # Membership is tested before resolution, so an ABSENT stamp and
+            # a PRESENT-but-unresolvable one stay different findings.
+            has_variety = "variety" in event
+            site_variety = event.get("variety")
+            site_value = resolve_variety_total(site_variety)
+            site_vector = _dimension_vector(site_variety)
+            task_id = event.get("task_id")
+            if task_id is not None:
+                snapshot = latest_snapshots.get(str(task_id))
+                if snapshot is not None:
+                    metadata = snapshot.get("metadata")
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    snapshot_variety = metadata.get("variety")
+                    # The snapshot nests the stamp, and `metadata` is the
+                    # resolver's second argument, so candidate 3 stays live.
+                    snapshot_value = resolve_variety_total(
+                        snapshot_variety, metadata
+                    )
+                    snapshot_vector = _dimension_vector(snapshot_variety)
+
+        # Arm 1: the snapshot carries the FINAL value. The six cells below
+        # are the partition the docstring argues; each member reaches one.
+        if snapshot_value is not None:
+            variety_totals.append(snapshot_value)
+            if site_value is None:
+                # The dispatch contributed no total. Which of the two
+                # findings this is depends on the KEY, not on the value:
+                # an absent stamp and an unresolvable one have opposite
+                # remedies, so they are counted apart.
+                if has_variety:
+                    dispatch_malformed += 1
+                else:
+                    late_stamped += 1
+            elif site_value != snapshot_value:
+                superseded += 1
+            elif site_vector is None or snapshot_vector is None:
+                # The totals agree and no vector comparison can run. Counted
+                # rather than absorbed, because an uncounted member here
+                # would read as agreement it was not measured to have.
+                dimensions_incomparable += 1
+            elif site_vector != snapshot_vector:
+                superseded_dimensions_only += 1
+            continue
+
+        # Arms 2 and 3: the final value did NOT come from a snapshot.
+        fallback_used += 1
+        if site_value is not None:
+            variety_totals.append(site_value)
+        else:
+            # ARM 3. No total resolved on EITHER stream. `fallback_used`
+            # keeps the arms-2-and-3 union, and this names the arm-3 half
+            # separately, so it is CONTAINED IN that union and never added
+            # to it. `malformed` is the subset of these that carries a
+            # present `variety` key, so it nests one level further in.
+            total_unresolved += 1
+            if has_variety:
+                malformed.append(event)
+
+    return {
+        "variety_totals": variety_totals,
+        "sites": len(dispatch_site_events),
+        "malformed": malformed,
+        "fallback_used": fallback_used,
+        "superseded": superseded,
+        "late_stamped": late_stamped,
+        "dispatch_malformed": dispatch_malformed,
+        "superseded_dimensions_only": superseded_dimensions_only,
+        "dimensions_incomparable": dimensions_incomparable,
+        "total_unresolved": total_unresolved,
+    }
+
+
 def resolve_arc_start(
     variety_assessed_events: list[dict],
     feature_task_id: str,
@@ -370,9 +809,10 @@ def resolve_arc_start(
     Timestamps are PARSED for the max, never lexically compared: `make_event`
     stamps `ts` as `...Z` while `canonical_since()` emits `...+00:00`, and a
     lexical compare across the two is wrong (`'+'` 0x2B sorts before `'Z'`
-    0x5A). The 2-line normalize-and-parse is duplicated locally (rather than
-    importing `session_journal._parse_ts`) to keep this module decoupled; if
-    a third ts-parse site ever appears, extract a shared util. The RETURN
+    0x5A). The normalize-and-parse is the module-level `_parse_ts`, a local
+    copy rather than an import of `session_journal._parse_ts`, which keeps
+    this module decoupled. It is ONE implementation with two call sites in
+    this module, so the extract-a-shared-util trigger does not fire. The RETURN
     value is the original `ts` STRING of the latest event, so the caller
     passes it to `--since`, which `_ts_ge` re-parses. The parse AND the
     max-comparison both run inside one try/except, so an entry that is
@@ -392,9 +832,6 @@ def resolve_arc_start(
 
     Pure function — no disk reads, no mutation.
     """
-    def _parse(value: object) -> datetime:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-
     latest_ts: str | None = None
     latest_dt: datetime | None = None
     for event in variety_assessed_events:
@@ -404,7 +841,7 @@ def resolve_arc_start(
         if not ts:
             continue
         try:
-            dt = _parse(ts)
+            dt = _parse_ts(ts)
             # The comparison is INSIDE the try (mirroring _ts_ge): comparing
             # a parseable-but-naive ts against an aware one raises TypeError
             # — fail open (skip the entry) instead of crashing the read.

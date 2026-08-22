@@ -19,7 +19,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
 from shared.teachback_schema import resolve_variety_total  # noqa: E402
-from shared.variety_divergence import extract_dispatch_coverage  # noqa: E402
+from shared.variety_divergence import (  # noqa: E402
+    extract_dispatch_coverage,
+    extract_final_dispatch_coverage,
+)
 
 WRAPUP_PATH = Path(__file__).parent.parent / "commands" / "wrap-up.md"
 
@@ -79,22 +82,122 @@ def _backticked_expression(line, prefix):
     raise AssertionError(f"no backticked expression starting with {prefix!r}")
 
 
-def _run_extraction(expression, events):
-    """Execute a documented extraction expression against `events` and return
-    the resulting namespace.
+# ---------------------------------------------------------------------------
+# THE EXTRACTION RUNNERS: ONE FOR EACH QUESTION, AND ONE FOR EACH Q5 PATH.
+#
+# THE DEFECT THAT PRODUCED THIS SPLIT, recorded so nobody re-merges them. A
+# SINGLE runner took `snapshot_events` with a default of EMPTY. An empty
+# snapshot stream sends each member of the Q5 join to the FALLBACK, where the
+# join does not read the snapshot side at all. So a caller that omitted the
+# argument selected a path it did not choose, and the choice was invisible at
+# the call site. Measured: this file detected 1 mutant of 15 in a sweep of the
+# join helper. The mutants that inverted the value precedence, narrowed the
+# resolver on the snapshot side, and widened membership from the snapshot
+# stream were ALL invisible to it.
+#
+# WHAT THE SPLIT MAKES STRUCTURALLY IMPOSSIBLE, in mechanism and not in an
+# assertion. Each item below is enforced by a signature or by a namespace, so
+# no reviewer vigilance is necessary.
+#
+#   1. A Q5 caller CANNOT take the fallback path in silence. The two paths are
+#      different functions and the path is readable from the NAME, without a
+#      reader inspecting the argument.
+#   2. A Q5 caller CANNOT call the joined runner and receive the fallback. The
+#      joined runner REFUSES an empty snapshot list, and it raises.
+#   3. A Q6 caller CANNOT pass a snapshot value, and a Q6 expression CANNOT
+#      read one. The Q6 runner has no such parameter and puts no
+#      `snapshot_events` name in its namespace, so a Q6 expression that ever
+#      reaches for one raises NameError rather than read a silent empty list.
+#
+# WHAT THE SPLIT DOES NOT MAKE IMPOSSIBLE, stated because an aspirational
+# claim here would repeat the defect. A file in which EVERY Q5 arm calls the
+# fallback runner STAYS blind to each snapshot-side mutant. No signature
+# can prevent that. A mutation sweep detects it, and a signature does not.
+# ---------------------------------------------------------------------------
+def _exec_documented_chain(expressions, namespace):
+    """Execute the documented extraction chain and return the namespace.
 
     `exec` is the point, not a shortcut: wrap-up.md is executed by an LLM at
     runtime, so the only way to pin the instruction's BEHAVIOUR (rather than
     grep its wording) is to run the expression the file actually carries. The
     input is repo-controlled markdown.
+
+    ACCEPTS A SEQUENCE, and that is load-bearing since the Q5 join. The join
+    carries the helper CALL and the unpack as two separate backticked spans,
+    so a lift of the unpack alone execs a statement that reads nothing from
+    `events` and raises NameError. Running the spans IN ORDER pins the whole
+    documented path rather than one line of it.
+
+    THE NAMESPACE IS THE CALLER'S, and that is the whole mechanism of the
+    split. What a runner puts in the namespace decides what the documented
+    text can reach, so a name that is absent is unreachable rather than
+    quietly empty.
     """
-    namespace = {
+    if isinstance(expressions, str):
+        expressions = [expressions]
+    for expression in expressions:
+        # noqa: S102, repo-controlled instruction text
+        exec(expression, namespace)  # noqa: S102
+    return namespace
+
+
+def _q5_namespace(events, snapshot_events):
+    return {
         "events": events,
+        "snapshot_events": snapshot_events,
         "resolve_variety_total": resolve_variety_total,
         "extract_dispatch_coverage": extract_dispatch_coverage,
+        "extract_final_dispatch_coverage": extract_final_dispatch_coverage,
     }
-    exec(expression, namespace)  # noqa: S102 — repo-controlled instruction text
-    return namespace
+
+
+def _run_q5_extraction(expressions, events, snapshot_events):
+    """Run the Q5 chain on the JOINED path. `snapshot_events` is REQUIRED.
+
+    THE EMPTY LIST IS REFUSED, and the refusal is the mechanism. An empty
+    snapshot stream sends each member to the fallback, so a caller that passed
+    one would name this runner and receive the other path. That is the exact
+    silent substitution the split exists to prevent, and it fails loudly here
+    instead. A caller that MEANS the fallback calls the fallback runner.
+    """
+    if not snapshot_events:
+        raise ValueError(
+            "_run_q5_extraction pins the JOINED path and an empty "
+            "snapshot_events selects the FALLBACK path for every member. "
+            "Call _run_q5_extraction_on_the_fallback_path when that is what "
+            "you mean, so the call site states which path it tests."
+        )
+    return _exec_documented_chain(
+        expressions, _q5_namespace(events, snapshot_events)
+    )
+
+
+def _run_q5_extraction_on_the_fallback_path(expressions, events):
+    """Run the Q5 chain where NO member has a snapshot.
+
+    EACH MEMBER TAKES THE FALLBACK and keeps its `dispatch_site` value. The
+    snapshot side of the join is not read. An arm that calls this runner
+    cannot detect a defect on the snapshot side, and the NAME says so at the
+    call site rather than in a comment a reader can miss.
+    """
+    return _exec_documented_chain(expressions, _q5_namespace(events, []))
+
+
+def _run_q6_extraction(expression, events):
+    """Run the Q6 chain. THERE IS NO SNAPSHOT PARAMETER, BY CONSTRUCTION.
+
+    Q6 reads the acknowledgment flags and it does not read the snapshot
+    stream. The namespace carries no `snapshot_events` name, so a Q6
+    expression that ever reaches for one raises NameError. That failure
+    direction is correct: a loud stop beats a silent read of an empty list.
+    """
+    return _exec_documented_chain(
+        expression,
+        {
+            "events": events,
+            "resolve_variety_total": resolve_variety_total,
+        },
+    )
 
 
 def _question_line(content, prefix):
@@ -166,12 +269,64 @@ class TestRetroReadHardening:
             "no dispatch sites recorded"
         )
 
+    def test_q5_stops_on_a_failed_snapshot_read_rather_than_passing_empty(
+        self, q5
+    ):
+        """THE ONE PLACE IN THIS QUESTION WHERE AN INCORRECT FALLBACK READS
+        AS A CLEAN GREEN.
+
+        A failed snapshot read that degrades to an empty list sends EVERY
+        member to the fallback. Q5 then reports the OLD as-dispatched numbers
+        carrying the NEW name, and the surface shows a plausible figure with
+        a correct label. No count moves and no error prints, so the reader
+        has nothing to notice.
+
+        The instruction must therefore carry FOUR parts, and each assertion
+        below is one of them: the stop rule, the explicit ban on the empty
+        list, the consequence that explains WHY the ban is not optional, and
+        the carve-out that keeps a genuine zero usable. The consequence half
+        is what stops a reader reasoning back to the empty list as a
+        harmless default.
+        """
+        assert "A FAILED snapshot read STOPS this question" in q5
+        assert "the same as a failed `dispatch_site` read" in q5
+        assert "Do NOT fall back to an empty list" in q5
+        assert "report the OLD as-dispatched numbers under the new name" in q5
+        assert "with nothing on the surface to show it" in q5
+        # The carve-out: an empty read that survives the masked-empty guard
+        # is a legitimate zero, so the stop rule cannot swallow it.
+        assert "legitimate zero" in q5
+        assert "report `fallback_used` equal to `sites`" in q5
+
+    def test_q5_states_the_stop_rule_before_it_calls_the_join_helper(self, q5):
+        """ORDERING, and it is load-bearing rather than cosmetic. A stop rule
+        stated AFTER the helper call reaches a reader who has called the
+        helper. The ban must precede the call it applies to."""
+        assert q5.index("A FAILED snapshot read STOPS this question") < q5.index(
+            "extract_final_dispatch_coverage"
+        )
+
+    def test_q5_scopes_the_snapshot_read_to_the_same_arc_as_the_site_read(
+        self, q5
+    ):
+        """The platform reuses task ids across arcs, so an unscoped snapshot
+        read can supply a prior arc's value for a current arc's member. The
+        helper cannot check this, so the instruction owns it."""
+        assert "read --type task_metadata_snapshot" in q5
+        assert "the SAME `--since` value" in q5
+        assert "BOTH reads omit `--since`" in q5
+
     def test_q5_denominator_comes_from_the_one_pass_helper(self, q5):
         """Successor to the retired-helper pin. The NEGATIVE half is the
         load-bearing one: it is what fails if someone reinstates
         `count_task_b_dispatch_sites` in the prose, which would leave the
-        retirement silently incomplete."""
-        assert "extract_dispatch_coverage" in q5
+        retirement silently incomplete.
+
+        The positive half names `extract_final_dispatch_coverage` since the
+        Q5 join: MEMBERSHIP continues to come from the `dispatch_site`
+        stream, and the VALUE comes from the latest `task_metadata_snapshot`
+        of the same task."""
+        assert "extract_final_dispatch_coverage" in q5
         assert "count_task_b_dispatch_sites" not in q5, (
             "the retired 3-marker helper must not be named in Q5 — a "
             "reinstated mention means the denominator was not actually moved"
@@ -340,8 +495,12 @@ class TestTotalExtraction:
         resolved rather than direct-indexed — did not go away; it moved into
         code, and is pinned behaviourally by
         `test_variety_divergence.py::TestExtractDispatchCoverage`. A prose pin
-        satisfiable by an import line is weaker than a behavioural one."""
-        assert "extract_dispatch_coverage" in q5
+        satisfiable by an import line is weaker than a behavioural one.
+
+        The helper is `extract_final_dispatch_coverage` since the Q5 join,
+        and the behavioural pin moved with it, to
+        `test_variety_divergence.py::TestExtractFinalDispatchCoverage`."""
+        assert "extract_final_dispatch_coverage" in q5
         assert "shared.variety_divergence" in q5
 
     def test_q5_does_not_direct_index_the_total(self, q5):
@@ -449,7 +608,16 @@ class TestQ5ExtractionDependsOnTheDimensionSumCandidate:
 
     @pytest.fixture
     def q5_expression(self, q5):
-        return _backticked_expression(q5, "variety_totals, ")
+        """The documented chain, IN ORDER: the helper call, then the unpack.
+
+        Q5 carries the join as two spans. Lifting the unpack alone runs a
+        statement that reads nothing from `events`, so the pair is the unit
+        that pins the extraction path.
+        """
+        return [
+            _backticked_expression(q5, "coverage = "),
+            _backticked_expression(q5, "variety_totals, "),
+        ]
 
     def test_higher_candidates_cannot_fire_on_the_corpus_shape(self):
         """Fixture control. Without it, a shape that candidate 1 resolved would
@@ -463,7 +631,7 @@ class TestQ5ExtractionDependsOnTheDimensionSumCandidate:
         )
 
     def test_extraction_recovers_the_corpus_malformed_stamp(self, q5_expression):
-        namespace = _run_extraction(
+        namespace = _run_q5_extraction_on_the_fallback_path(
             q5_expression, [self.CANONICAL_EVENT, self.CORPUS_MALFORMED_EVENT]
         )
         assert namespace["variety_totals"] == [9, 8], (
@@ -481,13 +649,15 @@ class TestQ5ExtractionDependsOnTheDimensionSumCandidate:
             {"task_id": "3"},                              # no variety key at all
             "not-a-dict",                                  # not even an object
         ]
-        assert _run_extraction(q5_expression, events)["variety_totals"] == [9]
+        namespace = _run_q5_extraction_on_the_fallback_path(q5_expression, events)
+        assert namespace["variety_totals"] == [9]
 
     def test_extraction_is_empty_not_raising_when_nothing_resolves(
         self, q5_expression
     ):
         events = [{"task_id": "1", "variety": {}}, {"task_id": "2"}]
-        assert _run_extraction(q5_expression, events)["variety_totals"] == []
+        namespace = _run_q5_extraction_on_the_fallback_path(q5_expression, events)
+        assert namespace["variety_totals"] == []
 
 
 class TestQ6ExtractionSurvivesAnUnreadableAck:
@@ -511,7 +681,7 @@ class TestQ6ExtractionSurvivesAnUnreadableAck:
             {"task_id": "4", "rationale_articulates_this_dispatch": "no"},
             "not-a-dict",
         ]
-        assert _run_extraction(q6_expression, events)["flags"] == ["yes", "no"]
+        assert _run_q6_extraction(q6_expression, events)["flags"] == ["yes", "no"]
 
     def test_extraction_is_empty_not_raising_when_no_flag_is_readable(
         self, q6_expression
@@ -519,4 +689,159 @@ class TestQ6ExtractionSurvivesAnUnreadableAck:
         """`len(flags) == 0` with `events` non-empty is the divisor the previous
         `len(events)` form could never produce — the case Q6's prose must (and
         does) tell the reader not to divide by."""
-        assert _run_extraction(q6_expression, [{"task_id": "1"}])["flags"] == []
+        assert _run_q6_extraction(q6_expression, [{"task_id": "1"}])["flags"] == []
+
+
+class TestQ5DocumentedChainReadsTheSnapshotStream:
+    """THE DOCUMENTED CHAIN MUST BE EXERCISED WITH A NON-EMPTY SNAPSHOT LIST,
+    and nothing else in this file does that.
+
+    Each other Q5 caller in this file calls
+    `_run_q5_extraction_on_the_fallback_path`, where the snapshot stream is
+    not read at all. On that path the documented chain returns the same
+    numbers as the pre-join helper, so a change that stops the join reading
+    the snapshot stream leaves each of those arms green. THE ARMS BELOW ARE
+    THE ONLY ONES IN THIS FILE THAT CAN GO RED FOR A SNAPSHOT-SIDE DEFECT.
+
+    The runner split makes the path visible at each call site. It does NOT
+    make this class redundant, because no signature can require that a file
+    holds an arm on the joined path.
+
+    The two arms below feed the streams DISAGREEING values through the
+    expressions the file actually carries, so they fail if the documented
+    chain stops taking the value from the snapshot.
+    """
+
+    SITE_TOTAL = 9
+    SNAPSHOT_TOTAL = 12
+
+    @pytest.fixture
+    def q5_expression(self, q5):
+        """The documented chain, IN ORDER: the helper call, then the unpack."""
+        return [
+            _backticked_expression(q5, "coverage = "),
+            _backticked_expression(q5, "variety_totals, "),
+        ]
+
+    def _events(self):
+        return [{"task_id": "1", "variety": {"total": self.SITE_TOTAL}}]
+
+    def _snapshots(self):
+        return [
+            {
+                "task_id": "1",
+                "ts": "2026-06-15T12:00:00Z",
+                "metadata": {"variety": {"total": self.SNAPSHOT_TOTAL}},
+            }
+        ]
+
+    def test_the_chain_takes_the_value_from_the_snapshot_not_the_site(
+        self, q5_expression
+    ):
+        """The whole cause of the join. The site says 9 and the snapshot says
+        12, so the distribution must carry 12."""
+        namespace = _run_q5_extraction(
+            q5_expression, self._events(), self._snapshots()
+        )
+        assert namespace["variety_totals"] == [self.SNAPSHOT_TOTAL]
+
+    def test_the_chain_keeps_membership_from_the_dispatch_site_stream(
+        self, q5_expression
+    ):
+        """MEMBERSHIP does not widen. The extra snapshot names a task that no
+        member names, and it carries a total DISTINCT from each member value,
+        which is what makes this arm able to fail."""
+        snapshots = self._snapshots() + [
+            {
+                "task_id": "99",
+                "ts": "2026-06-15T12:00:00Z",
+                "metadata": {"variety": {"total": 15}},
+            }
+        ]
+        namespace = _run_q5_extraction(q5_expression, self._events(), snapshots)
+        assert namespace["sites"] == 1
+        assert namespace["variety_totals"] == [self.SNAPSHOT_TOTAL]
+
+
+class TestTheRunnerDivideIsEnforcedAtRunTime:
+    """The three guarantees of the runner divide, pinned as BEHAVIOUR.
+
+    THE DIVIDE IS ENFORCED BY A SIGNATURE AND BY A NAMESPACE. That is
+    stronger than a docstring, because it acts at run time rather than on a
+    reader. IT DOES NOT PIN ITSELF. Remove the empty-list refusal, or put
+    `snapshot_events` back into the Q6 namespace, and no other arm in this
+    file goes red. These three arms are what fails.
+
+    EACH ARM CARRIES ITS POSITIVE HALF, and that half is load-bearing. An
+    arm that asserts only a raise passes against a runner that raises on
+    each input, so each arm below also shows the accepted call returning its
+    value. Without that half the arm cannot separate a working guard from a
+    broken runner.
+    """
+
+    EVENTS = [{"task_id": "1", "variety": {"total": 9}}]
+    SNAPSHOTS = [
+        {
+            "task_id": "1",
+            "ts": "2026-06-15T12:00:00Z",
+            "metadata": {"variety": {"total": 12}},
+        }
+    ]
+
+    @pytest.fixture
+    def q5_expression(self, q5):
+        """The documented chain, IN ORDER: the helper call, then the unpack."""
+        return [
+            _backticked_expression(q5, "coverage = "),
+            _backticked_expression(q5, "variety_totals, "),
+        ]
+
+    def test_the_joined_runner_refuses_an_empty_snapshot_list(
+        self, q5_expression
+    ):
+        """An empty snapshot list sends each member to the fallback, so a
+        caller that named the JOINED runner would receive the OTHER path.
+        The refusal is what stops that substitution from being silent.
+
+        The `match` ties this arm to the refusal and not to any ValueError.
+        """
+        with pytest.raises(ValueError, match="FALLBACK"):
+            _run_q5_extraction(q5_expression, self.EVENTS, [])
+        # POSITIVE HALF: a non-empty list is accepted and takes the join.
+        # The site says 9 and the snapshot says 12, so 12 proves the joined
+        # path ran rather than the fallback.
+        namespace = _run_q5_extraction(
+            q5_expression, self.EVENTS, self.SNAPSHOTS
+        )
+        assert namespace["variety_totals"] == [12]
+
+    def test_the_joined_runner_has_no_default_for_the_snapshot_argument(
+        self, q5_expression
+    ):
+        """A DEFAULT IS WHAT ALLOWED A CALLER TO SELECT A PATH IT DID NOT
+        CHOOSE. A two-argument call must stop with a TypeError rather than
+        proceed on a fallback nobody asked for."""
+        with pytest.raises(TypeError):
+            _run_q5_extraction(q5_expression, self.EVENTS)
+        # POSITIVE HALF: the three-argument call is accepted.
+        namespace = _run_q5_extraction(
+            q5_expression, self.EVENTS, self.SNAPSHOTS
+        )
+        assert namespace["variety_totals"] == [12]
+
+    def test_a_q6_expression_cannot_reach_the_snapshot_stream(self):
+        """The Q6 namespace carries NO `snapshot_events` name, so a Q6
+        expression that reaches for one STOPS rather than read a silent
+        empty list.
+
+        THE EXPRESSION HERE IS SYNTHETIC ON PURPOSE. This arm pins the
+        NAMESPACE and not the Q6 prose, because the Q6 prose reads no
+        snapshot stream today. A future prose edit that reached for one must
+        fail loudly, and this arm is what makes that the outcome.
+        """
+        with pytest.raises(NameError):
+            _run_q6_extraction("probe = len(snapshot_events)", self.EVENTS)
+        # POSITIVE HALF: the Q6 namespace does carry `events`, so the raise
+        # above is an absent NAME and not a broken runner.
+        namespace = _run_q6_extraction("probe = len(events)", self.EVENTS)
+        assert namespace["probe"] == 1
