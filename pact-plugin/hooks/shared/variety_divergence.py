@@ -18,10 +18,10 @@ Functions:
 - extract_dispatch_coverage(dispatch_site_events) -> (variety_totals,
   total, malformed) — BOTH Q5 terms from ONE pass over ONE input list.
 - extract_final_dispatch_coverage(dispatch_site_events, snapshot_events)
-  -> dict of NINE keys. The Q5 join: MEMBERSHIP comes from the
+  -> dict of TEN keys. The Q5 join: MEMBERSHIP comes from the
   `dispatch_site` stream, and the VALUE comes from the latest
   `task_metadata_snapshot` of the same task, so the distribution holds the
-  FINAL total rather than the as-dispatched one. Four of the nine keys
+  FINAL total rather than the as-dispatched one. Four of the ten keys
   report what the join OBSERVED about the as-dispatched side, so a value
   taken from a snapshot cannot silently absorb a stamping gap, a producer
   defect, or a revision that left the total where it was.
@@ -472,7 +472,7 @@ def extract_final_dispatch_coverage(
     property. This is a property of the iteration, and not a filter that a
     later edit can weaken by accident.
 
-    Returns a dict with NINE keys:
+    Returns a dict with TEN keys:
 
     - `variety_totals` (list[int]) — the FINAL total of each member that
       resolved one. This list IS the distribution.
@@ -501,6 +501,12 @@ def extract_final_dispatch_coverage(
       resolve and are EQUAL, and at least one dimension vector is not
       complete. The vector comparison could not run, so these members are
       REPORTED rather than absorbed into the agreeing population.
+    - `total_unresolved` (int) — members that resolved NO total on EITHER
+      stream. Arm 3 alone. `fallback_used` counts arms 2 and 3 together and
+      keeps that union on purpose, so this term is the arm-3 half named
+      separately and NOT a split of it. See the nesting statement below,
+      because this count is CONTAINED IN `fallback_used` and CONTAINS
+      `len(malformed)`.
       **A MISSING VECTOR AND A JUNK VECTOR ARE MERGED HERE ON PURPOSE, AND
       THAT IS THE OPPOSITE CHOICE FROM `late_stamped` AGAINST
       `dispatch_malformed`, SO THE GROUND IS STATED.** Those two report a
@@ -519,7 +525,8 @@ def extract_final_dispatch_coverage(
     the two would re-merge them on the snapshot path, so the split here
     mirrors the split there.
 
-    **THE NINE KEYS ARE DISJOINT WHERE IT MATTERS, AND HERE IS THE ARGUMENT.**
+    **ARM 1 PARTITIONS, AND HERE IS THE ARGUMENT. THE FALLBACK-PATH TERMS DO
+    NOT PARTITION, AND THE NESTING STATEMENT BELOW IS WHERE THEY ARE STATED.**
     A member reaches arm 1 or it does not, and `fallback_used` counts exactly
     the members that do not, so `fallback_used` shares no member with the
     five arm-1 counters. Arm 1 then partitions SIX ways with no overlap,
@@ -557,8 +564,29 @@ def extract_final_dispatch_coverage(
     `dispatch_site` event holds the stamp at the TOP level. A snapshot holds
     it NESTED at `metadata.variety`. The snapshot side passes `metadata` as
     the second argument to `resolve_variety_total`, which keeps the
-    non-canonical `metadata["variety_score"]` candidate reachable. To omit
-    it narrows the resolver on one side of the join and not on the other.
+    non-canonical `metadata["variety_score"]` candidate reachable. The
+    dispatch side passes no second argument, so that candidate is
+    unreachable there.
+
+    **THE CAUSE THAT MAKES THAT SAFE IS THE EMITTER PAYLOAD SHAPE, AND NOT
+    THE RESOLVER ARGUMENT.** `_emit_dispatch_site` in `task_lifecycle_gate`
+    builds its payload as a `task_id` plus an OPTIONAL `variety`, and it
+    writes NO `metadata` key of any kind. So there is no input on the
+    dispatch side for that candidate to read, and the asymmetry is INERT
+    rather than merely tolerable. Read this paragraph before you change the
+    call: if a `metadata` key is ever added to the `dispatch_site` payload,
+    the protection stated here is gone and the two sides diverge for real.
+
+    **A SECOND ASYMMETRY IS LIVE, AND IT IS THE ONE WITH A REACHABLE INPUT.**
+    `_dispatch_site_variety` projects only `DISPATCH_VARIETY_KEYS`, the four
+    dimensions plus the total, and its own docstring says a non-canonical
+    `score` key is a legal candidate that the projection DELIBERATELY DROPS.
+    So the `variety["score"]` candidate is unreachable on the dispatch side
+    and reachable on the snapshot side. A task stamped with `score` alone and
+    no `total` therefore emits a `dispatch_site` carrying NO `variety` key at
+    all, and its snapshot resolves a value. That member is counted in
+    `late_stamped`, which is the correct cell for it, and this note is here
+    so a reader meets the cause rather than infers a defect.
 
     **THE FALLBACK, in order:**
 
@@ -578,6 +606,22 @@ def extract_final_dispatch_coverage(
     `superseded_dimensions_only` or `dimensions_incomparable`. The six-cell
     argument above states the rest of the partition.
 
+    **THE RETURNED SET IS A PARTITION PLUS A NESTING, AND A READER CANNOT
+    TREAT ALL TEN KEYS ALIKE.** The six arm-1 cells PARTITION arm 1, so their
+    counts add. The three fallback-path counts NEST, so their counts do not:
+
+        `fallback_used`  CONTAINS  `total_unresolved`  CONTAINS  `malformed`
+
+    - `fallback_used` minus `total_unresolved` is the ARM-2 count, the
+      members that fell back to a usable `dispatch_site` value.
+    - `total_unresolved` minus `len(malformed)` is the arm-3 members that
+      carry NO `variety` key, which is the honest un-stamped dispatch on the
+      fallback path.
+
+    **A READER WHO ADDS `fallback_used` AND `total_unresolved` DOUBLE-COUNTS**
+    and gets a plausible total with no error to warn them. Report the two as
+    a containment and never as an addition.
+
     **MALFORMED IS CLASSIFIED BY THE VALUE THE JOIN FINALLY USES.** After
     arm 3, a member is malformed if and only if `variety` is present on its
     `dispatch_site` event. ONE CELL READS DIFFERENTLY FROM A CAREFUL HUMAN:
@@ -591,6 +635,37 @@ def extract_final_dispatch_coverage(
     `--since` value, because the platform reuses task ids across arcs. And
     `snapshot_events` must arrive in journal order, because the tie-break is
     positional.
+
+    **A STATED LIMIT: THE VALUE IS THE LATEST USABLE SNAPSHOT, NOT THE LATEST
+    SNAPSHOT.** `_latest_snapshot_by_task` skips a snapshot with a missing or
+    unparseable `ts`, because an event with no instant has no position in the
+    order this function sorts by. So if a task carries a NEWER snapshot that
+    the skip removed, an EARLIER one supplies the value and the result is
+    reported as final. NO COUNTER REPORTS THAT, and `fallback_used` does not,
+    because a snapshot DID resolve.
+
+    THIS LIMIT IS STATED RATHER THAN COUNTED, AND THE CHOICE HAS A GROUND. A
+    counter here can report SKIPS and cannot report STALENESS, because a
+    skipped event has no instant and so cannot be shown to be newer than the
+    one used. A skipped event can equally be OLDER, in which case nothing is
+    stale, so such a counter over-reports. A reader who meets a skip count
+    adjacent to this paragraph reads it as a staleness count, which is worse
+    than the limit stated plainly. Journal POSITION is an order this module
+    uses, and only as a TIE-BREAK between equal instants: making position the
+    primary order for one counter would put a second ordering rule into a
+    function that has one, and a reader could not tell which rule produced
+    the number. A counter named `snapshots_skipped_unusable_ts` was
+    considered for this and DECLINED on those grounds.
+
+    **ONE MEMBER FOR EACH DISPATCH IS A GUARANTEE THIS FUNCTION DOES NOT
+    MAKE.** The loop iterates `dispatch_site_events`, so two events naming the
+    same task contribute their final value TWICE and can count twice in
+    `superseded`. What prevents that is NOT here: `_emit_dispatch_site` in
+    `hooks/task_lifecycle_gate.py` takes an O_EXCL marker claim on
+    `(team_name, task_id)` at step 7 of its ladder, so a repeated
+    owner-bearing write yields one site rather than two. That claim is in a
+    different file and this function inherits it. If it is ever relaxed, the
+    double count appears here and no term in the returned dict names it.
 
     Pure function, and it does not raise. A non-list `dispatch_site_events`
     yields the empty result. A non-dict element counts as a site and joins
@@ -607,6 +682,7 @@ def extract_final_dispatch_coverage(
             "dispatch_malformed": 0,
             "superseded_dimensions_only": 0,
             "dimensions_incomparable": 0,
+            "total_unresolved": 0,
         }
 
     latest_snapshots = _latest_snapshot_by_task(snapshot_events)
@@ -619,6 +695,7 @@ def extract_final_dispatch_coverage(
     dispatch_malformed = 0
     superseded_dimensions_only = 0
     dimensions_incomparable = 0
+    total_unresolved = 0
 
     for event in dispatch_site_events:
         site_value = None
@@ -677,8 +754,15 @@ def extract_final_dispatch_coverage(
         fallback_used += 1
         if site_value is not None:
             variety_totals.append(site_value)
-        elif has_variety:
-            malformed.append(event)
+        else:
+            # ARM 3. No total resolved on EITHER stream. `fallback_used`
+            # keeps the arms-2-and-3 union, and this names the arm-3 half
+            # separately, so it is CONTAINED IN that union and never added
+            # to it. `malformed` is the subset of these that carries a
+            # present `variety` key, so it nests one level further in.
+            total_unresolved += 1
+            if has_variety:
+                malformed.append(event)
 
     return {
         "variety_totals": variety_totals,
@@ -690,6 +774,7 @@ def extract_final_dispatch_coverage(
         "dispatch_malformed": dispatch_malformed,
         "superseded_dimensions_only": superseded_dimensions_only,
         "dimensions_incomparable": dimensions_incomparable,
+        "total_unresolved": total_unresolved,
     }
 
 

@@ -565,25 +565,42 @@ class TestExtractFinalDispatchCoverage:
     # -- The latest-picker -------------------------------------------------
 
     def test_latest_snapshot_is_chosen_by_parsed_instant_not_by_position(self):
-        """`make_event` stamps `ts` as `...Z` and `canonical_since()` emits
-        `...+00:00`. A lexical compare is decided by the first byte after the
-        seconds, and `+` (0x2B) sorts before `Z` (0x5A).
+        """THE NAME MAKES TWO CLAIMS AND THIS FIXTURE PINS EACH OF THEM.
 
-        The LATER instant is placed FIRST in the list, so a picker that takes
-        the last element returns 11 and fails here.
+        A NON-UTC OFFSET IS WHAT MAKES THE TWO ORDERS DISAGREE AT UNEQUAL
+        INSTANTS. `2026-06-15T00:00:00+02:00` IS the instant
+        `2026-06-14T22:00:00Z`, so it is EARLIER than `2026-06-14T23:00:00Z`
+        as an instant, and it sorts ABOVE it as a string, because the first
+        byte that differs is the day, 5 against 4.
+
+        - PARSED, which is shipped: the Z stamp is later, so the answer is 11.
+        - LEXICAL: the offset stamp sorts higher, so the answer is 12.
+        - BY POSITION, last element: the answer is 12.
+        The parsed winner is placed FIRST, so a positional picker and a
+        lexical picker each return 12 and each fails here.
+
+        THE EARLIER FIXTURE SEPARATED NOTHING AND THAT IS WHY IT MOVED. It
+        used two stamps a DAY apart in the two formats, where a lexical
+        compare and a parsed compare AGREE, so the name claimed a
+        discrimination the input could not make. Measured before this repair:
+        the lexical mutant left this arm GREEN.
+
+        THIS IS NOT THE SIBLING BELOW. That arm uses EQUAL instants in the
+        two formats. This one uses UNEQUAL instants, so it holds when the
+        equal-instant case is removed.
         """
         snapshots = [
             self._snap(
-                "1", {"variety": {"total": 12}}, ts="2026-06-15T00:00:00+00:00"
+                "1", {"variety": {"total": 11}}, ts="2026-06-14T23:00:00Z"
             ),
             self._snap(
-                "1", {"variety": {"total": 11}}, ts="2026-06-14T12:00:00Z"
+                "1", {"variety": {"total": 12}}, ts="2026-06-15T00:00:00+02:00"
             ),
         ]
         result = extract_final_dispatch_coverage(
             [self._site("1", {"total": 9})], snapshots
         )
-        assert result["variety_totals"] == [12]
+        assert result["variety_totals"] == [11]
 
     def test_equal_instant_tie_break_takes_the_later_element(self):
         """Journal events stamp `ts` at second granularity, so a tie is
@@ -600,18 +617,36 @@ class TestExtractFinalDispatchCoverage:
         assert result["variety_totals"] == [12]
 
     def test_unparseable_and_missing_ts_snapshots_are_skipped(self):
-        """Fail-open, mirroring `resolve_arc_start`. The usable snapshot
-        wins rather than the whole member falling back."""
+        """Fail-open, mirroring `resolve_arc_start`. A member keeps its usable
+        snapshot, and a member with NO usable snapshot falls back.
+
+        MEMBER 1 CARRIES ONLY UNREADABLE STAMPS AND THAT IS THE MECHANISM.
+        It has no usable competitor, so an implementation that KEEPS a
+        skipped entry lets that entry win BY DEFAULT rather than by a date
+        comparison, and the member takes 11 or 12 in place of its own 9.
+        THE SUBSTITUTE DATE BELONGS TO THE MUTANT, so a fixture that only
+        re-dates the junk entries is not robust: a mutant that dates them to
+        the epoch loses a comparison against a usable stamp and separates
+        nothing. This shape separates for ANY substitute date.
+
+        THE EARLIER FIXTURE SEPARATED NOTHING AND THAT IS WHY IT MOVED. It
+        gave one member three snapshots with the usable one LAST AND
+        GREATEST, so a kept entry lost the comparison and the answer held at
+        13. Measured before this repair: the keeps-the-skipped mutant left
+        this arm GREEN.
+
+        MEMBER 2 KEEPS THE MIXED-STREAM PROPERTY the name claims: a readable
+        stamp in the same call is used and is not collateral damage.
+        """
+        sites = [self._site("1", {"total": 9}), self._site("2", {"total": 10})]
         snapshots = [
             self._snap("1", {"variety": {"total": 11}}, ts="not-a-timestamp"),
             self._snap("1", {"variety": {"total": 12}}, ts=""),
-            self._snap("1", {"variety": {"total": 13}}, ts=_TS),
+            self._snap("2", {"variety": {"total": 13}}, ts=_TS),
         ]
-        result = extract_final_dispatch_coverage(
-            [self._site("1", {"total": 9})], snapshots
-        )
-        assert result["variety_totals"] == [13]
-        assert result["fallback_used"] == 0
+        result = extract_final_dispatch_coverage(sites, snapshots)
+        assert sorted(result["variety_totals"]) == [9, 13]
+        assert result["fallback_used"] == 1
 
     # -- Classification ----------------------------------------------------
 
@@ -877,6 +912,132 @@ class TestExtractFinalDispatchCoverage:
         assert result["dimensions_incomparable"] == 2
         assert result["superseded"] == 0
 
+    def test_the_low_bound_is_accepted_on_its_own_member(self):
+        """A SECOND DETECTOR FOR THE LOW BOUND, AND NOT A COPY OF THE ARM
+        ABOVE. The arm above is the SOLE detector of three conditions: the
+        two bounds moved by one, and the bool rejection removed. Lose that
+        arm and the three reopen together with nothing else going red.
+
+        THIS ARM FAILS IN THE OPPOSITE DIRECTION. The arm above asserts
+        REJECTION for its 5 and its True: the guard refuses the value. THIS
+        ONE ASSERTS ACCEPTANCE: a dimension of 1 is VALID, so the vector is
+        COMPLETE and the member is a dimension revision. A guard that
+        NARROWS breaks acceptance. A guard that WIDENS breaks rejection. One
+        directional mutation cannot kill an acceptance arm and a rejection
+        arm together, which is what makes this a detector rather than a copy.
+
+        AND IT SEES A MOVE THE ARM ABOVE CANNOT. That arm holds three cases
+        in ONE assertion pair, 1 against 2. A COMPOUND MUTATION THAT MOVES
+        ONE MEMBER INTO THE REVISION CELL AND ANOTHER OUT OF IT PRESERVES
+        THE PAIR AND GOES UNDETECTED. This arm has ONE member and its own
+        assertion, so it has no second member to absorb the move.
+
+        THE LOW BOUND IS THE CONDITION ORDINARY DATA REACHES. A 1 appears in
+        a normal stamp. A 5 is out of range and a True is a producer defect.
+        If one of the three must survive an arm loss, it is this one.
+
+        The two totals AGREE at 11, so the member reaches the vector cell.
+        """
+        member = self._site(
+            "1", {"novelty": 1, "scope": 3, "uncertainty": 3, "risk": 4, "total": 11}
+        )
+        snapshots = [
+            self._snap(
+                "1",
+                {
+                    "variety": {
+                        "novelty": 2,
+                        "scope": 3,
+                        "uncertainty": 3,
+                        "risk": 3,
+                        "total": 11,
+                    }
+                },
+            )
+        ]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [11]
+        assert result["superseded_dimensions_only"] == 1
+        assert result["dimensions_incomparable"] == 0
+
+    def test_the_high_bound_is_rejected_on_its_own_member(self):
+        """A SECOND DETECTOR FOR THE HIGH BOUND, ON ITS OWN MEMBER.
+
+        The arm above holds three cases in ONE assertion pair, so a COMPOUND
+        mutation that moves one member into a cell and another out of it
+        preserves the pair and goes undetected. THIS ARM HAS ONE MEMBER AND
+        ITS OWN ASSERTION, so it has no second member to absorb a move.
+
+        A dimension of 5 is ONE ABOVE the high bound, which is the value that
+        changes verdict when the bound moves by one. A value far above the
+        bound, such as 9, is refused by the shipped guard AND by a guard
+        moved by one, so it cannot see the move.
+
+        THE TWO CELLS ARE ASSERTED TOGETHER, because a guard that accepts up
+        to 5 does not LOSE the member. It MOVES it: the vector completes, the
+        two vectors differ, and the member reads as a dimension revision. An
+        assertion on one cell alone would not see that move.
+        """
+        member = self._site(
+            "1", {"novelty": 5, "scope": 3, "uncertainty": 3, "risk": 3, "total": 11}
+        )
+        snapshots = [
+            self._snap(
+                "1",
+                {
+                    "variety": {
+                        "novelty": 2,
+                        "scope": 3,
+                        "uncertainty": 3,
+                        "risk": 3,
+                        "total": 11,
+                    }
+                },
+            )
+        ]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [11]
+        assert result["dimensions_incomparable"] == 1
+        assert result["superseded_dimensions_only"] == 0
+
+    def test_a_bool_dimension_is_rejected_on_its_own_member(self):
+        """A SECOND DETECTOR FOR THE BOOL REJECTION, ON ITS OWN MEMBER.
+
+        `True` IS an int in Python and it equals 1, so a guard that checks
+        the TYPE alone accepts it. A JSON `true` parses to a Python `True`,
+        so this shape reaches the journal and is not adversarial.
+
+        THE MOVE HERE IS OUT OF THE TWO CELLS AND NOT BETWEEN THEM, and that
+        is why the two are asserted. The snapshot side carries a 1. Under the
+        shipped guard the bool is refused, the vector is incomplete, and the
+        member is incomparable. Under a guard that accepts a bool the two
+        vectors AGREE, because `True` equals 1, so the member counts NOWHERE
+        and each of the two cells reads zero. An assertion on
+        `dimensions_incomparable` alone would see that, and an assertion on
+        `superseded_dimensions_only` alone would not.
+        """
+        member = self._site(
+            "1", {"novelty": True, "scope": 3, "uncertainty": 3, "risk": 3, "total": 11}
+        )
+        snapshots = [
+            self._snap(
+                "1",
+                {
+                    "variety": {
+                        "novelty": 1,
+                        "scope": 3,
+                        "uncertainty": 3,
+                        "risk": 3,
+                        "total": 11,
+                    }
+                },
+            )
+        ]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [11]
+        assert result["dimensions_incomparable"] == 1
+        assert result["superseded_dimensions_only"] == 0
+
     def test_a_moved_total_is_superseded_and_not_a_dimension_revision(self):
         """The two superseded counters are DISJOINT, asserted on one member.
 
@@ -908,6 +1069,123 @@ class TestExtractFinalDispatchCoverage:
         assert result["superseded_dimensions_only"] == 0
         assert result["dimensions_incomparable"] == 0
 
+    def test_an_unusable_ts_drops_its_snapshot_and_no_counter_says_so(self):
+        """THE STATED LIMIT, PINNED AS BEHAVIOUR. The value is the latest
+        USABLE snapshot and not the latest snapshot.
+
+        A snapshot with an unparseable `ts` has no instant, so it has no
+        position in the order this join sorts by, and the picker drops it.
+        WHEN THE DROPPED ONE IS THE NEWER ONE, AN EARLIER SNAPSHOT SUPPLIES
+        THE VALUE AND THE RESULT REPORTS AS FINAL. That substitution is
+        SILENT: no term in the returned set names it, and `fallback_used`
+        does not, because a snapshot DID resolve.
+
+        THE HELPER DOCSTRING STATES THAT LIMIT AND DECLINES A COUNTER FOR IT,
+        on the ground that a skip count cannot show staleness: a dropped
+        event has no instant, so it can equally be older. THIS ARM PINS THE
+        BEHAVIOUR THAT LIMIT DESCRIBES, so a later edit that starts counting
+        the drop, or that sends the whole member to the fallback instead,
+        goes RED here and becomes a decision rather than a drift.
+
+        EACH COUNTER IS ASSERTED AT ZERO ON PURPOSE. The claim is that
+        NOTHING reports the substitution, and a claim about the absence of a
+        report needs each candidate reporter named.
+
+        The dispatch value is 9 and the usable snapshot is 11, so 11 in the
+        distribution shows the join ran and did not take the fallback.
+        """
+        member = self._site("1", {"total": 9})
+        snapshots = [
+            self._snap("1", {"variety": {"total": 11}}, ts=_TS),
+            self._snap("1", {"variety": {"total": 12}}, ts="not-a-timestamp"),
+        ]
+        result = extract_final_dispatch_coverage([member], snapshots)
+        assert result["variety_totals"] == [11]
+        assert result["fallback_used"] == 0
+        assert result["total_unresolved"] == 0
+        assert result["malformed"] == []
+        assert result["late_stamped"] == 0
+        assert result["dispatch_malformed"] == 0
+
+    # -- The arm-3 counter and the nesting it joins -------------------------
+
+    def test_total_unresolved_counts_arm_three_and_not_arm_two(self):
+        """`total_unresolved` names the ARM-3 half: no total resolved on
+        EITHER stream. An arm-2 member resolved its `dispatch_site` value,
+        so it is NOT unresolved and must not be counted here.
+
+        The fixture populates the two arms at DIFFERENT sizes, one arm-2
+        member against two arm-3 members, so a counter that counted the
+        union or counted arm 2 alone reads a different number.
+        """
+        sites = [
+            self._site("1", {"total": 9}),
+            self._site("2"),
+            self._site("3"),
+        ]
+        result = extract_final_dispatch_coverage(sites, [])
+        assert result["variety_totals"] == [9]
+        assert result["total_unresolved"] == 2
+
+    def test_fallback_used_is_unchanged_by_the_arm_three_counter(self):
+        """A REGRESSION GUARD, and it is deliberately redundant.
+
+        `fallback_used` keeps its meaning as the UNION of arms 2 and 3 and
+        keeps its name. The arm-3 counter is an ADDITION and not a split.
+        AN ADDITION THAT QUIETLY MOVES THE OLD NUMBER IS THE WAY THIS LANDS
+        WRONG, because the new number looks correct and the old one is what
+        a reader compares against a figure from before the change.
+
+        THIS ARM EXISTS TO GO RED ON A FUTURE EDIT, so an existing arm that
+        also catches the mutation today is not a reason to remove it. The
+        fixture populates arm 2 AND arm 3, because a fixture that reaches
+        one arm alone cannot see a counter narrowed to the other.
+        """
+        sites = [
+            self._site("1", {"total": 9}),
+            self._site("2", {"total": 10}),
+            self._site("3"),
+        ]
+        result = extract_final_dispatch_coverage(sites, [])
+        assert result["fallback_used"] == 3
+        assert result["total_unresolved"] == 1
+
+    def test_the_three_fallback_terms_nest_and_do_not_add(self):
+        """`fallback_used` CONTAINS `total_unresolved` CONTAINS `malformed`.
+
+        THE RETURNED SET CARRIES TWO RELATION TYPES AT THE SAME TIME: the
+        six arm-1 cells PARTITION, and these three NEST. A reader who ADDS
+        `fallback_used` and `total_unresolved` DOUBLE-COUNTS and gets a
+        plausible number with no error, so the nesting needs an arm.
+
+        THE THREE EXPECTED VALUES ARE DIFFERENT ON PURPOSE, 4 against 3
+        against 1. TWO CELLS AT THE SAME EXPECTED VALUE CONSTRAIN THE
+        MULTISET AND NOT THE MAPPING, so an equality among the three would
+        hide a transposition of two of them.
+
+        The members, one for each layer of the nesting:
+        - member 1 is arm 2. It resolved its own value, so it reaches
+          `fallback_used` alone.
+        - members 2 and 3 are arm 3 with NO `variety` key. They reach
+          `total_unresolved` and are not malformed.
+        - member 4 is arm 3 with a PRESENT but unresolvable `variety`. It
+          reaches all three layers.
+        """
+        sites = [
+            self._site("1", {"total": 9}),
+            self._site("2"),
+            self._site("3"),
+            self._site("4", {"total": "junk"}),
+        ]
+        result = extract_final_dispatch_coverage(sites, [])
+        assert result["fallback_used"] == 4
+        assert result["total_unresolved"] == 3
+        assert len(result["malformed"]) == 1
+        # THE NESTING STATED AS THE INEQUALITY IT IS, so a later edit that
+        # makes the three disjoint breaks here rather than in a reader.
+        assert result["fallback_used"] > result["total_unresolved"]
+        assert result["total_unresolved"] > len(result["malformed"])
+
     # -- Hostile input -----------------------------------------------------
 
     @pytest.mark.parametrize(
@@ -916,6 +1194,11 @@ class TestExtractFinalDispatchCoverage:
     )
     def test_non_list_members_yield_the_empty_result(self, hostile):
         """The empty result carries EVERY key the populated result carries.
+
+        THIS ARM IS A SCHEMA GATE ON THE KEY SET, AND A NEW KEY SHOULD MAKE
+        IT RED. That is the arm working rather than the arm breaking. It has
+        caught a key-set change two rounds running. WHEN IT GOES RED, ADD THE
+        NEW KEY TO THE DICT BELOW. DO NOT WEAKEN THE EQUALITY.
 
         The equality is against a whole dict on purpose. A reader that pulls
         a counter off this result must find it here too, so a key added to
@@ -932,6 +1215,7 @@ class TestExtractFinalDispatchCoverage:
             "dispatch_malformed": 0,
             "superseded_dimensions_only": 0,
             "dimensions_incomparable": 0,
+            "total_unresolved": 0,
         }
 
     @pytest.mark.parametrize(
