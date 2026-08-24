@@ -947,7 +947,7 @@ After you resolve a blocker, message the teammate by name. Spawn fresh if the te
 
 ⚠️ **Write the message so that it works alone.** The teammate can hold none of its earlier context. Put the full resolution, the task id, and what the teammate must do into the message. A self-contained message is correct in the two cases. A message that points back at earlier context gives the teammate nothing, and the result looks like a teammate that ignored you.
 
-**Fresh spawn pattern**: Follow the standard dispatch pattern (`TaskCreate` + `TaskUpdate` + Agent with name/team_name/subagent_type).
+**Fresh spawn pattern**: Follow the standard dispatch pattern (`TaskCreate` + `TaskUpdate` + Agent with name/team_name/subagent_type/description).
 
 ---
 
