@@ -1023,3 +1023,175 @@ class TestNonVacuity:
 
         monkeypatch.setattr(pc, "_resolve_aligned_team_name", _boom)
         assert ctx_module.get_team_name() == first  # served from cache, no re-call
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 14. BRANCH-3 RESUME CENSUS (#1507) — reaped old config + journal witness
+# ══════════════════════════════════════════════════════════════════════════════
+
+# The NEW team's lead id: a clean end-session reaps the OLD team config and
+# resume provisions a fresh team + task store under a NEW id while every hook
+# frame still carries LEAD_SID (the OLD id). The new team dir is named with
+# the full NEW uuid.
+NEW_SID = "aaaa1111-2222-4333-8444-555566667777"
+NEW_UUID_DIR = NEW_SID
+# The persisted-but-reaped OLD team (non-empty fail-safe default under test).
+STALE_TEAM = SESSION_ID8_DIR
+# A deterministic ANCIENT epoch for mtime-window tests (2001-09-09): far
+# outside RESUME_CENSUS_RECENCY_SECONDS on any conceivable clock.
+ANCIENT_MTIME = 1_000_000_000
+
+
+def _seed_tasks_store(teams_root, dir_name, *, mtime=None):
+    """Create the sibling tasks/<dir_name>/ store (the census LIVE-team
+    signal). Optionally pin its mtime (epoch seconds) for window tests."""
+    tasks_dir = teams_root.parent / "tasks" / dir_name
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    (tasks_dir / "2.json").write_text("{}", encoding="utf-8")  # a write happened
+    if mtime is not None:
+        os.utime(tasks_dir, (mtime, mtime))
+    return tasks_dir
+
+
+def _seed_session_journal(ctx_module, event_types):
+    """Write a session journal with one event per given type at the dir
+    get_session_dir() points at — the branch-3 witness's read location."""
+    session_dir = Path(ctx_module.get_session_dir())
+    session_dir.mkdir(parents=True, exist_ok=True)
+    lines = [
+        json.dumps({"v": 1, "type": event_type, "ts": "2026-08-24T00:00:00Z"})
+        for event_type in event_types
+    ]
+    (session_dir / "session-journal.jsonl").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+    return session_dir
+
+
+def _seed_census_candidate(teams_root, dir_name=NEW_UUID_DIR,
+                           lead_session_id=NEW_SID, *, mtime=None):
+    """Seed a census candidate: a team dir whose config carries a DIFFERENT
+    leadSessionId plus a live sibling tasks store."""
+    _seed_team_dir(teams_root, dir_name, lead_session_id=lead_session_id)
+    _seed_tasks_store(teams_root, dir_name, mtime=mtime)
+
+
+class TestBranch3ResumeCensus:
+    """Focused CODE-phase verification of the branch-3 census: trigger
+    conjuncts, unambiguous-only, and the witness's cold-start guard. The
+    comprehensive matrix (adversarial dead dirs, ordering, both-modes gate
+    legs, scratch roots) is TEST-phase work (test_resume_team_realign_1507)."""
+
+    def test_unique_live_candidate_realigns(self, ctx, monkeypatch, tmp_path):
+        """ALL trigger conjuncts true (identity-match missed; stale team's
+        config reaped; lived-session journal) + exactly ONE live candidate ->
+        the resolver UPGRADES to the re-provisioned team."""
+        ctx_module, teams_root = ctx
+        _seed_census_candidate(teams_root)
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        _seed_session_journal(ctx_module, ["task_claimed", "variety_assessed"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == NEW_UUID_DIR
+
+    def test_witness_absence_census_never_fires(self, ctx, monkeypatch,
+                                                tmp_path):
+        """COLD-START GUARD — same FS substrate as the realign leg, but the
+        journal carries NO team-activity event (a fresh session's journal) ->
+        census stays off, fail-safe default returned. The paired default-half
+        that makes the realign leg's assertion attributable to the witness."""
+        ctx_module, teams_root = ctx
+        _seed_census_candidate(teams_root)
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        # A real journal EVENT TYPE, but NOT an activity type.
+        _seed_session_journal(ctx_module, ["variety_assessed"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == STALE_TEAM
+
+    def test_absent_journal_census_never_fires(self, ctx, monkeypatch,
+                                               tmp_path):
+        """No journal FILE at all (fresh session before first journal write)
+        -> witness unprovable -> census inert -> fail-safe default."""
+        ctx_module, teams_root = ctx
+        _seed_census_candidate(teams_root)
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == STALE_TEAM
+
+    def test_two_candidates_fail_safe(self, ctx, monkeypatch, tmp_path):
+        """Two live re-provisioned candidates (two simultaneous broken
+        resumes) -> AMBIGUOUS -> stale default, never a coin flip."""
+        ctx_module, teams_root = ctx
+        _seed_census_candidate(teams_root, dir_name=NEW_UUID_DIR)
+        _seed_census_candidate(
+            teams_root, dir_name="session-beefbeef",
+            lead_session_id="beefbeef-1111-4222-8333-444455556666",
+        )
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        _seed_session_journal(ctx_module, ["task_claimed"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == STALE_TEAM
+
+    def test_stale_tasks_mtime_not_a_candidate(self, ctx, monkeypatch,
+                                               tmp_path):
+        """A candidate's config exists but its tasks store mtime is ANCIENT
+        (outside RESUME_CENSUS_RECENCY_SECONDS) -> zero candidates -> stale
+        default."""
+        ctx_module, teams_root = ctx
+        _seed_census_candidate(teams_root, mtime=ANCIENT_MTIME)
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        _seed_session_journal(ctx_module, ["task_claimed"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == STALE_TEAM
+
+    def test_persisted_config_present_census_inert(self, ctx, monkeypatch,
+                                                   tmp_path):
+        """POST-CONVERGENCE STABILITY — the fallback team's OWN config EXISTS
+        (write-back already realigned; nothing reaped) -> trigger conjunct
+        false -> census inert even with a live foreign candidate present."""
+        ctx_module, teams_root = ctx
+        _seed_census_candidate(teams_root)
+        _seed_team_dir(teams_root, STALE_TEAM, lead_session_id=LEAD_SID)
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        _seed_session_journal(ctx_module, ["task_claimed"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == STALE_TEAM
+
+    def test_census_winner_flows_through_get_team_name(self, ctx, monkeypatch,
+                                                       tmp_path):
+        """END-TO-END at the consumer seam: non-empty stale SSOT + census
+        inputs -> get_team_name() returns the census winner (lowercased)."""
+        ctx_module, teams_root = ctx
+        _seed_census_candidate(teams_root)
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        _seed_session_journal(ctx_module, ["task_claimed"])
+        assert ctx_module.get_team_name() == NEW_UUID_DIR.lower()
+
+    def test_empty_ssot_census_unreachable(self, ctx, monkeypatch, tmp_path):
+        """SECURITY GATE — empty SSOT short-circuits to '' BEFORE the resolver
+        (and hence the census) runs, even when census inputs would otherwise
+        fire. The census is reachable only on the NON-empty path."""
+        ctx_module, teams_root = ctx
+        _seed_census_candidate(teams_root)
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name="", session_id=LEAD_SID)
+        _seed_session_journal(ctx_module, ["task_claimed"])
+        assert ctx_module.get_team_name() == ""

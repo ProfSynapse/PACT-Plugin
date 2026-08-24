@@ -18,6 +18,7 @@ import re
 import secrets
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -309,6 +310,121 @@ def get_pact_context() -> dict:
         return _cache
 
 
+# Recency window for the branch-3 resume census (#1507), in SECONDS: a
+# candidate team's tasks/<dir>/ store mtime must be within this window of
+# "now" to count as LIVE. RESUME_CENSUS_RECENCY_SECONDS = 900 (15 minutes)
+# — minutes-scale so a resume followed by a delayed dispatch still lands
+# inside the window, while aged stores fall out. The window is a NARROWING
+# parameter only: zero or >= 2 surviving candidates always fail safe to the
+# persisted default, so a mis-tuned window can only suppress the census,
+# never mis-align.
+RESUME_CENSUS_RECENCY_SECONDS = 900
+
+# Journal event types proving prior TEAM ACTIVITY for the branch-3 census
+# witness (see _journal_has_team_activity). `task_*` types are matched by
+# prefix; these three are matched exactly. `dispatch_decision` has an
+# ACTIVE writer (dispatch_gate emits one per gate decision; only its READER
+# was retired with the Q5 coverage ratio), so the type is DELIBERATELY in
+# the witness set — dispatch events are real lived-session activity.
+_RESUME_CENSUS_ACTIVITY_EXACT_TYPES = frozenset(
+    {"dispatch_decision", "session_end", "session_consolidated"}
+)
+
+
+def _journal_has_team_activity() -> bool:
+    """Branch-3 witness (#1507): has THIS session LIVED as a team session?
+
+    Proves the journal get_session_dir() points at contains at least one
+    prior team ACTIVITY event (`task_*` / `dispatch_decision` /
+    `session_end` / `session_consolidated`). This is the load-bearing
+    cold-start guard: a FRESH session's journal has no prior team activity,
+    so its census can never fire — without this witness, a fresh session
+    (own team config unborn in the ~38 s cold-start window) plus a
+    concurrently ACTIVE second PACT session would present exactly one
+    candidate (the OTHER session) and the unambiguous-only rule alone would
+    mis-align to it.
+
+    Pure read; NEVER raises (any error -> False, i.e. census does not fire).
+
+    The session_journal import is FUNCTION-LOCAL on purpose: session_journal
+    itself imports pact_context function-LOCAL (see its get_session_dir /
+    is_initialized call sites — there is no module-level cycle), so this
+    mirrors the package's existing import idiom and keeps the journal
+    reader loaded only on the census path.
+    """
+    try:
+        session_dir = get_session_dir()
+        if not session_dir:
+            return False
+        from .session_journal import read_events_from
+
+        for event in read_events_from(session_dir):
+            event_type = str(event.get("type", ""))
+            if (
+                event_type.startswith("task_")
+                or event_type in _RESUME_CENSUS_ACTIVITY_EXACT_TYPES
+            ):
+                return True
+        return False
+    except Exception:
+        # Never raises: the witness is a gate, and an unreadable/missing
+        # journal means "cannot prove a lived session" -> census stays off.
+        return False
+
+
+def _resume_census_unique_candidate(teams_root: Path, session_id: str) -> str | None:
+    """Branch-3 census (#1507): the single LIVE re-provisioned team, if
+    unambiguous.
+
+    Enumerates teams/*/config.json. A dir is a CANDIDATE iff its
+    config.json carries a leadSessionId DIFFERENT from this session's id
+    AND its sibling tasks/<dir>/ store mtime falls within
+    RESUME_CENSUS_RECENCY_SECONDS of now (the "live team" signal). Returns
+    the dir name only when EXACTLY ONE candidate survives (unambiguous-only);
+    None on zero, on >= 2 (two simultaneous broken resumes -> stale
+    default), or on any error.
+
+    Pure / FS-read-only / NEVER raises — same contract as the resolver that
+    calls it. The tasks root is derived as the SIBLING of teams_root
+    (teams_root.parent / "tasks") so a teams_dir override relocates the
+    tasks probe with it.
+    """
+    try:
+        tasks_root = teams_root.parent / "tasks"
+        cutoff = time.time() - RESUME_CENSUS_RECENCY_SECONDS
+        candidates: list[str] = []
+        for entry in sorted(teams_root.iterdir()):
+            try:
+                if not entry.is_dir():
+                    continue
+                data = json.loads(
+                    (entry / "config.json").read_text(encoding="utf-8")
+                )
+                if data.get("leadSessionId") == session_id:
+                    continue  # this session's own team — identity-match owns it
+                tasks_dir = tasks_root / entry.name
+                if not tasks_dir.is_dir():
+                    continue  # no live task store under this name
+                if tasks_dir.stat().st_mtime < cutoff:
+                    continue  # live-looking config, but an AGED task store
+                # Path-safety the dir name BEFORE accepting it as a
+                # candidate (mirrors the identity-match loop's tamper guard).
+                if not is_safe_path_component(entry.name):
+                    continue
+                candidates.append(entry.name)
+            except (OSError, json.JSONDecodeError, ValueError, TypeError,
+                    AttributeError):
+                # Unreadable / malformed sibling — skip it, keep scanning.
+                continue
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+    except Exception:
+        # Total fail-safe: the census is an upgrade path, never a new raise
+        # source. Any unexpected error -> "no candidate" -> stale default.
+        return None
+
+
 def _resolve_aligned_team_name(
     session_id: str,
     teams_dir: str | None = None,
@@ -332,6 +448,19 @@ def _resolve_aligned_team_name(
     first-class. A stale/foreign dir from another session carries a DIFFERENT
     ``leadSessionId`` and is rejected, so an ``id8`` collision cannot
     mis-resolve.
+
+    BRANCH-3 RESUME CENSUS (#1507): after branch-1 (identity match) and
+    branch-2 (config-less full-UUID witness) both miss, a RESUMED session
+    (clean end-session reaped the old team config; a new team + task store
+    was provisioned under a new id while hook frames still carry the OLD
+    session id) can still be realigned: census the teams root for the
+    single LIVE re-provisioned team (config leadSessionId != this session's
+    id, tasks store mtime within RESUME_CENSUS_RECENCY_SECONDS). Gated by
+    a journal lived-session witness (prior team activity in THIS session's
+    journal — kills cold-start concurrent-session cross-alignment) and by
+    the fallback team's config being ABSENT (post-convergence the census
+    goes inert). UNAMBIGUOUS-only: exactly one candidate wins; zero or >= 2
+    fall to the fail-safe default. See the inline branch-3 comment.
 
     FAIL-SAFE DEFAULT: on no identity match (the team dir is half-formed —
     ``inboxes/`` present but ``config.json`` not yet written — or simply
@@ -452,6 +581,39 @@ def _resolve_aligned_team_name(
             )
         ):
             return session_id
+        # Branch-3: resume census (#1507). After a clean end-session, resume
+        # provisions a NEW team + task store under a new id while every hook
+        # frame still carries the OLD session id. Identity-match (branch-1)
+        # cannot fire: the new config carries a leadSessionId != this
+        # session's id, and the OLD team's config was reaped at end-session.
+        # Census the live teams root for the single recently-active
+        # re-provisioned team. TRIGGER — all conjuncts, cheapest first:
+        #   * fallback non-empty + path-safe (an empty fail-safe default
+        #     has nothing to realign; get_team_name already short-circuits
+        #     an EMPTY SSOT before calling the resolver, so this branch is
+        #     reachable only on the NON-empty path — the empty-SSOT
+        #     fail-closed gate stays untouched).
+        #   * the fallback team's OWN config.json is ABSENT (teams/<fallback>
+        #     missing or half-formed — the reaped-old-team signal; post-
+        #     convergence the write-back persists the census winner, its
+        #     config EXISTS, this conjunct goes false, and the census is
+        #     inert — no flicker).
+        #   * journal lived-session witness (_journal_has_team_activity) —
+        #     prior team activity in THIS session's journal. Kills the
+        #     cold-start concurrent-session cross-alignment: a fresh
+        #     session's journal has no prior activity, so its census never
+        #     fires even when another live session is the sole candidate.
+        # UNAMBIGUOUS-only: zero or >= 2 candidates -> fall through to the
+        # fail-safe default, byte-identical to today.
+        if (
+            fallback
+            and is_safe_path_component(fallback)
+            and not (teams_root / fallback / "config.json").exists()
+            and _journal_has_team_activity()
+        ):
+            census_winner = _resume_census_unique_candidate(teams_root, session_id)
+            if census_winner is not None:
+                return census_winner
         return fallback
     except Exception:
         # TOTAL fail-safe: home-resolution RuntimeError (get_claude_config_dir
