@@ -322,12 +322,14 @@ RESUME_CENSUS_RECENCY_SECONDS = 900
 
 # Journal event types proving prior TEAM ACTIVITY for the branch-3 census
 # witness (see _journal_has_team_activity). `task_*` types are matched by
-# prefix; these three are matched exactly. `dispatch_decision` has an
-# ACTIVE writer (dispatch_gate emits one per gate decision; only its READER
-# was retired with the Q5 coverage ratio), so the type is DELIBERATELY in
-# the witness set — dispatch events are real lived-session activity.
+# prefix; these two are matched exactly. `dispatch_decision` is
+# DELIBERATELY EXCLUDED (F1a, PR #1510 review): the gate journals EVERY
+# decision INCLUDING DENIALS, so a single denied spawn would arm the
+# "lived session" witness without any real team life — the cold-start
+# guard's premise. Denials are gate verdicts, not team activity; the #1507
+# incident journal satisfies `task_*` + `session_end` regardless.
 _RESUME_CENSUS_ACTIVITY_EXACT_TYPES = frozenset(
-    {"dispatch_decision", "session_end", "session_consolidated"}
+    {"session_end", "session_consolidated"}
 )
 
 
@@ -335,8 +337,8 @@ def _journal_has_team_activity() -> bool:
     """Branch-3 witness (#1507): has THIS session LIVED as a team session?
 
     Proves the journal get_session_dir() points at contains at least one
-    prior team ACTIVITY event (`task_*` / `dispatch_decision` /
-    `session_end` / `session_consolidated`). This is the load-bearing
+    prior team ACTIVITY event (`task_*` / `session_end` /
+    `session_consolidated`). This is the load-bearing
     cold-start guard: a FRESH session's journal has no prior team activity,
     so its census can never fire — without this witness, a fresh session
     (own team config unborn in the ~38 s cold-start window) plus a
@@ -372,17 +374,131 @@ def _journal_has_team_activity() -> bool:
         return False
 
 
+def _own_journal_last_end_marker_ts() -> float | None:
+    """Epoch seconds of this session's journal's LAST end-of-life marker.
+
+    The max ts across `session_end` / `session_consolidated` events — the
+    anchor the corroboration strengthening compares a candidate lead's
+    joinedAt against (a re-provisioned team is born AFTER the old life
+    ended; a sibling session active ACROSS the resume predates it). None
+    when the journal has no end marker or the ts is unparseable (the
+    strengthening is then skipped, never fatal). Never raises.
+    """
+    try:
+        session_dir = get_session_dir()
+        if not session_dir:
+            return None
+        from .session_journal import read_events_from
+
+        last_ts: float | None = None
+        for event in read_events_from(session_dir):
+            if str(event.get("type", "")) not in ("session_end",
+                                                  "session_consolidated"):
+                continue
+            raw_ts = str(event.get("ts", ""))
+            try:
+                parsed = datetime.fromisoformat(
+                    raw_ts.replace("Z", "+00:00")
+                ).timestamp()
+            except ValueError:
+                continue
+            if last_ts is None or parsed > last_ts:
+                last_ts = parsed
+        return last_ts
+    except Exception:
+        return None
+
+
+def _resume_census_candidate_corroborated(
+    team_dir_name: str, config_data: dict
+) -> bool:
+    """Bind a census candidate to THIS session's platform identity (#1507 F1).
+
+    Set-uniqueness alone proves nothing (a sibling session's fresh store can
+    be the unique candidate whenever this session's own team is unborn), so
+    the unique candidate must additionally corroborate as THIS session's
+    team, by mechanism:
+
+      * LEAD ENTRY: the config's members[] entry whose agentId EQUALS the
+        config's leadAgentId (the platform's first-class key — NOT a
+        members[0] or shape heuristic). A member-less / malformed config
+        corroborates nothing -> suppressed.
+      * SELF-CONSISTENCY: the lead's agentId embeds "@<team-dir-name>",
+        binding the entry to the dir it sits in (a config copied from
+        another team's dir fails this).
+      * SUBJECT ANCHOR: the lead entry's cwd must RAW-match (no resolve —
+        an unresolved mismatch only ever fails safe) the hook process's
+        LIVE cwd OR the persisted project_dir — the re-provisioned team's
+        lead lives where THIS session lives; a sibling in another project
+        or worktree does not.
+      * BIRTH ORDER (strengthening): when the journal has an end-of-life
+        marker, the lead's joinedAt (epoch MILLIS, platform-verified) must
+        sit strictly AFTER it — the own re-provisioned team is born after
+        the old life ended; a sibling active ACROSS the resume predates it.
+        Skipped (not fatal) when no marker or an unparseable ts.
+
+    TRUST BOUNDARY (documented residual, mirrors the Backend-F2 pattern):
+    this defeats ACCIDENTAL/environmental cross-alignment (the F1 class).
+    A same-user MIRRORING adversary that reads this session's journal and
+    context can also rewrite the plugin hooks themselves — every pure-read
+    control here sits inside that same boundary, so mirroring-resistance
+    is out of scope by construction. Residual hole: a sibling BORN between
+    this session's end marker and its resume, running from the same
+    directory.
+
+    Never raises: any parse/compare failure corroborates nothing (False),
+    which suppresses the census (fail-safe direction).
+    """
+    try:
+        lead_agent_id = str(config_data.get("leadAgentId", ""))
+        if not lead_agent_id:
+            return False
+        if f"@{team_dir_name}" not in lead_agent_id:
+            return False
+        lead_entry = None
+        for member in config_data.get("members") or []:
+            if (isinstance(member, dict)
+                    and str(member.get("agentId", "")) == lead_agent_id):
+                lead_entry = member
+                break
+        if lead_entry is None:
+            return False
+        lead_cwd = str(lead_entry.get("cwd", ""))
+        if not lead_cwd:
+            return False
+        if lead_cwd not in (os.getcwd(), get_project_dir()):
+            return False
+        end_marker_ts = _own_journal_last_end_marker_ts()
+        if end_marker_ts is not None:
+            joined_at = lead_entry.get("joinedAt")
+            if not isinstance(joined_at, (int, float)):
+                return False
+            if (joined_at / 1000.0) <= end_marker_ts:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def _resume_census_unique_candidate(teams_root: Path, session_id: str) -> str | None:
     """Branch-3 census (#1507): the single LIVE re-provisioned team, if
-    unambiguous.
+    unambiguous AND corroborated as this session's own.
 
     Enumerates teams/*/config.json. A dir is a CANDIDATE iff its
     config.json carries a leadSessionId DIFFERENT from this session's id
     AND its sibling tasks/<dir>/ store mtime falls within
     RESUME_CENSUS_RECENCY_SECONDS of now (the "live team" signal). Returns
-    the dir name only when EXACTLY ONE candidate survives (unambiguous-only);
-    None on zero, on >= 2 (two simultaneous broken resumes -> stale
-    default), or on any error.
+    the dir name only when EXACTLY ONE candidate survives AND that
+    candidate corroborates as this session's team (see
+    _resume_census_candidate_corroborated — F1: uniqueness is an
+    environmental accident, never an ownership proof). None on zero, on
+    >= 2 (two simultaneous broken resumes -> stale default), on an
+    UNCORROBORATED unique candidate (pre-birth window / foreign sibling ->
+    fail-safe suppression), or on any error.
+
+    The corroboration lives HERE, inside the get_team_name resolution path,
+    so the marker-writer write-back (which calls get_team_name) can never
+    persist an uncorroborated winner.
 
     Pure / FS-read-only / NEVER raises — same contract as the resolver that
     calls it. The tasks root is derived as the SIBLING of teams_root
@@ -392,7 +508,7 @@ def _resume_census_unique_candidate(teams_root: Path, session_id: str) -> str | 
     try:
         tasks_root = teams_root.parent / "tasks"
         cutoff = time.time() - RESUME_CENSUS_RECENCY_SECONDS
-        candidates: list[str] = []
+        candidates: list[tuple[str, dict]] = []
         for entry in sorted(teams_root.iterdir()):
             try:
                 if not entry.is_dir():
@@ -411,14 +527,20 @@ def _resume_census_unique_candidate(teams_root: Path, session_id: str) -> str | 
                 # candidate (mirrors the identity-match loop's tamper guard).
                 if not is_safe_path_component(entry.name):
                     continue
-                candidates.append(entry.name)
+                candidates.append((entry.name, data))
             except (OSError, json.JSONDecodeError, ValueError, TypeError,
                     AttributeError):
                 # Unreadable / malformed sibling — skip it, keep scanning.
                 continue
-        if len(candidates) == 1:
-            return candidates[0]
-        return None
+        if len(candidates) != 1:
+            # Zero or >= 2: ambiguous -> fail-safe stale default.
+            return None
+        winner_name, winner_config = candidates[0]
+        if not _resume_census_candidate_corroborated(winner_name, winner_config):
+            # Unique but UNBOUND to this session (pre-birth window / foreign
+            # sibling): suppress — never return a uniqueness-only winner.
+            return None
+        return winner_name
     except Exception:
         # Total fail-safe: the census is an upgrade path, never a new raise
         # source. Any unexpected error -> "no candidate" -> stale default.
@@ -455,12 +577,16 @@ def _resolve_aligned_team_name(
     was provisioned under a new id while hook frames still carry the OLD
     session id) can still be realigned: census the teams root for the
     single LIVE re-provisioned team (config leadSessionId != this session's
-    id, tasks store mtime within RESUME_CENSUS_RECENCY_SECONDS). Gated by
-    a journal lived-session witness (prior team activity in THIS session's
-    journal — kills cold-start concurrent-session cross-alignment) and by
-    the fallback team's config being ABSENT (post-convergence the census
-    goes inert). UNAMBIGUOUS-only: exactly one candidate wins; zero or >= 2
-    fall to the fail-safe default. See the inline branch-3 comment.
+    id, tasks store mtime within RESUME_CENSUS_RECENCY_SECONDS), and return
+    it only if it CORROBORATES as this session's team (lead member cwd
+    anchor + birth order — see _resume_census_candidate_corroborated; F1:
+    uniqueness alone is not an ownership proof). Gated by a journal
+    lived-session witness (prior team activity in THIS session's journal —
+    kills cold-start concurrent-session cross-alignment) and by the
+    fallback team's config being ABSENT (post-convergence the census goes
+    inert). UNAMBIGUOUS-only: exactly one candidate wins; zero, >= 2, or an
+    uncorroborated unique candidate fall to the fail-safe default. See the
+    inline branch-3 comment.
 
     FAIL-SAFE DEFAULT: on no identity match (the team dir is half-formed —
     ``inboxes/`` present but ``config.json`` not yet written — or simply

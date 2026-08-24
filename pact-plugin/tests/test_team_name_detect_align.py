@@ -1040,6 +1040,11 @@ STALE_TEAM = SESSION_ID8_DIR
 # A deterministic ANCIENT epoch for mtime-window tests (2001-09-09): far
 # outside RESUME_CENSUS_RECENCY_SECONDS on any conceivable clock.
 ANCIENT_MTIME = 1_000_000_000
+# Deterministic lead joinedAt (epoch MILLIS, 2026-08-24 evening UTC): AFTER
+# any seeded journal ts, so the birth-order strengthening never suppresses
+# a candidate a cell means to BIND (cells wanting suppression-by-birth-order
+# pass an explicit earlier joinedAt).
+LEAD_JOINED_AT_MS = 1_787_600_000_000
 
 
 def _seed_tasks_store(teams_root, dir_name, *, mtime=None):
@@ -1055,13 +1060,18 @@ def _seed_tasks_store(teams_root, dir_name, *, mtime=None):
 
 def _seed_session_journal(ctx_module, event_types):
     """Write a session journal with one event per given type at the dir
-    get_session_dir() points at — the branch-3 witness's read location."""
+    get_session_dir() points at — the branch-3 witness's read location.
+    `task_metadata_snapshot` is the ONLY task_* type a real hook emits
+    (`task_claimed` was fictional — review F6); its events carry the
+    schema-required task_id + metadata fields."""
     session_dir = Path(ctx_module.get_session_dir())
     session_dir.mkdir(parents=True, exist_ok=True)
-    lines = [
-        json.dumps({"v": 1, "type": event_type, "ts": "2026-08-24T00:00:00Z"})
-        for event_type in event_types
-    ]
+    lines = []
+    for event_type in event_types:
+        event = {"v": 1, "type": event_type, "ts": "2026-08-24T00:00:00Z"}
+        if event_type == "task_metadata_snapshot":
+            event.update({"task_id": "17", "metadata": {}})
+        lines.append(json.dumps(event))
     (session_dir / "session-journal.jsonl").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
     )
@@ -1069,10 +1079,34 @@ def _seed_session_journal(ctx_module, event_types):
 
 
 def _seed_census_candidate(teams_root, dir_name=NEW_UUID_DIR,
-                           lead_session_id=NEW_SID, *, mtime=None):
+                           lead_session_id=NEW_SID, *, mtime=None,
+                           lead_cwd="/foreign/launch/dir",
+                           lead_joined_at_ms=LEAD_JOINED_AT_MS):
     """Seed a census candidate: a team dir whose config carries a DIFFERENT
-    leadSessionId plus a live sibling tasks store."""
-    _seed_team_dir(teams_root, dir_name, lead_session_id=lead_session_id)
+    leadSessionId plus a live sibling tasks store. The config is
+    REAL-SHAPED (F1 corroboration fixture — a member-less config never
+    occurs on the real platform): leadAgentId plus the lead members entry
+    (found by agentId == leadAgentId, the platform invariant) carrying cwd
+    and joinedAt (epoch millis). lead_cwd DEFAULTS to a directory matching
+    NEITHER corroboration anchor, so a candidate BINDS only when a cell
+    explicitly passes the context's project_dir (or the live cwd) — an
+    unbound candidate suppresses."""
+    team_dir = _seed_team_dir(teams_root, dir_name, lead_session_id=lead_session_id)
+    lead_agent_id = f"team-lead@{dir_name}"
+    (team_dir / "config.json").write_text(
+        json.dumps({
+            "name": dir_name,
+            "leadSessionId": lead_session_id,
+            "leadAgentId": lead_agent_id,
+            "members": [{
+                "agentId": lead_agent_id,
+                "name": "team-lead",
+                "cwd": lead_cwd,
+                "joinedAt": lead_joined_at_ms,
+            }],
+        }),
+        encoding="utf-8",
+    )
     _seed_tasks_store(teams_root, dir_name, mtime=mtime)
 
 
@@ -1084,13 +1118,15 @@ class TestBranch3ResumeCensus:
 
     def test_unique_live_candidate_realigns(self, ctx, monkeypatch, tmp_path):
         """ALL trigger conjuncts true (identity-match missed; stale team's
-        config reaped; lived-session journal) + exactly ONE live candidate ->
-        the resolver UPGRADES to the re-provisioned team."""
+        config reaped; lived-session journal) + exactly ONE live candidate
+        that CORROBORATES (lead cwd == persisted project_dir) -> the
+        resolver UPGRADES to the re-provisioned team."""
         ctx_module, teams_root = ctx
-        _seed_census_candidate(teams_root)
+        _seed_census_candidate(teams_root, lead_cwd=str(tmp_path / "project"))
         _write_context_file(monkeypatch, ctx_module, tmp_path,
                             team_name=STALE_TEAM, session_id=LEAD_SID)
-        _seed_session_journal(ctx_module, ["task_claimed", "variety_assessed"])
+        _seed_session_journal(ctx_module,
+                              ["task_metadata_snapshot", "variety_assessed"])
         resolved = ctx_module._resolve_aligned_team_name(
             LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
         )
@@ -1098,12 +1134,13 @@ class TestBranch3ResumeCensus:
 
     def test_witness_absence_census_never_fires(self, ctx, monkeypatch,
                                                 tmp_path):
-        """COLD-START GUARD — same FS substrate as the realign leg, but the
-        journal carries NO team-activity event (a fresh session's journal) ->
-        census stays off, fail-safe default returned. The paired default-half
-        that makes the realign leg's assertion attributable to the witness."""
+        """COLD-START GUARD — same FS substrate as the realign leg (candidate
+        BINDS via lead cwd), but the journal carries NO team-activity event
+        (a fresh session's journal) -> census stays off, fail-safe default
+        returned. The paired default-half that makes the realign leg's
+        assertion attributable to the witness."""
         ctx_module, teams_root = ctx
-        _seed_census_candidate(teams_root)
+        _seed_census_candidate(teams_root, lead_cwd=str(tmp_path / "project"))
         _write_context_file(monkeypatch, ctx_module, tmp_path,
                             team_name=STALE_TEAM, session_id=LEAD_SID)
         # A real journal EVENT TYPE, but NOT an activity type.
@@ -1137,7 +1174,7 @@ class TestBranch3ResumeCensus:
         )
         _write_context_file(monkeypatch, ctx_module, tmp_path,
                             team_name=STALE_TEAM, session_id=LEAD_SID)
-        _seed_session_journal(ctx_module, ["task_claimed"])
+        _seed_session_journal(ctx_module, ["task_metadata_snapshot"])
         resolved = ctx_module._resolve_aligned_team_name(
             LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
         )
@@ -1152,7 +1189,7 @@ class TestBranch3ResumeCensus:
         _seed_census_candidate(teams_root, mtime=ANCIENT_MTIME)
         _write_context_file(monkeypatch, ctx_module, tmp_path,
                             team_name=STALE_TEAM, session_id=LEAD_SID)
-        _seed_session_journal(ctx_module, ["task_claimed"])
+        _seed_session_journal(ctx_module, ["task_metadata_snapshot"])
         resolved = ctx_module._resolve_aligned_team_name(
             LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
         )
@@ -1168,7 +1205,7 @@ class TestBranch3ResumeCensus:
         _seed_team_dir(teams_root, STALE_TEAM, lead_session_id=LEAD_SID)
         _write_context_file(monkeypatch, ctx_module, tmp_path,
                             team_name=STALE_TEAM, session_id=LEAD_SID)
-        _seed_session_journal(ctx_module, ["task_claimed"])
+        _seed_session_journal(ctx_module, ["task_metadata_snapshot"])
         resolved = ctx_module._resolve_aligned_team_name(
             LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
         )
@@ -1179,10 +1216,10 @@ class TestBranch3ResumeCensus:
         """END-TO-END at the consumer seam: non-empty stale SSOT + census
         inputs -> get_team_name() returns the census winner (lowercased)."""
         ctx_module, teams_root = ctx
-        _seed_census_candidate(teams_root)
+        _seed_census_candidate(teams_root, lead_cwd=str(tmp_path / "project"))
         _write_context_file(monkeypatch, ctx_module, tmp_path,
                             team_name=STALE_TEAM, session_id=LEAD_SID)
-        _seed_session_journal(ctx_module, ["task_claimed"])
+        _seed_session_journal(ctx_module, ["task_metadata_snapshot"])
         assert ctx_module.get_team_name() == NEW_UUID_DIR.lower()
 
     def test_empty_ssot_census_unreachable(self, ctx, monkeypatch, tmp_path):
@@ -1193,5 +1230,5 @@ class TestBranch3ResumeCensus:
         _seed_census_candidate(teams_root)
         _write_context_file(monkeypatch, ctx_module, tmp_path,
                             team_name="", session_id=LEAD_SID)
-        _seed_session_journal(ctx_module, ["task_claimed"])
+        _seed_session_journal(ctx_module, ["task_metadata_snapshot"])
         assert ctx_module.get_team_name() == ""
