@@ -274,6 +274,7 @@ Agent(
   name="{scope-prefixed-name}",
   team_name="{team_name}",
   subagent_type="pact-{specialist-type}",
+  description="Spawn {scope-prefixed-name} specialist",
   prompt="YOUR PACT ROLE: teammate ({scope-prefixed-name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
 )
 ```

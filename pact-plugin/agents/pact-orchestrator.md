@@ -359,7 +359,7 @@ For full detail, `Read(file_path="../protocols/pact-variety.md")` when calibrati
 
 ## 11. Agent Teams Dispatch
 
-> ⚠️ **MANDATORY**: Specialists are spawned as teammates via `Agent(name=..., team_name="{team_name}", subagent_type=...)`. The session team is pre-created by the platform at session start per INSTRUCTIONS step 1. The `session_init` hook provides the specific team name in your session context.
+> ⚠️ **MANDATORY**: Specialists are spawned as teammates via `Agent(name=..., team_name="{team_name}", subagent_type=..., description=...)`. The session team is pre-created by the platform at session start per INSTRUCTIONS step 1. The `session_init` hook provides the specific team name in your session context.
 >
 > ⚠️ **NEVER** use plain `Agent(subagent_type=...)` without `name` and `team_name` for specialist agents. This bypasses team coordination, task tracking, and `SendMessage` communication.
 
@@ -375,7 +375,7 @@ For non-exempt teammates (everyone except `pact-secretary`):
 2. `TaskCreate(subject="{name}: {primary work subject}", description="<full mission: CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13 Recommended Agent Prompting Structure>")` — create Task B (primary work).
 3. `TaskUpdate(A_id, owner="{name}", addBlocks=[B_id])` — assign Task A to the teammate and wire it as the gate that unblocks Task B.
 4. `TaskUpdate(B_id, owner="{name}", addBlockedBy=[A_id])` — assign Task B to the same teammate and explicitly mirror the block edge. Do NOT pre-set `status="in_progress"` on either task — the teammate self-claims on arrival. Ensure the Task A brief reminds the teammate to claim Task B (`status="in_progress"`) before any implementation tool-use once it unblocks (the command dispatch templates carry this line) — the teammate flips it, never you.
-5. `Agent(name="{name}", team_name="{team_name}", subagent_type="pact-{type}", prompt="YOUR PACT ROLE: teammate ({name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you.")` — spawn the teammate. Keep the prompt ≤ 800 chars and include the literal `TaskList` reference (or one of: `task list`, `tasks assigned`, `check your tasks`); the teammate reads the mission via `TaskGet(B_id)`, not from the prompt.
+5. `Agent(name="{name}", team_name="{team_name}", subagent_type="pact-{type}", description="Spawn {name} specialist", prompt="YOUR PACT ROLE: teammate ({name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you.")` — spawn the teammate. Keep the prompt ≤ 800 chars and include the literal `TaskList` reference (or one of: `task list`, `tasks assigned`, `check your tasks`); the teammate reads the mission via `TaskGet(B_id)`, not from the prompt.
 
 #### Which signal governs a tool call
 
@@ -399,7 +399,7 @@ A different author writes each level at a different time, so a higher level can 
 
 After your first specialist spawn in a session — and after any subsequent spawn where you suspect dispatch tooling may be misconfigured — verify the teammate received the full PACT protocol surface. The teammate's first message MUST demonstrate access to `TaskList`, `TaskUpdate`, and `SendMessage`. If the teammate reports any of those tools "not available", "not loaded", or otherwise missing:
 
-> ⚠️ **HARD STOP — DISPATCH PROTOCOL VIOLATION**. This is **NOT** degraded mode. **NOT** something to "work around". The dispatch was malformed (almost always: spawn shape used `Task(...)` instead of `Agent(...)`, or omitted `name=` / `team_name=`). Stop the teammate, correct the dispatch shape, and re-spawn with the canonical `Agent(name=..., team_name=..., subagent_type=...)` form documented above. Do **not** instruct the teammate to "make do" — they cannot self-recover from a malformed spawn.
+> ⚠️ **HARD STOP — DISPATCH PROTOCOL VIOLATION**. This is **NOT** degraded mode. **NOT** something to "work around". The dispatch was malformed (almost always: spawn shape used `Task(...)` instead of `Agent(...)`, or omitted `name=` / `team_name=` / `description=`). Stop the teammate, correct the dispatch shape, and re-spawn with the canonical `Agent(name=..., team_name=..., subagent_type=..., description=...)` form documented above. Do **not** instruct the teammate to "make do" — they cannot self-recover from a malformed spawn.
 
 #### Hook WARN signals are STOP signals
 
