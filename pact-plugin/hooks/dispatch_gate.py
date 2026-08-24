@@ -529,14 +529,20 @@ _STALE_DIAGNOSABLE_RULES = frozenset({"team_name_unavailable", "no_task_assigned
 # warning. The detector names the live-vs-recorded session_id mismatch; this
 # adds the dispatch-specific recovery (the gate read a different task store
 # than the live session's).
+#
+# The remedy is the MEASURED manual repoint, not a bootstrap pointer: the
+# bootstrap ritual does NOT rewrite these records, so a pointer there sends
+# the operator to a ritual that changes nothing for this denial.
 _STALE_REALIGN_HINT = (
     " This dispatch denial is likely a STALE-TEAM/STORE MISMATCH, not a "
     "genuinely missing task: after a Claude Code restart/fork the platform "
     "minted a new team for the live session while PACT's persisted team_name "
-    "went stale, so this gate read an orphaned task store. To re-align: update "
-    "the `team_name` in this session's pact-session-context.json (and the "
-    "project CLAUDE.md '- Team:' line) to the LIVE platform team, then "
-    "re-dispatch. Completing /PACT:bootstrap also rewrites those records."
+    "went stale, so this gate read an orphaned task store. Working recovery "
+    "(measured): edit pact-session-context.json in the OLD session's "
+    "directory (the one named for the OLD session id) and set team_name to "
+    "the LIVE team (the newest teams/session-*/config.json under your "
+    "Claude config dir); leave session_id and the session journal dir "
+    "untouched (journal continuity), then re-dispatch."
 )
 
 
@@ -636,6 +642,11 @@ def _augment_deny_with_stale_diagnosis(
 #
 # The remedy for cause (3) is a pointer, never an inlined setting.
 #
+# The remedy for cause (2) is the MEASURED manual repoint, not a bootstrap
+# pointer: the bootstrap ritual does NOT rewrite the persisted team records,
+# so the earlier pointer ("Completing the bootstrap ritual rewrites those
+# records.") sent that operator to a ritual that changed nothing.
+#
 # That pointer is an ABSOLUTE URL rather than a section name, and ONE ground
 # carries the two halves. The README shipped INSIDE the plugin package does
 # not contain that section — it lives in the repository README — so a reader
@@ -679,7 +690,10 @@ _CAUSE_ENUMERATION = (
     "     cleared. Create the teachback task + the work task, then re-dispatch.\n"
     " (2) This session's recorded team no longer matches the live one, so this\n"
     "     gate reads a different task store than the one the task tools write.\n"
-    "     Completing the bootstrap ritual rewrites those records.\n"
+    "     Recovery: set team_name in the OLD session's pact-session-context.json\n"
+    "     to the LIVE team (the newest teams/session-*/config.json), leaving\n"
+    "     session_id and the journal dir untouched (journal continuity), then\n"
+    "     re-dispatch.\n"
     " (3) The task-management tools are not available in this session at all.\n"
     "     They can be withheld by a server-controlled feature gate keyed on the\n"
     "     session's model — in which case (1) cannot be satisfied, because the\n"

@@ -565,6 +565,85 @@ def test_every_known_cause_carries_its_own_marker(tmp_path, monkeypatch, capsys)
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Cause (2)'s REMEDY — the measured manual repoint, not a bootstrap pointer
+# ══════════════════════════════════════════════════════════════════════════
+
+# Elements of the measured recovery, hardcoded per the POST-FIX marker
+# convention above (importing a post-fix symbol would yield an ImportError
+# artifact under revert rather than a behavioural failure). ASCII-only, and
+# the positive assertions below are their own liveness check.
+_CAUSE2_RECOVERY_MARKERS = (
+    "OLD session",
+    "pact-session-context.json",
+    "teams/session-*/config.json",
+    "session_id",
+    "journal",
+)
+
+# The falsified claim, in the constructions already seen. Same declared
+# bound as the other phrase denylists in this file: it cannot be complete
+# over free prose; it forces a human to look when the known-bad construction
+# returns. Completing bootstrap does NOT rewrite the persisted team records,
+# so the pointer sent that operator to a ritual that changed nothing.
+_FORBIDDEN_INERT_REMEDIES = (
+    "bootstrap ritual rewrites",
+    "bootstrap also rewrites",
+    "rewrites those records",
+    "bootstrap will rewrite",
+)
+
+
+def test_cause_two_names_the_measured_manual_repoint_not_a_bootstrap_pointer(
+    tmp_path, monkeypatch, capsys
+):
+    """COUPLED PAIR IN ONE BODY: the recovery elements PRESENT and the inert
+    bootstrap-pointer phrasings ABSENT, asserted against the SAME emitted
+    deny. Either half alone is vacuous — absence-only passes on a cause (2)
+    emptied of any remedy at all; presence-only passes with the inert
+    pointer still appended after the real recovery.
+
+    The recovery pinned here is the MEASURED one: set team_name in the OLD
+    session's pact-session-context.json to the LIVE team, leaving
+    session_id + the journal dir untouched (journal continuity). "OLD
+    session" is the load-bearing element — after a resume there are two
+    session dirs and only the OLD one holds the records this gate reads.
+
+    Written against observable deny text only, importing no post-fix symbol,
+    so it carries revert-cardinality like its section neighbours.
+    """
+    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
+    _write_project_claude_md(monkeypatch, tmp_path, _LIVE_SESSION_ID)
+    _reset_context_caches(monkeypatch)
+
+    code, out = _run_main(_make_input(), capsys)
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    assert code == 2, "rule 8 must actually DENY, else this test is vacuous"
+    assert _ENUM_MARKER in reason, "enumeration absent — nothing to check"
+    assert _CAUSE_MARKERS[2] in reason, "precondition: cause 2 present"
+
+    for marker in _CAUSE2_RECOVERY_MARKERS:
+        assert marker.isascii(), (
+            f"cause-2 recovery marker is not ASCII-only: {marker!r}. A "
+            "marker that spans a non-ASCII character invites a "
+            "transcription that substitutes a hyphen for U+2014, after "
+            "which it can never fail."
+        )
+        assert marker in reason, (
+            f"measured-recovery element missing from cause (2): {marker!r}. "
+            "The reader in this cause is being sent to chase a team "
+            "mismatch without the one edit that recovers it."
+        )
+    for phrase in _FORBIDDEN_INERT_REMEDIES:
+        assert phrase not in reason, (
+            f"inert bootstrap-pointer remedy reintroduced: {phrase!r}. "
+            "Completing bootstrap does not rewrite these records, so that "
+            "pointer sends the operator to a ritual that changes nothing "
+            "for this denial."
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Advice soundness — the branch arms NARROW, they do not CLOSE
 # ══════════════════════════════════════════════════════════════════════════
 
