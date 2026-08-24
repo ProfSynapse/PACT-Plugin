@@ -54,6 +54,7 @@ the FAIL counts — an xfailed cell reports xfailed, not failed):
 
 import io
 import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -137,17 +138,32 @@ def _write_context(monkeypatch, tmp_path, plugin_root, *, team_name,
 
 
 def _seed_team_store(config_root, *, team_name, lead_session_id, members=(),
-                     tasks=()):
+                     tasks=(), corroborate=False, lead_cwd=None,
+                     joined_at=None):
     """Platform-shaped team store under a CONFIG ROOT (the dir
     get_claude_config_dir() resolves to — tmp/.claude for the default-root
     worlds, the scratch root itself for the CLAUDE_CONFIG_DIR cell):
     teams/{team}/config.json (name + leadSessionId + members) plus
-    tasks/{team}/*.json task files."""
+    tasks/{team}/*.json task files. corroborate=True adds the F1 ownership
+    binding fields the staged corroboration requires (leadAgentId
+    first-class key + the members[] lead entry found by agentId ==, with
+    cwd/joinedAt as given); a MINIMAL config (corroborate=False) is the
+    member-less shape the fix deliberately SUPPRESSES."""
     team_dir = config_root / "teams" / team_name
     team_dir.mkdir(parents=True, exist_ok=True)
     config = {"name": team_name, "members": [{"name": m} for m in members]}
     if lead_session_id is not None:
         config["leadSessionId"] = lead_session_id
+    if corroborate:
+        lead_agent_id = f"team-lead@{team_name}"
+        config["leadAgentId"] = lead_agent_id
+        config["members"] = [{
+            "agentId": lead_agent_id,
+            "name": "team-lead",
+            "cwd": lead_cwd,
+            "joinedAt": joined_at if joined_at is not None
+            else CORROBORATED_JOINED_AT_MS,
+        }]
     (team_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
     tasks_dir = config_root / "tasks" / team_name
     tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -223,8 +239,9 @@ def _reset_aligned_cache():
 
 
 def _seed_census_world(monkeypatch, tmp_path, *, live_team=NEW_TEAM_ID8,
-                       live_lead_sid=NEW_SID, journal_events=("task_claimed",),
-                       with_journal=True, tasks=((_NAME, "pending"),)):
+                       live_lead_sid=NEW_SID, journal_events=("task_metadata_snapshot",),
+                       with_journal=True, tasks=((_NAME, "pending"),),
+                       corroborate_live_team=True, live_lead_cwd=None):
     """The canonical #1507 world: OLD team config REAPED (dir absent), the
     live re-provisioned team present with a fresh task store carrying the
     owner's task (non-vacuity: an ALLOW is reachable ONLY by resolving the
@@ -239,6 +256,9 @@ def _seed_census_world(monkeypatch, tmp_path, *, live_team=NEW_TEAM_ID8,
     _seed_team_store(
         tmp_path / ".claude", team_name=live_team,
         lead_session_id=live_lead_sid, members=(), tasks=tasks,
+        corroborate=corroborate_live_team,
+        lead_cwd=(live_lead_cwd if live_lead_cwd is not None
+                  else str(tmp_path / "project")),  # RAW-matches project_dir
     )
     # The stale team is FULLY reaped: neither its config nor its dir exists.
     assert not (tmp_path / ".claude" / "teams" / OLD_TEAM).exists()
@@ -405,7 +425,7 @@ def test_iii_empty_ssot_fails_closed_with_census_inputs(tmp_path, monkeypatch,
     _seed_team_store(tmp_path / ".claude", team_name=NEW_TEAM_ID8,
                      lead_session_id=NEW_SID, members=(),
                      tasks=((_NAME, "pending"),))
-    _seed_session_journal(monkeypatch, tmp_path, ["task_claimed"])
+    _seed_session_journal(monkeypatch, tmp_path, ["task_metadata_snapshot"])
     import shared.pact_context as ctx_module
     assert ctx_module.get_team_name() == ""
     spawn = _make_spawn()
@@ -440,7 +460,7 @@ def test_iv_identity_match_outranks_census(tmp_path, monkeypatch, capsys):
     # A census candidate that WOULD win if the census ran first.
     _seed_team_store(tmp_path / ".claude", team_name=NEW_TEAM_ID8,
                      lead_session_id=NEW_SID, members=(), tasks=())
-    _seed_session_journal(monkeypatch, tmp_path, ["task_claimed"])
+    _seed_session_journal(monkeypatch, tmp_path, ["task_metadata_snapshot"])
     code, out = _run_dispatch(_make_spawn(), capsys)
     assert code == 0, "identity-match must resolve before the census"
     import shared.pact_context as ctx_module
@@ -477,7 +497,7 @@ def test_v_branch2_witness_preempts_census(tmp_path, monkeypatch, capsys):
     # The census candidate that would win if ordering were inverted.
     _seed_team_store(tmp_path / ".claude", team_name=NEW_TEAM_ID8,
                      lead_session_id=NEW_SID, members=(), tasks=())
-    _seed_session_journal(monkeypatch, tmp_path, ["task_claimed"])
+    _seed_session_journal(monkeypatch, tmp_path, ["task_metadata_snapshot"])
     code, out = _run_dispatch(_make_spawn(), capsys)
     assert code == 0, "branch-2 must preempt the census on own-substrate"
     import shared.pact_context as ctx_module
@@ -544,7 +564,7 @@ def test_vii_post_convergence_stable_with_foreign_candidate(tmp_path,
                      tasks=((_NAME, "pending"),))
     _seed_team_store(tmp_path / ".claude", team_name=FOREIGN_TEAM,
                      lead_session_id=FOREIGN_SID, members=(), tasks=())
-    _seed_session_journal(monkeypatch, tmp_path, ["task_claimed"])
+    _seed_session_journal(monkeypatch, tmp_path, ["task_metadata_snapshot"])
     code, out = _run_dispatch(_make_spawn(), capsys)
     assert code == 0, "post-convergence resolution must stay on the winner"
     import shared.pact_context as ctx_module
@@ -576,7 +596,9 @@ def test_viii_scratch_root_no_default_root_leakage(tmp_path, monkeypatch,
     # The LIVE candidate under the SCRATCH root (owner's task lives here).
     _seed_team_store(scratch, team_name=NEW_TEAM_ID8,
                      lead_session_id=NEW_SID, members=(),
-                     tasks=((_NAME, "pending"),))
+                     tasks=((_NAME, "pending"),),
+                     corroborate=True,
+                     lead_cwd=str(tmp_path / "project"))
     # The journal witness must also resolve under the scratch root.
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     import shared.pact_context as ctx_module
@@ -586,7 +608,7 @@ def test_viii_scratch_root_no_default_root_leakage(tmp_path, monkeypatch,
     )
     session_dir.mkdir(parents=True, exist_ok=True)
     (session_dir / "session-journal.jsonl").write_text(
-        json.dumps({"v": 1, "type": "task_claimed",
+        json.dumps({"v": 1, "type": "task_metadata_snapshot",
                     "ts": "2026-08-24T00:00:00Z"}) + "\n",
         encoding="utf-8",
     )
@@ -660,10 +682,16 @@ def test_x_config_missing_leadsessionid_counts_as_candidate(
                    team_name=OLD_TEAM, session_id=OLD_SID)
     _reset_aligned_cache()
     # The malformed candidate: config.json EXISTS but carries NO
-    # leadSessionId key; fresh sibling tasks store.
+    # leadSessionId key; fresh sibling tasks store. Corroboration fields ARE
+    # present, so the candidate is BOTH counted and bound — post-remediation
+    # semantics (resolver-coder's note): a missing leadSessionId still COUNTS
+    # as a candidate, realigning only when corroborated; a malformed-config
+    # positive realign requires the binding fields, which corroborate=True
+    # provides.
     _seed_team_store(tmp_path / ".claude", team_name=NEW_TEAM_ID8, lead_session_id=None,
-                     members=(), tasks=())
-    _seed_session_journal(monkeypatch, tmp_path, ["task_claimed"])
+                     members=(), tasks=(),
+                     corroborate=True, lead_cwd=str(tmp_path / "project"))
+    _seed_session_journal(monkeypatch, tmp_path, ["task_metadata_snapshot"])
     import shared.pact_context as ctx_module
     resolved = ctx_module._resolve_aligned_team_name(
         OLD_SID, teams_dir=str(tmp_path / ".claude" / "teams"),
@@ -725,3 +753,365 @@ def test_xi_stale_block_and_working_recovery_coexist_scoped(tmp_path,
     # ...and the composer did NOT also append the enumeration (A-xor-B), so
     # no second, competing remedy block rides in the same message.
     assert _ENUMERATION_HEADER not in reason
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 15. REMEDIATION CYCLE 1 (F1-F7) — cells written against the ACCEPTANCE BAR in
+#     docs/review/1507-resume-team-realign-review.md, NOT against any
+#     implementation. The F1 cells were RED against the pre-fix source (the
+#     reproduced defect) and are GREEN against the landed corroboration —
+#     they now PIN that contract; a regression back to unbound uniqueness
+#     reddens them. The F2-F7 pins pin the named conjuncts/stances.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# The ONLY task_*-prefixed journal type any real hook writes (verified against
+# _REQUIRED_FIELDS_BY_TYPE in shared/session_journal.py — no emitter of any
+# other task_* type exists in hooks/). Used for witness seeds in place of the
+# fictional "task_claimed" the original suite seeded (review F6 nit).
+REAL_TASK_EVENT = "task_metadata_snapshot"
+# Epoch MILLIS strictly after the journals' seeded ts (2026-08-24T00:00:00Z
+# = 1787529600000 ms): the corroborated lead JOINED after the old life
+# ended, satisfying the birth-order strengthening for journals that seed an
+# end-of-life marker (session_end / session_consolidated legs). The constant
+# itself is 2026-08-24T10:40:00Z — comfortably after, never boundary-adjacent.
+CORROBORATED_JOINED_AT_MS = 1787568000000
+
+
+def _seed_scenario_a_world(monkeypatch, tmp_path, *, journal_events,
+                           foreign_tasks=((_NAME, "pending"),),
+                           foreign_corroboration="foreign-cwd",
+                           foreign_joined_at_ms=None):
+    """SCENARIO A (review F1): a LIVED session (journal armed) whose OWN new
+    team substrate is UNBORN (old config reaped, no own-team config anywhere)
+    while a concurrently ACTIVE sibling session's team is the SOLE fresh
+    candidate. Pre-fix, the census aligns to the FOREIGN team and the write-
+    back makes it sticky; the acceptance bar requires STALE DEFAULT here.
+    foreign_corroboration selects the binding arm: "foreign-cwd" seeds the
+    FULL corroboration fields with the sibling's OWN cwd (the real F1 kill —
+    suppressed by the subject anchor); "own-cwd" seeds them pointing at THIS
+    session's project dir (the documented same-dir residual — aligns);
+    "none" seeds the minimal member-less config (suppressed: corroborates
+    nothing)."""
+    plugin_root = tmp_path / "plugin"
+    _seed_plugin(plugin_root)
+    _write_context(monkeypatch, tmp_path, plugin_root,
+                   team_name=OLD_TEAM, session_id=OLD_SID)
+    _reset_aligned_cache()
+    # The sole candidate: a FOREIGN concurrent session's team — config carries
+    # ITS leadSessionId, fresh task store holding the owner's task (so an
+    # ALLOW is reachable ONLY via foreign alignment: the mis-alignment is
+    # observable, not hypothetical).
+    _seed_team_store(
+        tmp_path / ".claude", team_name=FOREIGN_TEAM,
+        lead_session_id=FOREIGN_SID, members=(), tasks=foreign_tasks,
+        corroborate=(foreign_corroboration != "none"),
+        lead_cwd=(str(tmp_path / "project")
+                  if foreign_corroboration == "own-cwd"
+                  else "/foreign/sibling/session"),
+        joined_at=foreign_joined_at_ms,
+    )
+    _seed_session_journal(monkeypatch, tmp_path, list(journal_events))
+    return plugin_root
+
+
+class TestF1OwnershipBinding:
+    """F1 (BLOCKING, security+backend independently): the census candidate
+    predicate has NO ownership tie and the witness is armable by the gate's
+    OWN DENIALS. Acceptance bar (review doc, all four): scenario A -> stale
+    default; post-birth semantics unchanged; write-back cannot persist an
+    uncorroborated winner. These cells assert the POST-FIX contract."""
+
+    def test_f1a_scenario_a_stale_default(self, tmp_path, monkeypatch, capsys):
+        """ACCEPTANCE 2 — scenario A gate-level: lived journal (armed via the
+        REAL task_* type) + own team config ABSENT + sole foreign fresh store
+        -> resolution stays the STALE DEFAULT and the gate DENIES. NON-VACUITY:
+        the owner's task lives ONLY under the foreign team, so an ALLOW would
+        PROVE the sticky cross-session mis-alignment (the pre-fix behavior and
+        the backend lane's sandboxed repro). EXPECTED RED until the fix lands."""
+        _seed_scenario_a_world(monkeypatch, tmp_path,
+                               journal_events=[REAL_TASK_EVENT],
+                               foreign_corroboration="foreign-cwd")
+        import shared.pact_context as ctx_module
+        assert ctx_module.get_team_name() == OLD_TEAM
+        code, out = _run_dispatch(_make_spawn(), capsys)
+        assert code == 2, "scenario A must not align to the foreign team"
+        reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "no Task assigned" in reason
+        assert ctx_module.get_team_name() != FOREIGN_TEAM
+
+    def test_f1b_deny_armed_witness_never_aligns(self, tmp_path, monkeypatch,
+                                                 capsys):
+        """F2-family acceptance — the witness must NOT be armable by the
+        guarded system's OWN denials: dispatch_gate journals EVERY decision
+        including denies (dispatch_gate.py _journal_decision), so one denied
+        spawn writes dispatch_decision. A journal armed ONLY by that event is
+        a session that was denied, not one that LIVED — no alignment. EXPECTED
+        RED against the pre-fix exact-set; dispatch_decision has since been
+        REMOVED — the cell now pins that exclusion (re-adding the type
+        reddens it)."""
+        _seed_scenario_a_world(monkeypatch, tmp_path,
+                               journal_events=["dispatch_decision"],
+                               foreign_corroboration="foreign-cwd")
+        import shared.pact_context as ctx_module
+        assert ctx_module.get_team_name() == OLD_TEAM
+        code, out = _run_dispatch(_make_spawn(), capsys)
+        assert code == 2, "a deny-armed witness must not align"
+
+    def test_f1_repro_security_lane_hermetic(self, tmp_path, monkeypatch):
+        """NAMED REGRESSION PIN — the security lane's hermetic repro, pinned
+        verbatim in shape: same scenario-A substrate observed at the resolver
+        seam. get_team_name() must return the STALE DEFAULT, never the foreign
+        team's name. EXPECTED RED until the fix lands."""
+        _seed_scenario_a_world(monkeypatch, tmp_path,
+                               journal_events=[REAL_TASK_EVENT])
+        import shared.pact_context as ctx_module
+        resolved = ctx_module.get_team_name()
+        assert resolved == OLD_TEAM, (
+            f"cross-session alignment reproduced: resolved {resolved!r}"
+        )
+
+    def test_f1_repro_backend_lane_end_to_end(self, tmp_path, monkeypatch,
+                                              capsys):
+        """NAMED REGRESSION PIN — the backend lane's sandboxed end-to-end
+        repro: pre-fix, the gate ALLOWed a spawn whose owner task lived ONLY
+        under the FOREIGN team's store (the observable mis-alignment). Post-
+        fix contract: DENY on the stale default; the foreign task must not be
+        reachable. Was RED pre-fix (the sandboxed repro); now pins the fix."""
+        _seed_scenario_a_world(monkeypatch, tmp_path,
+                               journal_events=[REAL_TASK_EVENT])
+        code, out = _run_dispatch(_make_spawn(), capsys)
+        assert code == 2
+        assert out != _SUPPRESS_EXPECTED
+
+
+
+    def test_f1_same_cwd_residual_is_pinned(self, tmp_path, monkeypatch,
+                                            capsys):
+        """DOCUMENTED RESIDUAL (backend lane's requested pin): a sibling team
+        whose lead runs from THIS session's directory (cwd RAW-matches the
+        persisted project_dir) passes the subject anchor — the census aligns
+        and the gate ALLOWs against its store. This is the trust-boundary
+        residual the staged corroboration docstring names (same-user
+        same-dir mirroring is out of scope by construction): the cell PINS
+        the boundary honestly rather than pretending a guard exists. If a
+        future hardening narrows it, flip this cell WITH that change.
+        SCOPE NOTE (security footnote b): this residual is closed for FRESH
+        sessions only by the conjunction witness-arming-requires-task-writes
+        AND the atomic substrate birth (config.json lands with the first
+        team write, so an unborn own team never coexists with a readable
+        own config); it would EXTEND to fresh sessions if substrate birth
+        ever lagged task writes."""
+        _seed_scenario_a_world(monkeypatch, tmp_path,
+                               journal_events=[REAL_TASK_EVENT],
+                               foreign_corroboration="own-cwd")
+        import shared.pact_context as ctx_module
+        assert ctx_module.get_team_name() == FOREIGN_TEAM
+        code, out = _run_dispatch(_make_spawn(), capsys)
+        assert code == 0, "same-cwd sibling passes the anchor (residual)"
+
+    def test_f1_same_cwd_pre_birth_suppressed_by_birth_order(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """ROUTED RESIDUAL (resolver-coder #35 open-questions): a sibling in
+        THIS session's directory whose lead JOINED BEFORE the old life ended
+        (joinedAt epoch-millis <= the journal's last session_end ts — a
+        session active ACROSS the resume, not born after it) is suppressed
+        by the birth-order strengthening even though its cwd passes the
+        subject anchor. Requires an end marker in the journal: this cell
+        seeds session_end (which also arms the witness), so the
+        strengthening is ACTIVE, unlike the post-birth residual cell above
+        (no marker -> cwd-only binding)."""
+        # 1787000000000 ms = 2026-08-17T20:53:20Z — strictly BEFORE the
+        # seeded journal ts 2026-08-24T00:00:00Z (1787529600000 ms).
+        _seed_scenario_a_world(monkeypatch, tmp_path,
+                               journal_events=["session_end"],
+                               foreign_corroboration="own-cwd",
+                               foreign_joined_at_ms=1787000000000)
+        import shared.pact_context as ctx_module
+        assert ctx_module.get_team_name() == OLD_TEAM
+        code, out = _run_dispatch(_make_spawn(), capsys)
+        assert code == 2, "pre-birth same-cwd sibling must be suppressed"
+
+    def test_f1_mirroring_boundary_pin(self, tmp_path, monkeypatch, capsys):
+        """ROUTED RESIDUAL (security ruling 6, per resolver-coder #35): a
+        same-user MIRRORING sibling — a config that mirrors every binding
+        field (leadAgentId self-consistent with its own dir, cwd ==
+        THIS session's project dir, joinedAt strictly after our end
+        marker) — PASSES corroboration and the census aligns to it. This is
+        the documented trust boundary: a mirroring adversary can also
+        rewrite the plugin hooks themselves, so mirroring-resistance is out
+        of scope BY CONSTRUCTION. The cell PINS the boundary so a future
+        claim of mirroring-resistance has a test to flip."""
+        _seed_scenario_a_world(monkeypatch, tmp_path,
+                               journal_events=["session_end"],
+                               foreign_corroboration="own-cwd")
+        import shared.pact_context as ctx_module
+        assert ctx_module.get_team_name() == FOREIGN_TEAM
+        code, out = _run_dispatch(_make_spawn(), capsys)
+        assert code == 0, "full mirror passes corroboration (trust boundary)"
+
+@pytest.mark.parametrize("witness_event",
+                         ["session_end", "session_consolidated"],
+                         ids=["session-end-arm", "session-consolidated-arm"])
+def test_f2_witness_exact_set_positive_arms(tmp_path, monkeypatch, capsys,
+                                            witness_event):
+    """F2 pin — each SURVIVING exact-set member must independently arm the
+    witness in the LEGITIMATE no-sibling realign world (old config reaped,
+    own re-provisioned team present with a fresh store holding the owner's
+    task). Dropping session_end (the canonical clean-end witness) or
+    session_consolidated from _RESUME_CENSUS_ACTIVITY_EXACT_TYPES reddens the
+    corresponding leg: the witness stays unarmed and the resolution falls to
+    the stale default. Green against the current source AND mandated green
+    post-fix (acceptance 3: the no-sibling common case still converges)."""
+    _seed_census_world(monkeypatch, tmp_path, live_team=NEW_TEAM_ID8,
+                       live_lead_sid=NEW_SID, journal_events=[witness_event])
+    code, out = _run_dispatch(_make_spawn(), capsys)
+    assert code == 0, f"{witness_event} alone must arm the witness"
+    import shared.pact_context as ctx_module
+    assert ctx_module.get_team_name() == NEW_TEAM_ID8
+
+
+@pytest.mark.parametrize(
+    "lead_cwd_choice,mode",
+    [("live-cwd", "cross-directory-resume"),
+     ("project-dir", "persisted-project")],
+)
+def test_f1_cross_directory_resume_either_match(tmp_path, monkeypatch, capsys,
+                                                lead_cwd_choice, mode):
+    """ROUTED CELL (resolver-coder #35, backend ruling 4) — the subject
+    anchor's EITHER-MATCH design: the lead's cwd RAW-matches the hook
+    process's LIVE os.getcwd() OR the persisted project_dir. A resume
+    launched from a DIFFERENT working directory than the original project
+    still binds via the live-cwd leg; the normal in-project resume binds
+    via the persisted leg. Both legs corroborate and the census realigns —
+    pinning the design so a future narrowing to a single leg flips this
+    cell."""
+    live_cwd = os.getcwd()  # RAW compare — seed exactly what the hook sees
+    _seed_census_world(
+        monkeypatch, tmp_path, live_team=NEW_TEAM_ID8, live_lead_sid=NEW_SID,
+        live_lead_cwd=(live_cwd if lead_cwd_choice == "live-cwd"
+                       else str(tmp_path / "project")),
+    )
+    code, out = _run_dispatch(_make_spawn(), capsys)
+    assert code == 0, f"{mode} leg must corroborate (either-match)"
+
+
+def test_f3_config_without_tasks_store_not_a_candidate(tmp_path, monkeypatch):
+    """F3 pin — the candidate predicate's live-store conjunct: a team dir
+    whose config carries a foreign leadSessionId but whose sibling tasks/
+    store is ABSENT is NOT a candidate (config alone must not win). With it
+    as the sole would-be candidate, the resolution stays the stale default.
+    Green now; reddens if the tasks-dir conjunct is dropped."""
+    plugin_root = tmp_path / "plugin"
+    _seed_plugin(plugin_root)
+    _write_context(monkeypatch, tmp_path, plugin_root,
+                   team_name=OLD_TEAM, session_id=OLD_SID)
+    _reset_aligned_cache()
+    config_root = tmp_path / ".claude"
+    team_dir = config_root / "teams" / FOREIGN_TEAM
+    team_dir.mkdir(parents=True, exist_ok=True)
+    (team_dir / "config.json").write_text(
+        json.dumps({"name": FOREIGN_TEAM, "leadSessionId": FOREIGN_SID,
+                    "members": []}), encoding="utf-8")
+    assert not (config_root / "tasks" / FOREIGN_TEAM).exists()  # the stance
+    _seed_session_journal(monkeypatch, tmp_path, [REAL_TASK_EVENT])
+    import shared.pact_context as ctx_module
+    assert ctx_module.get_team_name() == OLD_TEAM
+
+
+def test_f4_unparseable_config_mid_census_skipped(tmp_path, monkeypatch):
+    """F4 pin — the census's own malformed-sibling stance: a team dir whose
+    config.json is UNPARSEABLE is skipped (neither candidate nor abort), with
+    scanning continuing. Sole unparseable sibling -> zero candidates -> stale
+    default. The branch-1 malformed pin (detect_align.py) does NOT transfer
+    to the census loop — this is its census-path counterpart. Green now;
+    reddens if the stance flips to candidate (e.g. defaulting a failed parse
+    to {})."""
+    plugin_root = tmp_path / "plugin"
+    _seed_plugin(plugin_root)
+    _write_context(monkeypatch, tmp_path, plugin_root,
+                   team_name=OLD_TEAM, session_id=OLD_SID)
+    _reset_aligned_cache()
+    config_root = tmp_path / ".claude"
+    bad = config_root / "teams" / FOREIGN_TEAM
+    bad.mkdir(parents=True, exist_ok=True)
+    (bad / "config.json").write_text("{not json", encoding="utf-8")
+    tasks_dir = config_root / "tasks" / FOREIGN_TEAM
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    (tasks_dir / "task_0.json").write_text("{}", encoding="utf-8")
+    _seed_session_journal(monkeypatch, tmp_path, [REAL_TASK_EVENT])
+    import shared.pact_context as ctx_module
+    assert ctx_module.get_team_name() == OLD_TEAM
+
+
+def test_f6_recency_boundary_semantics(tmp_path, monkeypatch):
+    """F6 pin — the recency window's boundary, pinned EXACTLY with the clock
+    stubbed (a wall-clock boundary test would race the code's own
+    time.time()). The implemented comparison is `mtime < cutoff -> skip`
+    (cutoff = now - RESUME_CENSUS_RECENCY_SECONDS), i.e. a store aged EXACTLY
+    900 s is still a candidate and 901 s is not. Also pins the constant
+    (retune guard). Green now; reddens if the operator flips to <= or the
+    window is retuned without this file noticing."""
+    import shared.pact_context as ctx_module
+    assert ctx_module.RESUME_CENSUS_RECENCY_SECONDS == 900
+
+    fixed_now = 1_800_000_000.0
+    config_root = tmp_path / ".claude"
+
+    def _boundary_world(candidate_mtime):
+        plugin_root = tmp_path / "plugin"
+        _seed_plugin(plugin_root)
+        _write_context(monkeypatch, tmp_path, plugin_root,
+                       team_name=OLD_TEAM, session_id=OLD_SID)
+        _reset_aligned_cache()
+        _seed_team_store(config_root, team_name=NEW_TEAM_ID8,
+                         lead_session_id=NEW_SID, members=(), tasks=(),
+                         corroborate=True,
+                         lead_cwd=str(tmp_path / "project"))
+        tasks_dir = config_root / "tasks" / NEW_TEAM_ID8
+        os.utime(tasks_dir, (candidate_mtime, candidate_mtime))
+        _seed_session_journal(monkeypatch, tmp_path, [REAL_TASK_EVENT])
+
+    # EXACTLY 900 s old: on the boundary, still a candidate -> realigns.
+    _boundary_world(fixed_now - 900)
+    import shared.pact_context as pc
+    monkeypatch.setattr(pc.time, "time", lambda: fixed_now)
+    assert pc._resolve_aligned_team_name(
+        OLD_SID, teams_dir=str(config_root / "teams"), default=OLD_TEAM,
+    ) == NEW_TEAM_ID8
+    _reset_aligned_cache()
+
+    # 901 s old: outside -> not a candidate -> stale default.
+    _boundary_world(fixed_now - 901)
+    assert pc._resolve_aligned_team_name(
+        OLD_SID, teams_dir=str(config_root / "teams"), default=OLD_TEAM,
+    ) == OLD_TEAM
+
+
+def test_f7_path_unsafe_candidate_name_skipped(tmp_path, monkeypatch):
+    """F7 future-pin (greedy batch) — the census loop's tamper guard: a
+    candidate dir whose NAME fails is_safe_path_component (here: an embedded
+    C0 control char) is skipped even though its config and fresh tasks store
+    would otherwise qualify. Green now; reddens if the guard is dropped from
+    the census loop (the branch-1 analog is separately pinned)."""
+    plugin_root = tmp_path / "plugin"
+    _seed_plugin(plugin_root)
+    _write_context(monkeypatch, tmp_path, plugin_root,
+                   team_name=OLD_TEAM, session_id=OLD_SID)
+    _reset_aligned_cache()
+    config_root = tmp_path / ".claude"
+    tampered = "session-evil\x01"
+    team_dir = config_root / "teams" / tampered
+    team_dir.mkdir(parents=True, exist_ok=True)
+    (team_dir / "config.json").write_text(
+        json.dumps({"name": tampered, "leadSessionId": FOREIGN_SID,
+                    "members": []}), encoding="utf-8")
+    tasks_dir = config_root / "tasks" / tampered
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    (tasks_dir / "task_0.json").write_text("{}", encoding="utf-8")
+    _seed_session_journal(monkeypatch, tmp_path, [REAL_TASK_EVENT])
+    import shared.pact_context as ctx_module
+    resolved = ctx_module._resolve_aligned_team_name(
+        OLD_SID, teams_dir=str(config_root / "teams"), default=OLD_TEAM,
+    )
+    assert resolved == OLD_TEAM
