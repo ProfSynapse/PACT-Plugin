@@ -50,6 +50,7 @@ Agent(
   name="{teammate-name}",
   team_name="{team_name}",
   subagent_type="pact-{teammate-type}",
+  description="Spawn {teammate-name} specialist",
   prompt="YOUR PACT ROLE: teammate ({teammate-name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
 )
 ```
@@ -484,6 +485,7 @@ Agent(
   name="preparer",
   team_name="{team_name}",
   subagent_type="pact-preparer",
+  description="Spawn preparer specialist",
   prompt="YOUR PACT ROLE: teammate (preparer).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
 )
 ```
@@ -591,6 +593,7 @@ Agent(
   name="architect",
   team_name="{team_name}",
   subagent_type="pact-architect",
+  description="Spawn architect specialist",
   prompt="YOUR PACT ROLE: teammate (architect).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
 )
 ```
@@ -729,6 +732,7 @@ Agent(
   name="{coder-name}",
   team_name="{team_name}",
   subagent_type="pact-{coder-type}",
+  description="Spawn {coder-name} specialist",
   prompt="YOUR PACT ROLE: teammate ({coder-name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
 )
 ```
@@ -757,6 +761,7 @@ Agent(
   name="auditor",
   team_name="{team_name}",
   subagent_type="pact-auditor",
+  description="Spawn auditor specialist",
   prompt="YOUR PACT ROLE: teammate (auditor).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
 )
 ```
@@ -876,6 +881,7 @@ Agent(
   name="test-engineer",
   team_name="{team_name}",
   subagent_type="pact-test-engineer",
+  description="Spawn test-engineer specialist",
   prompt="YOUR PACT ROLE: teammate (test-engineer).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
 )
 ```
@@ -941,7 +947,7 @@ After you resolve a blocker, message the teammate by name. Spawn fresh if the te
 
 ⚠️ **Write the message so that it works alone.** The teammate can hold none of its earlier context. Put the full resolution, the task id, and what the teammate must do into the message. A self-contained message is correct in the two cases. A message that points back at earlier context gives the teammate nothing, and the result looks like a teammate that ignored you.
 
-**Fresh spawn pattern**: Follow the standard dispatch pattern (`TaskCreate` + `TaskUpdate` + Agent with name/team_name/subagent_type).
+**Fresh spawn pattern**: Follow the standard dispatch pattern (`TaskCreate` + `TaskUpdate` + Agent with name/team_name/subagent_type/description).
 
 ---
 

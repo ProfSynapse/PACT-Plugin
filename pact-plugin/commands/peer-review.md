@@ -219,6 +219,7 @@ Agent(
   name="{reviewer-name}",
   team_name="{team_name}",
   subagent_type="pact-{reviewer-type}",
+  description="Spawn {reviewer-name} specialist",
   prompt="YOUR PACT ROLE: teammate ({reviewer-name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
 )
 ```

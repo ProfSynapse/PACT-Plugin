@@ -95,7 +95,7 @@ self-completion transition.
    three calls (single-task, teachback-exempt — NO Task A):
    1. `TaskCreate(subject="secretary: deliver session briefing", description=...)` — single work task (mission lives in `description`)
    2. `TaskUpdate(taskId, owner="secretary")` — assign to the secretary; NO `addBlockedBy` (no teachback gate)
-   3. `Agent(name="secretary", team_name=<team>, subagent_type="pact-secretary", prompt="YOUR PACT ROLE: teammate (secretary).\n\nYou are joining team <team>. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you.")`
+   3. `Agent(name="secretary", team_name=<team>, subagent_type="pact-secretary", description="Spawn session secretary", prompt="YOUR PACT ROLE: teammate (secretary).\n\nYou are joining team <team>. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you.")`
 
    > The secretary spawn prompt carries the register first-action directive
    > (the secretary self-supplies `secretary@<team>` and registers before its

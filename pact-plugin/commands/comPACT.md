@@ -272,6 +272,7 @@ Agent(
   name="{specialist-name}",
   team_name="{team_name}",
   subagent_type="pact-{specialist-type}",
+  description="Spawn {specialist-name} specialist",
   prompt="YOUR PACT ROLE: teammate ({specialist-name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
 )
 ```
@@ -329,6 +330,7 @@ Agent(
   name="{specialist-name}",
   team_name="{team_name}",
   subagent_type="pact-{specialist-type}",
+  description="Spawn {specialist-name} specialist",
   prompt="YOUR PACT ROLE: teammate ({specialist-name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
 )
 ```

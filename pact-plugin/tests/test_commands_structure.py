@@ -394,6 +394,36 @@ def _spawn_prompt_literals(text: str) -> list[str]:
     ]
 
 
+# Matches a description="..." param with a NON-EMPTY value. The empty form
+# description="" would satisfy a bare presence check while carrying no spawn
+# description, so the value must be non-empty for the guard to see the param.
+_DESCRIPTION_PARAM_RE = re.compile(r'description="[^"]+"')
+
+
+def _spawn_literals_missing_description(text: str) -> list[str]:
+    """Return every teammate-spawn prompt literal whose Agent( call does not
+    carry a non-empty ``description=`` param before the prompt.
+
+    For each spawn-literal match, the span from the nearest preceding
+    ``Agent(`` to the literal must contain ``description="<non-empty>"`` —
+    the same span that holds name=/team_name=/subagent_type=. A description
+    that appears only AFTER the prompt match is inside the prompt string, not
+    a sibling param, and does not count. Non-spawn prompts (no role prelude)
+    are skipped: a prompt to a running teammate is not a spawn template and
+    is not held to the description rule.
+    """
+    missing = []
+    for match in _PROMPT_LITERAL_RE.finditer(text):
+        if not match.group(1).startswith(_SPAWN_LITERAL_PREFIX):
+            continue
+        call_open = text.rfind("Agent(", 0, match.start())
+        if call_open == -1 or not _DESCRIPTION_PARAM_RE.search(
+            text[call_open:match.start()]
+        ):
+            missing.append(match.group(1))
+    return missing
+
+
 class TestRegisterDirectivePresentInEverySpawnLiteral:
     """Present-in-EVERY-LITERAL drop-guard for the self-registration first-action
     (literal-granular — supersedes the prior file-granular substring check).
@@ -484,6 +514,95 @@ class TestRegisterDirectivePresentInEverySpawnLiteral:
         assert len(_spawn_prompt_literals(spawn)) == 1, (
             "a genuine teammate-spawn literal was dropped by the extractor. "
             "The directive requirement would then cover nothing."
+        )
+
+
+class TestDescriptionParamPresentInEverySpawnLiteral:
+    """Per-literal presence guard for the required ``description=`` param.
+
+    The canonical Agent() teammate spawn carries a ``description`` param
+    (the form documented in agents/pact-orchestrator.md §11 step 5). This
+    guard pins it per literal, so a future edit that drops ``description=``
+    from ONE template in a multi-template file (orchestrate.md has 6) goes
+    red here — where a whole-file substring check would stay green on the
+    other templates' occurrences.
+
+    Non-vacuity (counter-test, documented): removing the description param
+    from one template of an isolated copy reddens that surface's arm, and an
+    empty description="" value reddens it too. The synthetic-fixture test
+    below keeps that proof in-suite on fixtures that a document edit cannot
+    drain.
+    """
+
+    @pytest.mark.parametrize(
+        "label,path",
+        SPAWN_PROMPT_SURFACES,
+        ids=[label for label, _ in SPAWN_PROMPT_SURFACES],
+    )
+    def test_every_spawn_literal_carries_description_param(self, label, path):
+        assert path.is_file(), f"Spawn-prompt surface missing: {label} ({path})"
+        raw = path.read_text(encoding="utf-8")
+        missing = _spawn_literals_missing_description(raw)
+        assert not missing, (
+            f"{label}: {len(missing)} teammate-spawn literal(s) lack a "
+            "non-empty description= param in their Agent( call. The "
+            "description param is part of the canonical spawn form "
+            "(agents/pact-orchestrator.md §11 step 5) — restore "
+            'description="<spawn description>" as a sibling param before '
+            f"prompt=. First offender (truncated): {missing[0][:90]!r}"
+        )
+
+    def test_checker_flags_missing_and_empty_description(self):
+        """The description checker must flag BOTH a dropped param and an
+        empty value, and must NOT flag a canonical template or a non-spawn
+        prompt.
+
+        The fixtures are SYNTHETIC and deliberately so (same reasoning as
+        test_a_prompt_without_the_role_prelude_is_not_a_spawn_literal): a
+        fixture taken from a live template can be drained by an edit to the
+        document; these cannot. MEASURED at the time of writing: all 13
+        canonical templates across the 7 SPAWN_PROMPT_SURFACES carry a
+        non-empty description=, so no document supplies a missing-description
+        fixture.
+
+        Four arms:
+          1. a canonical multi-line template WITH description= -> not flagged
+          2. the same template with the description line REMOVED -> flagged
+          3. the same template with description="" (empty value) -> flagged
+          4. a non-spawn prompt (no role prelude) with no description ->
+             not flagged — the exclusion is not widened
+        """
+        template = (
+            "Agent(\n"
+            '  name="x",\n'
+            '  team_name="t",\n'
+            '  subagent_type="pact-x",\n'
+            '  description="Spawn x specialist",\n'
+            '  prompt="YOUR PACT ROLE: teammate (x).\\n\\nregister first."\n'
+            ")"
+        )
+        assert _spawn_literals_missing_description(template) == [], (
+            "a canonical template carrying a non-empty description= was "
+            "flagged. The guard would be over-blocking."
+        )
+        assert _spawn_literals_missing_description(
+            template.replace('  description="Spawn x specialist",\n', "")
+        ) != [], (
+            "a template with the description line dropped was NOT flagged. "
+            "The guard is vacuous — the exact drop it exists to catch passes."
+        )
+        assert _spawn_literals_missing_description(
+            template.replace('description="Spawn x specialist"', 'description=""')
+        ) != [], (
+            'a template with an EMPTY description="" value was NOT flagged. '
+            "A bare presence check passes while carrying no description."
+        )
+        assert _spawn_literals_missing_description(
+            'Agent(prompt="Blocker resolved: {details}. Continue.")'
+        ) == [], (
+            "a non-spawn prompt with no role prelude was flagged. The "
+            "exclusion is widened — a prompt to a running teammate is not a "
+            "spawn template."
         )
 
 
@@ -756,12 +875,12 @@ class TestPerLoopDispatchSites:
     # 9 per-loop dispatch sites. Each entry is
     # (relative_command_path, lead_in_line_number_1based, role_or_phase_label).
     SITES = [
-        ("orchestrate.md", 460, "PREPARE"),
-        ("orchestrate.md", 567, "ARCHITECT"),
-        ("orchestrate.md", 702, "CODE"),
-        ("orchestrate.md", 852, "TEST"),
+        ("orchestrate.md", 461, "PREPARE"),
+        ("orchestrate.md", 569, "ARCHITECT"),
+        ("orchestrate.md", 705, "CODE"),
+        ("orchestrate.md", 857, "TEST"),
         ("comPACT.md", 233, "MultipleSpecialists"),
-        ("comPACT.md", 293, "SingleSpecialist"),
+        ("comPACT.md", 294, "SingleSpecialist"),
         ("peer-review.md", 192, "Reviewers"),
         ("plan-mode.md", 236, "Consultants"),
         ("rePACT.md", 263, "SubScopeSpecialists"),
