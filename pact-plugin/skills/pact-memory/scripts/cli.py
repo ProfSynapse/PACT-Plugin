@@ -1085,7 +1085,7 @@ def main(argv=None):
     except Exception as exc:
         # Scrub the user's home directory (both the literal expansion and
         # the realpath form) from the message so absolute paths
-        # (e.g. ~/.claude/pact-memory/...) don't leak into stderr for
+        # (e.g. ~/.claude/pact-memory/... — illustrative example, not a live path) don't leak into stderr for
         # callers piping the JSON envelope into logs.
         _error("SYSTEM_ERROR", _scrub(str(exc)), exit_code=2)
 

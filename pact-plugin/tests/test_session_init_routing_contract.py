@@ -454,8 +454,8 @@ class TestKernelStripStatusRouting:
     """Site 1032, status source ``strip_orphan_kernel_block``.
 
     MUTANT: in ``hooks/shared/claude_md_manager.py``, change the orphan-marker
-    status prefix ``"Migration skipped: ~/.claude/CLAUDE.md contains "`` to
-    ``"Migration not performed: ~/.claude/CLAUDE.md contains "``. EXPECTED: the
+    status prefix ``f"Migration skipped: {target_file} contains "`` to
+    ``f"Migration not performed: {target_file} contains "``. EXPECTED: the
     routing test fails and the removed test stays green.
     CONTROL MUTANT: change the same status to ``"Migration skipped for
     safety: ..."``. EXPECTED: the two tests stay green.

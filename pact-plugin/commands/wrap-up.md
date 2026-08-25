@@ -140,7 +140,7 @@ Before ending the session (step 8), ensure all journal entries have been process
 
 1. Confirm the secretary has completed the consolidation harvest (step 1) — on the normal path the step-4 single-save handoff folds the retrospective into that SAME harvest; on the degradation path it is saved as a separate follow-up write — either way the retrospective is not dropped. The secretary should confirm via `SendMessage`: "All journal entries processed to pact-memory."
 2. **Only on confirmation**: Proceed to worktree cleanup and session decision.
-3. **If secretary cannot confirm**: Warn user — unprocessed journal entries will not be distilled to pact-memory. The journal itself is safe (stored in `~/.claude/pact-sessions/`, not the team directory).
+3. **If secretary cannot confirm**: Warn user — unprocessed journal entries will not be distilled to pact-memory. The journal itself is safe (stored in `{config_dir}/pact-sessions/`, not the team directory). `{config_dir}` is this session's Claude config root — the value of `$CLAUDE_CONFIG_DIR` when set and non-empty, otherwise `$HOME/.claude`. Read it off an absolute path the platform already injected into your context — your plugin root is `{config_dir}/plugins/…` — rather than shelling out for the variable. Substitute it before running any command; never assume `~/.claude`.
 
 **Journal events**: Write a `session_end` event after confirmation, then emit a `session_consolidated` event (when step 1 actually ran) so the SessionEnd detector (`check_unpaused_pr`) can recognize this session as consolidated regardless of whether the wrap-up took the "PR merged / no PR" branch or the "PR still open" branch. The bash template below is **shell-clamped** via a three-branch `case` statement — `true` emits, `false` is a no-op, and anything else (empty string, `True`, `TRUE`, a stray integer, an accidental unsubstituted placeholder) fails fast with a stderr message and non-zero exit. The orchestrator MUST pass the literal string `true` or `false` for `{consolidation_ran}`; any other value is treated as a template-substitution bug, not a caller convention.
 
@@ -171,7 +171,7 @@ esac
 
 The `session_consolidated` write fires under the `true` branch regardless of whether step 6 takes the "PR still open" branch (which ALSO writes `session_paused`) or the "PR merged / no PR" branch. `{task_count}` and `{memories_saved}` come from the secretary's consolidation summary (step 1); when the secretary cannot produce exact counts, emit the event with `0` for either field rather than skipping the write — the event's EXISTENCE is the detector signal and the payload is advisory audit trail.
 
-**Recovery note**: The journal lives in `~/.claude/pact-sessions/{slug}/{session_id}/`, independent of the team directory — it survives both natural TTL cleanup and explicit team teardown. Old session directories are cleaned automatically after 30 days (with paused-session preservation). See [pact-state-recovery.md](../protocols/pact-state-recovery.md) for the full State Recovery Protocol.
+**Recovery note**: The journal lives in `{config_dir}/pact-sessions/{slug}/{session_id}/`, independent of the team directory — it survives both natural TTL cleanup and explicit team teardown. Old session directories are cleaned automatically after 30 days (with paused-session preservation). See [pact-state-recovery.md](../protocols/pact-state-recovery.md) for the full State Recovery Protocol.
 
 ## 6. Worktree Cleanup
 
@@ -255,4 +255,4 @@ The secretary is included in the loop. On the normal path, step 5's drain-confir
 
 EXPECTED post-state: each stop removes that member's roster entry — the config FILE and the team IDENTITY survive; a lead-only roster is the correct post-shutdown state, not corruption. Do NOT delete the team.
 
-Then report: "Session complete. All teammates stopped. Team and task directories (`~/.claude/teams/`, `~/.claude/tasks/`) are reaped after 30 days by PACT's own `session_end` hook."
+Then report: "Session complete. All teammates stopped. Team and task directories (`{config_dir}/teams/`, `{config_dir}/tasks/`) are reaped after 30 days by PACT's own `session_end` hook."

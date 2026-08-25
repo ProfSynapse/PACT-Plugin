@@ -919,8 +919,11 @@ class TestCheckAdditionalDirectories:
         result = check_additional_directories()
 
         assert result is not None
-        assert "~/.claude/pact-sessions" in result
-        assert "~/.claude/teams" not in result
+        # The tip names the RESOLVED directory, not a tilde literal: the
+        # membership test above ran on the resolved path, so a tilde in the
+        # message would name a directory this check never looked at.
+        assert str(tmp_path / ".claude" / "pact-sessions") in result
+        assert str(tmp_path / ".claude" / "teams") not in result
 
     def test_returns_tip_for_teams_when_only_pact_sessions_present(self, monkeypatch, tmp_path):
         """Should return tip mentioning teams when only pact-sessions is configured."""
@@ -934,8 +937,8 @@ class TestCheckAdditionalDirectories:
         result = check_additional_directories()
 
         assert result is not None
-        assert "~/.claude/teams" in result
-        assert "~/.claude/pact-sessions" not in result
+        assert str(tmp_path / ".claude" / "teams") in result
+        assert str(tmp_path / ".claude" / "pact-sessions") not in result
 
     def test_returns_tip_for_both_when_neither_present(self, monkeypatch, tmp_path):
         """Should return tip mentioning both dirs when neither is configured."""
@@ -950,8 +953,8 @@ class TestCheckAdditionalDirectories:
 
         assert result is not None
         assert "additionalDirectories" in result
-        assert "~/.claude/teams" in result
-        assert "~/.claude/pact-sessions" in result
+        assert str(tmp_path / ".claude" / "teams") in result
+        assert str(tmp_path / ".claude" / "pact-sessions") in result
 
     def test_returns_tip_when_additional_directories_empty(self, monkeypatch, tmp_path):
         """Should return tip mentioning both dirs when additionalDirectories is empty."""
@@ -965,8 +968,8 @@ class TestCheckAdditionalDirectories:
         result = check_additional_directories()
 
         assert result is not None
-        assert "~/.claude/teams" in result
-        assert "~/.claude/pact-sessions" in result
+        assert str(tmp_path / ".claude" / "teams") in result
+        assert str(tmp_path / ".claude" / "pact-sessions") in result
 
     def test_returns_none_when_settings_file_missing(self, monkeypatch, tmp_path):
         """Should return None (fail-open) when settings.json does not exist."""
@@ -1004,8 +1007,8 @@ class TestCheckAdditionalDirectories:
         # permissions missing → .get("permissions", {}).get("additionalDirectories", [])
         # returns [] → no matching entry → tip message with both dirs
         assert result is not None
-        assert "~/.claude/teams" in result
-        assert "~/.claude/pact-sessions" in result
+        assert str(tmp_path / ".claude" / "teams") in result
+        assert str(tmp_path / ".claude" / "pact-sessions") in result
 
     def test_returns_none_when_additional_dirs_not_list(self, monkeypatch, tmp_path):
         """Should return None (fail-open) when additionalDirectories is not a list."""
@@ -1078,9 +1081,13 @@ class TestCheckAdditionalDirectories:
         result = check_additional_directories()
 
         assert result is not None
-        # Count occurrences of ~/.claude/ paths in the tip message
+        # Count the backticked entries in the "Add ..." list only. Keyed on the
+        # list segment rather than on a root literal, so it counts the same
+        # thing whatever config root the message resolved to — the message now
+        # also backticks `additionalDirectories` and the settings.json path.
         import re
-        dir_mentions = re.findall(r"`~/.claude/[^`]+`", result)
+        listed = result.split(" to `additionalDirectories`")[0]
+        dir_mentions = re.findall(r"`[^`]+`", listed)
         assert len(dir_mentions) == 2, f"Expected exactly 2 directory mentions, got {dir_mentions}"
 
 
@@ -1120,8 +1127,8 @@ class TestCheckAdditionalDirectoriesMainIntegration:
         output = json.loads(mock_stdout.getvalue())
         system_msg = output.get("systemMessage", "")
         assert "additionalDirectories" in system_msg
-        assert "~/.claude/teams" in system_msg
-        assert "~/.claude/pact-sessions" in system_msg
+        assert str(tmp_path / ".claude" / "teams") in system_msg
+        assert str(tmp_path / ".claude" / "pact-sessions") in system_msg
 
     def test_no_tip_when_setting_present(self, monkeypatch, tmp_path):
         """No tip should appear when both required dirs are configured."""

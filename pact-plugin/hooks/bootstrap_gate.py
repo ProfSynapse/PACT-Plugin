@@ -259,6 +259,11 @@ def _emit_degraded_warning(stage: str, error: BaseException, tool_name: str) -> 
         if decision == "ask"
         else "deferred to the normal permission flow"
     )
+    # Resolved from os.environ directly, NOT via shared.paths: this function
+    # runs BECAUSE an import failed, so calling into the plugin's own resolver
+    # here could raise inside the degraded handler and flip the exit code,
+    # voiding the defer/ask decision. os is stdlib and already imported.
+    config_root = os.environ.get("CLAUDE_CONFIG_DIR") or "$HOME/.claude"
     warning = (
         f"PACT bootstrap_gate is DEGRADED ({stage} failure — "
         f"{_bounded_error_text(error)}). Read-only tool '{tool_name}' is "
@@ -267,7 +272,7 @@ def _emit_degraded_warning(stage: str, error: BaseException, tool_name: str) -> 
         "Write, Agent, NotebookEdit), Bash, and MCP tools remain blocked "
         "fail-closed. Surface this to the user: PACT hooks are failing — "
         "check Python version compatibility and the plugin install under "
-        "~/.claude/plugins/cache/. Bootstrap cannot complete until the "
+        f"{config_root}/plugins/cache/. Bootstrap cannot complete until the "
         "hook loads cleanly."
     )
     print(json.dumps({

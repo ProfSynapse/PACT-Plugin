@@ -12,10 +12,10 @@ Walk the user through configuring the pact-telegram bridge. This is an interacti
 
 ## Step 1: Check Existing Configuration
 
-Check if `~/.claude/pact-telegram/.env` already exists:
+Check if `~/.claude/pact-telegram/.env` (matches a default-root pin in code — do not migrate) already exists:
 
 ```bash
-test -f ~/.claude/pact-telegram/.env && echo "EXISTS" || echo "MISSING"
+test -f ~/.claude/pact-telegram/.env && echo "EXISTS" || echo "MISSING"  # matches a default-root pin in code — do not migrate
 ```
 
 - If **EXISTS**: Tell the user "pact-telegram is already configured." Use AskUserQuestion to ask: "Would you like to (A) reconfigure from scratch, (B) test the existing setup, or (C) cancel?"
@@ -66,10 +66,10 @@ Create the config file with secure permissions:
 
 1. Create directory:
    ```bash
-   mkdir -p ~/.claude/pact-telegram
+   mkdir -p ~/.claude/pact-telegram  # matches a default-root pin in code — do not migrate
    ```
 
-2. Write `~/.claude/pact-telegram/.env` with the collected values:
+2. Write `~/.claude/pact-telegram/.env` (matches a default-root pin in code — do not migrate) with the collected values:
    ```
    TELEGRAM_BOT_TOKEN=<token from step 2>
    TELEGRAM_CHAT_ID=<chat_id from step 4>
@@ -79,12 +79,12 @@ Create the config file with secure permissions:
 
 3. Set permissions:
    ```bash
-   chmod 600 ~/.claude/pact-telegram/.env
+   chmod 600 ~/.claude/pact-telegram/.env  # matches a default-root pin in code — do not migrate
    ```
 
 4. Verify the file is NOT inside a git repository:
    ```bash
-   git -C ~/.claude/pact-telegram rev-parse 2>/dev/null
+   git -C ~/.claude/pact-telegram rev-parse 2>/dev/null  # matches a default-root pin in code — do not migrate
    ```
    If exit code is 0 (inside a git repo), warn: "Your pact-telegram config directory is inside a git repository. Credentials could be accidentally committed. Consider moving it or adding it to .gitignore."
 
@@ -143,12 +143,12 @@ Tell the user:
 > **Setup complete!** The pact-telegram MCP server is enabled and ready to use.
 >
 > - **Passive mode** (default): You will receive a Telegram notification when a Claude Code session ends, summarizing what was accomplished.
-> - **Active mode**: The orchestrator can send you questions via Telegram and wait for your reply. Enable by changing `PACT_TELEGRAM_MODE=active` in `~/.claude/pact-telegram/.env`.
+> - **Active mode**: The orchestrator can send you questions via Telegram and wait for your reply. Enable by changing `PACT_TELEGRAM_MODE=active` in `~/.claude/pact-telegram/.env` (matches a default-root pin in code — do not migrate).
 > - **MCP tools**: The tools `telegram_notify`, `telegram_ask`, `telegram_check_replies`, and `telegram_status` are available to agents.
 > - **Multi-session support**: Each message includes the project name so you can tell which Claude Code instance sent it. When replying to questions, use swipe-reply (mobile) or click-reply (desktop) to route your answer to the correct session.
 > - **Toggle**: You can enable/disable the MCP server anytime via `/plugin` → PACT → pact-telegram MCP.
 >
 > **Restart Claude Code now** to activate the pact-telegram MCP server.
 
-Configuration file: `~/.claude/pact-telegram/.env`
+Configuration file: `~/.claude/pact-telegram/.env` (matches a default-root pin in code — do not migrate)
 To reconfigure later: `/PACT:telegram-setup`

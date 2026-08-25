@@ -26,7 +26,7 @@ Use refresh when the context window is near exhaustion while work is still mid-f
 - **LEAD-FRAME-ONLY**: every step that spawns, stops, or messages teammates runs in the lead frame. The team roster is flat — teammates cannot spawn or stop teammates.
 - **Never clean worktrees, branches, or commits.** Verification is read-only; the workstream continues after the reset.
 - **Never complete or delete tasks** — the feature task, phase tasks, and any HALT/algedonic signal tasks must survive for resume.
-- **Never write under `~/.claude/pact-refresh/`.** That directory is legacy state from a removed subsystem; checkpoint state lives ONLY in the session journal.
+- **Never write under `{config_dir}/pact-refresh/`.** That directory is legacy state from a removed subsystem; checkpoint state lives ONLY in the session journal. `{config_dir}` is this session's Claude config root — the value of `$CLAUDE_CONFIG_DIR` when set and non-empty, otherwise `$HOME/.claude`. Read it off an absolute path the platform already injected into your context — your plugin root is `{config_dir}/plugins/…` — rather than shelling out for the variable. Substitute it before running any command; never assume `~/.claude`.
 
 ---
 

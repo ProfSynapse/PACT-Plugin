@@ -222,8 +222,9 @@ RULE_HEADING = "Index upkeep"
 
 # --- the memory-block selection rule (see the second docstring block below) ---
 SELECTOR_FILE = SINGLE_SOURCE
-# The discriminator, backtick-anchored and deliberately WITHOUT a tilde.
-DISCRIMINATOR = "`.claude/agent-memory/`"
+# The discriminator, backtick-anchored and deliberately carrying NO UNEXPANDED
+# ROOT TOKEN and no config-root NAME -- see the rationale block below.
+DISCRIMINATOR = "`/agent-memory/`"
 # The bare form the discriminator must never be reduced to.
 BARE_DISCRIMINATOR = "`agent-memory/`"
 EXPECTED_SELECTOR_SITES = 2
@@ -1456,25 +1457,37 @@ def test_index_upkeep_pointer_resolves_to_a_rule_that_exists():
 # READING IT. Both are the kind a future editor "tidies" away, leaving text
 # that reads better and a predicate that no longer works.
 #
-# 1. NO TILDE. The delivered path is EXPANDED, so `~/.claude/agent-memory/` is
-#    not a substring of anything an agent holds and a tilde predicate NEVER
-#    FIRES. The tilde is correct in the DESCRIPTION sentence beside it, which
-#    describes rather than selects. The two spellings sit on the same line on
-#    purpose, which is why these tests slice the selector SENTENCE out of the
-#    line: a line-level tilde assertion would be red against correct text.
+# 1. NO UNEXPANDED ROOT TOKEN. The delivered path is EXPANDED, so any spelling
+#    that still carries a root token is not a substring of anything an agent
+#    holds and the predicate NEVER FIRES. `~/.claude/agent-memory/` was the
+#    original instance of that defect. A `{config_dir}/agent-memory/` spelling
+#    is the SAME defect wearing a different sigil, and in one way it is WORSE:
+#    a tilde never fires, deterministically, so a single check finds it, while
+#    a placeholder fires only when substitution happens -- an intermittently
+#    dead rule, and harder to detect. The assertion below therefore rejects
+#    BOTH `~` and any `{...}` placeholder, never the tilde alone. A rule that
+#    generalises in the prose and matches one spelling in the predicate is
+#    unenforced.
 #
-# 2. THE FULL `.claude/` PREFIX, which looks like padding and is not. It
-#    contributes nothing to discrimination — the discriminating component is
-#    `agent-memory` — so the tempting edit is to strip it for brevity. That
+# 2. THE LEADING SLASH, which looks like padding and is not. It contributes
+#    nothing to discrimination -- the discriminating component is
+#    `agent-memory` -- so the tempting edit is to strip it for brevity. That
 #    edit reintroduces a real collision. Project directories are keyed by a
 #    SLUG, and a slug is the filesystem path with `/` replaced by `-`; a
 #    repository under an `agent-memory` path therefore yields, for example,
-#    `.claude/projects/-Users-me-Sites-agent-memory/memory/`. The bare form
-#    matches that project path and MISROUTES the agent; the full form does not.
-#    The general reason is stronger than the example: a slug cannot contain
-#    `/`, and the full form contains two, so it can only ever match a real
-#    directory path and is immune to slug collision BY CONSTRUCTION. Keep the
-#    prefix. It is a false-positive guard, not a discriminator.
+#    `projects/-Users-me-Sites-agent-memory/memory/`. The bare form matches
+#    that project path and MISROUTES the agent; the slash-prefixed form does
+#    not. The general reason is stronger than the example: a slug cannot
+#    contain `/`, and the discriminator contains two, so it can only ever
+#    match a real directory path and is immune to slug collision BY
+#    CONSTRUCTION. Keep the slash. It is a false-positive guard, not a
+#    discriminator.
+#
+#    THE MARGIN IS ONE CHARACTER. The earlier `.claude/agent-memory/` form sat
+#    EIGHT characters from the forbidden bare form; this one sits ONE, the
+#    leading `/`. The rule became more robust in OPERATION and more fragile to
+#    TIDYING at the same moment, so the bare-form arm below is no longer
+#    belt-and-braces -- it is the only thing holding that margin.
 #
 # WHY THIS IS NOT THE PIN VERIFICATION D FORBIDS. D forbids pinning the cap
 # sentence because that asserts a PLATFORM CONSTANT matches itself: it would
@@ -1486,42 +1499,64 @@ def test_index_upkeep_pointer_resolves_to_a_rule_that_exists():
 # Do not delete these believing D forbids them.
 #
 # THE RESIDUAL, STATED RATHER THAN IMPLIED, because a bound left out is a
-# bounded guarantee presented as an unbounded one. The discriminator is ITSELF
-# a platform-determined path. If the platform relocated the agent-memory tree,
-# or renamed `.claude/`, the rule would go stale and THESE TESTS WOULD STAY
-# GREEN — structurally D's own objection, one level down. Two things bound it:
-# the path is OBSERVED by every agent in its own context every session, unlike
-# the cap, so staleness is discoverable in normal operation rather than
-# undetectable in principle; and a stale discriminator matches NOTHING, so the
-# agent falls back to the ambiguity that existed before the rule rather than
-# being routed to the wrong directory. Fail-safe, not fail-open.
+# bounded guarantee presented as an unbounded one. This form is WIDER than the
+# root-qualified one it replaced: it matches any path containing
+# `/agent-memory/`, including one outside a config root, and a false positive
+# here MISROUTES -- the active class, not the fail-safe one. The claim is NOT
+# that the form is fail-safe in the width direction. It is bounded by
+# POPULATION rather than by pattern: the rule ranges only over paths offered
+# to an agent AS A MEMORY DIRECTORY. Known members -- agent-memory itself
+# (matches, correctly); platform auto-memory under `projects/<slug>/memory/`
+# (slug-encoded, the character before `agent-memory` is `-`, no match); and
+# pact-memory's `.../memory.db` (no match). No known member collides. REVISIT
+# CONDITION, checkable rather than reassuring: a SECOND offered memory
+# directory whose path contains `/agent-memory/`.
 #
-# WHAT THE FULL-STRING FORM COSTS, because it is a TRADE and not a free win.
-# Asserting the whole `.claude/agent-memory/` couples this pin more tightly to
-# the platform's config-root NAME than a bare `agent-memory` would, and so it
-# WIDENS the silent-staleness surface described immediately above: rename
-# `.claude/` and the rule goes stale while these tests stay green. That cost is
-# accepted deliberately, because the alternative is worse in kind rather than
-# in degree. A stale full form matches NOTHING and degrades to the ambiguity
-# that existed before the rule; a stripped form plus a slug collision matches
-# BOTH paths and actively misroutes. The trade is a slightly larger
-# silent-staleness surface in exchange for removing an active-misroute
-# surface. Anyone reopening this decision should re-derive that comparison
-# rather than weigh the two failures as though they were the same kind.
+# WHAT THIS FORM REMOVED, because the earlier comment weighed a trade that no
+# longer applies. Asserting the whole `.claude/agent-memory/` coupled this pin
+# to the platform's config-root NAME: rename `.claude/` and the rule went
+# stale while these tests stayed GREEN. This form carries no root name at all,
+# so that silent-staleness surface is ZERO. It also repairs an operational bug
+# the root-qualified form carried on every non-default root: under a
+# `$CLAUDE_CONFIG_DIR` of, say, `~/.claude-zai`, `.claude/agent-memory/` was a
+# substring of NOTHING the agent held, so the selection rule was already dead
+# in practice. The earlier trade was not re-weighed -- it dissolved.
+#
+# THE DESCRIPTION SENTENCES ARE NOW FORM B, AND ONE SELF-CHECK IS INERT BY
+# DESIGN AS A RESULT. Recorded here so the next reader does not read it as
+# broken, and does not "revive" it by putting a root token back.
+# `_selector_slices` slices the SELECTOR sentence out of its line, and that
+# slicer used to be self-checking in the too-WIDE direction: when the
+# description sentence beside the selector carried a tilde, a too-wide slice
+# dragged the tilde in and reddened the no-tilde assertion. The description
+# sentences at both sites now name no path at all -- they point at the
+# absolute path the platform injects into the agent's own context -- so they
+# carry neither a tilde nor a brace token, and a too-wide slice would drag in
+# nothing to fail on.
+#
+# WHAT STILL GUARDS, so the inertness above is a bounded loss and not a hole:
+# the too-NARROW direction is unaffected (an empty or mis-split slice fails
+# the contains-discriminator assertion beside it), and the
+# no-unexpanded-token arm itself is unaffected -- it still catches a future
+# editor reintroducing `~` or `{config_dir}` INTO THE SELECTOR, which is the
+# failure that actually breaks agent routing. Restoring a root token to the
+# DESCRIPTIONS purely to revive the too-wide check would trade a live
+# instruction defect for a test-harness convenience. Do not.
 
 
 def _selector_slices():
     """Every sentence in the selector file that carries the discriminator.
 
-    Returned as (line number, sentence). Slicing to the SENTENCE is what makes
-    the no-tilde assertion meaningful: the description sentence on the same
-    line legitimately carries a tilde, so a line-level assertion would be red
-    against correct text.
+    Returned as (line number, sentence). Slicing to the SENTENCE is what keeps
+    the no-unexpanded-token assertion aimed at the SELECTOR rather than at the
+    whole line: the description sentence beside it is prose about the same
+    subject and is not what that assertion rules on.
 
-    A broken slicer is caught rather than tolerated in both directions. Too
-    wide (the whole line) drags the description tilde in and reddens the
-    no-tilde assertion; too narrow (empty) fails the contains-discriminator
-    assertion beside it.
+    A broken slicer is caught in the too-NARROW direction: too narrow (empty,
+    or a mis-split) fails the contains-discriminator assertion beside it. The
+    too-WIDE direction is INERT BY DESIGN -- under Form B the description
+    sentences carry no root token to drag in. See the rationale block above;
+    do not restore one here to revive it.
     """
     import re
 
@@ -1552,8 +1587,14 @@ def test_selection_rule_present_at_every_deferral_site():
 
 
 @pytest.mark.parametrize("index", range(EXPECTED_SELECTOR_SITES))
-def test_selector_clause_carries_no_tilde(index):
-    """The tilde belongs in the description sentence and NEVER in the selector."""
+def test_selector_clause_carries_no_unexpanded_token(index):
+    """An unexpanded root token belongs NOWHERE in the selector.
+
+    Generalised from a tilde-only arm. The tilde was one SPELLING of the
+    defect; `{config_dir}` is another and is worse, because it fires
+    intermittently rather than never. A rule stated as a class in prose and
+    enforced against one spelling is unenforced -- see property 1 above.
+    """
     slices = _selector_slices()
     assert index < len(slices), (
         f"expected {EXPECTED_SELECTOR_SITES} selector sites, found {len(slices)}"
@@ -1561,24 +1602,38 @@ def test_selector_clause_carries_no_tilde(index):
     lineno, clause = slices[index]
     assert DISCRIMINATOR in clause, (
         f"the slice taken at {SELECTOR_FILE}:{lineno} does not contain the "
-        f"discriminator, so the no-tilde check below would pass vacuously. The "
-        f"sentence splitter is broken, not the instruction text."
+        f"discriminator, so the no-unexpanded-token check below would pass "
+        f"vacuously. The sentence splitter is broken, not the instruction text."
     )
-    assert "~" not in clause, (
-        f"the selection rule at {SELECTOR_FILE}:{lineno} contains a tilde: "
-        f"{clause!r}. The delivered path is EXPANDED, so a tilde form is not a "
-        f"substring of what an agent holds and the predicate would NEVER FIRE. "
-        f"The tilde in the DESCRIPTION sentence beside this one is correct and "
-        f"must stay; this asymmetry is deliberate. Do not harmonise them."
+    found = ["a tilde"] if "~" in clause else []
+    if re.search(r"\{[^}]*\}", clause):
+        found.append("a {...} placeholder")
+    if "$HOME" in clause:
+        found.append("a $HOME")
+    assert not found, (
+        f"the selection rule at {SELECTOR_FILE}:{lineno} carries an UNEXPANDED "
+        f"ROOT TOKEN ({' and '.join(found)}): {clause!r}. The delivered path is "
+        f"EXPANDED, so a spelling that still carries `~`, a brace placeholder or a bare `$HOME` "
+        f"is not a substring of what an agent holds and the predicate would "
+        f"NEVER FIRE. A placeholder is the worst of the three: a tilde and a bare `$HOME` never "
+        f"fires, so one check finds it, while a placeholder fires only when "
+        f"substitution happens. The DESCRIPTION sentence beside this one names "
+        f"no path at all -- it points at the absolute path the platform injects "
+        f"-- and that is deliberate. Do not restore a root token to either one."
     )
 
 
-def test_discriminator_keeps_its_claude_prefix():
-    """`.claude/` is a false-positive guard, not padding. See the block above.
+def test_discriminator_keeps_its_leading_slash():
+    """The leading `/` is a false-positive guard, not padding. See the block above.
 
     Separable from the site-count assertion: adding a THIRD mention in the bare
     form leaves the count of full discriminators at two while reintroducing the
     collision, and only this assertion sees that.
+
+    THE MARGIN IS ONE CHARACTER. The earlier root-qualified form sat eight
+    characters from the bare form; this one sits one. This arm is no longer
+    belt-and-braces -- it is the only thing holding that margin, and the edit
+    that breaks it is a single keystroke.
     """
     text = (PLUGIN_ROOT / SELECTOR_FILE).read_text(encoding="utf-8")
     bare_sites = [
@@ -1588,10 +1643,11 @@ def test_discriminator_keeps_its_claude_prefix():
     ]
     assert not bare_sites, (
         f"{SELECTOR_FILE} uses the bare {BARE_DISCRIMINATOR} at line(s) "
-        f"{bare_sites}. The `.claude/` prefix is NOT redundant padding: project "
+        f"{bare_sites}. The leading `/` is NOT redundant padding, and it is the "
+        f"ONLY character between the correct form and this one: project "
         f"directories are keyed by a slug, a slug is the filesystem path with "
         f"'/' replaced by '-', so a repository under an `agent-memory` path "
         f"yields a project path the bare form MATCHES and misroutes the agent "
-        f"to. The full form contains two slashes and a slug contains none, so it "
-        f"can only match a real directory path. Restore the prefix."
+        f"to. The slash-prefixed form contains two slashes and a slug contains "
+        f"none, so it can only match a real directory path. Restore the slash."
     )

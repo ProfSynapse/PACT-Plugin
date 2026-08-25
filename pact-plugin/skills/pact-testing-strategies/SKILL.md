@@ -189,10 +189,11 @@ narrower: do not mock the *integration seam whose correct resolution IS the thin
 under test*.
 
 **What a non-mocked seam test looks like.** Build the real seam state on disk (e.g.
-a real `~/.claude/tasks/<team>/<id>.json`, or a tmp-redirected equivalent), invoke
+a real `{config_dir}/tasks/<team>/<id>.json`, or a tmp-redirected equivalent), invoke
 the component over the **unstubbed** read, and assert the observable outcome. The
 test passes only if the component resolves the real seam — so a regression in
 seam resolution turns it red, where a mocked test would stay green.
+`{config_dir}` is this session's Claude config root — the value of `$CLAUDE_CONFIG_DIR` when set and non-empty, otherwise `$HOME/.claude`. Read it off an absolute path the platform already injected into your context — your plugin root is `{config_dir}/plugins/…` — rather than shelling out for the variable. Substitute it before running any command; never assume `~/.claude`.
 
 **Canonical reference example.** `pact-plugin/tests/test_missed_wake_scan_integration.py`
 is the worked exemplar to copy from. Its non-vacuity-gate case — the one that would

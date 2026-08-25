@@ -48,13 +48,15 @@ If the prompt said `refresh_ts=UNAVAILABLE`, skip the write (the prompt may re-s
 
 ## Step 4 — Plugin banner
 
-Surface the plugin banner — a single line of the form `PACT plugin: <version> (root: ~/.claude/plugins/cache/pact-marketplace/PACT/<version>)` — in the bootstrap-confirmation reply. The banner is pre-rendered by the `format_plugin_banner()` helper in `hooks/shared/plugin_manifest.py` (reading the live version from `plugin.json`) and delivered through the `session_init` SessionStart system reminder + the per-prompt `peer_inject` surface; no manual composition is needed — echo what the hook already produced. If the session-start system reminder has been dropped (post-compaction), fall back in order: (a) read the `- Plugin root:` line in CLAUDE.md's Current Session block (the path embeds the version), then (b) read `plugin.json["version"]` directly. The `<version>` placeholder above is illustrative — do not substitute it manually.
+Surface the plugin banner — a single line beginning `PACT plugin: ` — in the bootstrap-confirmation reply. The banner is pre-rendered by the `format_plugin_banner()` helper in `hooks/shared/plugin_manifest.py` (reading the live version from `plugin.json`) and delivered through the `session_init` SessionStart system reminder + the per-prompt `peer_inject` surface; no manual composition is needed — echo what the hook already produced. If the session-start system reminder has been dropped (post-compaction), fall back in order: (a) read the `- Plugin root:` line in CLAUDE.md's Current Session block (the path embeds the version), then (b) read `plugin.json["version"]` directly.
 
 ---
 
 ## Session Placeholder Variables
 
-Command files use `{team_name}`, `{session_dir}`, and `{plugin_root}` as literal brace-wrapped placeholders. **Substitution is manual textual replacement** performed by the orchestrator before invoking shell commands — there is no template engine.
+Command files use `{team_name}`, `{session_dir}`, `{plugin_root}`, and `{config_dir}` as literal brace-wrapped placeholders. **Substitution is manual textual replacement** performed by the orchestrator before invoking shell commands — there is no template engine.
+
+`{config_dir}` is this session's Claude config root — the value of `$CLAUDE_CONFIG_DIR` when set and non-empty, otherwise `$HOME/.claude`. Read it off an absolute path the platform already injected into your context — your plugin root is `{config_dir}/plugins/…` — rather than shelling out for the variable. Substitute it before running any command; never assume `~/.claude`. It is env-derived, so it has no CLAUDE.md line and no context-JSON key in the table below.
 
 | Placeholder | CLAUDE.md line | Context JSON key | Description |
 |-------------|---------------|-----------------|-------------|
@@ -66,7 +68,7 @@ Command files use `{team_name}`, `{session_dir}`, and `{plugin_root}` as literal
 
 **Per-field fallback**: if an individual variable is missing from `CLAUDE.md` (e.g., a session block written by an older `session_init` that didn't record `- Plugin root:`), fall back to `pact-session-context.json` in the current session directory for that one variable. Do not re-read the whole set from JSON when a single field is missing.
 
-**Last-resort fallback for `{plugin_root}`**: if both `CLAUDE.md` and `pact-session-context.json` are unavailable, use `$HOME/.claude/protocols/pact-plugin/../` (symlink traversal). If the resolved path does not exist, stop and report the issue to the user rather than continuing with a broken path.
+**Last-resort fallback for `{plugin_root}`**: if both `CLAUDE.md` and `pact-session-context.json` are unavailable, use `"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/protocols/pact-plugin/../"` (symlink traversal). If the resolved path does not exist, stop and report the issue to the user rather than continuing with a broken path.
 
 ---
 
@@ -74,4 +76,4 @@ Command files use `{team_name}`, `{session_dir}`, and `{plugin_root}` as literal
 
 The bootstrap-complete marker at `<session_dir>/bootstrap-complete` is written by the `bootstrap_marker_writer.py` UserPromptSubmit hook once the ritual's pre-conditions are observable on disk: team config exists AND `secretary` is in `members[]`. The marker self-installs on the next user prompt after Steps 1-2 complete. No LLM action is required for the marker.
 
-If a `bootstrap_gate` PreToolUse refusal indicates the marker is missing after the ritual, see the `bootstrap_marker_writer.py` source for the pre-condition checks; the most likely cause is a delayed secretary spawn that hasn't yet propagated to `~/.claude/teams/{team_name}/config.json`.
+If a `bootstrap_gate` PreToolUse refusal indicates the marker is missing after the ritual, see the `bootstrap_marker_writer.py` source for the pre-condition checks; the most likely cause is a delayed secretary spawn that hasn't yet propagated to `{config_dir}/teams/{team_name}/config.json`.
