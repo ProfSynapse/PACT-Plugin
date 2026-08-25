@@ -990,7 +990,7 @@ def strip_orphan_kernel_block() -> str | None:
                 which = "PACT_START" if has_start else "PACT_END"
                 missing = "PACT_END" if has_start else "PACT_START"
                 return (
-                    f"Migration skipped: ~/.claude/CLAUDE.md contains "
+                    f"Migration skipped: {target_file} contains "
                     f"{which} but no matching {missing}. To avoid data "
                     f"loss, inspect the file and either remove the "
                     f"orphan {which} marker or restore the matching "
@@ -1002,7 +1002,7 @@ def strip_orphan_kernel_block() -> str | None:
                 # END marker exists in content but appears textually
                 # before START. Same defensive handling.
                 return (
-                    "Migration skipped: ~/.claude/CLAUDE.md contains "
+                    f"Migration skipped: {target_file} contains "
                     "both PACT_START and PACT_END markers but PACT_END "
                     "appears before PACT_START. Inspect the file and "
                     "reorder or remove the orphan markers."
@@ -1032,14 +1032,18 @@ def strip_orphan_kernel_block() -> str | None:
                     target_file, new_content, get_claude_config_dir()
                 )
                 return (
-                    "Removed obsolete PACT kernel block from "
-                    "~/.claude/CLAUDE.md"
+                    f"Removed obsolete PACT kernel block from {target_file}"
                 )
             except ContainmentError:
                 # Opaque skip, matching the message the removed is_symlink
                 # guard returned -- do not leak the resolved victim path.
+                # target_file is built at the top of this function as
+                # get_claude_config_dir() / "CLAUDE.md" and is never resolved,
+                # so it cannot be the symlink victim this message must not
+                # leak. It names only the config root, which the platform
+                # already injects into every agent context.
                 return (
-                    "Migration skipped: ~/.claude/CLAUDE.md path "
+                    f"Migration skipped: {target_file} path "
                     "precondition not met."
                 )
             except OSError as e:
@@ -1053,7 +1057,7 @@ def strip_orphan_kernel_block() -> str | None:
                 )
     except TimeoutError:
         return (
-            "Failed to acquire lock on ~/.claude/CLAUDE.md within 5s "
+            f"Failed to acquire lock on {target_file} within 5s "
             "(another session_init hook may be running concurrently). "
             "Kernel-block migration skipped; will retry on next session "
             "start."
@@ -1066,7 +1070,7 @@ def strip_orphan_kernel_block() -> str | None:
         # Opaque (no str(e)) so the sidecar path is not leaked into a status
         # string -- matches the sibling TimeoutError message's non-disclosure.
         return (
-            "Could not acquire lock on ~/.claude/CLAUDE.md "
+            f"Could not acquire lock on {target_file} "
             "(path precondition not met); kernel-block migration skipped."
         )
 

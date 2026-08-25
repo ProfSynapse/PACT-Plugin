@@ -413,17 +413,17 @@ def check_additional_directories() -> str | None:
                 expanded = Path(entry).resolve()
             configured.add(expanded)
 
-        # Check which required directories are missing
-        required = {
-            "~/.claude/teams": (get_claude_config_dir() / "teams").resolve(),
-            "~/.claude/pact-sessions": (
-                get_claude_config_dir() / "pact-sessions"
-            ).resolve(),
-        }
-        missing = [
-            tilde for tilde, resolved in required.items()
-            if resolved not in configured
+        # Check which required directories are missing. The path DISPLAYED is
+        # the same object the membership test ran on — deliberately not a
+        # separate display literal. A tilde literal here would name a directory
+        # this check never looked at, so on a non-default config root the user
+        # would add a path that still does not satisfy the test, and following
+        # the tip would not silence the tip.
+        required = [
+            (get_claude_config_dir() / "teams").resolve(),
+            (get_claude_config_dir() / "pact-sessions").resolve(),
         ]
+        missing = [path for path in required if path not in configured]
 
         if not missing:
             return None  # All required directories configured
@@ -431,7 +431,7 @@ def check_additional_directories() -> str | None:
         dirs_list = ", ".join(f"`{d}`" for d in missing)
         return (
             f"PACT tip: Add {dirs_list} to `additionalDirectories` in your "
-            "~/.claude/settings.json to avoid permission prompts for team and "
+            f"`{settings_path}` to avoid permission prompts for team and "
             "session file operations."
         )
     except Exception:
@@ -875,7 +875,7 @@ def check_settings_well_formed() -> Optional[str]:
             json.loads(settings_path.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return (
-                "PACT: ~/.claude/settings.json is not valid JSON — Claude Code "
+                f"PACT: {settings_path} is not valid JSON — Claude Code "
                 "silently ignores a malformed settings.json (including its `env` "
                 "block), so any PACT_* options set there are NOT applied. Fix the "
                 "JSON syntax to restore them."
