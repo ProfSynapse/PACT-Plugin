@@ -128,11 +128,6 @@ ARM1_ALLOWLIST = [
 
 ARM2_ALLOWLIST = [
     ("skills/pact-memory/scripts/config.py", 186, _DB_PIN),
-    ("skills/pact-memory/scripts/pact_session.py", 48,
-     "the resolver contract's mandated $HOME/.claude fallback — removing it "
-     "breaks the contract. NOT 'unmigrated': that reads as an oversight and "
-     "would invite deleting the fallback, silently reintroducing the "
-     "wrong-root defect this gate exists to prevent."),
 ]
 
 

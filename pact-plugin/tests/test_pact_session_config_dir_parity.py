@@ -1,106 +1,90 @@
 """
 Location: pact-plugin/tests/test_pact_session_config_dir_parity.py
-Summary: Behavioural parity pin between the config-root resolver twin inside
-         skills/pact-memory/scripts/pact_session.py and the authoritative
-         resolver hooks/shared/paths.get_claude_config_dir().
+Summary: Pins that skills/pact-memory/scripts/pact_session.py anchors its paths
+         at the resolved Claude config root, and that it can actually IMPORT
+         that resolver the way production invokes it.
 Used by: the merge gate only — nothing imports this module.
 
-WHY A TWIN EXISTS AT ALL: skill scripts cannot import the hooks package (a real
-package boundary, documented repeatedly in working_memory.py), so pact_session
-must reproduce the resolver contract rather than call it. The defect this pin
-guards is therefore not the copy — it is the UNCOVERED copy. Nothing pinned
-parity, so the copy drifted.
+SCOPE, ON PURPOSE — do not "restore" the missing coverage:
 
-THE RESOLVER IS THE ORACLE. Every expected value below is COMPUTED by calling
-get_claude_config_dir() under the same env and the same redirected home. None is
-restated as a literal: a restatement would be a THIRD copy of the contract, free
-to drift from both and capable of passing while the two it compares disagree.
+  This file does NOT re-test the resolver's precedence contract (unset / empty /
+  whitespace / "~" / "~/x" / absolute / relative / trailing slash / nonexistent).
+  tests/test_paths.py owns that, with 21 hardcoded-literal tests including
+  test_exact_prefix_slice_not_lstrip and test_no_expanduser_uses_resolved_home.
+  Restating those clauses here would be a second statement of one contract, free
+  to drift, with nothing comparing the two — the duplicate-implementation problem
+  moved to the test layer.
 
-The package boundary binds PRODUCTION code, not tests — tests/conftest.py puts
-both trees on sys.path, so oracle and twin load in one interpreter, and both read
-Path.home() at call time so one redirected home reaches both.
+  What is left for this file is what test_paths.py cannot see: whether
+  pact_session ANCHORS at the resolved root, and whether it REACHES the resolver
+  at all.
 
-test_oracle_moves_with_env is what keeps the rest of this file from going
-vacuous. If a future change makes get_claude_config_dir() ignore
-$CLAUDE_CONFIG_DIR, oracle and twin agree on home/".claude" for every input and
-every other arm here goes green against an unchanged broken twin.
+EXPECTED VALUES ARE HARDCODED, never computed by calling the resolver. Since
+pact_session now imports the same function a test would call, deriving the
+expectation from it would move expectation and subject together — a resolver
+that stopped honoring $CLAUDE_CONFIG_DIR would green every arm here. (The
+opposite rule applied while pact_session held its own copy: with two
+implementations, restating would have been a third. The rule inverts on how many
+implementations exist.)
+
+WHY THE SUBPROCESS ARM IS NOT OPTIONAL: tests/conftest.py puts BOTH hooks/ and
+skills/pact-memory/ on sys.path for the whole suite. So in-process, the import
+under test succeeds whether or not pact_session's own bootstrap works — a wrong
+parents[] index would leave every other arm in this file green while production
+raised ModuleNotFoundError on each cli.py invocation. Only a subprocess without
+conftest's help can tell those apart.
 """
 import json
-
-import pytest
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 from scripts import pact_session
-from shared.paths import get_claude_config_dir
 
-# The clause set is the resolver's STATED PRECEDENCE (hooks/shared/paths.py),
-# not a plausible-looking sample. The three UNSET clauses separate nothing —
-# the contract's answer there IS home/".claude", which a home-hardcoded twin
-# matches by coincidence. That is exactly their job: they are the control that
-# shows the instrument is live. The five divergent clauses are the ones where
-# correct and defective code actually differ, so they are the ones that can
-# fail.
-UNSET_CLAUSES = ("unset", "empty", "whitespace")
-DIVERGENT_CLAUSES = ("tilde", "tilde_child", "abs_existing", "abs_missing", "relative")
-ALL_CLAUSES = UNSET_CLAUSES + DIVERGENT_CLAUSES
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "skills" / "pact-memory" / "scripts"
 
 
-@pytest.fixture
-def apply_clause(tmp_path, monkeypatch):
-    """Put $CLAUDE_CONFIG_DIR into exactly one precedence clause.
+def test_context_file_path_anchors_at_relocated_root(tmp_path, monkeypatch):
+    """A relocated root must move the context path off home entirely."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "relocated"))
 
-    The autouse `_isolate_config_root_to_tmp` fixture has already scrubbed the
-    variable and redirected Path.home() to tmp_path, so "unset" needs no action
-    and every config root built here is a SEPARATE tree from home — an anchor
-    that lags on Path.home() lands somewhere no arm expects, rather than
-    somewhere an arm happens to accept.
-    """
-    existing = tmp_path / "config-existing"
-    existing.mkdir()
-    values = {
-        "empty": "",
-        "whitespace": "   ",
-        "tilde": "~",
-        "tilde_child": "~/nested",
-        "abs_existing": str(existing),
-        # Honored even though it is never created — the resolver's contract is
-        # explicit that only CONSUMERS fail open on a missing dir.
-        "abs_missing": str(tmp_path / "config-never-created"),
-        "relative": "rel-root",
-    }
-
-    def _apply(clause):
-        if clause != "unset":
-            monkeypatch.setenv("CLAUDE_CONFIG_DIR", values[clause])
-
-    return _apply
-
-
-@pytest.mark.parametrize("clause", ALL_CLAUSES)
-def test_context_file_path_tracks_the_resolver(clause, apply_clause):
-    """The session-context path must be anchored at the resolved config root."""
-    apply_clause(clause)
-
+    # Hardcoded, not get_claude_config_dir(). conftest redirects home to tmp_path,
+    # so a home-anchored regression lands on tmp_path/".claude"/... instead.
     expected = (
-        get_claude_config_dir()
-        / "pact-sessions" / "proj" / "sid" / "pact-session-context.json"
+        tmp_path / "relocated" / "pact-sessions"
+        / "proj" / "sid" / "pact-session-context.json"
     )
 
     assert pact_session._context_file_path("sid", "/somewhere/proj") == expected
 
 
-def test_disk_discovery_tracks_the_resolver(tmp_path, monkeypatch):
-    """Session discovery must GLOB the resolved config root, not home.
+def test_context_file_path_honors_tilde_root(tmp_path, monkeypatch):
+    """`~` resolves to home ITSELF, not home/".claude".
 
-    A second, independently hardcoded site: a fix that re-anchors the path
-    builder alone leaves this one reading the wrong tree, and every parametrized
-    arm above still passes.
+    Catches a re-hardcode that reads $CLAUDE_CONFIG_DIR directly instead of
+    delegating — such a version passes the absolute-root arm above and fails
+    here, because it would treat "~" as a literal directory name.
+    """
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~")
+
+    expected = tmp_path / "pact-sessions" / "proj" / "sid" / "pact-session-context.json"
+
+    assert pact_session._context_file_path("sid", "/somewhere/proj") == expected
+
+
+def test_disk_discovery_anchors_at_relocated_root(tmp_path, monkeypatch):
+    """Session discovery must GLOB the resolved root — a second call site.
+
+    A fix that re-anchors only the path builder leaves this one reading home,
+    and every arm above still passes.
     """
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "relocated"))
     session_id = "session-abc"
 
     context_file = (
-        get_claude_config_dir()
-        / "pact-sessions" / "proj" / session_id / "pact-session-context.json"
+        tmp_path / "relocated" / "pact-sessions"
+        / "proj" / session_id / "pact-session-context.json"
     )
     context_file.parent.mkdir(parents=True)
     context_file.write_text(json.dumps({"session_id": session_id}), encoding="utf-8")
@@ -108,21 +92,29 @@ def test_disk_discovery_tracks_the_resolver(tmp_path, monkeypatch):
     assert pact_session._resolve_context_on_disk(session_id) == session_id
 
 
-def test_oracle_moves_with_env(tmp_path, monkeypatch):
-    """The ORACLE itself must track $CLAUDE_CONFIG_DIR.
+def test_import_reaches_resolver_from_direct_script_context(tmp_path):
+    """pact_session must import the resolver ON ITS OWN, as production does.
 
-    Without this arm, a resolver that stopped honoring the variable would make
-    every comparison in this file compare home/".claude" against home/".claude"
-    — all green, against an unchanged broken twin, with no red anywhere.
+    Runs in a subprocess with ONLY the scripts dir on sys.path — the direct-script
+    layout `python3 .../scripts/cli.py` produces — from a cwd outside the repo,
+    with PYTHONPATH scrubbed. conftest's path help is absent by construction, so
+    this fails if pact_session's bootstrap is wrong, missing, or silently falling
+    back to a local copy.
     """
-    unset_answer = get_claude_config_dir()
+    root = tmp_path / "relocated"
+    probe = (
+        "import sys; sys.path.insert(0, sys.argv[1]);"
+        "import pact_session;"
+        "print(pact_session._context_file_path('sid', '/somewhere/proj'))"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["CLAUDE_CONFIG_DIR"] = str(root)
 
-    first = tmp_path / "root-one"
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(first))
-    assert get_claude_config_dir() == first
+    result = subprocess.run(
+        [sys.executable, "-c", probe, str(SCRIPTS_DIR)],
+        cwd=tmp_path, env=env, capture_output=True, text=True,
+    )
 
-    second = tmp_path / "root-two"
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(second))
-    assert get_claude_config_dir() == second
-
-    assert unset_answer not in (first, second)
+    assert result.returncode == 0, f"import failed as production would:\n{result.stderr}"
+    expected = root / "pact-sessions" / "proj" / "sid" / "pact-session-context.json"
+    assert result.stdout.strip() == str(expected)

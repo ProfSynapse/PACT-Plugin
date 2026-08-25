@@ -10,47 +10,34 @@ The context file is written once per session by session_init.py and
 read by all subsequent hooks and skill scripts.
 
 Note: hooks/shared/pact_context.py has the authoritative implementation.
-This module mirrors the path logic — the config-root resolution and the
-Path(project_dir).name slug — because skill scripts can't import from the
-hooks package (different Python package boundary).
+This module mirrors the Path(project_dir).name slug logic, and IMPORTS the
+config-root resolver rather than re-implementing it (see the bootstrap below).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
+# A direct-script invocation (`python3 .../scripts/cli.py`) puts only this
+# directory on sys.path, so a bare `from shared.paths import ...` raises
+# ModuleNotFoundError. parents[3] is the plugin root; its hooks/ dir holds the
+# ONE config-root resolver. Importing it beats re-implementing it: a local copy
+# has drifted from the authoritative one before.
+#
+# NO try/except fallback here, deliberately. A fallback would silently rebuild
+# the local copy this import replaced, turning a loud startup failure into a
+# session-state split across two config roots that nothing reports.
+#
+# APPEND, not insert(0): this path stays on sys.path for the rest of the
+# process, and hooks/ holds ~29 importable names. Prepending would let a future
+# hooks/config.py or hooks/database.py shadow this package's own modules of
+# those names. Appending cannot — nothing else on the path provides `shared`.
+sys.path.append(str(Path(__file__).resolve().parents[3] / "hooks"))
 
-def _claude_config_dir() -> Path:
-    """Resolve the Claude Code config/state root.
-
-    A TWIN of hooks/shared/paths.get_claude_config_dir(). The duplication is
-    deliberate and structural: skill scripts cannot import the hooks package.
-    tests/test_pact_session_config_dir_parity.py pins the two together
-    behaviourally, with the hooks resolver as the oracle — change one clause
-    here without changing it there and that pin goes red.
-
-    Precedence (fail-loud — NEVER a silent wrong-root fallback):
-      1. $CLAUDE_CONFIG_DIR, honored EVEN IF the dir does not yet exist (the
-         platform creates it; only CONSUMERS fail open on a missing dir).
-         set-but-empty / whitespace == UNSET.
-           "~"      -> home
-           "~/x"    -> home / "x"     (exact-prefix slice; monkeypatch-safe)
-           "/abs"   -> Path("/abs")
-           "rel"    -> Path("rel")    (honored as-is)
-      2. fallback (unset): home / ".claude"
-
-    Returns an UNRESOLVED path. NO expanduser/lstrip/removeprefix.
-    """
-    raw = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
-    if not raw:
-        return Path.home() / ".claude"
-    if raw == "~":
-        return Path.home()
-    if raw.startswith("~/"):
-        return Path.home() / raw[2:]   # exact 2-char prefix — NOT lstrip, NOT removeprefix
-    return Path(raw)
+from shared.paths import get_claude_config_dir  # noqa: E402  # requires the sys.path bootstrap above
 
 
 def _context_file_path(session_id: str, project_dir: str) -> Path | None:
@@ -61,7 +48,7 @@ def _context_file_path(session_id: str, project_dir: str) -> Path | None:
 
     Returns the session-scoped path when both identifiers are provided:
         <config-root>/pact-sessions/{project-slug}/{session-id}/pact-session-context.json
-    where the config root is resolved by _claude_config_dir() and project-slug
+    where the config root is resolved by get_claude_config_dir() and project-slug
     is Path(project_dir).name (e.g., "PACT-Plugin").
 
     Returns None when either identifier is missing — callers should treat
@@ -75,7 +62,7 @@ def _context_file_path(session_id: str, project_dir: str) -> Path | None:
     if session_id and project_dir:
         slug = Path(project_dir).name
         return (
-            _claude_config_dir() / "pact-sessions"
+            get_claude_config_dir() / "pact-sessions"
             / slug / session_id / "pact-session-context.json"
         )
     return None
@@ -97,7 +84,7 @@ def _resolve_context_on_disk(env_session: str) -> str:
     guards being cached with it.
     """
     try:
-        sessions_root = _claude_config_dir() / "pact-sessions"
+        sessions_root = get_claude_config_dir() / "pact-sessions"
         matches = list(sessions_root.glob(f"*/{env_session}/pact-session-context.json"))
     except OSError:
         return ""
