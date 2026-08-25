@@ -4,7 +4,7 @@ Agents follow prose literally, not the Python resolver, so a `~/.claude/...`
 literal in an instruction surface makes a non-default-root install read, write,
 and in one case execute against the WRONG install's state tree.
 
-Two arms, two prose assertions, one allowlist, and a control per direction.
+Three arms, two prose assertions, one allowlist, and a control per direction.
 Implemented in pathlib rather than shell grep as a PORTABILITY requirement:
 ARM 1's lookahead is PCRE and BSD `/usr/bin/grep` rejects `-P`. Where `grep -P`
 appears to work, an interactive shell function may be rewriting `grep` to
@@ -49,6 +49,19 @@ ARM1 = re.compile(r"(?:~|\$HOME|\$\{HOME\})/\.claude(?=/)")
 # `~/.claude/pact-memory/memory.db` for a forbidden `~/.claude/tasks/` while
 # holding its count. Occurrence granularity, not line granularity.
 ARM1_KEY = re.compile(r"(?:~|\$HOME|\$\{HOME\})/\.claude/[^\s`\"'),*]*")
+
+# ARM 1 stops at `.claude/` and is therefore blind to a BARE config root with
+# no path after it - `cd ~/.claude`, `CONFIG=~/.claude`. ARM 3 closes that.
+# The exclusion set is the whole design and each character earns its place:
+#   /  ARM 1's job, and firing here too would double-count
+#   `  the `{config_dir}` definition sentence writes a trailing backticked
+#      `~/.claude`; without this, every carrier of that sentence needs a triple
+#   }  the migrated shell form ends `$HOME/.claude}` - WITHOUT THIS, ARM 3 REDS
+#      ON CORRECTLY MIGRATED CODE, the same trap as ARM 1's lookahead
+#   \w and -  `.claude-zai`, `.claudex` are OTHER installs, not this root
+# Measured on the migrated tree: 0 occurrences, so this costs no allowlist
+# entries. It can acquire them if someone writes a bare root deliberately.
+ARM3 = re.compile(r"(?:~|\$HOME|\$\{HOME\})/\.claude(?![/`\w}-])")
 
 # Targeted pin on known sites — NOT a class gate. Misses single-quoted
 # '.claude', Path.home().joinpath(".claude"), os.path.expanduser("~/.claude"),
@@ -175,6 +188,21 @@ def test_arm2_finds_no_unallowlisted_home_join():
     )
 
 
+def test_arm3_finds_no_bare_config_root():
+    """A bare `~/.claude` with no path after it - `cd ~/.claude`, `X=~/.claude`.
+
+    ARM 1 cannot see these: it requires a trailing slash. Measured at zero on
+    the migrated tree, so there is no allowlist for this arm; if a deliberate
+    bare root ever lands, add one here with a justification.
+    """
+    hits = [(rel, i) for rel, text in _scanned_files()
+            for i, line in enumerate(text.splitlines(), 1) if ARM3.search(line)]
+    assert not hits, (
+        "bare config-root literal in LLM-facing prose. An agent told to `cd` "
+        f"here lands in the wrong install on a non-default root: {hits}"
+    )
+
+
 # --------------------------------------------------------------------------
 # Prose assertions
 
@@ -253,6 +281,23 @@ def test_control_arm1_stays_quiet_on_the_migrations_own_output():
         assert not ARM1.search(cured), (
             f"ARM 1 reds on correctly migrated code: {cured}. The `(?=/)` "
             "lookahead is load-bearing; see the comment at its definition."
+        )
+
+
+def test_control_arm3_fires_on_a_bare_root():
+    for bare in ("~/.claude", "cd ~/.claude", "CONFIG=$HOME/.claude", 'set "~/.claude"'):
+        assert ARM3.search(bare), f"ARM 3 blind to {bare}"
+
+
+def test_control_arm3_stays_quiet_on_everything_it_must_not_claim():
+    for quiet in ("~/.claude/tasks/",
+                  "`~/.claude`",
+                  "~/.claude-zai/x", "~/.claudex",
+                  'python3 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/x"',
+                  '"${CLAUDE_CONFIG_DIR:-$HOME/.claude}"'):
+        assert not ARM3.search(quiet), (
+            f"ARM 3 over-fires on {quiet}. Every character in its exclusion set "
+            "is load-bearing; see the comment at its definition."
         )
 
 
