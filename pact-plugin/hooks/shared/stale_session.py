@@ -41,7 +41,7 @@ _STALENESS_WARNING_TEMPLATE = (
     "{actual}. session_init likely failed at SessionStart this session "
     "(or the CLAUDE.md write failed). Do NOT trust the recorded Team/"
     "Session dir/Resume lines for THIS session; completing bootstrap "
-    "will rewrite them."
+    "will rewrite the CLAUDE.md session records."
 )
 
 # FORWARD NOTE — a SIBLING restart-detection signal is planned for this leaf:

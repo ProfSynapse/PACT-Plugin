@@ -67,7 +67,13 @@ from dispatch_gate import _STALE_REALIGN_HINT  # noqa: E402
 # A marker substring unique to the augmentation — asserting on it proves the
 # net-new self-diagnosis text is present without coupling to exact wording.
 _AUGMENT_MARKER = "STALE-TEAM/STORE MISMATCH"
-_REALIGN_MARKER = "pact-session-context.json"
+# NOT the context filename: the rule-⑧ cause enumeration's cause (2) now
+# names pact-session-context.json too (both texts deliberately name the same
+# measured recovery), so on every leg where the enumeration legitimately
+# appends the filename appears WITHOUT this hint and a filename marker would
+# false-fail the absence cells. "Working recovery" is unique to the hint's
+# remedy block; the enumeration says only "Recovery:".
+_REALIGN_MARKER = "Working recovery"
 
 
 def test_stale_markers_are_live_and_ascii():
@@ -118,6 +124,81 @@ def test_stale_markers_are_live_and_ascii():
             "file is now vacuous. Re-derive the marker from the production "
             "constant; do not re-type it."
         )
+
+# =============================================================================
+# The REMEDY the hint names — the measured manual repoint, not a pointer at
+# the bootstrap ritual. Completing bootstrap does NOT rewrite the persisted
+# team records, so the earlier pointer ("Completing /PACT:bootstrap also
+# rewrites those records.") sent the operator to a ritual that changed
+# nothing for this denial; the measured working recovery is a manual edit.
+# =============================================================================
+
+# Elements of the measured recovery. Each is ASCII-only and typed once; the
+# positive assertions below are their own liveness check (a marker absent
+# from the live constant fails the test, not silently passes).
+_RECOVERY_MARKERS = (
+    "OLD session",
+    "pact-session-context.json",
+    "teams/session-*/config.json",
+    "session_id",
+    "journal",
+)
+
+# The falsified claim, in the constructions already seen. A phrase denylist
+# over free prose cannot be complete — its job is to force a human to look
+# when the known-bad construction returns, exactly like the sibling
+# tripwires in test_dispatch_gate_cause_enumeration.py.
+_FORBIDDEN_INERT_REMEDIES = (
+    "bootstrap ritual rewrites",
+    "bootstrap also rewrites",
+    "rewrites those records",
+    "bootstrap will rewrite",
+)
+
+
+def test_hint_names_the_measured_manual_repoint_not_a_bootstrap_pointer(
+    tmp_path, monkeypatch, capsys
+):
+    """COUPLED PAIR IN ONE BODY: the recovery elements PRESENT and the inert
+    bootstrap-pointer phrasings ABSENT, asserted against the SAME emitted
+    deny. Either half alone is vacuous — absence-only passes on a hint
+    emptied of any remedy at all; presence-only passes with the inert
+    pointer still appended after the real recovery.
+
+    The recovery pinned here is the MEASURED one: edit
+    pact-session-context.json in the OLD session's directory, set team_name
+    to the LIVE team, and leave session_id + the journal dir untouched
+    (journal continuity). "OLD session" is the load-bearing element — after
+    a resume there are two session dirs and only the OLD one holds the
+    records this gate reads.
+    """
+    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
+    _seed_team_with_lead(tmp_path, _TEAM, _LIVE_SESSION_ID)
+    _write_project_claude_md(monkeypatch, tmp_path, _RECORDED_STALE_ID)
+
+    code, out = _run_main(_make_input(), capsys)
+
+    assert code == 2, "stale-mismatch deny must still fire, else vacuous"
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _AUGMENT_MARKER in reason, "precondition: the hint actually appended"
+
+    for marker in _RECOVERY_MARKERS:
+        assert marker.isascii(), f"recovery marker not ASCII-only: {marker!r}"
+        assert marker in reason, (
+            f"measured-recovery element missing from the hint: {marker!r}"
+        )
+    # Scoped to the HINT constant, not the emitted reason: the shared
+    # detector's stale-block — legitimately prepended on this leg — carries
+    # its own "completing bootstrap will rewrite the CLAUDE.md session
+    # records" claim, which is a different sentence from a different
+    # module and not this tripwire's subject.
+    for phrase in _FORBIDDEN_INERT_REMEDIES:
+        assert phrase not in _STALE_REALIGN_HINT, (
+            f"inert bootstrap-pointer remedy reintroduced into the hint: "
+            f"{phrase!r}. Completing bootstrap does not rewrite these "
+            "records."
+        )
+
 
 # session_id values for the both-modes matrix.
 _LIVE_SESSION_ID = "test-session"          # the stdin session_id _make_input uses
