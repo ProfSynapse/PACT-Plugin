@@ -48,7 +48,7 @@ If the prompt said `refresh_ts=UNAVAILABLE`, skip the write (the prompt may re-s
 
 ## Step 4 — Plugin banner
 
-Surface the plugin banner — a single line of the form `PACT plugin: <version> (root: {plugin_root})` — in the bootstrap-confirmation reply. The banner is pre-rendered by the `format_plugin_banner()` helper in `hooks/shared/plugin_manifest.py` (reading the live version from `plugin.json`) and delivered through the `session_init` SessionStart system reminder + the per-prompt `peer_inject` surface; no manual composition is needed — echo what the hook already produced. If the session-start system reminder has been dropped (post-compaction), fall back in order: (a) read the `- Plugin root:` line in CLAUDE.md's Current Session block (the path embeds the version), then (b) read `plugin.json["version"]` directly. The `<version>` placeholder above is illustrative — do not substitute it manually.
+Surface the plugin banner — a single line beginning `PACT plugin: ` — in the bootstrap-confirmation reply. The banner is pre-rendered by the `format_plugin_banner()` helper in `hooks/shared/plugin_manifest.py` (reading the live version from `plugin.json`) and delivered through the `session_init` SessionStart system reminder + the per-prompt `peer_inject` surface; no manual composition is needed — echo what the hook already produced. If the session-start system reminder has been dropped (post-compaction), fall back in order: (a) read the `- Plugin root:` line in CLAUDE.md's Current Session block (the path embeds the version), then (b) read `plugin.json["version"]` directly.
 
 ---
 
