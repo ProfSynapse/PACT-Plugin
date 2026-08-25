@@ -53,14 +53,14 @@ Every session begins with a one-time ritual that identifies the platform-pre-cre
 - **Team identification** — read `team_name` from the session context: the hook-delivered value is authoritative; the project `CLAUDE.md` Current Session block is a fallback (used only when hook context is lost, and can be stale). The platform pre-creates exactly one session team; use it (you do not create it). Every specialist dispatch requires the team to exist.
 - **Secretary spawn** — spawn the session secretary with `subagent_type="pact-secretary"` and `name="secretary"` (canonical). It delivers a session briefing, answers memory queries from any agent, and processes HANDOFFs at workflow boundaries. The briefing is dispatched as a discrete-deliverable task (`secretary: deliver session briefing`) that the secretary self-completes after delivering it — you do NOT complete it, and completing it does not end the secretary's role. The secretary must exist before any memory query. The literal name is load-bearing — `bootstrap_marker_writer.py` checks `member.name == "secretary"` and the housekeeping dispatch sites assign work via `TaskUpdate(owner="secretary")`.
 - **Paused-state check** — paused state is surfaced automatically by the `session_init` hook in the SessionStart context (sourced from the prior session's `session_paused` journal event). Do NOT read a `paused-state.json` file — nothing writes it. If the SessionStart context shows a "Paused work detected" line, surface it to the user; do not silently resume.
-- **Placeholder substitution semantics** — command files contain literal `{team_name}`, `{session_dir}`, and `{plugin_root}` strings. Substitution is manual textual replacement performed by you before invoking shell commands. Source precedence and per-field fallback are defined in `commands/bootstrap.md`.
+- **Placeholder substitution semantics** — command files contain literal `{team_name}`, `{session_dir}`, `{plugin_root}`, and `{config_dir}` strings. Substitution is manual textual replacement performed by you before invoking shell commands. Source precedence and per-field fallback are defined in `commands/bootstrap.md`. `{config_dir}` is this session's Claude config root — the value of `$CLAUDE_CONFIG_DIR` when set and non-empty, otherwise `$HOME/.claude`. Substitute it before running any command; never assume `~/.claude`.
 
 ### When to re-invoke
 
 The ritual is per-session and idempotent — the marker survives compaction. Re-invoke `Skill("PACT:bootstrap")` when:
 
 - The session has just resumed (post-compaction or `claude --resume`) and the team-existence assumption needs re-verification.
-- The team config (`~/.claude/teams/{team_name}/config.json`) is missing, or its `members[]` no longer contains a `secretary` entry. The bootstrap ritual is the only path that re-establishes the `secretary` entry (the platform re-provisions the team config itself on the next spawn).
+- The team config (`{config_dir}/teams/{team_name}/config.json`) is missing, or its `members[]` no longer contains a `secretary` entry. The bootstrap ritual is the only path that re-establishes the `secretary` entry (the platform re-provisions the team config itself on the next spawn).
 
 Steady-state marker absences self-heal automatically: the `bootstrap_marker_writer` UserPromptSubmit hook re-creates the marker on the next prompt whenever team config + secretary are still on disk. `/clear` removes only the marker (see `session_init._clear_bootstrap_marker`); the team config persists, so `/clear` falls into the self-healing path and does NOT require manual re-invocation.
 
@@ -147,7 +147,7 @@ Idle notifications arrive as conversation turns. When a turn carries no actionab
 Reconstruct state:
 
 1. `git worktree list` — identify active feature work
-2. Read session journal (`~/.claude/pact-sessions/{slug}/{session_id}/session-journal.jsonl`) — durable record of HANDOFFs, phase transitions, variety scores, and commits
+2. Read session journal (`{session_dir}/session-journal.jsonl`) — durable record of HANDOFFs, phase transitions, variety scores, and commits
 3. `TaskList` — tasks, status, owners, blockers (summaries survive compaction, but task files with full metadata may be GC'd)
 4. `TaskGet` on priority tasks: in-progress first, then recent completed (fallback for metadata not yet in journal)
 5. Next action: blocker → imPACT; in-progress phase → invoke its command; all complete → peer-review; PR open → check status; no tasks → check `gh pr list` or await user
@@ -457,7 +457,7 @@ Use the same iterate-by-name pattern for any other team-lead-to-many signal (`pl
 | After dispatching agent | Teammate self-claims Task B via `TaskUpdate(taskId, status="in_progress")` **before any implementation tool-use** once it unblocks; the team-lead does NOT pre-set `in_progress` |
 | Teachback submitted (Task A) | Read raw JSON `metadata.teachback_submit`, validate per §12 Teachback Review, then Acceptance two-call atomic pair (§12) auto-unblocks Task B |
 | HANDOFF submitted (Task B) | Read raw JSON `metadata.handoff` (TaskGet is metadata-blind), then Acceptance two-call atomic pair (§12) — paired wake-`SendMessage` + `TaskUpdate(taskId, status="completed")` (SendMessage FIRST per the lifecycle-gate ordering invariant) |
-| Reading agent's full HANDOFF | `cat ~/.claude/tasks/{team_name}/{taskId}.json \| jq .metadata.handoff` (on-demand, raw JSON; `TaskGet` does NOT surface metadata.handoff) |
+| Reading agent's full HANDOFF | `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" \| jq .metadata.handoff` (on-demand, raw JSON; `TaskGet` does NOT surface metadata.handoff) |
 | Creating downstream phase task | Include upstream task IDs in description for chain-read |
 | Agent reports blocker | `TaskCreate(subject: "BLOCKER: ...", metadata={"type": "blocker"})` then `TaskUpdate(agent_taskId, addBlockedBy: [blocker_taskId])`. **`metadata.type` is required** — `agent_handoff_emitter.py` inline-checks `metadata.type in ("blocker", "algedonic")` and SUPPRESSES journal emission for signal tasks; `shared/task_utils.py` and `shared/session_resume.py` use the same literal to CATEGORIZE signal tasks for recovery display. The subject prefix has no special meaning. |
 | Agent reports algedonic signal | `TaskCreate(subject: "[HALT\|ALERT]: ...", metadata={"type": "algedonic", "level": "halt"\|"alert", "category": "..."})` then amplify scope via `addBlockedBy` on phase/feature task. |
@@ -502,7 +502,7 @@ Teammate self-completion carve-outs (predicate-witnessed): signal-tasks (`metada
 
 An auditor dispatch carries `completion_type: "signal"` with NO `type` key, so it does NOT satisfy the signal-task predicate above and is NOT predicate-witnessed — auditors self-complete as documented practice, not as an exemption. Do NOT add `metadata.type` to an auditor dispatch to make it fit the predicate: that would silently move those dispatches out of the Q5 coverage denominator.
 
-**TaskGet metadata-blindness reminder**: `TaskGet` does NOT surface `metadata.handoff`. Read directly via `cat ~/.claude/tasks/{team_name}/{taskId}.json | jq .metadata.handoff`; do NOT mark completed if missing or empty.
+**TaskGet metadata-blindness reminder**: `TaskGet` does NOT surface `metadata.handoff`. Read directly via `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff`; do NOT mark completed if missing or empty.
 
 **You MUST `Read(file_path="../protocols/pact-completion-authority.md")` before answering** whenever you detect a TEACHBACK or HANDOFF arrival, a rejection cycle, or any teammate idle on `awaiting_lead_completion`.
 
@@ -583,7 +583,7 @@ Teammates signal protocol-defined waits via the `intentional_wait` task metadata
   task-file-mtime plus sustained-silence evidence. Applies under both
   teammateModes. See [pact-completion-authority §Crossed-Wake Idles](../protocols/pact-completion-authority.md#crossed-wake-idles-one-redundant-confirm-then-stop).
 - **Drive resolution on your own cadence.** Track outstanding waits across your teammates; send the resolving message (approval / commit confirmation / peer reply routed / user decision) when appropriate.
-- **Reading the flag**: `TaskGet` does NOT surface task metadata. Read the task file directly: `cat ~/.claude/tasks/{team}/{taskId}.json | jq .metadata.intentional_wait`. Fields: `reason`, `expected_resolver`, `since`.
+- **Reading the flag**: `TaskGet` does NOT surface task metadata. Read the task file directly: `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team}/{taskId}.json" | jq .metadata.intentional_wait`. Fields: `reason`, `expected_resolver`, `since`.
 - **Staleness signal**: the 30-min threshold (`wait_stale` in `shared.intentional_wait`) renders the flag stale for your audit and inspection purposes; the `missed_wake_scan` hook (UserPromptSubmit + SessionStart) re-surfaces tasks idling on `awaiting_lead_completion` past this threshold, while all other reasons have no hook consumer — inspect manually. If a flagged wait has been pending past 30 min, the teammate should re-SET with a fresh `since` — or the wait has hung and you should investigate and drive resolution.
 - **Don't SET the `intentional_wait` task metadata on your own team-lead task.** TeammateIdle hooks filter by task owner; they don't inspect team-lead state.
 - **`awaiting_lead_completion` is the most common wait you'll see** — set by every teammate after they store HANDOFF or teachback metadata. Resolution = your two-call acceptance pair (or rejection dual-channel pair).

@@ -207,7 +207,7 @@ Other agents in your team (coders, architect, test-engineer) do NOT self-complet
 
 ## PERSISTENT MEMORY
 
-Save accumulated audit patterns to your agent-memory directory. The platform gives you its absolute path, under `~/.claude/agent-memory/` — use the path you are given, never one built from your agent type.
+Save accumulated audit patterns to your agent-memory directory. The platform gives you its absolute path — use the path you are given, never one built from your agent type.
 
 Examples of patterns worth saving:
 - "Backend coders in this project tend to drift on error handling in auth modules"
