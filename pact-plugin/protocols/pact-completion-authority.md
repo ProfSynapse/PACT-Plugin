@@ -42,7 +42,7 @@ The canonical predicate `is_self_complete_exempt(task, team_name)` in `shared/in
 **TaskGet metadata-blindness reminder**: `TaskGet` does NOT surface `metadata.handoff`. Read directly:
 
 ```
-cat ~/.claude/tasks/{team_name}/{taskId}.json | jq .metadata.handoff
+cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff
 ```
 
 Inspect the HANDOFF before flipping status. If `metadata.handoff` is missing or empty, do NOT mark the task completed — request the teammate write the HANDOFF first.
@@ -105,7 +105,7 @@ Both tasks are created at dispatch time; the teammate receives both in their ini
 Read `metadata.teachback_submit` directly:
 
 ```
-cat ~/.claude/tasks/{team_name}/{A_id}.json | jq .metadata.teachback_submit
+cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{A_id}.json" | jq .metadata.teachback_submit
 ```
 
 ### Read-Trigger Precondition
@@ -113,7 +113,7 @@ cat ~/.claude/tasks/{team_name}/{A_id}.json | jq .metadata.teachback_submit
 Before the raw JSON read above is load-bearing, you MUST wait for teammate's wake-signal SendMessage. The 3-point rule:
 
 1. **Wake-signal SendMessage is the load-bearing content-arrival signal.** The teammate's notify SendMessage (sent immediately after their `metadata.teachback_submit` write per [pact-teachback Step 2](../skills/pact-teachback/SKILL.md)) is the only durable signal that the metadata write has landed on disk. Acting on a raw JSON read before that SendMessage arrives risks reading empty or stale metadata mid-write.
-2. **Raw read MUST follow SendMessage receipt, not precede it.** The ordering is: teammate writes `metadata.teachback_submit` → teammate sends notify SendMessage → platform poller delivers between-tool-call → your turn opens with the SendMessage in context → THEN you read `cat ~/.claude/tasks/{team_name}/{A_id}.json | jq .metadata.teachback_submit`. Reversing this order produces false-empty reads that have historically triggered false-positive rejection cycles.
+2. **Raw read MUST follow SendMessage receipt, not precede it.** The ordering is: teammate writes `metadata.teachback_submit` → teammate sends notify SendMessage → platform poller delivers between-tool-call → your turn opens with the SendMessage in context → THEN you read `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{A_id}.json" | jq .metadata.teachback_submit`. Reversing this order produces false-empty reads that have historically triggered false-positive rejection cycles.
 3. **Mitigation for residual race.** If your raw read returns empty `{}` immediately after the wake-signal SendMessage receipt, the metadata write may still be in flight on the platform side. Mitigations (any one suffices): (a) brief 1-2s delay before re-reading; (b) read twice with a short interval and only treat empty as authoritative if both reads agree; (c) trust the SendMessage's GREEN/RED summary as primary and treat the raw read as audit-only. Do NOT reject a teachback or HANDOFF on a single empty raw read.
 
 The symmetric rule applies to HANDOFF inspection (the raw `cat ... | jq .metadata.handoff` read in §Completion Authority above): wait for teammate's wake-signal SendMessage there too before treating the raw read as authoritative.
