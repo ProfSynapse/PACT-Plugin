@@ -27,7 +27,14 @@ CENSUS_DIRS = ("agents", "commands", "skills", "protocols")
 # reader's installed interpreters and moved 0 -> 13 -> 0 -> 13 -> 17 during
 # development while nobody edited anything. Filter by suffix, never by
 # directory name; suffix fails closed.
-SCANNED_SUFFIXES = (".py", ".md", ".json", ".txt", ".yml", ".yaml", ".toml")
+# Measured by reviewer-impl: 17 of 17 .pyc raise UnicodeDecodeError under a
+# strict utf-8 read, and an errors="replace" read recovers 2 banned literals
+# from them. So WITHOUT this filter ARM 1 HARD-REDS on allowlist-absent keys;
+# it does not merely drift. `.sh` was added after measuring that exactly one
+# .sh file sits in the population and carries zero hits - it was invisible to
+# all three arms, which is a fail-OPEN on detection.
+SCANNED_SUFFIXES = (".py", ".md", ".json", ".txt", ".yml", ".yaml",
+                    ".toml", ".sh")
 
 # This file necessarily contains the banned literals in its own allowlist.
 SELF_EXCLUDED_FILES = frozenset({"tests/test_prose_root_gate.py"})
@@ -36,10 +43,15 @@ SELF_EXCLUDED_FILES = frozenset({"tests/test_prose_root_gate.py"})
 # It is the only reason this arm stays quiet on the migration's OWN output.
 # The prescribed shell form is `"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/..."`,
 # where `$HOME/.claude` is followed by `}` and not `/`. Broadening to
-# `(?=[/}])`, or dropping the lookahead, REDS ON CORRECTLY MIGRATED CODE —
-# including the CRITICAL registration site, and every file carrying the
-# `{config_dir}` definition sentence (which writes a trailing backticked
-# `~/.claude`). Measured three times independently. See the control
+# `(?=[/}])`, or dropping the lookahead, REDS ON CORRECTLY MIGRATED CODE — but
+# NOT on the same text, and the distinction is the point:
+#   BROADENING to `(?=[/}])` reds the SHELL form `"${CLAUDE_CONFIG_DIR:-$HOME/
+#     .claude}/..."`, because `$HOME/.claude` there is followed by `}`. It
+#     leaves the `{config_dir}` definition sentence QUIET.
+#   DROPPING the lookahead reds BOTH the shell form AND every file carrying the
+#     definition sentence, which writes a trailing backticked `~/.claude`.
+# Spec site 1, the CRITICAL registration site, migrates to the shell form, so
+# BOTH edits break it. Measured. See the control
 # `test_arm1_stays_quiet_on_the_migrations_own_output` below.
 ARM1 = re.compile(r"(?:~|\$HOME|\$\{HOME\})/\.claude(?=/)")
 
@@ -83,6 +95,19 @@ _TELEGRAM = (
     "(CONFIG_DIR = Path.home() / '.claude' / 'pact-telegram'). Migrating these "
     "would write the .env where the server never reads it."
 )
+
+# Premise pin for _TELEGRAM, which licenses 8 of the 15 allowlisted
+# occurrences - the majority - and is the only justification here without one.
+# _DB_PIN's premise is pinned by ARM2_ALLOWLIST; _DB_PIN_MIRRORED names a second
+# detector; this had neither, so a "migrate telegram too" pass would silently
+# invalidate both entries while this file stayed green.
+#
+# THIS READS telegram/config.py, WHICH CENSUS_DIRS DELIBERATELY EXCLUDES, AND
+# THAT IS CORRECT. CENSUS_DIRS is the population of the VIOLATION SCAN. A
+# premise pin is a different operation on a different file, and it reads outside
+# that population BECAUSE THAT IS WHY THE ENTRY NEEDS A PIN AT ALL - the premise
+# lives where the scan does not look. Do not "tidy" this into CENSUS_DIRS.
+_TELEGRAM_PREMISE = ("telegram/config.py", 'Path.home() / ".claude" / "pact-telegram"')
 
 # (path, literal, count, justification). The count closes the hole in BOTH
 # directions: a new site pushes it above declared, a removed site drops it
@@ -134,9 +159,20 @@ def _arm1_counts():
 # ARM 1 — the census population
 
 
-def test_arm1_finds_no_unallowlisted_config_root_literal():
+def test_arm1_allowlist_is_exact_in_both_directions():
+    """Over AND under in ONE test, deliberately.
+
+    Splitting the two directions across two tests means deleting one silently
+    opens that direction. ARM 2 does both in a single test and is structurally
+    stronger for it; this now matches.
+    """
     declared = {(p, lit): n for p, lit, n, _ in ARM1_ALLOWLIST}
     found = _arm1_counts()
+    stale = {k: (found.get(k, 0), n) for k, n in declared.items() if found.get(k, 0) < n}
+    assert not stale, (
+        "Allowlist entries declare more occurrences than exist. The site was "
+        f"fixed or moved; delete the entry rather than leave the hole: {stale}"
+    )
     over = {k: (found[k], declared.get(k, 0)) for k in found if found[k] > declared.get(k, 0)}
     assert not over, (
         "LLM-facing prose hardcodes the Claude config root. Agents follow prose "
@@ -147,14 +183,16 @@ def test_arm1_finds_no_unallowlisted_config_root_literal():
     )
 
 
-def test_arm1_allowlist_has_no_stale_entry():
-    """A fixed site must red on its stale entry rather than leave a silent hole."""
-    found = _arm1_counts()
-    stale = {(p, lit): (found.get((p, lit), 0), n) for p, lit, n, _ in ARM1_ALLOWLIST
-             if found.get((p, lit), 0) < n}
-    assert not stale, (
-        "Allowlist entries declare more occurrences than exist. The site was "
-        f"fixed or moved; delete the entry rather than leave the hole: {stale}"
+def test_telegram_allowlist_premise_still_holds():
+    """8 of 15 allowlisted occurrences rest on this one line. If it moves, they
+    are unlicensed and telegram-setup.md's prose becomes a real defect."""
+    rel, needle = _TELEGRAM_PREMISE
+    text = (PLUGIN_ROOT / rel).read_text(encoding="utf-8")
+    assert needle in text, (
+        f"{rel} no longer binds its config dir to the default root, so the "
+        f"_TELEGRAM justification is false and its 8 allowlisted occurrences in "
+        f"commands/telegram-setup.md are unlicensed. Either restore the pin or "
+        f"migrate the prose AND drop those entries - see #1206."
     )
 
 

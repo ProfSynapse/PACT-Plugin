@@ -1608,12 +1608,14 @@ def test_selector_clause_carries_no_unexpanded_token(index):
     found = ["a tilde"] if "~" in clause else []
     if re.search(r"\{[^}]*\}", clause):
         found.append("a {...} placeholder")
+    if "$HOME" in clause:
+        found.append("a $HOME")
     assert not found, (
         f"the selection rule at {SELECTOR_FILE}:{lineno} carries an UNEXPANDED "
         f"ROOT TOKEN ({' and '.join(found)}): {clause!r}. The delivered path is "
-        f"EXPANDED, so a spelling that still carries `~` or a brace placeholder "
+        f"EXPANDED, so a spelling that still carries `~`, a brace placeholder or a bare `$HOME` "
         f"is not a substring of what an agent holds and the predicate would "
-        f"NEVER FIRE. A placeholder is the worse of the two: a tilde never "
+        f"NEVER FIRE. A placeholder is the worst of the three: a tilde and a bare `$HOME` never "
         f"fires, so one check finds it, while a placeholder fires only when "
         f"substitution happens. The DESCRIPTION sentence beside this one names "
         f"no path at all -- it points at the absolute path the platform injects "
