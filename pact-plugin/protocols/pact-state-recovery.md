@@ -12,7 +12,7 @@ From most to least durable:
 |--------|----------|----------|---------|
 | **Session journal** | `{session_dir}/session-journal.jsonl` | Compaction, task GC, team teardown, crashes | HANDOFFs, phase progress, variety scores, commits, pause state |
 | **Task system** | `TaskList` / `TaskGet` | Compaction (summaries only) | Status, blocking, assignment. Task *files* (metadata) may be GC'd |
-| **pact-memory** | `~/.claude/pact-memory/memory.db` | Permanently | Cross-session knowledge (not workflow state) |
+| **pact-memory** | `~/.claude/pact-memory/memory.db` (matches a default-root pin in code — do not migrate) | Permanently | Cross-session knowledge (not workflow state) |
 
 <!-- PACT_STORE_BAR_BEGIN -->
 **STORE ACCESS.** A memory operation (save, search, get, list, update or

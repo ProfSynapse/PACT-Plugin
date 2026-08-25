@@ -163,7 +163,7 @@ def get_memory_dir() -> Path:
     Resolution order:
       1. The store scope, when a block has bound one. Its parent directory.
       2. The `PACT_TEST_MEMORY_DIR` environment variable, when set and non-empty.
-      3. `~/.claude/pact-memory`.
+      3. `~/.claude/pact-memory` (matches a default-root pin in code — do not migrate).
 
     THE SCOPE OUTRANKS THE VARIABLE, and the reason is coherence rather than
     preference. `database.get_connection` gave an explicit caller path

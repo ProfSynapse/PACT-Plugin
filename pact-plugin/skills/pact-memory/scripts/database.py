@@ -5,7 +5,7 @@ SQLite database implementation for the PACT Memory skill.
 Provides schema initialization, connection management, and CRUD operations
 for rich memory objects.
 
-Storage Location: ~/.claude/pact-memory/memory.db
+Storage Location: ~/.claude/pact-memory/memory.db (matches a default-root pin in code — do not migrate)
 Uses WAL mode for corruption prevention and concurrent access safety.
 
 Note: Uses pysqlite3 when available for SQLite extension loading support.
