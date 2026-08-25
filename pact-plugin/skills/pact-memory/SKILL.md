@@ -474,7 +474,7 @@ right purpose.
 | **pact-memory** (SQLite) | `~/.claude/pact-memory/memory.db` | Structured institutional knowledge: context, goals, decisions, lessons, entities | Agents via this skill | Partially — newest entries only, via Working Memory sync to CLAUDE.md |
 | **Agent persistent memory** | Platform-delivered absolute path — the leaf is given, never derived from the type name | Per-agent domain expertise accumulated across sessions | Individual agents (automatic) | Yes — head of the index only; see the index-upkeep rule in `pact-agent-teams` for the enforced limits (per memory directory) |
 
-> `{config_dir}` is this session's Claude config root — the value of `$CLAUDE_CONFIG_DIR` when set and non-empty, otherwise `$HOME/.claude`. Substitute it before running any command; never assume `~/.claude`.
+> `{config_dir}` is this session's Claude config root — the value of `$CLAUDE_CONFIG_DIR` when set and non-empty, otherwise `$HOME/.claude`. Read it off an absolute path the platform already injected into your context — your plugin root is `{config_dir}/plugins/…` — rather than shelling out for the variable. Substitute it before running any command; never assume `~/.claude`.
 
 **pact-memory's unique value**: Structured fields (context, goal, decisions,
 lessons_learned, entities) enable semantic search, graph-enhanced retrieval,

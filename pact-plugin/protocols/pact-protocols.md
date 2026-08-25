@@ -2484,7 +2484,7 @@ The journal survives crashes because:
 - **Fail-open reads** — `read_events()` silently skips malformed lines
 - **Session-scoped storage** — the journal lives in `{config_dir}/pact-sessions/`, not `{config_dir}/teams/`, so team teardown does not remove it
 
-`{config_dir}` is this session's Claude config root — the value of `$CLAUDE_CONFIG_DIR` when set and non-empty, otherwise `$HOME/.claude`. Substitute it before running any command; never assume `~/.claude`.
+`{config_dir}` is this session's Claude config root — the value of `$CLAUDE_CONFIG_DIR` when set and non-empty, otherwise `$HOME/.claude`. Read it off an absolute path the platform already injected into your context — your plugin root is `{config_dir}/plugins/…` — rather than shelling out for the variable. Substitute it before running any command; never assume `~/.claude`.
 
 The wrap-up command harvests journal events to pact-memory before session close. The journal persists in the sessions directory for 30 days (TTL cleanup), providing a recovery window even if harvest fails. Paused sessions are exempt from TTL cleanup.
 

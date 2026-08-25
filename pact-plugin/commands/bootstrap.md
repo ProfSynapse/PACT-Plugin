@@ -56,7 +56,7 @@ Surface the plugin banner — a single line beginning `PACT plugin: ` — in the
 
 Command files use `{team_name}`, `{session_dir}`, `{plugin_root}`, and `{config_dir}` as literal brace-wrapped placeholders. **Substitution is manual textual replacement** performed by the orchestrator before invoking shell commands — there is no template engine.
 
-`{config_dir}` is this session's Claude config root — the value of `$CLAUDE_CONFIG_DIR` when set and non-empty, otherwise `$HOME/.claude`. Substitute it before running any command; never assume `~/.claude`. It is env-derived, so it has no CLAUDE.md line and no context-JSON key in the table below.
+`{config_dir}` is this session's Claude config root — the value of `$CLAUDE_CONFIG_DIR` when set and non-empty, otherwise `$HOME/.claude`. Read it off an absolute path the platform already injected into your context — your plugin root is `{config_dir}/plugins/…` — rather than shelling out for the variable. Substitute it before running any command; never assume `~/.claude`. It is env-derived, so it has no CLAUDE.md line and no context-JSON key in the table below.
 
 | Placeholder | CLAUDE.md line | Context JSON key | Description |
 |-------------|---------------|-----------------|-------------|
