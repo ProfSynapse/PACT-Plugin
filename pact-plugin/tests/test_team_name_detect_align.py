@@ -1276,3 +1276,151 @@ class TestBranch3ResumeCensus:
             LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
         )
         assert resolved == STALE_TEAM
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 15. #1509 GUARDED BRANCH-2 OVERRIDE — corroborated census preempts a
+#     dead-looking own substrate; every census-empty world is byte-identical
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _seed_dead_own_substrate(teams_root, *, own_tasks_mtime=None):
+    """The #1509 adversarial substrate: teams/<LEAD_SID>/ with inboxes/ and
+    NO config.json (branch-2's witness satisfied by a DEAD dir), plus an
+    optional own tasks store pinned to a given mtime (None = absent)."""
+    _seed_team_dir(teams_root, LEAD_SID, lead_session_id=None,
+                   with_config=False, with_inboxes=True)
+    if own_tasks_mtime is not None:
+        _seed_tasks_store(teams_root, LEAD_SID, mtime=own_tasks_mtime)
+
+
+class TestGuardedBranchTwoOverride:
+    """#1509 — the guard only ADDS suppression of branch-2 in ONE conjunctive
+    world (substrate witness AND dead-looking own store AND a corroborated
+    unique census winner). Each pin isolates one leg of that conjunction."""
+
+    def test_guarded_census_preempts_dead_substrate(self, ctx, monkeypatch,
+                                                    tmp_path):
+        """THE i-b CONTRACT — dead own-id dir (witness satisfied, no config,
+        no own tasks) + a CORROBORATED live candidate + reaped fallback
+        config + lived journal -> the resolver returns the LIVE team, NEVER
+        the dead dir name."""
+        ctx_module, teams_root = ctx
+        _seed_dead_own_substrate(teams_root)
+        _seed_census_candidate(teams_root, lead_cwd=str(tmp_path / "project"))
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        # The substrate is DEAD = the session ENDED -> the journal carries
+        # the end marker the N1 conjunct requires for preemption.
+        _seed_session_journal(ctx_module,
+                              ["session_end", "task_metadata_snapshot"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == NEW_UUID_DIR  # live team — never LEAD_SID (dead dir)
+
+    def test_census_empty_does_not_preempt_idle_substrate(self, ctx,
+                                                          monkeypatch,
+                                                          tmp_path):
+        """THE IDLE-CONFIG-LESS WORLD — own substrate witness holds, own
+        tasks store AGED past the window (an idle #989 session), lived
+        journal, but the census is EMPTY (no candidates). Branch-2 still
+        wins: byte-identical to the pre-guard behavior, so idleness alone
+        can never strand a config-less session on its fallback."""
+        ctx_module, teams_root = ctx
+        _seed_dead_own_substrate(teams_root, own_tasks_mtime=ANCIENT_MTIME)
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        _seed_session_journal(ctx_module, ["task_metadata_snapshot"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == LEAD_SID  # branch-2 anchor — the own substrate
+
+    def test_uncorroborated_does_not_preempt(self, ctx, monkeypatch,
+                                             tmp_path):
+        """F1 CANNOT REOPEN THROUGH THE OVERRIDE — a fresh unique candidate
+        that FAILS corroboration (lead cwd matches neither anchor) returns
+        None from the census, so it cannot preempt branch-2: the resolver
+        anchors to the own substrate, not the foreign team."""
+        ctx_module, teams_root = ctx
+        _seed_dead_own_substrate(teams_root)
+        # Candidate with the DEFAULT non-matching lead cwd: fresh, unique,
+        # uncorroborated. End marker PRESENT so the census is consulted and
+        # ONLY the corroboration leg fails.
+        _seed_census_candidate(teams_root)
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        _seed_session_journal(ctx_module,
+                              ["session_end", "task_metadata_snapshot"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == LEAD_SID  # substrate beats the uncorroborated foreign team
+
+    def test_guard_suppressed_but_converged_returns_fallback(self, ctx,
+                                                             monkeypatch,
+                                                             tmp_path):
+        """LEAD-RULED EDGE — guard suppresses branch-2 (dead-looking own
+        store + corroborated winner) but the branch-3 trigger is FALSE
+        because the persisted fallback's config EXISTS (the converged /
+        #989-resume-revert world): the resolver returns the READABLE
+        persisted fallback — not the census winner, not the dead-looking
+        substrate."""
+        ctx_module, teams_root = ctx
+        _seed_dead_own_substrate(teams_root)
+        _seed_census_candidate(teams_root, lead_cwd=str(tmp_path / "project"))
+        # The fallback team's config EXISTS (converged world); its
+        # leadSessionId is foreign so branch-1 identity-match stays out.
+        _seed_team_dir(teams_root, STALE_TEAM,
+                       lead_session_id="beefbeef-1111-4222-8333-444455556666")
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        # End marker present so the guard's preemption path is walked (the
+        # edge under test is branch-3's trigger going false, not the N1 gate).
+        _seed_session_journal(ctx_module,
+                              ["session_end", "task_metadata_snapshot"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == STALE_TEAM  # readable persisted team beats a substrate guess
+
+    def test_live_idle_sibling_never_preempts_without_marker(self, ctx,
+                                                             monkeypatch,
+                                                             tmp_path):
+        """N1 CELL (a) — a LIVE config-less session, idle past the window
+        (own tasks AGED, journal has activity but NO end marker), with a
+        corroborated SAME-DIR fresh sibling (lead cwd == the persisted
+        project_dir; birth-order strengthening has no marker to key on).
+        Cycle-1's unconditional branch-2 precedence MUST hold: the own
+        substrate wins; the sibling must not preempt and stick via the
+        write-back."""
+        ctx_module, teams_root = ctx
+        _seed_dead_own_substrate(teams_root, own_tasks_mtime=ANCIENT_MTIME)
+        # Same-dir sibling: corroborates on the cwd leg precisely because
+        # it shares this session's project dir.
+        _seed_census_candidate(teams_root, lead_cwd=str(tmp_path / "project"))
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        _seed_session_journal(ctx_module, ["task_metadata_snapshot"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == LEAD_SID  # own substrate — the live session's anchor
+
+    def test_same_world_with_marker_sibling_preempts(self, ctx, monkeypatch,
+                                                     tmp_path):
+        """N1 CELL (b) — the SAME world plus the end marker (the session
+        actually ENDED): preemption is legitimate, the corroborated sibling
+        wins over the dead-looking substrate."""
+        ctx_module, teams_root = ctx
+        _seed_dead_own_substrate(teams_root, own_tasks_mtime=ANCIENT_MTIME)
+        _seed_census_candidate(teams_root, lead_cwd=str(tmp_path / "project"))
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        _seed_session_journal(ctx_module,
+                              ["session_end", "task_metadata_snapshot"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == NEW_UUID_DIR  # corroborated sibling preempts the ENDED substrate

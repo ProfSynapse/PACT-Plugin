@@ -318,48 +318,28 @@ def test_i_b_dead_incident_shaped_dir_never_resolved(tmp_path, monkeypatch,
     assert ctx_module.get_team_name() != OLD_TEAM
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Accepted residual (lead ruling, follow-up #1509): the world needs "
-        "TWO unobserved platform behaviors to co-occur — bare-uuid remnant "
-        "naming AND inboxes/ surviving end-session. Measured remnants are "
-        "session-<id8>-named with file-edits.json (branch-2 never matches "
-        "them); PACT's own reaper rmtrees whole dirs. Branch-2 returns the "
-        "dead name before the census runs. The unguarded liveness conjunct "
-        "is REJECTED (silent sticky foreign-team alignment in the "
-        "live-but-idle config-less world); the guarded branch-2 override "
-        "sketch lives in #1509. strict=True is the deliberate tripwire: when "
-        "#1509 lands, this XPASSes and the suite REDDENS, forcing the "
-        "un-xfail-and-turn-green step that issue's acceptance requires."
-    ),
-    strict=True,
-)
 def test_i_b_dead_desktop_shaped_uuid_dir_never_resolved(
     tmp_path, monkeypatch, capsys
 ):
     """CELL i-b (Desktop composition shape) — the reaped OLD team dir is named
     with the BARE OLD full uuid and carries inboxes/ (branch-2's config-less
-    witness is SATISFIED by a DEAD dir), while the live re-provisioned team is
-    the sole census candidate. PLAN CONTRACT (Test-phase table, i-b): the
-    resolution must be the live team or the stale default — NEVER the dead
-    dir's name. MEASURED RED on the landed code (branch-2 fires on the dead
-    substrate and returns the dead name before the census), ruled an ACCEPTED
-    RESIDUAL: reachability requires (a) bare-uuid dir naming (Desktop
-    2.1.177 shape) AND (b) inboxes/ surviving end-session to CO-OCCUR — both
-    unobserved on this platform (5 config-less remnants measured at the zai
-    teams root: all session-<id8>-named, all file-edits.json, ZERO inboxes/,
-    ZERO bare-uuid; session_end's reaper is ^pact--scoped whole-dir rmtree,
-    so PACT itself cannot leave this half-corpse). The xfail pins the
-    contract against future platform change and tracks follow-up #1509
-    (guarded branch-2 override: fire branch-2 only when own tasks are fresh
-    OR the census has no unique candidate — preserves matrix v and every
-    census-empty #989 pin). The plainly-fresh-tasks liveness conjunct was
-    REJECTED: in the live-but-idle config-less world it would fall through
-    branch-2 to the census, silently align to a concurrent FOREIGN team, and
-    the write-back would make that sticky — a worse hole than this deny,
-    which at least self-diagnoses with the manual-repoint remedy."""
+    witness is SATISFIED by a DEAD dir), while the live re-provisioned team
+    is the sole CORROBORATED census candidate. Contract: the resolution is
+    the live team or the stale default — NEVER the dead dir's name.
+    Originally RED (unguarded branch-2 returned the dead name before the
+    census ran) and xfailed as a two-unobserved-platform-behaviors residual
+    with a strict tripwire; #1509's GUARDED OVERRIDE now handles the world —
+    branch-2 wins only when its own substrate looks alive (fresh sibling
+    tasks store) OR the census has no corroborated unique winner, so a DEAD
+    substrate with a corroborated winner is preempted and the resolution
+    lands on the live team. The strict xfail did its job: XPASSed against
+    the landed guard and reddened the suite, forcing exactly this
+    un-xfail-and-turn-green step. See test_1509_idle_config_less_branch2_
+    unstarved for the guard's not-starving complement."""
     _seed_census_world(monkeypatch, tmp_path, live_team=NEW_TEAM_ID8,
-                       live_lead_sid=NEW_SID)
+                       live_lead_sid=NEW_SID,
+                       journal_events=["session_end",
+                                       "task_metadata_snapshot"])
     _seed_dead_team_dir(tmp_path, team_name=OLD_SID, with_inboxes=True)
     import shared.pact_context as ctx_module
     resolved = ctx_module.get_team_name()
@@ -370,6 +350,44 @@ def test_i_b_dead_desktop_shaped_uuid_dir_never_resolved(
     # Live team or stale default are both acceptable per the plan contract;
     # the dead name is the only forbidden outcome.
     assert resolved in (NEW_TEAM_ID8, OLD_TEAM)
+
+
+def test_1509_idle_config_less_branch2_unstarved(tmp_path, monkeypatch,
+                                                 capsys):
+    """#1509 acceptance complement — the guard must not starve the legitimate
+    #989 world: a config-less OWN-session substrate whose tasks store is AGED
+    (a live-but-idle Desktop session — nothing wrote inside the recency
+    window) in a census-EMPTY world (no config-bearing teams at all). The
+    guard consults the census, gets None, and branch-2 still wins: the
+    resolution is the own substrate, never the stale default. NON-VACUITY:
+    the owner's task lives only under the substrate's tasks dir, so the
+    ALLOW is reachable only via the branch-2 resolution (a stale-default
+    resolution would DENY)."""
+    plugin_root = tmp_path / "plugin"
+    _seed_plugin(plugin_root)
+    _write_context(monkeypatch, tmp_path, plugin_root,
+                   team_name=OLD_TEAM, session_id=OLD_SID)
+    _reset_aligned_cache()
+    config_root = tmp_path / ".claude"
+    # The config-less OWN substrate (the #989 Desktop shape) with an AGED
+    # (idle) tasks store — nothing fresh anywhere.
+    _seed_dead_team_dir(tmp_path, team_name=OLD_SID, with_inboxes=True)
+    tasks_dir = config_root / "tasks" / OLD_SID
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    (tasks_dir / "task_0.json").write_text(
+        json.dumps({"id": "0", "owner": _NAME, "status": "pending"}),
+        encoding="utf-8",
+    )
+    aged = 1  # epoch — far outside the 900 s window on any clock
+    os.utime(tasks_dir, (aged, aged))
+    _seed_session_journal(monkeypatch, tmp_path, ["task_metadata_snapshot"])
+    # Census-empty: no team dir carries a config.json (the substrate is
+    # config-less, so it is not a candidate either).
+    assert not list((config_root / "teams").glob("*/config.json"))
+    code, out = _run_dispatch(_make_spawn(), capsys)
+    assert code == 0, "idle config-less own substrate must still win (branch-2)"
+    import shared.pact_context as ctx_module
+    assert ctx_module.get_team_name() == OLD_SID
 
 
 # ══════════════════════════════════════════════════════════════════════════════

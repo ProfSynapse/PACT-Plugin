@@ -484,6 +484,32 @@ def _resume_census_candidate_corroborated(
         return False
 
 
+def _own_tasks_store_fresh(teams_root: Path, session_id: str) -> bool:
+    """#1509 guard input: does this session's OWN sibling tasks store look
+    ALIVE? True iff tasks/<session_id>/ is a dir whose mtime falls within
+    RESUME_CENSUS_RECENCY_SECONDS of now — the same live-team signal the
+    census applies to candidates, applied here to the branch-2 own
+    substrate. A dead-looking own substrate (reaped remnant, or an idle
+    store aged past the window) is the only world where the census may be
+    consulted to preempt branch-2.
+
+    Never raises: False on any error. False pushes ONLY toward
+    preemption/suppression of branch-2 — never toward a foreign team (the
+    census winner must corroborate, and post-N1 the preemption itself is
+    end-marker-gated); a census-empty world still returns the substrate
+    unchanged.
+    """
+    try:
+        tasks_dir = teams_root.parent / "tasks" / session_id
+        if not tasks_dir.is_dir():
+            return False
+        return tasks_dir.stat().st_mtime >= (
+            time.time() - RESUME_CENSUS_RECENCY_SECONDS
+        )
+    except Exception:
+        return False
+
+
 def _resume_census_unique_candidate(teams_root: Path, session_id: str) -> str | None:
     """Branch-3 census (#1507): the single LIVE re-provisioned team, if
     unambiguous AND corroborated as this session's own.
@@ -584,7 +610,9 @@ def _resolve_aligned_team_name(
     mis-resolve.
 
     BRANCH-3 RESUME CENSUS (#1507): after branch-1 (identity match) and
-    branch-2 (config-less full-UUID witness) both miss, a RESUMED session
+    branch-2 (config-less full-UUID witness, GUARDED per #1509 — a
+    corroborated census winner preempts a dead-looking own substrate; see
+    the inline branch-2 comment) both miss, a RESUMED session
     (clean end-session reaped the old team config; a new team + task store
     was provisioned under a new id while hook frames still carry the OLD
     session id) can still be realigned: census the teams root for the
@@ -710,6 +738,23 @@ def _resolve_aligned_team_name(
         # dir). Unreachable under new-CLI: the platform names the dir
         # session-<id8>, so teams/<full-uuid>/ never exists (steady-state AND
         # the ~38s cold-start) -> CLI byte-identical.
+        #
+        # #1509 GUARD: the substrate witness alone cannot tell a LIVE own
+        # session from a DEAD reaped remnant — both present inboxes/ or
+        # file-edits.json. Branch-2 wins only when the own substrate looks
+        # ALIVE (its sibling tasks store is fresh) OR the census has NO
+        # corroborated unique winner to offer; a corroborated census winner
+        # preempts the DEAD substrate (the i-b contract: live team or stale
+        # default, never the dead dir). The census is consulted ONLY when
+        # the witness holds and the own store is stale, and _resume_census_
+        # unique_candidate already enforces the cycle-1 corroboration — an
+        # uncorroborated unique candidate returns None and CANNOT preempt,
+        # so the F1 hole cannot reopen through this path. In every
+        # census-empty world (including every #989 fixture with an empty
+        # teams root) this is byte-identical to the pre-guard branch-2.
+        # Preemption additionally requires an END MARKER in this session's
+        # journal (N1): only an ENDED substrate may be preempted.
+        census_winner: str | None = None
         if (
             is_safe_path_component(session_id)
             and (teams_root / session_id).is_dir()
@@ -718,7 +763,23 @@ def _resolve_aligned_team_name(
                 or (teams_root / session_id / "file-edits.json").exists()
             )
         ):
-            return session_id
+            if not _own_tasks_store_fresh(teams_root, session_id):
+                # N1 (cycle-2 review): preemption is legitimate only when
+                # the own substrate was actually ENDED. A LIVE idle session
+                # has no end marker in its journal and must keep cycle-1's
+                # unconditional branch-2 precedence — otherwise a same-dir
+                # sibling corroborates (cwd matches; birth-order skipped,
+                # no marker) and the write-back makes the mis-alignment
+                # sticky. Crash-resume without markers: pre-#1509 status
+                # quo (no preemption, no regression). The marker conjunct
+                # is the journal-derived gate this preemption path was
+                # missing (it does not rely on branch-3's witness).
+                if _own_journal_last_end_marker_ts() is not None:
+                    census_winner = _resume_census_unique_candidate(
+                        teams_root, session_id
+                    )
+            if census_winner is None:
+                return session_id
         # Branch-3: resume census (#1507). After a clean end-session, resume
         # provisions a NEW team + task store under a new id while every hook
         # frame still carries the OLD session id. Identity-match (branch-1)
@@ -749,7 +810,13 @@ def _resolve_aligned_team_name(
             and not (teams_root / fallback / "config.json").exists()
             and _journal_has_team_activity()
         ):
-            census_winner = _resume_census_unique_candidate(teams_root, session_id)
+            # Reuse the winner the #1509 guard may already have computed in
+            # branch-2 (single census pass per resolution); compute it only
+            # when branch-2 never ran it.
+            if census_winner is None:
+                census_winner = _resume_census_unique_candidate(
+                    teams_root, session_id
+                )
             if census_winner is not None:
                 return census_winner
         return fallback
