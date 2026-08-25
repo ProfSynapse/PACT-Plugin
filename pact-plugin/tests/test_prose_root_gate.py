@@ -147,6 +147,18 @@ def _scanned_files():
             yield rel, path.read_text(encoding="utf-8", errors="replace")
 
 
+def _allowlist_delta(found, declared):
+    """Both directions of the allowlist comparison, in one place.
+
+    Lifted out of the live check so the tail-discrimination arm below exercises
+    THE SHIPPED COMPARISON rather than a copy of it - a reimplementation could
+    drift from this while the suite stayed green.
+    """
+    stale = {k: (found.get(k, 0), n) for k, n in declared.items() if found.get(k, 0) < n}
+    over = {k: (found[k], declared.get(k, 0)) for k in found if found[k] > declared.get(k, 0)}
+    return stale, over
+
+
 def _arm1_counts():
     found = {}
     for rel, text in _scanned_files():
@@ -167,19 +179,83 @@ def test_arm1_allowlist_is_exact_in_both_directions():
     stronger for it; this now matches.
     """
     declared = {(p, lit): n for p, lit, n, _ in ARM1_ALLOWLIST}
-    found = _arm1_counts()
-    stale = {k: (found.get(k, 0), n) for k, n in declared.items() if found.get(k, 0) < n}
+    stale, over = _allowlist_delta(_arm1_counts(), declared)
     assert not stale, (
         "Allowlist entries declare more occurrences than exist. The site was "
         f"fixed or moved; delete the entry rather than leave the hole: {stale}"
     )
-    over = {k: (found[k], declared.get(k, 0)) for k in found if found[k] > declared.get(k, 0)}
     assert not over, (
         "LLM-facing prose hardcodes the Claude config root. Agents follow prose "
         "literally, so each of these misdirects a non-default-root install. "
         f"Migrate to `{{config_dir}}` (narrative) or "
         '`"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/..."` (shell), or add an '
         f"allowlist entry WITH a justification. found>declared: {over}"
+    )
+
+
+# The file and substitution used by the tail-discrimination arm. Chosen because
+# it is the entry whose justification names this exact hazard.
+_SWAP_FILE = "skills/pact-memory/SKILL.md"
+_SWAP_FROM = "~/.claude/pact-memory/memory.db"
+_SWAP_TO = "~/.claude/tasks/"
+# The counterfactual key: ARM1_KEY with the tail capture removed.
+_ROOT_ONLY_KEY = re.compile(r"(?:~|\$HOME|\$\{HOME\})/\.claude/")
+
+
+def _counts_for(text, key_re):
+    found = {}
+    for match in key_re.finditer(text):
+        k = (_SWAP_FILE, match.group(0))
+        found[k] = found.get(k, 0) + 1
+    return found
+
+
+def test_arm1_key_discriminates_the_tail_not_only_the_count():
+    """ARM1_KEY captures the path tail. This proves the tail does the work.
+
+    A same-count tail swap - one allowed `memory.db` occurrence becoming a
+    forbidden `tasks/` one, total held at 2 - must be DETECTED. But detection
+    alone would not show the TAIL caught it, since any count change would also
+    red. So the same input is run through a tail-LESS key, and must go SILENT.
+    That second arm is the proof: remove the tail capture and this exact
+    substitution slips through.
+
+    Derived in memory from the real file via the SHIPPED regex - nothing is
+    written to disk, so pytest's assertion-rewrite cache (which validates on
+    mtime-seconds and size, and is NOT defeated by -p no:cacheprovider or
+    PYTHONDONTWRITEBYTECODE=1) cannot serve stale bytecode here.
+    """
+    text = (PLUGIN_ROOT / _SWAP_FILE).read_text(encoding="utf-8")
+    swapped = text.replace(_SWAP_FROM, _SWAP_TO, 1)
+    declared = {(p, lit): n for p, lit, n, _ in ARM1_ALLOWLIST if p == _SWAP_FILE}
+
+    before = _counts_for(text, ARM1_KEY)
+    after = _counts_for(swapped, ARM1_KEY)
+    assert sum(after.values()) == sum(before.values()), (
+        "the substitution changed the occurrence COUNT, so the count alone would "
+        "catch it and this arm would verify nothing about the tail"
+    )
+    assert len(after) > len(before), "the substitution did not produce a new tail"
+
+    stale, over = _allowlist_delta(after, declared)
+    assert stale and over, (
+        f"a same-count tail swap was NOT detected. stale={stale} over={over}. "
+        "If this fires, ARM1_KEY's tail capture does not do what its comment "
+        "claims and the allowlist design needs rethinking."
+    )
+
+    rootless_declared = {(_SWAP_FILE, "~/.claude/"): sum(declared.values())}
+    r_stale, r_over = _allowlist_delta(_counts_for(swapped, _ROOT_ONLY_KEY), rootless_declared)
+    assert not r_stale and not r_over, (
+        "the tail-LESS counterfactual also detected the swap, so this arm does "
+        f"not isolate the tail. stale={r_stale} over={r_over}"
+    )
+
+    legit = text + "\n<!-- reflowed; no literal and no count changed -->\n"
+    l_stale, l_over = _allowlist_delta(_counts_for(legit, ARM1_KEY), declared)
+    assert not l_stale and not l_over, (
+        f"an edit touching no keyed literal and no count reddened: "
+        f"stale={l_stale} over={l_over}. The arm reds on any perturbation."
     )
 
 
