@@ -660,34 +660,27 @@ def test_ix_composition_both_divergences_both_topologies(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def test_x_config_missing_leadsessionid_counts_as_candidate(
+def test_x_config_missing_leadsessionid_not_a_candidate(
     tmp_path, monkeypatch
 ):
-    """CELL x — the resolver's candidate predicate is the LITERAL spec
-    (``leadSessionId != session_id`` — NO non-empty requirement), so a config
-    whose leadSessionId key is MISSING (``data.get`` -> None != the persisted
-    id) COUNTS as a census candidate whenever its tasks store is fresh. This
-    test ASSERTS that implemented stance and records it (resolver-coder's
-    open question #1): the stance is acceptable because it is bounded by the
-    unambiguous-only rule, the journal witness, and the recency window — a
-    malformed sibling can only WIN when it is the sole fresh candidate of a
-    lived session whose persisted team config is reaped, i.e. a world where
-    returning the stale default denies every spawn anyway. If a future change
-    tightens the predicate (e.g. requires a non-string-safe, present,
-    non-empty leadSessionId), flip this test WITH it — the stance is pinned,
-    not endorsed."""
+    """CELL x — HARDENED M1 stance: a candidate must carry a REAL string
+    leadSessionId that differs from this session's id; a config MISSING the
+    field (``data.get`` -> None) is malformed identity and does NOT count as
+    a candidate — the ``!=`` alone would treat absence as foreign identity.
+    The sole malformed candidate leaves ZERO candidates and the stale
+    default stands. This cell originally pinned the literal None-counts
+    stance (bounded by unambiguous-only + witness + recency); resolver-
+    coder's isinstance(str) hardening ENDORSED the stricter reading and the
+    cell was flipped WITH it."""
     plugin_root = tmp_path / "plugin"
     _seed_plugin(plugin_root)
     _write_context(monkeypatch, tmp_path, plugin_root,
                    team_name=OLD_TEAM, session_id=OLD_SID)
     _reset_aligned_cache()
     # The malformed candidate: config.json EXISTS but carries NO
-    # leadSessionId key; fresh sibling tasks store. Corroboration fields ARE
-    # present, so the candidate is BOTH counted and bound — post-remediation
-    # semantics (resolver-coder's note): a missing leadSessionId still COUNTS
-    # as a candidate, realigning only when corroborated; a malformed-config
-    # positive realign requires the binding fields, which corroborate=True
-    # provides.
+    # leadSessionId key; fresh sibling tasks store; corroboration fields
+    # otherwise complete (a deliberately tempting candidate that the
+    # hardened predicate must still refuse).
     _seed_team_store(tmp_path / ".claude", team_name=NEW_TEAM_ID8, lead_session_id=None,
                      members=(), tasks=(),
                      corroborate=True, lead_cwd=str(tmp_path / "project"))
@@ -697,7 +690,7 @@ def test_x_config_missing_leadsessionid_counts_as_candidate(
         OLD_SID, teams_dir=str(tmp_path / ".claude" / "teams"),
         default=OLD_TEAM,
     )
-    assert resolved == NEW_TEAM_ID8
+    assert resolved == OLD_TEAM
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -712,8 +705,8 @@ def test_xi_stale_block_and_working_recovery_coexist_scoped(tmp_path,
     the ambiguous-census deny, the composite reason carries BOTH diagnoses,
     each scoped to ITS OWN records with no contradiction inside one message:
       * the stale-block WARNING (about the CLAUDE.md 'Current Session' block —
-        its 'completing bootstrap will rewrite them' claim is TRUE for the
-        CLAUDE.md records it names), and
+        its 'completing bootstrap will rewrite the CLAUDE.md session records'
+        claim is scoped to exactly those records), and
       * the re-align HINT (about pact-session-context.json — the measured
         working recovery, leaving session_id/journal untouched).
     The composer is A-xor-B by construction: with the incumbent fired the
@@ -994,6 +987,54 @@ def test_f1_cross_directory_resume_either_match(tmp_path, monkeypatch, capsys,
     )
     code, out = _run_dispatch(_make_spawn(), capsys)
     assert code == 0, f"{mode} leg must corroborate (either-match)"
+
+
+def test_1514_prefix_colliding_leadagentid_not_corroborated(tmp_path,
+                                                            monkeypatch):
+    """#1514 pin — the leadAgentId self-consistency check is a SUFFIX match,
+    not substring: a config whose leadAgentId is "team-lead@session-aaaa1111"
+    sitting in a dir named "session-aaaa" (a PREFIX COLLISION — a config
+    copied or mis-placed from the longer-named team) must NOT corroborate,
+    even with every other binding field complete (matching members entry,
+    cwd anchored to this session, joinedAt fine). The substring form
+    ("@session-aaaa" in the agentId) passes this collision; the suffix form
+    (endswith) rejects it -> suppressed -> stale default. Reddens if the
+    check ever regresses to substring containment."""
+    plugin_root = tmp_path / "plugin"
+    _seed_plugin(plugin_root)
+    _write_context(monkeypatch, tmp_path, plugin_root,
+                   team_name=OLD_TEAM, session_id=OLD_SID)
+    _reset_aligned_cache()
+    config_root = tmp_path / ".claude"
+    colliding_dir = "session-aaaa"
+    team_dir = config_root / "teams" / colliding_dir
+    team_dir.mkdir(parents=True, exist_ok=True)
+    colliding_agent_id = "team-lead@session-aaaa1111"
+    (team_dir / "config.json").write_text(
+        json.dumps({
+            "name": colliding_dir,
+            "leadSessionId": NEW_SID,
+            "leadAgentId": colliding_agent_id,
+            "members": [{
+                "agentId": colliding_agent_id,
+                "name": "team-lead",
+                "cwd": str(tmp_path / "project"),
+                "joinedAt": CORROBORATED_JOINED_AT_MS,
+            }],
+        }),
+        encoding="utf-8",
+    )
+    tasks_dir = config_root / "tasks" / colliding_dir
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    (tasks_dir / "task_0.json").write_text("{}", encoding="utf-8")
+    _seed_session_journal(monkeypatch, tmp_path, ["task_metadata_snapshot"])
+    import shared.pact_context as ctx_module
+    resolved = ctx_module._resolve_aligned_team_name(
+        OLD_SID, teams_dir=str(config_root / "teams"), default=OLD_TEAM,
+    )
+    assert resolved == OLD_TEAM, (
+        "prefix-colliding leadAgentId must not corroborate (#1514)"
+    )
 
 
 def test_f3_config_without_tasks_store_not_a_candidate(tmp_path, monkeypatch):

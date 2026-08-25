@@ -423,9 +423,10 @@ def _resume_census_candidate_corroborated(
         config's leadAgentId (the platform's first-class key — NOT a
         members[0] or shape heuristic). A member-less / malformed config
         corroborates nothing -> suppressed.
-      * SELF-CONSISTENCY: the lead's agentId embeds "@<team-dir-name>",
+      * SELF-CONSISTENCY: the lead's agentId ENDS WITH "@<team-dir-name>",
         binding the entry to the dir it sits in (a config copied from
-        another team's dir fails this).
+        another team's dir — or from a longer-named team into a
+        prefix-named dir — fails this; #1514).
       * SUBJECT ANCHOR: the lead entry's cwd must RAW-match (no resolve —
         an unresolved mismatch only ever fails safe) the hook process's
         LIVE cwd OR the persisted project_dir — the re-provisioned team's
@@ -453,7 +454,10 @@ def _resume_census_candidate_corroborated(
         lead_agent_id = str(config_data.get("leadAgentId", ""))
         if not lead_agent_id:
             return False
-        if f"@{team_dir_name}" not in lead_agent_id:
+        # SUFFIX match (#1514), not substring: a config copied from
+        # session-aaaa1111 into a dir named session-aaaa must NOT
+        # corroborate — "@<dir>" has to be the agentId's TAIL.
+        if not lead_agent_id.endswith(f"@{team_dir_name}"):
             return False
         lead_entry = None
         for member in config_data.get("members") or []:
@@ -485,8 +489,9 @@ def _resume_census_unique_candidate(teams_root: Path, session_id: str) -> str | 
     unambiguous AND corroborated as this session's own.
 
     Enumerates teams/*/config.json. A dir is a CANDIDATE iff its
-    config.json carries a leadSessionId DIFFERENT from this session's id
-    AND its sibling tasks/<dir>/ store mtime falls within
+    config.json carries a REAL string leadSessionId DIFFERENT from this
+    session's id (a config missing/null on the field is malformed and
+    never counts) AND its sibling tasks/<dir>/ store mtime falls within
     RESUME_CENSUS_RECENCY_SECONDS of now (the "live team" signal). Returns
     the dir name only when EXACTLY ONE candidate survives AND that
     candidate corroborates as this session's team (see
@@ -516,7 +521,14 @@ def _resume_census_unique_candidate(teams_root: Path, session_id: str) -> str | 
                 data = json.loads(
                     (entry / "config.json").read_text(encoding="utf-8")
                 )
-                if data.get("leadSessionId") == session_id:
+                # M1: a candidate must carry a REAL string leadSessionId that
+                # differs from this session's id. A config MISSING the field
+                # (None) is malformed and no longer counts — the != alone
+                # would treat absence as foreign identity.
+                candidate_lead_sid = data.get("leadSessionId")
+                if not isinstance(candidate_lead_sid, str):
+                    continue
+                if candidate_lead_sid == session_id:
                     continue  # this session's own team — identity-match owns it
                 tasks_dir = tasks_root / entry.name
                 if not tasks_dir.is_dir():

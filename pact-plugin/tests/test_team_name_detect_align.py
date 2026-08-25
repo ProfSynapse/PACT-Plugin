@@ -1081,7 +1081,8 @@ def _seed_session_journal(ctx_module, event_types):
 def _seed_census_candidate(teams_root, dir_name=NEW_UUID_DIR,
                            lead_session_id=NEW_SID, *, mtime=None,
                            lead_cwd="/foreign/launch/dir",
-                           lead_joined_at_ms=LEAD_JOINED_AT_MS):
+                           lead_joined_at_ms=LEAD_JOINED_AT_MS,
+                           lead_agent_id=None):
     """Seed a census candidate: a team dir whose config carries a DIFFERENT
     leadSessionId plus a live sibling tasks store. The config is
     REAL-SHAPED (F1 corroboration fixture — a member-less config never
@@ -1090,9 +1091,11 @@ def _seed_census_candidate(teams_root, dir_name=NEW_UUID_DIR,
     and joinedAt (epoch millis). lead_cwd DEFAULTS to a directory matching
     NEITHER corroboration anchor, so a candidate BINDS only when a cell
     explicitly passes the context's project_dir (or the live cwd) — an
-    unbound candidate suppresses."""
+    unbound candidate suppresses. lead_agent_id overrides the derived
+    "team-lead@<dir>" for the #1514 suffix-mismatch pin."""
     team_dir = _seed_team_dir(teams_root, dir_name, lead_session_id=lead_session_id)
-    lead_agent_id = f"team-lead@{dir_name}"
+    if lead_agent_id is None:
+        lead_agent_id = f"team-lead@{dir_name}"
     (team_dir / "config.json").write_text(
         json.dumps({
             "name": dir_name,
@@ -1232,3 +1235,44 @@ class TestBranch3ResumeCensus:
                             team_name="", session_id=LEAD_SID)
         _seed_session_journal(ctx_module, ["task_metadata_snapshot"])
         assert ctx_module.get_team_name() == ""
+
+    def test_agentid_suffix_mismatch_never_corroborates(self, ctx, monkeypatch,
+                                                        tmp_path):
+        """#1514 — SELF-CONSISTENCY is a SUFFIX match: a config copied from
+        session-aaaa1111 into a dir named session-aaaa carries an agentId
+        that CONTAINS "@session-aaaa" but does not END with it. Every other
+        corroboration leg binds (cwd matches) yet the candidate must be
+        suppressed — the substring form would have corroborated it."""
+        ctx_module, teams_root = ctx
+        _seed_census_candidate(
+            teams_root, dir_name="session-aaaa",
+            lead_session_id="aaaa1111-2222-4333-8444-555566667777",
+            lead_cwd=str(tmp_path / "project"),
+            lead_agent_id="team-lead@session-aaaa1111",
+        )
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        _seed_session_journal(ctx_module, ["task_metadata_snapshot"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == STALE_TEAM
+
+    def test_missing_leadsessionid_not_a_candidate(self, ctx, monkeypatch,
+                                                   tmp_path):
+        """M1 — a candidate config with NO real-string leadSessionId (null or
+        absent) no longer counts as a candidate at all: the != comparison
+        alone used to treat absence (None) as foreign identity. Every
+        corroboration leg otherwise binds, yet zero candidates -> the stale
+        default. (Endorses hard the cell-x stance the sibling suite pinned
+        as not-endorsed.)"""
+        ctx_module, teams_root = ctx
+        _seed_census_candidate(teams_root, lead_session_id=None,
+                               lead_cwd=str(tmp_path / "project"))
+        _write_context_file(monkeypatch, ctx_module, tmp_path,
+                            team_name=STALE_TEAM, session_id=LEAD_SID)
+        _seed_session_journal(ctx_module, ["task_metadata_snapshot"])
+        resolved = ctx_module._resolve_aligned_team_name(
+            LEAD_SID, teams_dir=str(teams_root), default=STALE_TEAM
+        )
+        assert resolved == STALE_TEAM
