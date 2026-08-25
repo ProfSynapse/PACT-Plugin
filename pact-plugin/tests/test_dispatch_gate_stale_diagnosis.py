@@ -189,8 +189,8 @@ def test_hint_names_the_measured_manual_repoint_not_a_bootstrap_pointer(
         )
     # Scoped to the HINT constant, not the emitted reason: the shared
     # detector's stale-block — legitimately prepended on this leg — carries
-    # its own "completing bootstrap will rewrite them" claim about the
-    # CLAUDE.md records, which is a different sentence from a different
+    # its own "completing bootstrap will rewrite the CLAUDE.md session
+    # records" claim, which is a different sentence from a different
     # module and not this tripwire's subject.
     for phrase in _FORBIDDEN_INERT_REMEDIES:
         assert phrase not in _STALE_REALIGN_HINT, (
