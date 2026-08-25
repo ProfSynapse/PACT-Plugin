@@ -2,8 +2,16 @@
 
 The skill (skills/pact-team-registration/SKILL.md) directs every spawned
 teammate to run, as its FIRST action, a SYMLINK-RELATIVE register command:
+``python3`` applied to a CONFIG-ROOT-RELATIVE path that enters the
+``protocols/pact-plugin`` symlink and hops ``..`` into
+``hooks/shared/session_registry.py``, passing the ``register`` subcommand and
+the ``--name`` flag.
 
-    python3 ~/.claude/protocols/pact-plugin/../hooks/shared/session_registry.py register --name '<name>@<team>'
+That command is DESCRIBED here and deliberately NOT reproduced. A verbatim
+copy would be a second byte-coupled pair with SKILL.md that NOTHING compares
+-- ``_REGISTER_CMD_RE`` below matches a SHAPE, not the literal -- so the two
+would drift apart with this suite green. A docstring that does not quote the
+command cannot drift from it.
 
 ``~/.claude/protocols/pact-plugin`` is a RUNTIME symlink to the plugin's
 ``protocols/`` dir (created by SessionStart setup_plugin_symlinks), so

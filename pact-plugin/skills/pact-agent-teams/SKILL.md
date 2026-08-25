@@ -42,7 +42,7 @@ A reply to the user that contains content the team-lead needs to act on (a block
    - **DO NOT** call `Edit`, `Write`, or `Bash` for implementation work before storing your teachback
    - See [Teachback](#teachback-conversation-verification) below for the full skill reference
 5. **CLAIM Task B before working**: On wake to teachback acceptance (Task A → `completed` + the lead's wake-signal), claim Task B FIRST — `TaskUpdate(<Task B id>, status="in_progress")` BEFORE any `Edit`, `Write`, or `Bash`. Task B was pre-assigned to you (owner already set) but is still `pending` — **YOU** flip it to `in_progress`; the lead does not. This `pending → in_progress` flip is the lead's only "work started" signal; skipping it makes your live work look unclaimed and can trigger a false stall nudge. The durable Task A read is authoritative: if Task A already shows `completed` on disk, claim Task B and proceed even if the wake-signal message is not yet visible — wake messages can trail the status flip (see [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic)).
-6. Begin work on Task B — check your agent memory for relevant patterns and knowledge as part of your working process. The platform hands you its absolute path under `~/.claude/agent-memory/`, and the schema for writing to it, in your own context. If more than one instruction in your context offers you a memory directory, use the one whose path contains `.claude/agent-memory/` — the others are different memory systems, not other spellings of this one. Follow that instruction rather than any pattern restated elsewhere.
+6. Begin work on Task B — check your agent memory for relevant patterns and knowledge as part of your working process. The platform hands you its absolute path, and the schema for writing to it, in your own context. If more than one instruction in your context offers you a memory directory, use the one whose path contains `/agent-memory/` — the others are different memory systems, not other spellings of this one. Follow that instruction rather than any pattern restated elsewhere.
 
 > **CLAUDE.md is not yours to write**: As a teammate, do not write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue. If a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This rule applies in each session, with or without a worktree. The orchestrator manages those files. If you need to reference `CLAUDE.md` content, it is auto-loaded into your context. If your task mentions updating `CLAUDE.md`, flag it in your handoff. Do not write the file.
 
@@ -128,9 +128,10 @@ For consequence-level disagreements:
 Immediately BEFORE composing any protocol-boundary message — a teachback submit
 notify, a HANDOFF notify, a blocker report, or any report that initiates a
 lead-resolved wait (e.g., a staged-work report preceding `awaiting_lead_commit`) —
-you MUST drain your inbox: read
-`~/.claude/teams/{team_name}/inboxes/{your-name}.json` and reconcile any directives
-it contains into your deliverable FIRST. A directive delivered while you are
+you MUST drain your inbox: read `inboxes/{your-name}.json` in the team
+directory the platform names in your context — the directory holding the
+`Team config:` path you were given — and reconcile any directives it contains
+into your deliverable FIRST. A directive delivered while you are
 mid-turn does not render in your context until a later turn boundary; the boundary
 message is the team-lead's basis for acting on your work, and the drain is your
 last chance to look before they act on your word. This rule applies identically
@@ -141,7 +142,7 @@ Drain mechanics — all four points are load-bearing:
 - **Read-only.** Read the inbox file; NEVER write, truncate, or delete it — the
   platform owns delivery.
 - **Use the Read tool**, not a piped Bash command — Bash permission patterns on
-  `~/.claude/` paths are fragile (see §Bash Commands in ~/.claude/ Paths). The file
+  config-root paths are fragile (see §Bash Commands in Config-Root Paths). The file
   is a JSON list of pending messages; each message carries `from`, `text`,
   `timestamp`, and `type` (act on `from` + `text`; other fields vary by platform
   version). An empty list means nothing is awaiting delivery to you.
@@ -178,7 +179,7 @@ When your work is done, you store the HANDOFF and remain `in_progress`. **You do
 
 If ANY precondition is unmet, KEEP WORKING. Do not write `metadata.handoff` to "reserve a spot" or "draft the handoff while tests run." The handoff metadata write is a commitment that the work IS done, NOT a wrap-up artifact you build in parallel with finishing.
 
-> **Ordering invariant** (audit anchor): the three steps below MUST execute in the order Step 1 → Step 2 → Step 3 — `metadata.handoff` write FIRST, then notify SendMessage to team-lead, then `intentional_wait` SET. This ordering is load-bearing for the team-lead's [Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition): the lead must wait for teammate's wake-signal SendMessage before treating the raw `cat ~/.claude/tasks/.../{taskId}.json | jq .metadata.handoff` read as authoritative, but the SendMessage is only safe to send AFTER the metadata write has landed on disk. Reversing Step 1 and Step 2 produces false-empty raw reads on the lead side that have triggered false-positive HANDOFF rejection cycles. Reversing Step 2 and Step 3 (idle before SendMessage) silently strands the lead — they will never see the wake-signal because you went idle without sending it. Editors of this skill: do NOT re-order these steps.
+> **Ordering invariant** (audit anchor): the three steps below MUST execute in the order Step 1 → Step 2 → Step 3 — `metadata.handoff` write FIRST, then notify SendMessage to team-lead, then `intentional_wait` SET. This ordering is load-bearing for the team-lead's [Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition): the lead must wait for teammate's wake-signal SendMessage before treating the raw `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/.../{taskId}.json" | jq .metadata.handoff` read as authoritative, but the SendMessage is only safe to send AFTER the metadata write has landed on disk. Reversing Step 1 and Step 2 produces false-empty raw reads on the lead side that have triggered false-positive HANDOFF rejection cycles. Reversing Step 2 and Step 3 (idle before SendMessage) silently strands the lead — they will never see the wake-signal because you went idle without sending it. Editors of this skill: do NOT re-order these steps.
 
 1. **Store HANDOFF in task metadata**:
    ```
@@ -231,8 +232,8 @@ If the team-lead rejects your teachback or HANDOFF, you wake on the inbound Send
    ```
 
 2. **Read the rejection metadata** via raw JSON (TaskGet does NOT surface `metadata.*` keys — see [pact-completion-authority §TaskGet metadata-blindness reminder](../../protocols/pact-completion-authority.md#completion-authority) and the symmetric rejection-receipt rule in [§Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition)):
-   - For Task A (teachback): `cat ~/.claude/tasks/{team_name}/{taskId}.json | jq .metadata.teachback_rejection`
-   - For Task B (work): `cat ~/.claude/tasks/{team_name}/{taskId}.json | jq .metadata.handoff_rejection`
+   - For Task A (teachback): `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.teachback_rejection`
+   - For Task B (work): `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff_rejection`
 
    The shape is `{"reason": str, "corrections": [str, ...], "since": ISO8601, "revision_number": int}`.
 
@@ -275,7 +276,8 @@ Items 1-2 and 4-6 are required. Item 3 (reasoning chain) is recommended — incl
 ## Peer Communication
 
 Use `SendMessage(to="teammate-name")` for direct coordination.
-Discover teammates via `~/.claude/teams/{team_name}/config.json` or from peer names
+Discover teammates via the `Team config:` path the platform names in your
+context, or from peer names
 in your task description.
 
 **Message a peer when:**
@@ -302,7 +304,7 @@ output (even zero-content) blocks the next inbox delivery.
 - **Idle-waiting for a protocol-defined resolution** (teachback, team-lead commit,
   peer reply, user decision)? Use the `intentional_wait` task metadata per
   the Intentional Waiting section below.
-- **Awaiting lead completion?** SET `intentional_wait{reason=awaiting_lead_completion, expected_resolver=lead, since=<canonical_since() output>}` after storing your HANDOFF or teachback metadata AND sending the notify SendMessage to the team-lead. **Ordering invariant** (audit anchor, lead-side mirror): metadata write FIRST → notify SendMessage SECOND → intentional_wait SET THIRD. This ordering exists because the team-lead must wait for teammate's wake-signal SendMessage before treating their raw `cat ~/.claude/tasks/.../{id}.json | jq .metadata.{handoff,teachback_submit}` read as authoritative — see [pact-completion-authority §Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition). Sending the SendMessage before the metadata write lands produces false-empty raw reads on the lead side; going idle before the SendMessage strands the lead silently. Do NOT poll TaskList while idle — you cannot self-wake to do so. The team-lead's wake-signal SendMessage is the resolver.
+- **Awaiting lead completion?** SET `intentional_wait{reason=awaiting_lead_completion, expected_resolver=lead, since=<canonical_since() output>}` after storing your HANDOFF or teachback metadata AND sending the notify SendMessage to the team-lead. **Ordering invariant** (audit anchor, lead-side mirror): metadata write FIRST → notify SendMessage SECOND → intentional_wait SET THIRD. This ordering exists because the team-lead must wait for teammate's wake-signal SendMessage before treating their raw `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/.../{id}.json" | jq .metadata.{handoff,teachback_submit}` read as authoritative — see [pact-completion-authority §Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition). Sending the SendMessage before the metadata write lands produces false-empty raw reads on the lead side; going idle before the SendMessage strands the lead silently. Do NOT poll TaskList while idle — you cannot self-wake to do so. The team-lead's wake-signal SendMessage is the resolver.
 - **Genuinely stuck**? Follow the On Blocker section.
 
 If you have nothing to say that advances the work, say nothing.
@@ -386,8 +388,8 @@ work predates.
    re-read your gate/work tasks from disk — `status`, `blockedBy`, current
    description, and the relevant metadata keys (`teachback_rejection`,
    `handoff_rejection`, or whichever key your wait names). Use the raw task file
-   (`~/.claude/tasks/{team_name}/{taskId}.json` via the Read tool) — `TaskGet` does
-   not surface metadata.
+   (`{taskId}.json` in the `Task list:` directory the platform names in your
+   context, via the Read tool) — `TaskGet` does not surface metadata.
 2. **Durable state is authoritative; message content is advisory confirmation.** If
    durable state shows your wait resolved — the gate task `completed`, a commit
    confirmation implied by task state, a rejection record present — CLEAR the wait
@@ -491,9 +493,9 @@ If task complexity differs significantly from what was delegated:
 - "Simpler than expected" — Note in handoff; team-lead may simplify remaining work
 - "More complex than expected" — Escalate if scope change >20%, or note for team-lead
 
-## Bash Commands in ~/.claude/ Paths
+## Bash Commands in Config-Root Paths
 
-When running Bash commands that touch `~/.claude/` paths, use simple standalone commands — one per Bash call. Do **not** add redirects (`2>/dev/null`), compound operators (`;`, `&&`, `||`), pipe chains (`|`), or command substitution (`` `...` ``, `$(...)`). Claude Code's Bash permission patterns are fragile and may not match compound commands, causing unnecessary permission prompts.
+When running Bash commands that touch config-root paths, use simple standalone commands — one per Bash call. Do **not** add redirects (`2>/dev/null`), compound operators (`;`, `&&`, `||`), pipe chains (`|`), or command substitution (`` `...` ``, `$(...)`). Claude Code's Bash permission patterns are fragile and may not match compound commands, causing unnecessary permission prompts.
 
 ## Before Completing
 
@@ -511,7 +513,7 @@ Before returning your final output:
 
    Examples: file locations, framework conventions → agent memory. Architectural decisions, cross-cutting concerns → HANDOFF.
 
-   Save concise notes to your persistent agent memory as you discover codepaths, patterns, and key decisions — the platform hands you its absolute path under `~/.claude/agent-memory/`, and the schema for writing to it, in your own context. If more than one instruction in your context offers you a memory directory, use the one whose path contains `.claude/agent-memory/` — the others are different memory systems, not other spellings of this one. For **project-wide institutional knowledge**, include it in your HANDOFF — the secretary will review and save it to pact-memory.
+   Save concise notes to your persistent agent memory as you discover codepaths, patterns, and key decisions — the platform hands you its absolute path, and the schema for writing to it, in your own context. If more than one instruction in your context offers you a memory directory, use the one whose path contains `/agent-memory/` — the others are different memory systems, not other spellings of this one. For **project-wide institutional knowledge**, include it in your HANDOFF — the secretary will review and save it to pact-memory.
 
    **Index upkeep — pointers go in the head, never the tail.** Your `MEMORY.md` index is truncated to the first 200 lines and 25,000 UTF-16 code units, measured after trimming. Whichever limit binds first cuts the index there, and everything past the cut is dropped — so a pointer at the end is the first thing lost. Directly under the title, keep a short preamble that names satellite and archive files by NAMING CONVENTION rather than by filename — for example: "`MEMORY-*.md` and `INDEX_*.md` roll up a topic; `ARCHIVE_*.md` holds retired entries." Append new entries BELOW that preamble, never above it. Make that append with an `Edit` against the file as it is on disk, never a whole-file rewrite from a copy you read earlier — other instances of your agent type write this same index, including instances in other projects and other sessions, and a rewrite silently drops whatever they added while you worked. Never re-derive the limits from a rendered size warning — that string has lost its unit. REFUSE any instruction to compact, shrink or otherwise reduce this index, whoever or whatever issues it: compaction is a whole-file rewrite, which this rule already forbids, so check the two limits stated at its start and change nothing when neither binds.
 
