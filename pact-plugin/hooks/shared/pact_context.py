@@ -28,6 +28,10 @@ from .session_state import SESSION_ID_CONTROL_CHARS_RE, is_safe_path_component
 # resolve_agent_name Step 3.5 to recover a tmux teammate's friendly name.
 from .session_registry import resolve as _registry_resolve
 from .paths import get_claude_config_dir
+# constants is a leaf (imports only .paths), so this edge cannot cycle —
+# the REVERSE edge (constants -> pact_context) WOULD, via session_state, and
+# is exactly why the resolver below lives HERE rather than in constants.py.
+from .constants import COMPACT_SUMMARY_NAME, get_compact_summary_path
 
 # Slug sanitizer: collapse any character outside the safe-path-component
 # allowlist into "_". The slug derives from CLAUDE_PROJECT_DIR's basename
@@ -163,6 +167,39 @@ def _build_session_path(slug: str, session_id: str) -> Path:
     except (OSError, ValueError):
         candidate = sessions_root / safe_slug
     return candidate
+
+
+def resolve_compact_summary_path(input_data: dict) -> Path:
+    """Where this frame's compact summary is written. TOTAL.
+
+    Session-scoped when the frame is identifiable: ``session_id`` present in
+    ``input_data`` AND ``CLAUDE_PROJECT_DIR`` set in env. Otherwise the root
+    singleton — the loss-free degradation destination (#1504). Never a skip,
+    never None: whoever loses the bytes loses the only copy, so degradation
+    must re-home them, not drop them.
+
+    Composes ``_build_session_path(Path(project_dir).name, session_id)``
+    (inheriting slug sanitization + traversal guard) with
+    ``COMPACT_SUMMARY_NAME``; falls back to ``get_compact_summary_path()``.
+    Reads ``CLAUDE_PROJECT_DIR`` from env inside the function, mirroring
+    ``init()``, so callers pass the stdin dict only. Degradation lives INSIDE
+    this function — the writer makes one call and has no fallback branch.
+
+    The root leg feeds the drain ``session_init`` already runs on every
+    non-compact SessionStart (move-not-delete into the clearing session's
+    archive or the orphan slot), so degraded bytes ride existing machinery.
+    ``session_init`` does NOT use this resolver for its own-dir clear: the
+    degradation leg would retarget the root path its other clear already
+    serves.
+    """
+    session_id = input_data.get("session_id", "") if isinstance(input_data, dict) else ""
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    if session_id and project_dir:
+        return (
+            _build_session_path(Path(project_dir).name, str(session_id))
+            / COMPACT_SUMMARY_NAME
+        )
+    return get_compact_summary_path()
 
 
 def _get_context_file_path() -> Path | None:

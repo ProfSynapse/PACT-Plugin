@@ -35,24 +35,33 @@ PACT_AGENTS = [
     "pact-secretary",
 ]
 
-# Canonical path for the compact summary file written by postcompact_archive
-# and read by session_init (post-compaction recovery) and pact-secretary
-# (session briefing).
+# Filename of the compact summary. ONE spelling, shared by the session-scoped
+# location ({session_dir}/compact-summary.txt, resolved by
+# pact_context.resolve_compact_summary_path) and the root singleton below, so
+# neither leg can drift from the name the secretary states in prose.
+COMPACT_SUMMARY_NAME = "compact-summary.txt"
+
+
+# Canonical ROOT path for the compact summary. After #1504 this is the
+# DEGRADATION + LEGACY-DRAIN destination, not the primary write target:
+# postcompact_archive writes the session-scoped path whenever the frame is
+# identifiable and degrades HERE when it is not (missing session_id or
+# CLAUDE_PROJECT_DIR), and pre-upgrade bytes start here. session_init drains
+# whatever it finds at this path on every non-compact SessionStart.
 #
 # SINGLE-USE, AND ARCHIVED RATHER THAN DELETED. The file must LEAVE this path
 # once processed, because a copy left here is processed again by the next
 # briefing in the same session. It does NOT follow that the bytes may go:
-# postcompact_archive writes this path as a GLOBAL SINGLETON and no second copy
-# exists anywhere, so whoever clears it destroys the only copy unless the clear
-# is a MOVE. Both clearers move it — the secretary into its session directory,
-# and session_init into the same place when it finds one left behind.
+# whoever clears it destroys the only copy unless the clear is a MOVE. The
+# clearer moves it — session_init, into the clearing session's directory when
+# it can identify one, else into the orphan slot below.
 #
-# Also referenced in: pact-plugin/agents/pact-secretary.md (the archive rule and
-# its fallback) and pact-plugin/hooks/session_init.py (the stale-summary archive,
-# and the resume-time pointer that tells a lead where the file went).
+# Also referenced in: pact-plugin/agents/pact-secretary.md (the named fallback
+# read) and pact-plugin/hooks/session_init.py (the stale-summary archive, and
+# the resume-time pointer's degraded branch).
 # Accessor (B1) — resolves $CLAUDE_CONFIG_DIR at CALL time (no import-time freeze).
 def get_compact_summary_path() -> Path:
-    return get_claude_config_dir() / "pact-sessions" / "compact-summary.txt"
+    return get_claude_config_dir() / "pact-sessions" / COMPACT_SUMMARY_NAME
 
 
 # Filename prefix for an ARCHIVED compact summary. One definition, so the hook
@@ -67,6 +76,11 @@ COMPACT_SUMMARY_ARCHIVE_PREFIX = "compact-summary-"
 # A FIXED name, never a timestamped one: this lives in the shared sessions root,
 # where timestamped files would accumulate without bound. One slot makes that
 # growth UNREPRESENTABLE rather than merely policed.
+#
+# ROLE (narrowed by #1504): the catch basin of the ROOT drain — the destination
+# when the CLEARING session is itself unidentified. Since the writer now scopes
+# its file to the session that produced it, that means degraded writes and
+# pre-upgrade legacy bytes only.
 #
 # THE TRADE, so nobody discovers it by losing something: a second orphan
 # OVERWRITES the first. That is a strict improvement on the previous behaviour,
