@@ -82,15 +82,22 @@ def plain_frame(**extra):
     return _frame(None, **extra)
 
 
-def postcompact_frame(agent_type, compact_summary="post-compaction summary text"):
-    """A synthesized PostCompact hook-stdin frame for the #881 gate tests.
+def postcompact_frame(agent_type, compact_summary="post-compaction summary text",
+                      session_id=None):
+    """A synthesized PostCompact hook-stdin frame for the gate/suppression tests.
 
     PostCompact frames carry ``compact_summary``; ``agent_type`` carries the
-    role discriminator the is_lead gate keys on. Pass ``agent_type=None`` for a
-    plain frame (the field is omitted).
+    role discriminator the is_lead gate keys on; ``session_id`` is optional —
+    None omits the field, which is the DEGRADATION shape the session-scoped
+    writer falls back on (#1504). The CAPTURED sibling of this builder is
+    ``postcompact_lead_manual``; this one stays SYNTHESIZED. Pass
+    ``agent_type=None`` for a plain frame (the field is omitted).
     """
+    extra = {}
+    if session_id is not None:
+        extra["session_id"] = session_id
     return _frame(agent_type, hook_event_name="PostCompact",
-                  compact_summary=compact_summary)
+                  compact_summary=compact_summary, **extra)
 
 
 # =============================================================================
@@ -337,6 +344,29 @@ _CAPTURED_FRAMES_JSON = r'''
     "team_name": "pact-e5e2be7d",
     "teammate_name": "architect",
     "transcript_path": "<transcript_path>"
+  },
+  "postcompact_lead_manual": {
+    "_meta": {
+      "capture_method": "live-session-append-only-hook-dump (PACT 4.6.44 dogfood, in-process lead session, 2026-08-26)",
+      "is_1504_step0": true,
+      "note": "#1504 step 0: FIRST captured PostCompact frame — a lead (PACT:pact-orchestrator) manual /compact in an in-process session. session_id IS present (closes the dagger the session-scoped writer resolution rests on); compact_summary PRESENT and non-empty; trigger and prompt_id are real fields the synthesized-from-matrix builder never carried.",
+      "quick_summary": {
+        "AGENT_TYPE_top_level": "PACT:pact-orchestrator",
+        "compact_summary_present": true,
+        "hook_event_name": "PostCompact",
+        "prompt_id_present": true,
+        "session_id_present": true,
+        "trigger": "manual"
+      }
+    },
+    "agent_type": "PACT:pact-orchestrator",
+    "compact_summary": "<elided for fixture - 21801 chars of session summary at capture; non-empty truthy string is the load-bearing shape>",
+    "cwd": "<cwd>",
+    "hook_event_name": "PostCompact",
+    "prompt_id": "e4aa375e-3347-4abc-8d19-0e4e2c19f3b9",
+    "session_id": "f5897740-e23f-4868-8d76-cc85c7e893f7",
+    "transcript_path": "<transcript_path>",
+    "trigger": "manual"
   }
 }
 '''
@@ -425,3 +455,13 @@ def captured_pretooluse_teammate_inprocess_subagent():
     agent_id PRESENT; session_id EQUALS the lead's = the session_id==leadSessionId
     collapse (was M0-inferred, now captured)."""
     return captured_frame("pretooluse_teammate_inprocess_subagent")
+
+
+def captured_postcompact_lead_manual():
+    """#1504 step-0 frame: FIRST captured PostCompact (lead manual /compact).
+
+    session_id PRESENT (the session-scoped writer's resolution input — closes
+    the dagger); compact_summary PRESENT and non-empty; trigger and prompt_id
+    are real fields the synthesized-from-matrix builder never carried.
+    """
+    return captured_frame("postcompact_lead_manual")

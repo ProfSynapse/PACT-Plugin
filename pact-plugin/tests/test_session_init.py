@@ -859,6 +859,78 @@ class TestCompactSummaryCleanup:
             "compact-summary.txt should be preserved for source='compact'"
         )
 
+    def test_main_clears_own_session_scoped_summary_not_foreign(
+        self, monkeypatch, tmp_path
+    ):
+        """session_init.main() END-TO-END for the #1504 own-dir clear.
+
+        The direct-call arms in test_compact_summary_session_scope.py pin
+        _archive_own_dir_stale_summary's SEMANTICS; this arm pins the WIRING
+        the guard owns: main() at source != "compact" must move a stale file
+        out of THIS session's dir into a same-dir timestamped archive (slot
+        clear, bytes kept), leave a FOREIGN session's file untouched, and
+        re-home nothing to the root. This is also the main()-level half of
+        the spec's mid-flight smoke: a second same-root session starting
+        leaves the first's copy alone.
+
+        Deliberately does NOT patch get_compact_summary_path: the real
+        accessor under the Path.home redirect resolves into this tmp tree,
+        and no root file is planted, so the root clear runs and no-ops —
+        end-to-end, not steered.
+        """
+        from session_init import main
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/example/Sites/test-project")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        own_sid = "aabb1122-0000-0000-0000-000000000000"
+        foreign_sid = "ff990011-0000-0000-0000-000000000000"
+        sessions_dir = tmp_path / ".claude" / "pact-sessions"
+        own_dir = sessions_dir / "test-project" / own_sid
+        foreign_dir = sessions_dir / "test-project" / foreign_sid
+        own_dir.mkdir(parents=True)
+        foreign_dir.mkdir(parents=True)
+        (own_dir / "compact-summary.txt").write_text(
+            self.SUMMARY_BODY, encoding="utf-8"
+        )
+        foreign = foreign_dir / "compact-summary.txt"
+        foreign.write_text("FOREIGN SESSION BYTES", encoding="utf-8")
+
+        stdin_data = json.dumps({"source": "startup", "session_id": own_sid})
+        with patch("session_init.setup_plugin_symlinks", return_value=None), \
+             patch("session_init.ensure_project_memory_md", return_value=None), \
+             patch("session_init.check_pinned_staleness", return_value=None), \
+             patch("session_init.update_session_info", return_value=None), \
+             patch("session_init.get_task_list", return_value=None), \
+             patch("session_init.restore_last_session", return_value=None), \
+             patch("session_init.check_resume_state", return_value=None), \
+             patch("sys.stdin", io.StringIO(stdin_data)), \
+             patch("sys.stdout", new_callable=io.StringIO):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+        assert exc_info.value.code == 0
+
+        assert not (own_dir / "compact-summary.txt").exists(), (
+            "the own-dir clear must empty THIS session's compact-summary slot "
+            "at the source!=compact guard"
+        )
+        archives = [
+            p for p in own_dir.glob("compact-summary-*.txt")
+            if p.read_text(encoding="utf-8") == self.SUMMARY_BODY
+        ]
+        assert len(archives) == 1, (
+            f"the own-dir clear must MOVE the stale session-scoped summary to "
+            f"a same-dir timestamped archive, byte-equal; own dir holds "
+            f"{sorted(p.name for p in own_dir.iterdir())}"
+        )
+        assert foreign.read_text(encoding="utf-8") == "FOREIGN SESSION BYTES", (
+            "a foreign session's compact summary was touched by this session's "
+            "clear — the cross-session non-interference invariant (#1504) broke"
+        )
+        assert not (sessions_dir / "compact-summary.txt").exists(), (
+            "nothing may re-home an own-dir clear to the root singleton"
+        )
+
 
 class TestCheckAdditionalDirectories:
     """Tests for check_additional_directories() — multi-directory tip.

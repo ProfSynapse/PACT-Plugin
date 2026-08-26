@@ -81,6 +81,7 @@ from pin_caps import (  # noqa: F401
 from shared import BOOTSTRAP_MARKER_NAME, SESSION_ID_CONTROL_CHARS_RE, build_session_path
 from shared.constants import (
     COMPACT_SUMMARY_ARCHIVE_PREFIX,
+    COMPACT_SUMMARY_NAME,
     COMPACT_SUMMARY_ORPHAN_NAME,
     get_compact_summary_path,
 )
@@ -790,16 +791,21 @@ def _stale_summary_destination(session_id: str, project_dir: str) -> Path:
 
 
 def _archive_stale_compact_summary(session_id: str, project_dir: str) -> None:
-    """Clear the compact-summary singleton BY MOVING IT, never by deleting.
+    """Clear the ROOT compact-summary singleton BY MOVING IT, never deleting.
+
+    Since #1504 the writer scopes its file to the session that produced it,
+    so the root singleton is fed only by DEGRADED writes (unidentifiable
+    frames) and pre-upgrade legacy bytes. This sweep is the one-time drain
+    for both: a MOVE empties the root path, so nothing can process the bytes
+    twice, and only unattributable writes can ever re-feed it.
 
     The path must end up clear: the summary is single-use, and a copy left
     there is processed a second time by the next briefing in the same session.
-    The bytes must survive: postcompact_archive writes that path as a global
-    singleton with no second copy anywhere, so an unlink destroys the only copy
-    of anything the secretary did not archive — which is precisely the
-    secretary's documented fallback branch, the one case where no archive was
-    ever made. A move satisfies both in ONE operation, so it cannot half-fail
-    into the state this repairs.
+    The bytes must survive: the writer leaves no second copy anywhere, so an
+    unlink destroys the only copy of anything the secretary did not archive —
+    which is precisely the secretary's documented fallback branch, the one
+    case where no archive was ever made. A move satisfies both in ONE
+    operation, so it cannot half-fail into the state this repairs.
 
     Fail-open, and the direction is deliberate: on any OSError the bytes stay
     where they are. That risks a summary processed twice, which costs a
@@ -812,6 +818,42 @@ def _archive_stale_compact_summary(session_id: str, project_dir: str) -> None:
             return
         destination = _stale_summary_destination(session_id, project_dir)
         destination.parent.mkdir(parents=True, exist_ok=True)
+        summary.replace(destination)
+    except OSError:
+        pass  # Fail-open: keep the bytes; never block session init for cleanup
+
+
+def _archive_own_dir_stale_summary(session_id: str, project_dir: str) -> None:
+    """Clear THIS session's stale compact summary BY MOVING IT in place.
+
+    Session-scoped twin of _archive_stale_compact_summary (#1504): a
+    compaction followed by a context reset leaves the file in the session's
+    own directory. Moving it to the timestamped archive convention of
+    COMPACT_SUMMARY_ARCHIVE_PREFIX in the SAME directory empties the
+    single-use slot and keeps the bytes where its own session can still
+    find them.
+
+    Composes build_session_path + COMPACT_SUMMARY_NAME DIRECTLY. The resolver
+    (pact_context.resolve_compact_summary_path) is deliberately NOT used: its
+    degradation leg retargets the root singleton, which the OTHER clear above
+    already serves — routing through it would double-drain one object and
+    never touch the other.
+
+    Fail-open, same direction as the root clear: on OSError the bytes stay
+    put. A summary processed twice costs a duplicate paragraph; a summary
+    lost is unrecoverable.
+    """
+    if not (session_id and project_dir):
+        return
+    try:
+        summary = (
+            build_session_path(Path(project_dir).name, str(session_id))
+            / COMPACT_SUMMARY_NAME
+        )
+        if not summary.exists():
+            return
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+        destination = summary.parent / f"{COMPACT_SUMMARY_ARCHIVE_PREFIX}{stamp}.txt"
         summary.replace(destination)
     except OSError:
         pass  # Fail-open: keep the bytes; never block session init for cleanup
@@ -982,15 +1024,22 @@ def main():
         # behavior, a KNOWN no-regression default, not a misroute.
         frame_role = classify_session_role(input_data)
 
-        # Clear a stale compact-summary left by a previous session — BY MOVING
-        # IT. Only "compact" source keeps it in place (postcompact_archive just
+        # Clear a stale compact-summary — BY MOVING IT, in BOTH of its homes.
+        # Only "compact" source keeps either in place (postcompact_archive just
         # wrote it, and this session is about to read it).
         #
-        # This used to unlink. The path still has to be cleared, for the same
-        # reason as before, but the previous code cleared it BY DESTROYING the
-        # bytes, and those are the only copy. See _archive_stale_compact_summary.
+        # The ROOT singleton is the degradation + legacy drain; the session's
+        # OWN DIR holds the writer's scoped file (#1504). Two move-not-delete
+        # objects, no once-flag: the filesystem is the state, and the MOVE is
+        # what empties it. This used to unlink. The path still has to be
+        # cleared, for the same reason as before, but the previous code cleared
+        # it BY DESTROYING the bytes, and those are the only copy. See
+        # _archive_stale_compact_summary and _archive_own_dir_stale_summary.
         if source != "compact":
             _archive_stale_compact_summary(
+                input_data.get("session_id", ""), project_dir
+            )
+            _archive_own_dir_stale_summary(
                 input_data.get("session_id", ""), project_dir
             )
 
@@ -1593,22 +1642,30 @@ def main():
                         "message='Post-compaction: deliver session briefing with current state.')."
                     )
                 # The compact-summary path is single-use: the secretary ARCHIVES
-                # it into the session directory after processing, so a lead that
-                # reads even slightly later finds nothing there. Naming only the
-                # canonical path sends the lead to a location it is expected to
-                # vacate. Name the archive too, so the read survives the move
-                # without waiting for the briefing to arrive.
+                # it after processing, so a lead that reads even slightly later
+                # finds nothing there. Naming only the canonical path sends the
+                # lead to a location it is expected to vacate. Name the archive
+                # too, so the read survives the move without waiting for the
+                # briefing to arrive.
+                #
+                # The READ TARGET tracks the writer (#1504): session_dir present
+                # -> the writer scoped the file to this session, so name the
+                # session-scoped path. session_dir absent -> the writer DEGRADED
+                # to the root singleton, so name the root path: the degenerate
+                # branch must follow the degraded write, not the happy path.
                 #
                 # session_dir is "" when session_id was missing (the ternary at
                 # the top of this function). Interpolating it blind would emit an
                 # instruction naming an empty directory — no error, just a
                 # confidently wrong sentence — so fall back to the briefing.
                 if session_dir:
+                    _summary_path = Path(session_dir) / COMPACT_SUMMARY_NAME
                     _archive_clause = (
                         f'(if it is gone, the secretary archived it into '
                         f'{session_dir} as compact-summary-<timestamp>.txt)'
                     )
                 else:
+                    _summary_path = get_compact_summary_path()
                     _archive_clause = (
                         '(if it is gone, the secretary archived it into the '
                         'session directory and names the path in its briefing)'
@@ -1616,7 +1673,7 @@ def main():
                 context_parts.insert(0, (
                     f'{_team_directive} '
                     f'After bootstrap, recover session state: '
-                    f'(1) Read {get_compact_summary_path()} for prior context '
+                    f'(1) Read {_summary_path} for prior context '
                     f'{_archive_clause}, '
                     f'(2) Run TaskList to find in-progress work, '
                     f'(3) TaskGet on in-progress tasks for details. '

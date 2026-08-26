@@ -11,7 +11,10 @@ Used by: hooks.json PostCompact hook
 
 After compaction completes:
 1. Reads compact_summary from stdin (PostCompact input field)
-2. Writes the compact_summary to the canonical get_compact_summary_path()
+2. Writes it to {session_dir}/compact-summary.txt — the SESSION that produced
+   it owns the file (#1504) — degrading LOSS-FREE to the root singleton when
+   the frame is unidentified. The resolution and its degradation live in ONE
+   total call: pact_context.resolve_compact_summary_path.
 3. Emits suppressOutput to avoid false "hook error" UI display on clean exits
 
 This is a non-blocking side effect (always exits 0), not a gate.
@@ -27,9 +30,9 @@ import os
 import sys
 from pathlib import Path
 
-from shared.constants import get_compact_summary_path
+from shared.constants import COMPACT_SUMMARY_NAME, get_compact_summary_path
 from shared.error_output import hook_error_json
-from shared.pact_context import is_lead
+from shared.pact_context import is_lead, resolve_compact_summary_path
 
 
 # ---------------------------------------------------------------------------
@@ -37,27 +40,25 @@ from shared.pact_context import is_lead
 # ---------------------------------------------------------------------------
 
 
-def _get_summary_path(
-    sessions_base_dir: str | None = None,
-) -> Path:
-    """Get the path for the compact summary file."""
-    if sessions_base_dir is None:
-        return get_compact_summary_path()
-    return Path(sessions_base_dir) / get_compact_summary_path().name
-
-
 def write_compact_summary(
     summary: str,
-    sessions_base_dir: str | None = None,
+    session_dir: str | None = None,
 ) -> bool:
     """
     Write the compact summary to disk for the secretary.
 
+    ``session_dir`` is the FULLY RESOLVED destination directory (the
+    test-injection seam, replacing the old ``sessions_base_dir``). Production
+    callers resolve it via resolve_compact_summary_path and pass its parent;
+    a bare call falls back to the root singleton path for the filename.
     Creates the directory if needed. Uses secure file permissions (0o600).
     Returns True on success, False on any error.
     """
     try:
-        path = _get_summary_path(sessions_base_dir)
+        if session_dir:
+            path = Path(session_dir) / COMPACT_SUMMARY_NAME
+        else:
+            path = get_compact_summary_path()
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Secure write: 0o600 permissions
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -88,15 +89,21 @@ def main():
         # "Post-compaction: critical context preserved" message was reassurance
         # that could suppress orchestrator self-check (see issue #444 root cause).
         #
-        # Lead-only (#881): the compact-summary path is a GLOBAL SINGLETON the lead
-        # reads on resume; the write is O_TRUNC, so a teammate/plain frame's
-        # PostCompact would CLOBBER the lead's summary (the 2nd acute clobber
-        # after #877). Gate the write behind is_lead. is_lead is total and only
-        # reaches stdin_data here when compact_summary is truthy, which the
-        # isinstance(dict) guard above already established — so stdin_data is a
-        # dict and the .get inside is_lead cannot raise.
+        # Lead-only (#881, re-scoped by #1504): the write is O_TRUNC, and
+        # in-process subagent topology COLLAPSES a teammate's session_id onto
+        # the LEAD's — so ungated, a teammate PostCompact writes into the
+        # lead's own session directory, resurrecting the clobber #881 fixed,
+        # now inside it. Gate the write behind is_lead. is_lead is total and
+        # only reaches stdin_data here when compact_summary is truthy, which
+        # the isinstance(dict) guard above already established — so stdin_data
+        # is a dict and the .get inside is_lead cannot raise.
+        #
+        # The destination resolves via the TOTAL resolver: session-scoped when
+        # the frame is identifiable, root singleton otherwise. Degradation
+        # lives INSIDE that one call — no fallback branch here.
         if compact_summary and is_lead(stdin_data):
-            write_compact_summary(compact_summary)
+            destination = resolve_compact_summary_path(stdin_data)
+            write_compact_summary(compact_summary, str(destination.parent))
 
         # Suppress output to avoid false "hook error" UI display on clean exits.
         print(json.dumps({"suppressOutput": True}))

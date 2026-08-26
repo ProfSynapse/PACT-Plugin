@@ -28,6 +28,10 @@ from .session_state import SESSION_ID_CONTROL_CHARS_RE, is_safe_path_component
 # resolve_agent_name Step 3.5 to recover a tmux teammate's friendly name.
 from .session_registry import resolve as _registry_resolve
 from .paths import get_claude_config_dir
+# constants is a leaf (imports only .paths), so this edge cannot cycle —
+# the REVERSE edge (constants -> pact_context) WOULD, via session_state, and
+# is exactly why the resolver below lives HERE rather than in constants.py.
+from .constants import COMPACT_SUMMARY_NAME, get_compact_summary_path
 
 # Slug sanitizer: collapse any character outside the safe-path-component
 # allowlist into "_". The slug derives from CLAUDE_PROJECT_DIR's basename
@@ -131,13 +135,24 @@ def _build_session_path(slug: str, session_id: str) -> Path:
     Used by init(), get_session_dir(), and write_context() to avoid
     duplicating path construction logic.
 
+    session_id is sanitized HERE with _UNSAFE_SLUG_CHARS_RE before
+    composition — the same allowlist init() applies, idempotent for
+    callers that pre-sanitize — because raw stdin/persisted ids reach
+    this guard from resolve_compact_summary_path, session_init's clears
+    and marker-reset, and get_session_dir. Sanitize-substitute (NOT
+    reject), matching the slug treatment below.
+
     Path traversal guard: resolves the constructed path and verifies it
     stays under ~/.claude/pact-sessions/ using Path.parents containment
     (immune to sibling-prefix collisions by design — matches
     session_init._validate_under_pact_sessions). A malicious session_id
     like "../../etc" would resolve outside the expected tree — fall back
     to a sanitized basename. Fail-closed: if the validation itself
-    raises, return a slug-only path (no session_id component).
+    raises, return a slug-only path (no session_id component). The
+    containment check returns the candidate as constructed, so traversal
+    segments must be collapsed BEFORE composition — which is what the
+    session_id sanitization above does; containment is the backstop for
+    everything the regex cannot produce.
 
     S3 defense (security-engineer-review): the slug derives from
     CLAUDE_PROJECT_DIR's basename and ends up interpolated into a
@@ -148,6 +163,7 @@ def _build_session_path(slug: str, session_id: str) -> Path:
     so sessions with unusual project-dir names still proceed.
     """
     safe_slug = _UNSAFE_SLUG_CHARS_RE.sub("_", slug) if slug else slug
+    session_id = _UNSAFE_SLUG_CHARS_RE.sub("_", session_id)
     sessions_root = get_claude_config_dir() / "pact-sessions"
     candidate = sessions_root / safe_slug / session_id
     try:
@@ -163,6 +179,39 @@ def _build_session_path(slug: str, session_id: str) -> Path:
     except (OSError, ValueError):
         candidate = sessions_root / safe_slug
     return candidate
+
+
+def resolve_compact_summary_path(input_data: dict) -> Path:
+    """Where this frame's compact summary is written. TOTAL.
+
+    Session-scoped when the frame is identifiable: ``session_id`` present in
+    ``input_data`` AND ``CLAUDE_PROJECT_DIR`` set in env. Otherwise the root
+    singleton — the loss-free degradation destination (#1504). Never a skip,
+    never None: whoever loses the bytes loses the only copy, so degradation
+    must re-home them, not drop them.
+
+    Composes ``_build_session_path(Path(project_dir).name, session_id)``
+    (inheriting slug sanitization + traversal guard) with
+    ``COMPACT_SUMMARY_NAME``; falls back to ``get_compact_summary_path()``.
+    Reads ``CLAUDE_PROJECT_DIR`` from env inside the function, mirroring
+    ``init()``, so callers pass the stdin dict only. Degradation lives INSIDE
+    this function — the writer makes one call and has no fallback branch.
+
+    The root leg feeds the drain ``session_init`` already runs on every
+    non-compact SessionStart (move-not-delete into the clearing session's
+    archive or the orphan slot), so degraded bytes ride existing machinery.
+    ``session_init`` does NOT use this resolver for its own-dir clear: the
+    degradation leg would retarget the root path its other clear already
+    serves.
+    """
+    session_id = input_data.get("session_id", "") if isinstance(input_data, dict) else ""
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    if session_id and project_dir:
+        return (
+            _build_session_path(Path(project_dir).name, str(session_id))
+            / COMPACT_SUMMARY_NAME
+        )
+    return get_compact_summary_path()
 
 
 def _get_context_file_path() -> Path | None:

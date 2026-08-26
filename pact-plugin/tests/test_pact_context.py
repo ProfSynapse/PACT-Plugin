@@ -2273,6 +2273,35 @@ class TestGetSessionDirAdversarial:
             f"{sessions_prefix}"
         )
 
+    def test_in_root_traversal_cannot_target_sibling_session(self, monkeypatch, tmp_path):
+        """F-SEC-1 red arm: a session_id that traverses INSIDE the sessions
+        root ("../other-project/other-session") must land as a single
+        segment under the caller's OWN slug, never at the sibling.
+
+        Pre-fix the containment check passed such an id (it resolves inside
+        the root) and returned the raw candidate — literal '..' segments
+        intact — so a hostile frame could aim the compact-summary O_TRUNC
+        write at another session's directory within the root. The
+        pre-composition sanitization collapses '/' to '_', so the candidate
+        that reaches containment carries no traversal segments.
+        """
+        from shared.pact_context import _build_session_path
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        sessions_root = tmp_path / ".claude" / "pact-sessions"
+        sessions_root.mkdir(parents=True, exist_ok=True)
+        sibling = sessions_root / "other-project" / "other-session"
+        sibling.mkdir(parents=True)
+
+        result = _build_session_path(
+            "my-project", "../other-project/other-session"
+        )
+
+        assert ".." not in result.parts
+        assert result.parent == sessions_root / "my-project"
+        assert result != sibling
+
     def test_dotdot_only_session_id_returns_safe_path(self, monkeypatch, tmp_path):
         """session_id='../..' produces a path whose basename() is '..',
         which the guard must reject. The result must not contain '..'

@@ -234,9 +234,10 @@ class TestCompactReadInstructionRealSeam:
         sid = "aabb1122-0000-0000-0000-000000000000"
         ctx = _run_compact_main(tmp_path, monkeypatch, sid)
 
-        # Canonical path stays PRIMARY — a lead resuming before any secretary
-        # has run must still be sent to the real file.
-        assert "compact-summary.txt" in ctx
+        # The READ TARGET is session-scoped (#1504): the instruction names the
+        # file inside the resolved session dir — the writer put it there, so
+        # the lead is sent where it actually is, not to the root singleton.
+        assert f"/{sid}/compact-summary.txt" in ctx
         # The archive directory is the REAL resolved one. Asserted from the
         # inputs (home + session id), never by re-deriving the resolver, so a
         # resolver returning "" or the wrong dir fails here.
@@ -252,7 +253,13 @@ class TestCompactReadInstructionRealSeam:
     ):
         ctx = _run_compact_main(tmp_path, monkeypatch, None)
 
-        assert "compact-summary.txt" in ctx
+        # The DEGRADED branch must follow the degraded WRITE: no session_id
+        # means the writer fell back to the root singleton, so the pointer
+        # names the sid-free ROOT path. The contiguous fragment cannot match
+        # a session-scoped pointer (pact-sessions/{slug}/{sid}/...), so a
+        # scoped misroute reddens here — the bare filename substring could not
+        # tell the two apart (F-TEST-1).
+        assert "pact-sessions/compact-summary.txt" in ctx
         assert "names the path in its briefing" in ctx
         # The two failure shapes a blind interpolation would produce.
         assert "archived it into  as" not in ctx
