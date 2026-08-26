@@ -49,10 +49,12 @@ Values below are grounded in verbatim stdin captured under tmux (Claude Code
 2.1.167) for **SessionStart, UserPromptSubmit, PostToolUse, and TaskCompleted**,
 and under Claude Code 2.1.177 for **PreToolUse** (three real frames: a tmux
 teammate, a lead, and an in-process subagent — confirming `agent_type` is stamped
-on `PreToolUse` in both topologies). Only the **PostCompact** row is now NOT
-separately captured (marked `†`): its `agent_type` shape is inferred from the
-uniform harness-stamping the captured frames establish (PostCompact has only a
-synthesized-from-matrix builder). "journal-resolvable in this process?" = does
+on `PreToolUse` in both topologies). **PostCompact** was captured live on
+2026-08-26 (#1504 step 0): a lead manual `/compact` in an in-process session —
+`agent_type` carries the qualified lead spelling as the matrix inferred, and the
+frame also carries `session_id`, `trigger`, `prompt_id`, and a non-empty
+`compact_summary` (committed shape: `tests/fixtures/role_frames.py`
+`postcompact_lead_manual`). "journal-resolvable in this process?" = does
 `session_journal.get_journal_path()` return a non-empty path — i.e. can THIS
 process write the canonical session journal. It is **process-scoped**: a
 teammate process has no persisted session-context file, so its journal path is
@@ -65,11 +67,15 @@ empty.
 | PreToolUse | `agent_type` | lead spelling | `pact-<specialist>` | — | **no** | lead: yes · teammate: no |
 | PostToolUse (incl. `TaskCreate` / `TaskUpdate`) | `agent_type` | lead spelling | `pact-<specialist>` | — | **no** | lead: yes · teammate: no |
 | TaskCompleted | `agent_type` | lead spelling | `pact-<specialist>` | — | lead: **no** · teammate: **yes** (also `teammate_name`) | lead: yes · teammate: no |
-| PostCompact `†` | `agent_type` | lead spelling | `pact-<specialist>` | — | no | lead: yes · teammate: no |
+| PostCompact | `agent_type` | lead spelling | `pact-<specialist>` | — | no | lead: yes · teammate: no |
 
-`†` PostCompact is NOT separately captured this campaign; its `agent_type` shape
-is inferred from the uniform harness-stamping the captured SessionStart /
-UserPromptSubmit / PostToolUse / TaskCompleted / PreToolUse frames establish.
+PostCompact capture provenance: live append-only hook dump, 2026-08-26, lead
+manual `/compact` in the in-process dogfood session (PACT 4.6.44). The committed
+verbatim shape is `tests/fixtures/role_frames.py` `postcompact_lead_manual`; its
+`session_id` presence is the premise the #1504 session-scoped writer resolves on.
+Teammate and plain PostCompact shapes remain matrix-inferred (no teammate compact
+has been captured): the in-process `session_id` collapse makes the teammate arm
+unreachable without a tmux teammate compact.
 `is_lead` is READ on PreToolUse and PostCompact (and SessionStart /
 UserPromptSubmit / PostToolUse) but is NOT read on TaskCompleted — that frame is
 captured for the #917 emit-path, which gates on `team_name` + journal
