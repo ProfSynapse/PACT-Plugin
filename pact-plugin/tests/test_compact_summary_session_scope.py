@@ -155,6 +155,42 @@ class TestOwnDirClearDoesNotCrossSessions:
         assert (a_dir / "compact-summary.txt").read_text(
             encoding="utf-8") == "SENTINEL-A"
 
+    def test_unidentified_clear_is_a_clean_noop(self, tmp_path, monkeypatch):
+        """F-TEST-2: the empty-identifier guard returns cleanly, touching
+        nothing. WITHOUT the guard an unidentified clear does not raise — the
+        empty path segment DROPS OUT of the composition, so the call resolves
+        to a sibling location (empty sid -> ``my-project/compact-summary.txt``
+        directly; empty project_dir -> ``{_SID_A}/compact-summary.txt`` under
+        the sessions root) and MOVES whatever it finds there. Sentinels planted
+        at exactly those two resolutions make the delete-the-guard mutation
+        visibly red; the mutation was probed physically, not reasoned (the
+        first reasoned version of this arm was VACUOUS — it planted nothing
+        where the guardless call would look, and passed under the mutation)."""
+        from session_init import _archive_own_dir_stale_summary
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        base = tmp_path / "pact-sessions"
+        a_dir = base / "my-project" / _SID_A
+        ragged_sid = base / "my-project"          # where empty-sid resolves
+        ragged_proj = base / _SID_A               # where empty-project resolves
+        for d in (a_dir, ragged_sid, ragged_proj):
+            d.mkdir(parents=True, exist_ok=True)
+        (a_dir / "compact-summary.txt").write_text("SENTINEL-A", encoding="utf-8")
+        (ragged_sid / "compact-summary.txt").write_text("RAGGED-SID", encoding="utf-8")
+        (ragged_proj / "compact-summary.txt").write_text("RAGGED-PROJ", encoding="utf-8")
+
+        for missing in (("", _PROJECT), (_SID_A, "")):
+            _archive_own_dir_stale_summary(*missing)
+
+        # Nothing moved: the guard makes BOTH shapes a clean no-op.
+        assert (a_dir / "compact-summary.txt").read_text(
+            encoding="utf-8") == "SENTINEL-A"
+        assert (ragged_sid / "compact-summary.txt").read_text(
+            encoding="utf-8") == "RAGGED-SID"
+        assert (ragged_proj / "compact-summary.txt").read_text(
+            encoding="utf-8") == "RAGGED-PROJ"
+        assert list(base.rglob("compact-summary-*.txt")) == []
+
 
 class TestLegacyDrainTwoPass:
     """Demonstration: pre-upgrade root bytes drain losslessly, exactly once.
