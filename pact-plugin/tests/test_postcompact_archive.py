@@ -38,6 +38,7 @@ HOOK_PATH = str(Path(__file__).parent.parent / "hooks" / "postcompact_archive.py
 def run_hook(
     stdin_data: str | None = None,
     env_root: str | None = None,
+    extra_env: dict | None = None,
 ) -> subprocess.CompletedProcess:
     """Run the hook as a subprocess and return the result.
 
@@ -66,13 +67,18 @@ def run_hook(
     """
     if env_root is None:
         env_root = tempfile.mkdtemp(prefix="postcompact-hook-test-")
+    # ``extra_env`` carries FRAME-CONTRACT env (e.g. CLAUDE_PROJECT_DIR for the
+    # #1504 session-scoped arm), NOT isolation: the HOME/CLAUDE_CONFIG_DIR pin
+    # above stays the sole isolation provider and wins the merge order below
+    # only for keys extra_env does not name.
     return subprocess.run(
         [sys.executable, HOOK_PATH],
         input=stdin_data or "",
         capture_output=True,
         text=True,
         timeout=10,
-        env={**os.environ, "HOME": env_root, "CLAUDE_CONFIG_DIR": env_root},
+        env={**os.environ, "HOME": env_root, "CLAUDE_CONFIG_DIR": env_root,
+             **(extra_env or {})},
     )
 
 
@@ -214,12 +220,27 @@ class TestConstants:
         assert p.name == "compact-summary.txt"
         assert "pact-sessions" in str(p)
 
-    def test_postcompact_uses_shared_path(self):
-        """Verify postcompact_archive derives the default path from the shared accessor."""
-        from postcompact_archive import _get_summary_path
-        from shared.constants import get_compact_summary_path
-        # Default path (no override) should match the shared accessor's result
-        assert _get_summary_path() == get_compact_summary_path()
+    def test_bare_write_targets_the_shared_root_accessor(self, tmp_path, monkeypatch):
+        """#1504: the seam takes a FULLY RESOLVED session dir; a bare call
+        falls back to the shared root accessor's path — the degradation
+        destination, not a locally re-spelled filename."""
+        from postcompact_archive import write_compact_summary
+
+        target = tmp_path / "compact-summary.txt"
+        monkeypatch.setattr(
+            "postcompact_archive.get_compact_summary_path", lambda: target
+        )
+        assert write_compact_summary("bare")
+        assert target.read_text(encoding="utf-8") == "bare"
+
+    def test_seam_write_targets_the_given_directory(self, tmp_path):
+        """write_compact_summary(summary, session_dir) writes
+        COMPACT_SUMMARY_NAME inside the fully-resolved dir, nowhere else."""
+        from postcompact_archive import write_compact_summary
+
+        session_dir = tmp_path / "proj" / "sid"
+        assert write_compact_summary("scoped", str(session_dir))
+        assert (session_dir / "compact-summary.txt").read_text(encoding="utf-8") == "scoped"
 
 
 # ---------------------------------------------------------------------------
@@ -297,51 +318,61 @@ class TestPostcompactOuterExceptionHandler:
 
 
 class TestPostcompactLeadGate:
-    """The compact-summary write is gated behind is_lead (#881).
+    """The compact-summary write is gated behind is_lead (#881, re-scoped #1504).
 
-    COMPACT_SUMMARY_PATH is a GLOBAL SINGLETON the lead reads on resume, and
-    the write is O_TRUNC. A teammate/plain frame's PostCompact must NOT clobber
-    it. These are smoke tests (call / no-call of write_compact_summary by
-    role); comprehensive per-role suppression coverage is the TEST phase.
+    The write is O_TRUNC, and in-process identity collapse resolves a teammate
+    frame into the LEAD's session directory — so a teammate/plain frame's
+    PostCompact must NOT write at all. The destination itself is the TOTAL
+    resolver's job (patched to a fixed path here; its own arms live in
+    test_compact_summary_session_scope.py). These are smoke tests (call /
+    no-call of write_compact_summary by role); comprehensive per-role
+    suppression coverage is the TEST phase.
     """
 
-    def _run_main_with(self, frame):
+    def _run_main_with(self, frame, tmp_path):
         from postcompact_archive import main
 
+        self._dest = tmp_path / "pact-sessions" / "proj" / "sid" / "compact-summary.txt"
         stdin_data = json.dumps(frame)
         with patch("sys.stdin", StringIO(stdin_data)), \
+             patch("postcompact_archive.resolve_compact_summary_path",
+                   return_value=self._dest), \
              patch("postcompact_archive.write_compact_summary") as mock_write:
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 0
             return mock_write
 
-    def test_lead_qualified_writes(self):
+    def test_lead_qualified_writes_to_resolved_destination(self, tmp_path):
         from fixtures.role_frames import postcompact_frame
         mock_write = self._run_main_with(
-            postcompact_frame("PACT:pact-orchestrator", compact_summary="x")
+            postcompact_frame("PACT:pact-orchestrator", compact_summary="x"),
+            tmp_path,
         )
-        mock_write.assert_called_once_with("x")
+        mock_write.assert_called_once_with("x", str(self._dest.parent))
 
-    def test_lead_unqualified_writes(self):
+    def test_lead_unqualified_writes_to_resolved_destination(self, tmp_path):
         from fixtures.role_frames import postcompact_frame
         mock_write = self._run_main_with(
-            postcompact_frame("pact-orchestrator", compact_summary="x")
+            postcompact_frame("pact-orchestrator", compact_summary="x"),
+            tmp_path,
         )
-        mock_write.assert_called_once_with("x")
+        mock_write.assert_called_once_with("x", str(self._dest.parent))
 
-    def test_teammate_suppressed(self):
+    def test_teammate_suppressed(self, tmp_path):
         from fixtures.role_frames import postcompact_frame
         mock_write = self._run_main_with(
-            postcompact_frame("pact-backend-coder", compact_summary="x")
+            postcompact_frame("pact-backend-coder", compact_summary="x"),
+            tmp_path,
         )
         mock_write.assert_not_called()
 
-    def test_plain_frame_suppressed(self):
+    def test_plain_frame_suppressed(self, tmp_path):
         """No agent_type (no --agent) → not lead → write suppressed."""
         from fixtures.role_frames import postcompact_frame
         mock_write = self._run_main_with(
-            postcompact_frame(None, compact_summary="x")
+            postcompact_frame(None, compact_summary="x"),
+            tmp_path,
         )
         mock_write.assert_not_called()
 
@@ -353,28 +384,32 @@ class TestPostcompactLeadGate:
 
 class TestPostcompactLeadGateRealDisk:
     """Defense-in-depth complement to TestPostcompactLeadGate (which mocks
-    write_compact_summary and asserts call/no-call). Here the REAL function runs
-    against a REAL file on disk: a teammate/plain frame through main() must NOT
-    truncate the global-singleton compact-summary file (#881's O_TRUNC clobber).
+    write_compact_summary and asserts call/no-call). Here the REAL writer runs
+    against REAL files on disk: a teammate/plain frame through main() must NOT
+    truncate the lead's compact summary (#881's O_TRUNC clobber).
 
-    The compact-summary path is now a call-time accessor
-    (get_compact_summary_path, B1). postcompact_archive binds it via
-    `from shared.constants import get_compact_summary_path`; we monkeypatch that
-    name to return a tmp file. main() calls write_compact_summary(summary) with
-    no base-dir → _get_summary_path() returns this redirected path.
+    #1504 changed where the resolution lives: the destination comes from
+    pact_context's TOTAL resolver, so no postcompact_archive-local accessor
+    patch can steer it. Instead the autouse config-root fixture (Path.home ->
+    tmp) carries every real path under tmp. The root singleton is planted via
+    the shared accessor; the identified-lead arm asserts the SESSION-SCOPED
+    landing and that the root sentinel SURVIVES (only degraded writes feed the
+    root now).
     """
 
     _SENTINEL = "PRIOR LEAD SUMMARY — must survive a teammate PostCompact"
+    _SID = "aabb1122-0000-0000-0000-00000000cafe"
 
-    def _run_main_realdisk(self, frame, monkeypatch, tmp_path):
+    def _root_summary_path(self):
+        from shared.constants import get_compact_summary_path
+        return get_compact_summary_path()
+
+    def _run_main_realdisk(self, frame):
         from postcompact_archive import main
 
-        summary_path = tmp_path / "compact-summary.txt"
+        summary_path = self._root_summary_path()
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text(self._SENTINEL, encoding="utf-8")
-        # Redirect the global-singleton path by patching the call-time accessor.
-        monkeypatch.setattr(
-            "postcompact_archive.get_compact_summary_path", lambda: summary_path
-        )
 
         with patch("sys.stdin", StringIO(json.dumps(frame))):
             with pytest.raises(SystemExit) as exc_info:
@@ -382,38 +417,46 @@ class TestPostcompactLeadGateRealDisk:
             assert exc_info.value.code == 0
         return summary_path
 
-    def test_teammate_frame_does_not_truncate_real_file(self, monkeypatch, tmp_path):
+    def test_teammate_frame_does_not_truncate_real_file(self):
         """A teammate PostCompact must leave the lead's on-disk compact-summary
         UNTOUCHED — the #881 is_lead gate suppresses the real O_TRUNC write."""
         from fixtures.role_frames import postcompact_frame
         summary_path = self._run_main_realdisk(
-            postcompact_frame("pact-backend-coder", compact_summary="TEAMMATE CLOBBER"),
-            monkeypatch, tmp_path,
+            postcompact_frame("pact-backend-coder", compact_summary="TEAMMATE CLOBBER")
         )
         assert summary_path.read_text(encoding="utf-8") == self._SENTINEL, (
-            "a teammate PostCompact truncated the global compact-summary file — "
+            "a teammate PostCompact truncated the lead's compact-summary file — "
             "the #881 lead-gate failed to suppress the real O_TRUNC write"
         )
 
-    def test_plain_frame_does_not_truncate_real_file(self, monkeypatch, tmp_path):
+    def test_plain_frame_does_not_truncate_real_file(self):
         """A plain (no-agent_type) PostCompact must also leave the file intact."""
         from fixtures.role_frames import postcompact_frame
         summary_path = self._run_main_realdisk(
-            postcompact_frame(None, compact_summary="PLAIN CLOBBER"),
-            monkeypatch, tmp_path,
+            postcompact_frame(None, compact_summary="PLAIN CLOBBER")
         )
         assert summary_path.read_text(encoding="utf-8") == self._SENTINEL
 
-    def test_lead_frame_does_overwrite_real_file(self, monkeypatch, tmp_path):
-        """Positive symmetry: a LEAD PostCompact DOES write the file (the gate
-        suppresses only NON-lead frames; the lead's archival must still work)."""
+    def test_identified_lead_frame_writes_session_scoped_not_root(self, tmp_path, monkeypatch):
+        """Positive symmetry, session-scoped (#1504): an IDENTIFIED lead
+        PostCompact writes into the session's own directory, and the root
+        sentinel SURVIVES — only degraded writes may feed the root now."""
         from fixtures.role_frames import postcompact_frame
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/test/project")
         summary_path = self._run_main_realdisk(
-            postcompact_frame("PACT:pact-orchestrator", compact_summary="NEW LEAD SUMMARY"),
-            monkeypatch, tmp_path,
+            postcompact_frame("PACT:pact-orchestrator",
+                              compact_summary="NEW LEAD SUMMARY",
+                              session_id=self._SID)
         )
-        assert summary_path.read_text(encoding="utf-8") == "NEW LEAD SUMMARY", (
-            "a lead PostCompact must still archive the compact summary"
+        assert summary_path.read_text(encoding="utf-8") == self._SENTINEL, (
+            "an identified lead PostCompact must not touch the root singleton"
+        )
+        scoped = (
+            tmp_path / ".claude" / "pact-sessions" / "project" / self._SID
+            / "compact-summary.txt"
+        )
+        assert scoped.read_text(encoding="utf-8") == "NEW LEAD SUMMARY", (
+            "an identified lead PostCompact must archive into the session dir"
         )
 
 
@@ -490,7 +533,9 @@ class TestPostcompactRunHookConfigRootIsolation:
         # POSITIVE tmp-target assertion (load-bearing). Robust to the Form A vs
         # Form B leaf shape: CCD=tmp -> tmp/pact-sessions/compact-summary.txt;
         # HOME=tmp -> tmp/.claude/pact-sessions/compact-summary.txt. A recursive
-        # glob catches either.
+        # glob catches either. This arm's frame carries NO session_id, so it is
+        # simultaneously the #1504 DEGRADATION arm: an unidentified lead frame
+        # lands at the root singleton under the pinned root, loss-free.
         written = list(tmp_path.glob("**/compact-summary.txt"))
         assert len(written) == 1, (
             f"expected exactly one compact-summary.txt under the pinned tmp root "
@@ -501,3 +546,35 @@ class TestPostcompactRunHookConfigRootIsolation:
             f"assertion is what the env= pin's absence breaks.)"
         )
         assert written[0].read_text(encoding="utf-8") == "LEAD COUNTER-TEST SUMMARY"
+
+    def test_identified_lead_frame_lands_session_scoped_under_pinned_tmp(self, tmp_path):
+        """#1504 session-scoped arm: an IDENTIFIED lead frame (session_id in
+        stdin, CLAUDE_PROJECT_DIR in env — both ride the real captured frame,
+        tests/fixtures/role_frames.py ``postcompact_lead_manual``) lands at
+        {env_root}/pact-sessions/{slug}/{sid}/compact-summary.txt, and the
+        root singleton stays EMPTY: identified writes never feed the drain.
+        """
+        from fixtures.role_frames import postcompact_frame
+
+        sid = "aabb1122-0000-0000-0000-00000000cafe"
+        lead_frame = postcompact_frame(
+            "PACT:pact-orchestrator", compact_summary="SCOPED LEAD SUMMARY",
+            session_id=sid,
+        )
+        result = run_hook(
+            json.dumps(lead_frame), env_root=str(tmp_path),
+            extra_env={"CLAUDE_PROJECT_DIR": "/test/project"},
+        )
+        assert result.returncode == 0, (
+            f"postcompact child exited {result.returncode}; stderr={result.stderr!r}"
+        )
+        scoped = tmp_path / "pact-sessions" / "project" / sid / "compact-summary.txt"
+        assert scoped.is_file(), (
+            f"identified lead frame must land session-scoped under the pinned "
+            f"tmp root; found instead: {list(tmp_path.glob('**/compact-summary.txt'))}"
+        )
+        assert scoped.read_text(encoding="utf-8") == "SCOPED LEAD SUMMARY"
+        assert not (tmp_path / "pact-sessions" / "compact-summary.txt").exists(), (
+            "an identified write fed the root singleton — the resolver's "
+            "session leg did not fire"
+        )

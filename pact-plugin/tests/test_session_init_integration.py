@@ -234,9 +234,10 @@ class TestCompactReadInstructionRealSeam:
         sid = "aabb1122-0000-0000-0000-000000000000"
         ctx = _run_compact_main(tmp_path, monkeypatch, sid)
 
-        # Canonical path stays PRIMARY — a lead resuming before any secretary
-        # has run must still be sent to the real file.
-        assert "compact-summary.txt" in ctx
+        # The READ TARGET is session-scoped (#1504): the instruction names the
+        # file inside the resolved session dir — the writer put it there, so
+        # the lead is sent where it actually is, not to the root singleton.
+        assert f"/{sid}/compact-summary.txt" in ctx
         # The archive directory is the REAL resolved one. Asserted from the
         # inputs (home + session id), never by re-deriving the resolver, so a
         # resolver returning "" or the wrong dir fails here.

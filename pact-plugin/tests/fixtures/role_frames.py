@@ -82,15 +82,22 @@ def plain_frame(**extra):
     return _frame(None, **extra)
 
 
-def postcompact_frame(agent_type, compact_summary="post-compaction summary text"):
-    """A synthesized PostCompact hook-stdin frame for the #881 gate tests.
+def postcompact_frame(agent_type, compact_summary="post-compaction summary text",
+                      session_id=None):
+    """A synthesized PostCompact hook-stdin frame for the gate/suppression tests.
 
     PostCompact frames carry ``compact_summary``; ``agent_type`` carries the
-    role discriminator the is_lead gate keys on. Pass ``agent_type=None`` for a
-    plain frame (the field is omitted).
+    role discriminator the is_lead gate keys on; ``session_id`` is optional —
+    None omits the field, which is the DEGRADATION shape the session-scoped
+    writer falls back on (#1504). The CAPTURED sibling of this builder is
+    ``postcompact_lead_manual``; this one stays SYNTHESIZED. Pass
+    ``agent_type=None`` for a plain frame (the field is omitted).
     """
+    extra = {}
+    if session_id is not None:
+        extra["session_id"] = session_id
     return _frame(agent_type, hook_event_name="PostCompact",
-                  compact_summary=compact_summary)
+                  compact_summary=compact_summary, **extra)
 
 
 # =============================================================================

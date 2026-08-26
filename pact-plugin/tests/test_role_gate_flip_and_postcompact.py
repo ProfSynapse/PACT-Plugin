@@ -3,9 +3,9 @@
 Three comprehensive groups complementing the coder's gate-specific smoke
 tests:
 
-  1. POSTCOMPACT suppression (#881) — postcompact_archive's global-singleton
-     compact-summary O_TRUNC write × {lead writes / teammate suppressed /
-     plain suppressed}, end-to-end via stdin.
+  1. POSTCOMPACT suppression (#881, re-scoped by #1504) — postcompact_archive's
+     session-scoped compact-summary O_TRUNC write × {lead writes / teammate
+     suppressed / plain suppressed}, end-to-end via stdin.
 
   2. CLASS-B GATE FLIP regression — each of the 5 migrated teammate-bypass
      gates: a non-lead frame (teammate both spellings + plain) takes the
@@ -46,9 +46,12 @@ _SESSION_ID = "aabb1122-0000-0000-0000-000000000000"
 # ===========================================================================
 
 class TestPostcompactSuppression:
-    """The compact-summary write is a GLOBAL SINGLETON (#881) — a teammate or
-    plain frame's PostCompact must NOT clobber the lead's summary. Gated behind
-    is_lead. Drives postcompact_archive.main() end-to-end via stdin.
+    """The compact-summary write is SESSION-SCOPED (#1504), and the in-process
+    topology COLLAPSES a teammate's session_id onto the lead's — so a teammate
+    or plain frame's PostCompact would land in the LEAD's own session dir and
+    clobber the summary there. Gated behind is_lead (#881). Drives
+    postcompact_archive.main() end-to-end via stdin; frames carry session_id
+    per the captured PostCompact shape.
     """
 
     def _run_postcompact(self, frame, monkeypatch, tmp_path):
@@ -71,18 +74,20 @@ class TestPostcompactSuppression:
     def test_lead_writes_compact_summary(self, frame_builder, monkeypatch, tmp_path):
         """A lead frame with a compact_summary writes the summary."""
         frame = frame_builder(hook_event_name="PostCompact",
-                              compact_summary="lead summary text")
+                              compact_summary="lead summary text",
+                              session_id=_SESSION_ID)
         mock_write = self._run_postcompact(frame, monkeypatch, tmp_path)
         mock_write.assert_called_once()
         assert mock_write.call_args.args[0] == "lead summary text"
 
     @pytest.mark.parametrize("frame, role", [
-        (postcompact_frame(agent_type="pact-backend-coder"), "teammate"),
-        (postcompact_frame(agent_type=None), "plain"),
+        (postcompact_frame(agent_type="pact-backend-coder", session_id=_SESSION_ID),
+         "teammate"),
+        (postcompact_frame(agent_type=None, session_id=_SESSION_ID), "plain"),
     ])
     def test_non_lead_suppresses_compact_summary(self, frame, role, monkeypatch, tmp_path):
-        """A teammate/plain frame must NOT write the compact-summary (it would
-        clobber the lead's global singleton)."""
+        """A teammate/plain frame must NOT write the compact-summary — identity
+        collapse resolves it into the lead's own session dir."""
         mock_write = self._run_postcompact(frame, monkeypatch, tmp_path)
         mock_write.assert_not_called()
 
@@ -91,7 +96,8 @@ class TestPostcompactSuppression:
         (the `compact_summary and is_lead(...)` short-circuit). Confirms the
         gate is `summary AND lead`, not `lead alone`."""
         frame = lead_frame_qualified(hook_event_name="PostCompact",
-                                     compact_summary="")
+                                     compact_summary="",
+                                     session_id=_SESSION_ID)
         mock_write = self._run_postcompact(frame, monkeypatch, tmp_path)
         mock_write.assert_not_called()
 
