@@ -355,3 +355,26 @@ class TestAgentIdDriftFixture:
         frame2 = {"agent_id": "someone@team"}
         assert is_lead(frame2) is False
         assert classify_session_role(frame2) == "unknown"
+
+    def test_postcompact_provenance_split_synthesized_vs_captured(self):
+        """#1504 provenance discipline: the C2 ``session_id`` kwarg does NOT
+        promote the builder. ``postcompact_frame`` must KEEP its SYNTHESIZED
+        stamp; the ONLY captured PostCompact shape is ``postcompact_lead_manual``
+        (the #1504 step-0 live capture). A silent promotion of the builder —
+        or a future frame stamped captured without a real capture behind it —
+        would let a guessed shape masquerade as a platform capture; this pins
+        the split in both directions."""
+        from fixtures.role_frames import captured_postcompact_lead_manual
+
+        synth = postcompact_frame(
+            "PACT:pact-orchestrator", session_id="sid"
+        )["_meta"]["capture_method"]
+        assert "synthesized" in synth.lower(), (
+            f"postcompact_frame must KEEP its SYNTHESIZED stamp (the "
+            f"session_id kwarg does not promote it); got {synth!r}"
+        )
+        captured = captured_postcompact_lead_manual()["_meta"]["capture_method"]
+        assert captured and "synthesized" not in captured.lower(), (
+            f"postcompact_lead_manual must be a REAL capture, not synthesized; "
+            f"got {captured!r}"
+        )
