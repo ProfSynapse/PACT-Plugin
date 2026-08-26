@@ -74,8 +74,10 @@ manual `/compact` in the in-process dogfood session (PACT 4.6.44). The committed
 verbatim shape is `tests/fixtures/role_frames.py` `postcompact_lead_manual`; its
 `session_id` presence is the premise the #1504 session-scoped writer resolves on.
 Teammate and plain PostCompact shapes remain matrix-inferred (no teammate compact
-has been captured): the in-process `session_id` collapse makes the teammate arm
-unreachable without a tmux teammate compact.
+has been captured): in-process teammates do NOT compact independently, so no
+teammate PostCompact event exists to capture in that topology; capturing a
+teammate frame requires a tmux teammate compact. The `session_id` collapse is a
+field-equality fact of the in-process topology, not the unreachability mechanism.
 `is_lead` is READ on PreToolUse and PostCompact (and SessionStart /
 UserPromptSubmit / PostToolUse) but is NOT read on TaskCompleted — that frame is
 captured for the #917 emit-path, which gates on `team_name` + journal

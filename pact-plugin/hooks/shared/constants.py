@@ -52,9 +52,11 @@ COMPACT_SUMMARY_NAME = "compact-summary.txt"
 # SINGLE-USE, AND ARCHIVED RATHER THAN DELETED. The file must LEAVE this path
 # once processed, because a copy left here is processed again by the next
 # briefing in the same session. It does NOT follow that the bytes may go:
-# whoever clears it destroys the only copy unless the clear is a MOVE. The
-# clearer moves it — session_init, into the clearing session's directory when
-# it can identify one, else into the orphan slot below.
+# whoever clears it destroys the only copy unless the clear is a MOVE. Both
+# clearers move it — the secretary, when its session-scoped read falls back to
+# this path, into its session directory; and session_init, into the clearing
+# session's directory when it can identify one, else into the orphan slot
+# below.
 #
 # Also referenced in: pact-plugin/agents/pact-secretary.md (the named fallback
 # read) and pact-plugin/hooks/session_init.py (the stale-summary archive, and
