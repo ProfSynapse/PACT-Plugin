@@ -135,13 +135,24 @@ def _build_session_path(slug: str, session_id: str) -> Path:
     Used by init(), get_session_dir(), and write_context() to avoid
     duplicating path construction logic.
 
+    session_id is sanitized HERE with _UNSAFE_SLUG_CHARS_RE before
+    composition — the same allowlist init() applies, idempotent for
+    callers that pre-sanitize — because raw stdin/persisted ids reach
+    this guard from resolve_compact_summary_path, session_init's clears
+    and marker-reset, and get_session_dir. Sanitize-substitute (NOT
+    reject), matching the slug treatment below.
+
     Path traversal guard: resolves the constructed path and verifies it
     stays under ~/.claude/pact-sessions/ using Path.parents containment
     (immune to sibling-prefix collisions by design — matches
     session_init._validate_under_pact_sessions). A malicious session_id
     like "../../etc" would resolve outside the expected tree — fall back
     to a sanitized basename. Fail-closed: if the validation itself
-    raises, return a slug-only path (no session_id component).
+    raises, return a slug-only path (no session_id component). The
+    containment check returns the candidate as constructed, so traversal
+    segments must be collapsed BEFORE composition — which is what the
+    session_id sanitization above does; containment is the backstop for
+    everything the regex cannot produce.
 
     S3 defense (security-engineer-review): the slug derives from
     CLAUDE_PROJECT_DIR's basename and ends up interpolated into a
@@ -152,6 +163,7 @@ def _build_session_path(slug: str, session_id: str) -> Path:
     so sessions with unusual project-dir names still proceed.
     """
     safe_slug = _UNSAFE_SLUG_CHARS_RE.sub("_", slug) if slug else slug
+    session_id = _UNSAFE_SLUG_CHARS_RE.sub("_", session_id)
     sessions_root = get_claude_config_dir() / "pact-sessions"
     candidate = sessions_root / safe_slug / session_id
     try:
