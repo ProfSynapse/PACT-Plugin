@@ -859,6 +859,20 @@ def _archive_own_dir_stale_summary(session_id: str, project_dir: str) -> None:
         pass  # Fail-open: keep the bytes; never block session init for cleanup
 
 
+# Strict plugin-written archive shape: compact-summary-YYYY-MM-DDTHH-MM-SS.txt.
+# Every archive writer produces exactly this (both clears below via
+# datetime.now().strftime("%Y-%m-%dT%H-%M-%S"), the secretary's archive step
+# via its instructed <YYYY-MM-DDTHH-MM-SS> rename). Selection admits nothing
+# else because the ARCHIVE FILENAME is attacker-controlled bytes reaching a
+# render sink: the glob's * matches newlines, so a crafted name embedding a
+# forged directive after "compact-summary-x" and a newline would carry its
+# bytes into the SessionStart instruction channel (F-SEC-1, PR #1527 review).
+# Skipping a nonconforming name only costs the clause — fail-safe, no pointer.
+_ARCHIVE_STAMP_SHAPE_RE = re.compile(
+    r"compact-summary-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.txt"
+)
+
+
 def _resume_own_summary_clause(session_dir: str) -> str:
     """One sentence naming this session's own compact summary, or "".
 
@@ -868,6 +882,12 @@ def _resume_own_summary_clause(session_dir: str) -> str:
     live slot to a timestamped archive by the time the source limbs render —
     so name the canonical file when it still exists, else the NEWEST archive
     by mtime. Read-only: a probe, never a move.
+
+    Both probes require a regular FILE (is_file): a directory named like
+    either slot is not a readable summary, and naming it would send the lead
+    to a path whose read can only error. Archives are additionally selected
+    by the exact stamp shape (_ARCHIVE_STAMP_SHAPE_RE) — hostile names never
+    render rather than rendering stripped.
 
     Ownership-neutral on purpose ("from an earlier point of this session"):
     the clause carries information, not an attribution claim, and the
@@ -883,12 +903,12 @@ def _resume_own_summary_clause(session_dir: str) -> str:
     try:
         base = Path(session_dir)
         canonical = base / COMPACT_SUMMARY_NAME
-        if canonical.exists():
+        if canonical.is_file():
             target = str(canonical)
         else:
             archives = [
                 p for p in base.glob(f"{COMPACT_SUMMARY_ARCHIVE_PREFIX}*.txt")
-                if p.is_file()
+                if p.is_file() and _ARCHIVE_STAMP_SHAPE_RE.fullmatch(p.name)
             ]
             if not archives:
                 return ""
