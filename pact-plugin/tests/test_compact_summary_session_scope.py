@@ -344,3 +344,71 @@ class TestResumeOwnSummaryClause:
 
         assert "pact-sessions/compact-summary.txt" not in clause
         assert f"pact-sessions/my-project/{_SID_A}/compact-summary.txt" in clause
+
+    def test_canonical_wins_over_newer_mtime_archive(self, tmp_path):
+        """F-TE-1: both-present PRIORITY. The canonical live slot outranks the
+        archive fallback even when an archive is mtime-NEWER — priority is
+        existence-shaped, not recency-shaped. Load-bearing in the
+        clear-failure world (own-dir clear raised OSError, canonical
+        survived) with prior archives present: inversion would send the lead
+        to STALE archived bytes while the fresh canonical sits unnamed.
+        Review-cycle-1 counter-test anchor — the priority-inversion mutation
+        that shipped green (0/274) must fail THIS arm."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        canonical = session_dir / "compact-summary.txt"
+        canonical.write_text("FRESH-CANONICAL", encoding="utf-8")
+        archive = session_dir / "compact-summary-2026-01-01T00-00-00.txt"
+        archive.write_text("STALE-ARCHIVE", encoding="utf-8")
+        # Force the archive mtime-NEWER than the freshly written canonical:
+        # priority must win on existence, not recency.
+        import os
+
+        os.utime(archive, (2_000_000_000, 2_000_000_000))
+
+        clause = self._clause(session_dir)
+
+        assert str(canonical) in clause
+        assert str(archive) not in clause
+
+    def test_root_drain_producer_named_by_clause(self, tmp_path, monkeypatch):
+        """F-TE-2: the SECOND producer of the named archive. The arms above
+        pin the helper's selection; the integration arms in
+        test_session_init pin the own-dir-clear producer. This arm composes
+        the REAL root drain with the REAL clause helper: a degraded write
+        lands at the root singleton, the resume-time drain moves it into the
+        session dir as compact-summary-<stamp>.txt, and the clause must then
+        name THAT archive — never the root path itself. Carrier-present
+        control: the same fixture BEFORE the drain (bytes at root, no
+        session-dir archive) yields no clause, so the clause's input is
+        proven to be the drain's output."""
+        from session_init import (
+            _archive_stale_compact_summary,
+            _resume_own_summary_clause,
+        )
+        from shared.constants import get_compact_summary_path
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", _PROJECT)
+        root_singleton = get_compact_summary_path()
+        root_singleton.parent.mkdir(parents=True, exist_ok=True)
+        root_singleton.write_text("DEGRADED-ROOT-BYTES", encoding="utf-8")
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+
+        # Control: no drain ran — bytes still at root, session dir absent,
+        # and the clause names nothing (the drain's output does not exist).
+        assert _resume_own_summary_clause(str(session_dir)) == ""
+
+        _archive_stale_compact_summary(_SID_A, _PROJECT)
+
+        archives = list(session_dir.glob("compact-summary-*.txt"))
+        assert len(archives) == 1, (
+            f"the root drain should land exactly one archive in the session "
+            f"dir, found {archives}"
+        )
+        clause = _resume_own_summary_clause(str(session_dir))
+        assert str(archives[0]) in clause
+        # Moved-not-copied, and the clause names the session-scoped archive —
+        # never the root-singleton path the bytes started at.
+        assert not root_singleton.exists()
+        assert str(root_singleton) not in clause
