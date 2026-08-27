@@ -253,3 +253,279 @@ class TestDegradationIsLossFree:
                  "compact_summary": "DEGRADED-NO-PROJ"}
         assert _run_postcompact_main(frame, monkeypatch, tmp_path) == 0
         self._assert_bytes_under_root(tmp_path, "DEGRADED-NO-PROJ")
+
+
+class TestResumeOwnSummaryClause:
+    """Unit arms for ``session_init._resume_own_summary_clause`` — the
+    read-side resume-limb pointer (re-scoped #1520). Canonical name first,
+    NEWEST archive by mtime as fallback, read-only, OSError fail-open to "".
+
+    The canonical branch is unreachable through a full main() run with
+    source="resume" (the own-dir clear archives the live slot before the
+    limbs render — the integration arms in test_session_init.py pin THAT
+    world); it is live only when the clear failed or has not run, which is
+    why these direct-call arms exist. Vacuity discipline: every absence
+    arm's fixture is the positive arm's fixture minus exactly one element.
+    """
+
+    def _clause(self, session_dir):
+        from session_init import _resume_own_summary_clause
+
+        return _resume_own_summary_clause(str(session_dir))
+
+    def test_canonical_present_named_by_absolute_path(self, tmp_path):
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        (session_dir / "compact-summary.txt").write_text(
+            "CANONICAL-BYTES", encoding="utf-8"
+        )
+
+        clause = self._clause(session_dir)
+
+        assert str(session_dir / "compact-summary.txt") in clause
+        assert clause.startswith(
+            " A compact summary from an earlier point of this session is "
+            "available at"
+        )
+        assert clause.endswith(".")
+
+    def test_newest_archive_wins_by_mtime(self, tmp_path):
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        old_archive = session_dir / "compact-summary-2026-01-01T00-00-00.txt"
+        new_archive = session_dir / "compact-summary-2026-08-27T00-00-00.txt"
+        old_archive.write_text("OLD", encoding="utf-8")
+        new_archive.write_text("NEW", encoding="utf-8")
+        # mtime, not the name, decides: force the lexically-older stamp to be
+        # the mtime-newest file.
+        import os
+
+        os.utime(old_archive, (2_000_000_000, 2_000_000_000))
+        os.utime(new_archive, (1_000_000_000, 1_000_000_000))
+
+        clause = self._clause(session_dir)
+
+        assert str(old_archive) in clause
+        assert str(new_archive) not in clause
+
+    def test_empty_dir_no_clause_carrier_control(self, tmp_path):
+        """Absence arm + carrier-present control: the same fixture with a
+        file planted yields a clause (control), without it yields "" — so the
+        empty verdict is the probe's, not a broken fixture."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+
+        assert self._clause(session_dir) == ""
+        (session_dir / "compact-summary.txt").write_text(
+            "CONTROL", encoding="utf-8"
+        )
+        assert self._clause(session_dir) != ""
+
+    def test_missing_dir_no_clause(self, tmp_path):
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        assert self._clause(session_dir) == ""
+
+    def test_empty_session_dir_string_no_clause(self):
+        from session_init import _resume_own_summary_clause
+
+        assert _resume_own_summary_clause("") == ""
+
+    def test_named_path_never_contains_sid_free_root_fragment(self, tmp_path):
+        """Degraded-pointer substring pin keeps discriminating: the clause's
+        named path embeds slug + session id between 'pact-sessions/' and the
+        filename, so the sid-free ROOT-singleton fragment never appears."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        (session_dir / "compact-summary.txt").write_text(
+            "BYTES", encoding="utf-8"
+        )
+
+        clause = self._clause(session_dir)
+
+        assert "pact-sessions/compact-summary.txt" not in clause
+        assert f"pact-sessions/my-project/{_SID_A}/compact-summary.txt" in clause
+
+    def test_canonical_wins_over_newer_mtime_archive(self, tmp_path):
+        """F-TE-1: both-present PRIORITY. The canonical live slot outranks the
+        archive fallback even when an archive is mtime-NEWER — priority is
+        existence-shaped, not recency-shaped. Load-bearing in the
+        clear-failure world (own-dir clear raised OSError, canonical
+        survived) with prior archives present: inversion would send the lead
+        to STALE archived bytes while the fresh canonical sits unnamed.
+        Review-cycle-1 counter-test anchor — the priority-inversion mutation
+        that shipped green (0/274) must fail THIS arm."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        canonical = session_dir / "compact-summary.txt"
+        canonical.write_text("FRESH-CANONICAL", encoding="utf-8")
+        archive = session_dir / "compact-summary-2026-01-01T00-00-00.txt"
+        archive.write_text("STALE-ARCHIVE", encoding="utf-8")
+        # Force the archive mtime-NEWER than the freshly written canonical:
+        # priority must win on existence, not recency.
+        import os
+
+        os.utime(archive, (2_000_000_000, 2_000_000_000))
+
+        clause = self._clause(session_dir)
+
+        assert str(canonical) in clause
+        assert str(archive) not in clause
+
+    # ── Cycle-2 first-surface gate (architect-confirmed semantics) ─────────
+    #
+    # A candidate (canonical or archive) is named only if NO consuming
+    # session_start (source in {resume, startup, clear}; absent/unknown
+    # NON-consuming) has ts strictly after its mtime. Newest unsuppressed
+    # archive wins. Missing/unreadable/empty journal fails OPEN to naming.
+    #
+    # Fixture clock: archives get fixed mtimes via os.utime; journal events
+    # get explicit ts via make_event (setdefault-honored). 1e9 = 2001-09-09,
+    # 2e9 = 2033-05-18, 1.5e9 = 2017-07-14T02:40:00Z sits strictly between.
+
+    def _plant_journal(self, session_dir, events):
+        """Write real-shaped session_start events to the session journal."""
+        from shared.session_journal import make_event
+
+        lines = [json.dumps(make_event("session_start", **e)) for e in events]
+        (session_dir / "session-journal.jsonl").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
+
+    def _archive(self, session_dir, name, mtime):
+        """Plant one archive with a FORCED mtime (deterministic clock)."""
+        p = session_dir / name
+        p.write_text(f"BYTES-{name}", encoding="utf-8")
+        import os
+
+        os.utime(p, (mtime, mtime))
+        return p
+
+    def test_first_surface_names_when_consuming_start_predates(self, tmp_path):
+        """Primary case (resume-after-compact world): the archive is named
+        when every consuming session_start in the journal PREDATES its
+        mtime — a startup long ago does not suppress a fresh archive."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        archive = self._archive(
+            session_dir, "compact-summary-2026-08-27T00-00-00.txt", 1_000_000_000
+        )
+        self._plant_journal(
+            session_dir, [{"ts": "2000-01-01T00:00:00Z", "source": "startup"}]
+        )
+
+        clause = self._clause(session_dir)
+
+        assert str(archive) in clause
+
+    def test_second_resume_consuming_start_suppresses_clause(self, tmp_path):
+        """Second-resume suppression: a consuming session_start(resume)
+        whose ts postdates the archive mtime means a later session already
+        surfaced this summary — NO clause. Carrier-present control in the
+        same fixture: a NON-consuming source (compact) postdating the same
+        archive leaves the clause in place, proving the suppression is
+        gated on the consuming source set, not on any session_start."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        archive = self._archive(
+            session_dir, "compact-summary-2026-08-27T00-00-00.txt", 1_000_000_000
+        )
+
+        # Control FIRST: non-consuming postdating start → still names.
+        self._plant_journal(
+            session_dir, [{"ts": "2030-01-01T00:00:00Z", "source": "compact"}]
+        )
+        assert str(archive) in self._clause(session_dir)
+
+        # Now the consuming shape: same ts, source=resume → suppressed.
+        self._plant_journal(
+            session_dir, [{"ts": "2030-01-01T00:00:00Z", "source": "resume"}]
+        )
+        assert self._clause(session_dir) == ""
+
+    def test_missing_or_empty_journal_fails_open_to_naming(self, tmp_path):
+        """Fail-open: no journal file at all, then an EMPTY journal file —
+        both worlds cannot prove consumption, and the gate must NAME (the
+        cycle-1 behavior) rather than suppress on absent evidence."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        archive = self._archive(
+            session_dir, "compact-summary-2026-08-27T00-00-00.txt", 1_000_000_000
+        )
+
+        assert not (session_dir / "session-journal.jsonl").exists()
+        assert str(archive) in self._clause(session_dir)
+
+        (session_dir / "session-journal.jsonl").write_text("", encoding="utf-8")
+        assert str(archive) in self._clause(session_dir)
+
+    def test_multi_archive_consumed_old_suppressed_fresh_named(self, tmp_path):
+        """Newest UNSUPPRESSED archive wins: a consuming start at 1.5e9
+        postdates the old archive (1e9 — consumed, suppressed) but predates
+        the fresh one (2e9 — never surfaced) → the fresh archive is named
+        and the old one is not."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        old = self._archive(
+            session_dir, "compact-summary-2026-01-01T00-00-00.txt", 1_000_000_000
+        )
+        fresh = self._archive(
+            session_dir, "compact-summary-2026-08-27T00-00-00.txt", 2_000_000_000
+        )
+        self._plant_journal(
+            session_dir, [{"ts": "2017-07-14T02:40:00Z", "source": "resume"}]
+        )
+
+        clause = self._clause(session_dir)
+
+        assert str(fresh) in clause
+        assert str(old) not in clause
+
+    def test_root_drain_artifact_distinct_prefix_never_named(
+        self, tmp_path, monkeypatch
+    ):
+        """F-TE-2 INVERTED for cycle 2 (F-SEC-2): drained root bytes are
+        UNATTRIBUTABLE to this session's compactions — they carry a DISTINCT
+        prefix and are NEVER named by the clause. Cycle 1 pinned the drain
+        artifact AS named; the architect ruling reversed that, so this arm
+        now composes the REAL root drain with the REAL clause helper and
+        asserts: the drain still RUNS (root singleton moved away, exactly
+        one compact-summary* artifact lands in the session dir), but the
+        landed artifact is not the canonical slot and the clause names
+        NOTHING — under fail-open (no journal planted), so ONLY the
+        prefix/shape separation can be what prevents the naming."""
+        from session_init import (
+            _archive_stale_compact_summary,
+            _resume_own_summary_clause,
+        )
+        from shared.constants import COMPACT_SUMMARY_NAME, get_compact_summary_path
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", _PROJECT)
+        root_singleton = get_compact_summary_path()
+        root_singleton.parent.mkdir(parents=True, exist_ok=True)
+        root_singleton.write_text("DEGRADED-ROOT-BYTES", encoding="utf-8")
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+
+        # Control: no drain ran — bytes still at root, session dir absent,
+        # and the clause names nothing.
+        assert _resume_own_summary_clause(str(session_dir)) == ""
+
+        _archive_stale_compact_summary(_SID_A, _PROJECT)
+
+        landed = sorted(
+            p.name for p in session_dir.glob("compact-summary*")
+        )
+        assert len(landed) == 1, (
+            f"the root drain should land exactly one compact-summary* "
+            f"artifact in the session dir, found {landed}"
+        )
+        assert landed[0] != COMPACT_SUMMARY_NAME
+        # Moved-not-copied: the root singleton slot is empty afterwards.
+        assert not root_singleton.exists()
+        # F-SEC-2 core: no journal exists (fail-open would name ANY valid
+        # archive), yet the drained artifact is not named — only its
+        # distinct, non-archive prefix/shape can be the blocker.
+        assert _resume_own_summary_clause(str(session_dir)) == ""
+        assert str(root_singleton) not in _resume_own_summary_clause(
+            str(session_dir)
+        )
