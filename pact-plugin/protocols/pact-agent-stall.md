@@ -6,12 +6,15 @@
 - Teammate process terminated without sending a completion message or blocker via `SendMessage`
 
 Detection is event-driven: check at signal monitoring points (after dispatch, on TeammateIdle events, on `SendMessage` receipt). If a teammate goes idle without sending a completion message or blocker, treat as
-stalled immediately — UNLESS the idle plausibly postdates a wake-signal you just
-sent or the task carries a live `intentional_wait`: those idles are
-delivery-ordering artifacts, not stalls. Apply the one-redundant-confirm rule in
+stalled immediately — UNLESS the idle crosses a directive you just sent in
+either order (a tick whose timestamp predates your send is a straggler from
+prior-turn state; a tick that postdates it may simply not have been acted on
+yet), or the task carries a live `intentional_wait`: those idles are
+delivery-ordering artifacts, not stalls. Discriminate by direction in
 [pact-completion-authority.md](pact-completion-authority.md#crossed-wake-idles-one-redundant-confirm-then-stop)
-and escalate to stall diagnosis only on task-file-mtime plus sustained-silence
-evidence.
+— a predating tick takes no action, a postdating tick gets the
+one-redundant-confirm rule — and escalate to stall diagnosis only on
+task-file-mtime plus sustained-silence evidence.
 
 **Relationship to agent state model**: Stall detection is the binary endpoint (active vs. stalled). For finer-grained mid-execution assessment (converging/exploring/stuck), see the agent state model in [pact-variety.md](pact-variety.md#agent-state-model). An agent assessed as "stuck" via progress signals may stall if not intervened upon.
 

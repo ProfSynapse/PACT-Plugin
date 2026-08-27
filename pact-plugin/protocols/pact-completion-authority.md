@@ -68,11 +68,15 @@ handling:
   idle event fires at the end of the teammate's turn, so a tick generated
   before your directive was sent is a late delivery of prior-turn state.
   Take no action and proceed — it is not a stall signal at all.
-- **On ambiguous timestamps, one durable read settles it.** Read the
-  teammate's task file (raw JSON — `TaskGet` is metadata-blind). A claim
-  present means the teammate is proceeding on the directive.
+- **On ambiguous timestamps, one durable read settles it.** Take the durable
+  read of step 1 below (raw JSON — `TaskGet` is metadata-blind) and apply its
+  predicate: a claim present means the teammate is proceeding on the
+  directive; a claim absent falls through to the postdating procedure (one
+  redundant confirm, then stop).
 - **Two idle ticks before any stall diagnosis.** A single tick is never
-  evidence. Escalate only on task-file-mtime plus sustained-silence
+  evidence, and a tick that predates your directive send never counts —
+  count only ticks that postdate the send or remain ambiguous. Escalate
+  only on task-file-mtime plus sustained-silence
   evidence (see [pact-agent-stall.md](pact-agent-stall.md)).
 - **Never accelerate nudging in response to idle ticks.** Patience is the
   counter: faster sends produce the crossed-message rhythm, they do not
