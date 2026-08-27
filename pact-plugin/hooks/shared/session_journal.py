@@ -120,8 +120,10 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     # enforces only the top-level task_id+variety keys — the projection lives
     # at the emit site, not here.)
     "dispatch_variety": {"task_id": str, "variety": dict},
-    # hooks/task_lifecycle_gate.py emits dispatch_site at the owner-wiring
-    # TaskUpdate — one event per dispatched Task-B, O_EXCL-deduped on
+    # hooks/task_lifecycle_gate.py emits dispatch_site at the owner-BEARING
+    # TaskUpdate (any write naming a pact-specialist owner on a
+    # non-teachback, non-exempt task) — one event per dispatched Task-B,
+    # O_EXCL-deduped on
     # (team, task_id). It is Q5's POPULATION: the event's EXISTENCE is the
     # dispatch site, and the OPTIONAL `variety` within it is that dispatch's
     # stamp. Both come from one stream, so the distribution and the site count

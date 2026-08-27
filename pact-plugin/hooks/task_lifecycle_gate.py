@@ -294,7 +294,7 @@ try:
         unclaim,
     )
     from shared.dispatch_helpers import (
-        is_owner_wiring_shape,
+        is_owner_bearing_write,
         is_pact_specialist_owner,
         variety_stamp_as_of_write,
         trustworthy_actor_name,
@@ -788,10 +788,30 @@ def _emit_dispatch_site(
     task: dict,
 ) -> None:
     """Emit ONE ``dispatch_site`` event per dispatched Task-B, at the
-    owner-wiring TaskUpdate. The event's EXISTENCE is a dispatch site; the
-    OPTIONAL ``variety`` within it carries that dispatch's stamp. Both come
-    from one stream, so the distribution and the site count can never be
-    sourced over different populations.
+    owner-WITNESSING TaskUpdate — any write naming a pact-specialist ``owner``
+    on a non-teachback, non-exempt task. The event's EXISTENCE is a dispatch
+    site; the OPTIONAL ``variety`` within it carries that dispatch's stamp.
+    Both come from one stream, so the distribution and the site count can
+    never be sourced over different populations.
+
+    MEMBERSHIP IS OWNER-WITNESSED, NEVER INFERRED. One event means one
+    dispatch BY CONSTRUCTION: the owner write on the task is the witness.
+    Two shapes are OUT and stay out:
+
+      * Teachback Task-A gates — excluded by the SUBJECT carve-out at step
+        (5). DEPENDENCE, named where the membership is defined: under the
+        owner-bearing leg an owner-only write is exactly the split wiring a
+        Task-A gate receives, so the subject carve-out is the SOLE
+        discriminator — membership depends on the TEACHBACK subject
+        convention. A gate whose subject loses that marker is counted as a
+        site.
+      * Review-panel dispatches — the peer-review path dispatches reviewers
+        WITHOUT ever writing owner on the task, so no owner write witnesses
+        them and no emit leg can cover them without inferring ownership from
+        a display convention. Wanting them counted is remedied by canonical
+        owner wiring at dispatch (a practice-side change), never by widening
+        this emit's inference; they stay visible through the
+        ``review_dispatch`` stream.
 
     READ BY Q5, AND IT IS THE ONLY SOURCE: commands/wrap-up.md sources the
     retrospective's dispatch population from this stream and says so under a
@@ -804,7 +824,7 @@ def _emit_dispatch_site(
     an owner gate there "would never fire". An owner-wiring predicate placed in
     that branch would return False forever: Q5 would stay exactly as dark as it
     is today with every test still green, and it would additionally inherit
-    that block's frame gate. The owner-wiring write is only observable on
+    that block's frame gate. The owner-bearing write is only observable on
     TaskUpdate, so that is where this lives.
 
     THE ORDER BELOW IS LOAD-BEARING, NOT STYLISTIC, and is kept in ONE ladder
@@ -865,10 +885,18 @@ def _emit_dispatch_site(
         # (3) task_id resolvable.
         if not task_id:
             return
-        # (4) The owner-wiring shape, then the owner resolving through team
-        #     config to a pact specialist. Owners are BARE names, so this is a
-        #     config resolution and never a `pact-` prefix test.
-        if not is_owner_wiring_shape(tool_input):
+        # (4) The owner-BEARING write shape, then the owner resolving through
+        #     team config to a pact specialist. Owners are BARE names, so this
+        #     is a config resolution and never a `pact-` prefix test.
+        #     Deliberately NOT the composite is_owner_wiring_shape (owner AND
+        #     addBlockedBy in the same write): live dispatch practice wires
+        #     owners in SPLIT writes — owner set in one update, blockers at
+        #     creation or in a separate one — so a population keyed on the
+        #     composite never fires on a real arc. Any owner-naming write on
+        #     the task WITNESSES the dispatch. The composite stays the
+        #     ordering gate's "terminal" predicate; the two legs are forked
+        #     in shared.dispatch_helpers.
+        if not is_owner_bearing_write(tool_input):
             return
         owner = tool_input.get("owner", "")
         if not is_pact_specialist_owner(owner, team_name):
@@ -1999,7 +2027,7 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         subject = task_a.get("subject") or ""
 
         # dispatch_site emit — the coverage DENOMINATOR, one event per
-        # dispatched Task-B at the owner-wiring write. Consumes the shared
+        # dispatched Task-B at the owner-WITNESSING write. Consumes the shared
         # task_a read above (subject for the teachback carve-out, metadata for
         # the variety projection), so it adds no disk cost of its own. The full
         # §5.2 evaluation order lives inside the helper as ONE auditable

@@ -9,11 +9,17 @@ Scope here is the PURE predicates (no FS, no team config, no context). The
 resolution helpers that read team config are exercised against a seeded config
 in the consumer suites.
 
-is_owner_wiring_shape recognizes ONE leg of the three-leg dispatch
-recognition — the SHAPE of an owner-wiring write. The other two legs (owner
-resolves to a pact specialist; subject is not a teachback gate) and the
-per-consumer exemption predicate are deliberately NOT its business; the
+is_owner_wiring_shape recognizes ONE leg of the ordering gate's dispatch
+recognition — the SHAPE of the COMPOSITE owner-wiring write. The other legs
+(owner resolves to a pact specialist; subject is not a teachback gate) and
+the per-consumer exemption predicate are deliberately NOT its business; the
 scope-boundary tests at the bottom are what keep them out.
+
+is_owner_bearing_write is the BROADER sibling the dispatch_site population
+keys on: live dispatch practice wires owners in split writes (owner in one
+update, blockers elsewhere), so the composite is dark by construction as a
+population membership leg. The two predicates are deliberately NOT unified —
+relaxing the composite in place would silently change the ordering gate.
 
 Note on vocabulary: handoff_ordering_gate calls this write "terminal", a term
 that file DEFINES locally as "both halves present" (as against a partial
@@ -30,6 +36,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
 from shared.dispatch_helpers import (  # noqa: E402
+    is_owner_bearing_write,
     is_owner_wiring_shape,
     variety_stamp_as_of_write,
 )
@@ -102,6 +109,81 @@ def test_non_list_addblockedby_never_fires(blockers):
 def test_non_dict_input_returns_false_and_never_raises(bad):
     """Contract is total: the callers invoke this on unvalidated hook stdin."""
     assert is_owner_wiring_shape(bad) is False
+
+
+# =============================================================================
+# is_owner_bearing_write — the dispatch_site population's membership leg.
+# Broader than the composite on purpose: live practice wires owners in SPLIT
+# writes, so a population keyed on the composite never fires on a real arc.
+# =============================================================================
+class TestIsOwnerBearingWrite:
+    def test_owner_alone_fires(self):
+        """The split-wiring shape the population exists to witness: owner
+        named with NO addBlockedBy in the same write."""
+        assert is_owner_bearing_write(_wiring(add_blocked_by=None)) is True
+
+    def test_owner_absent_does_not_fire(self):
+        assert is_owner_bearing_write(_wiring(owner=None)) is False
+
+    def test_blockers_without_owner_do_not_fire(self):
+        """The review-dispatch shape: writes that never name an owner witness
+        nothing, whatever else they carry."""
+        assert is_owner_bearing_write(
+            {"taskId": "9", "addBlockedBy": ["7"], "status": "in_progress"}
+        ) is False
+
+    def test_ignores_addblockedby_entirely(self):
+        """Membership is the OWNER write alone. addBlockedBy present, empty,
+        or malformed must not change the answer — the composite question is
+        the ordering gate's, not the population's."""
+        assert is_owner_bearing_write(_wiring()) is True
+        assert is_owner_bearing_write(_wiring(add_blocked_by=())) is True
+        assert is_owner_bearing_write(_wiring(add_blocked_by="not-a-list")) is True
+
+    def test_whitespace_only_owner_does_not_fire(self):
+        assert is_owner_bearing_write(_wiring(owner="   ", add_blocked_by=None)) is False
+
+
+@pytest.mark.parametrize("owner", ["", "   ", "\t\n", None, 7, 0, ["x"], {"a": 1}, True])
+def test_unusable_owner_never_fires_bearing(owner):
+    """Same fail-closed owner vocabulary as the composite: empty /
+    whitespace-only / non-str owners all fail closed."""
+    ti = _wiring(owner=None, add_blocked_by=None)
+    if owner is not None:
+        ti["owner"] = owner
+    assert is_owner_bearing_write(ti) is False
+
+
+@pytest.mark.parametrize("bad", [None, "", [], 0, 42, "tool_input", ("owner",), set()])
+def test_bearing_non_dict_input_returns_false_and_never_raises(bad):
+    """Contract is total: the emit ladder invokes this on unvalidated hook
+    stdin."""
+    assert is_owner_bearing_write(bad) is False
+
+
+class TestBearingSubsumption:
+    def test_every_composite_write_is_owner_bearing(self):
+        """THE FORK INVARIANT: is_owner_wiring_shape is a STRICT SUBSET of
+        is_owner_bearing_write. The composite composes the bearing predicate,
+        so the two cannot drift on what "owner-bearing" means — if this ever
+        reddens, someone decoupled the owner half into two different tests
+        and the population and the ordering gate no longer share a
+        vocabulary."""
+        shapes = [
+            _wiring(),
+            _wiring(add_blocked_by=("A", "B")),
+            _wiring(owner="  backend-coder  "),
+        ]
+        for ti in shapes:
+            assert is_owner_wiring_shape(ti) is True
+            assert is_owner_bearing_write(ti) is True
+
+    def test_split_wiring_is_bearing_but_not_composite(self):
+        """The discriminating cell of the fork: owner-only is IN the
+        population's leg and OUT of the ordering gate's."""
+        ti = _wiring(add_blocked_by=None)
+        assert is_owner_bearing_write(ti) is True
+        assert is_owner_wiring_shape(ti) is False
 
 
 class TestScopeBoundary:

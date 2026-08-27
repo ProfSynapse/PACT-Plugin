@@ -336,8 +336,8 @@ def extract_dispatch_coverage(
     - `variety` ABSENT — counted in `total`, absent from `variety_totals`,
       and NOT in `malformed`. An honest un-stamped dispatch: the coverage
       gap the metric exists to surface. The emit merges the on-disk task
-      metadata with the wiring write, so an absent `variety` means the
-      dispatch was never stamped ANYWHERE — a compliance signal, not a
+      metadata with the owner-witnessing write, so an absent `variety` means
+      the dispatch was never stamped ANYWHERE — a compliance signal, not a
       producer artefact.
     - `variety` PRESENT but unresolvable — counted in `total`, absent from
       `variety_totals`, AND listed in `malformed`. A data-quality defect.

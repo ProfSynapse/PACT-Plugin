@@ -8,9 +8,13 @@ Exposes:
     of the dispatch_gate rules; rejects unregistered pact-* spawns)
   - is_pact_specialist_owner(owner, team_name) — bare-owner → team-config
     agentType → registry resolution (one leg of the dispatch recognition)
-  - is_owner_wiring_shape(tool_input) — pure structural recognition of an
-    owner-wiring TaskUpdate's SHAPE (one leg of the dispatch recognition;
-    see its docstring for the other two legs, why they are deliberately
+  - is_owner_bearing_write(tool_input) — pure structural recognition of an
+    owner-BEARING TaskUpdate's SHAPE (the dispatch_site population's
+    membership leg; broader than the composite wiring shape, because live
+    dispatch practice wires owners in split writes)
+  - is_owner_wiring_shape(tool_input) — pure structural recognition of the
+    COMPOSITE owner-wiring SHAPE (the handoff-ordering gate's "terminal"
+    leg; see its docstring for the other legs, why they are deliberately
     NOT folded into one composite, and — important — what this predicate
     does NOT establish)
   - variety_stamp_as_of_write(tool_input, task) — the variety stamp the
@@ -198,6 +202,47 @@ def is_pact_specialist_owner(
 
 # ─── dispatch-wiring recognition ───────────────────────────────────────────
 
+def is_owner_bearing_write(tool_input: object) -> bool:
+    """True iff ``tool_input`` names a non-empty string ``owner`` — the
+    owner-BEARING write shape, regardless of ``addBlockedBy``.
+
+    THIS IS THE dispatch_site POPULATION'S MEMBERSHIP LEG. Live dispatch
+    practice wires a specialist owner onto a work task in SPLIT writes:
+    ``owner`` lands in one TaskUpdate while the blockers landed at creation
+    or in a separate update, so the COMPOSITE shape below (owner AND
+    addBlockedBy in the same write) never occurs on a real arc — a
+    population keyed on it is dark BY CONSTRUCTION, with nothing suppressed
+    and no signal that anything was missed. The population leg is therefore
+    the broader owner-bearing shape: ANY owner-naming write on the task
+    WITNESSES the dispatch.
+
+    RELATION TO ``is_owner_wiring_shape``: the composite is a STRICT SUBSET
+    (``is_owner_wiring_shape`` composes this predicate), so the two cannot
+    drift on what "owner-bearing" means. They deliberately answer different
+    consumers' questions and are deliberately NOT unified — relaxing the
+    composite in place would silently change the handoff-ordering gate,
+    whose "terminal" recognition requires BOTH halves present. A
+    one-expression coupling of the two gates that used to live in the
+    composite alone is retired by this split; the ordering gate keeps the
+    composite, the population takes the broader leg.
+
+    ONE THING IT DELIBERATELY DOES NOT ESTABLISH: NOT "this is a dispatch."
+    The same three further legs the composite's docstring lists still apply
+    (specialist-owner resolution, teachback-subject carve-out, exemption
+    predicate). For the population consumer the subject carve-out carries a
+    NAMED DEPENDENCE: an owner-only write is exactly the split wiring a
+    teachback Task-A gate receives, so the SUBJECT carve-out is the sole
+    discriminator excluding those gates — the population's membership
+    depends on the TEACHBACK subject convention.
+
+    Pure function: no FS, no I/O, never raises. Non-dict input → False.
+    """
+    if not isinstance(tool_input, dict):
+        return False
+    owner = tool_input.get("owner")
+    return isinstance(owner, str) and bool(owner.strip())
+
+
 def is_owner_wiring_shape(tool_input: dict) -> bool:
     """True iff ``tool_input`` carries the owner-wiring SHAPE — a non-empty
     string ``owner`` AND a non-empty list ``addBlockedBy`` in the SAME write.
@@ -226,14 +271,26 @@ def is_owner_wiring_shape(tool_input: dict) -> bool:
        lifecycle gate are scoped to ``TaskCreate`` and are a separate
        question from this one.
 
-    The full recognition is three legs:
+    The full recognition is three legs, and its SHAPE LEG IS CONSUMER-FORKED:
 
-        is_owner_wiring_shape(tool_input)                # this function
+        handoff_ordering_gate (the "terminal" wiring):
+            is_owner_wiring_shape(tool_input)            # this function
+        dispatch_site emit (the Q5 population's witness):
+            is_owner_bearing_write(tool_input)           # above, broader
+
         AND is_pact_specialist_owner(owner, team_name)   # above
         AND NOT is_teachback_subject(subject)            # shared.task_utils
 
-    on top of which each consumer applies its OWN exemption predicate:
-    ``handoff_ordering_gate`` asks "may this owner self-complete?"
+    The fork is deliberate and measured, not drift: the workflow templates
+    wire Task B with one composite update, but LIVE practice splits the
+    write (owner in one update, blockers elsewhere), so a population keyed
+    on this composite is dark on every real arc. The ordering gate keeps the
+    composite because "terminal" is its question; the population takes the
+    broader owner-bearing leg because "was the dispatch witnessed by an
+    owner write?" is its question.
+
+    On top of the shape leg, each consumer applies its OWN exemption
+    predicate: ``handoff_ordering_gate`` asks "may this owner self-complete?"
     (``is_self_complete_exempt``); the ``dispatch_site`` emit that builds Q5's
     population asks "is this a dispatch requiring understanding verification?"
     (``is_teachback_exempt``). Those two are deliberately NOT unified — see the
@@ -248,23 +305,25 @@ def is_owner_wiring_shape(tool_input: dict) -> bool:
     specialist, turning a short-circuit into a disk hit. Callers apply the
     legs in their own cost order and share the recognition, not the ordering.
 
-    WHY BOTH FIELDS, AND WHY TOGETHER: the workflow templates all wire Task B
-    with a single ``TaskUpdate(B, owner=..., addBlockedBy=[A])``. Neither half
-    alone is the wiring shape — ``TaskCreate(B)`` leaves owner empty (it is
-    wired by this later update), and every other addBlockedBy use across the
-    templates is addBlockedBy-ONLY with no owner in the same call. So the
-    co-occurrence is the signal; each field on its own is a partial write.
+    WHY BOTH FIELDS, AND WHY TOGETHER: the workflow templates wire Task B
+    with a single ``TaskUpdate(B, owner=..., addBlockedBy=[A])``, and the
+    co-occurrence is what marks the write TERMINAL for the ordering gate —
+    both halves of the wiring settled in one place. ``TaskCreate(B)`` leaves
+    owner empty (it is wired by a later update), and an addBlockedBy-ONLY
+    write says the owner is still unsettled. That the composite is the
+    ordering gate's signal does NOT make it the population's: live practice
+    splits the write, which is why the dispatch_site membership leg is the
+    broader ``is_owner_bearing_write`` above.
 
     Owners are BARE names (``backend-coder``), never ``pact-``-prefixed —
     ``pact-*`` is the team-config agentType. This function deliberately does no
     name-shape test at all; ``is_pact_specialist_owner`` owns that resolution.
 
     Pure function: no FS, no I/O, never raises. Non-dict input → False.
+    Composes ``is_owner_bearing_write`` so the owner half of the test is
+    shared by construction with the population's broader leg.
     """
-    if not isinstance(tool_input, dict):
-        return False
-    owner = tool_input.get("owner")
-    if not isinstance(owner, str) or not owner.strip():
+    if not is_owner_bearing_write(tool_input):
         return False
     add_blocked_by = tool_input.get("addBlockedBy")
     return isinstance(add_blocked_by, list) and bool(add_blocked_by)

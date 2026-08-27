@@ -1,15 +1,26 @@
 """dispatch_site — the hook-side emit that carries the coverage DENOMINATOR.
 
-One event per dispatched Task-B, emitted at the owner-wiring TaskUpdate. The
-event's EXISTENCE is a dispatch site; the OPTIONAL `variety` within it is the
-numerator. Both terms come from one stream, which is what makes coverage > 1.0
-structurally impossible rather than merely guarded.
+One event per dispatched Task-B, emitted at the owner-WITNESSING TaskUpdate —
+any write naming a pact-specialist `owner` on a non-teachback, non-exempt
+task. The event's EXISTENCE is a dispatch site; the OPTIONAL `variety` within
+it is the numerator. Both terms come from one stream, which is what makes
+coverage > 1.0 structurally impossible rather than merely guarded.
+
+MEMBERSHIP IS OWNER-WITNESSED, NEVER INFERRED. Live dispatch practice wires
+owners in SPLIT writes (owner in one update, blockers at creation or in
+another), so the population leg is the owner-BEARING shape, not the composite
+owner+addBlockedBy the ordering gate keys on — a composite-keyed population is
+dark by construction on every real arc. Teachback Task-A gates are excluded by
+the SUBJECT carve-out alone (the named dependence: an owner-only write is
+exactly the split wiring a gate receives); review-panel dispatches are EXCLUDED
+because no owner write ever witnesses them (documented exclusion — their
+dispatches stay visible via the review_dispatch stream).
 
 WHY THE TaskUpdate BRANCH AND NOT BESIDE dispatch_variety: that emit lives in
 the TaskCreate branch and keys on metadata.variety PRESENCE, because
 TaskCreate(B) leaves owner empty — an owner-wiring predicate placed there would
 return False forever and Q5 would stay dark with every test still green. These
-tests pin the emit to the branch where an owner-wiring write is observable.
+tests pin the emit to the branch where an owner-bearing write is observable.
 
 Each step of the evaluation order gets a negation test, because every one of
 them fails SILENTLY: a wrong frame gate zeroes the population, a dropped
@@ -18,7 +29,8 @@ missing dedup claim turns one dispatch into two sites. None of those produce an
 exception or a red anywhere else.
 
 Drives tlg.evaluate_lifecycle against a real on-disk team config, task store
-and O_EXCL marker root, with tlg.append_event spied to capture events.
+and O_EXCL marker root, with tlg.append_event spied to capture events — EXCEPT
+the seam-integration class at the bottom, which leaves the journal write real.
 """
 import json
 import sys
@@ -122,7 +134,30 @@ def sites(events):
     return [e for e in events if e.get("type") == "dispatch_site"]
 
 
-class TestEmitsAtTheWiringWrite:
+class TestEmitsAtTheOwnerWitnessWrite:
+    def test_owner_only_split_wiring_write_NOW_EMITS(self, env, events):
+        """CARRIED FORWARD AND FLIPPED — this arm was
+        ``test_partial_wiring_owner_only_does_not_emit`` (a pin of the OLD
+        composite membership) before the owner-witnessed population change;
+        it is flipped, never deleted, so the suite's record of the membership
+        change is the flip itself.
+
+        THE SHAPE IS THE LIVE ONE: real dispatch practice wires the work
+        task's owner in a SPLIT write — owner set in one TaskUpdate, blockers
+        at creation or in a separate update — which the composite shape
+        (owner AND addBlockedBy in the same write) never matches. Under the
+        composite, this exact write was the reason an arc that dispatched
+        produced ZERO dispatch_site events with nothing suppressed. Under the
+        owner-bearing leg it is the primary witness of a dispatch."""
+        seed(env, metadata={"variety": STAMP})
+        tlg.evaluate_lifecycle(wiring(blockers=()))
+        s = sites(events)
+        assert len(s) == 1, (
+            "an owner-only write on a stamped specialist work task must "
+            "witness a dispatch site"
+        )
+        assert s[0]["variety"]["total"] == 11
+
     def test_stamped_dispatch_emits_one_site_with_variety(self, env, events):
         seed(env, metadata={"variety": STAMP})
         tlg.evaluate_lifecycle(wiring())
@@ -384,12 +419,9 @@ class TestEvaluationOrderNegations:
             "specialist leg no longer blocks it"
         )
 
-    def test_partial_wiring_owner_only_does_not_emit(self, env, events):
-        seed(env, metadata={"variety": STAMP})
-        tlg.evaluate_lifecycle(wiring(blockers=()))
-        assert sites(events) == []
-
     def test_partial_wiring_blockers_only_does_not_emit(self, env, events):
+        """No owner named → no witness. This is the review-dispatch shape too:
+        a write that never names owner cannot witness a dispatch site."""
         seed(env, metadata={"variety": STAMP})
         tlg.evaluate_lifecycle(wiring(owner=None))
         assert sites(events) == []
@@ -576,3 +608,101 @@ class TestAntiWidening:
         s = sites(events)
         assert len(s) == 1, "a signal-shaped dispatch must COUNT as a site"
         assert "variety" not in s[0], "and it counts as an un-stamped one"
+
+
+class TestLiveDispatchShapes:
+    """Regression: the live dispatch shapes that left the stream DARK on an
+    arc that dispatched (issue #1531 — 5 dispatch_variety, 0 dispatch_site,
+    0 journal_emit_skipped; nothing was suppressed, the ladder simply never
+    matched). Three shapes adjudicated from that arc's journal and task
+    snapshots; the owner-only WORK-task arm is the flipped pin in
+    TestEmitsAtTheOwnerWitnessWrite above."""
+
+    def test_split_wiring_teachback_gate_does_not_emit(self, env, events):
+        """A teachback Task-A gate receives the SAME owner-only split wiring
+        the work task does — the subject carve-out is the SOLE discriminator.
+        This arm pins that discriminator against the gate shape."""
+        seed(env, subject="backend-coder: TEACHBACK for the thing",
+             metadata={"variety": STAMP})
+        tlg.evaluate_lifecycle(wiring(blockers=()))
+        assert sites(events) == []
+
+    def test_gate_without_the_subject_marker_is_counted(self, env, events):
+        """THE NAMED DEPENDENCE, MADE EXECUTABLE. Membership depends on the
+        TEACHBACK subject convention: a Task-A gate whose subject does not
+        carry the marker is indistinguishable from a work task at the
+        owner-witnessing write and IS counted as a site. This arm documents
+        the dependence by asserting it — if this ever reddens, someone added a
+        beyond-subject discriminator and this docstring (plus the membership
+        prose) must be updated, not just the assertion."""
+        seed(env, subject="backend-coder: verify understanding for the thing",
+             metadata={"variety": STAMP})
+        tlg.evaluate_lifecycle(wiring(blockers=()))
+        s = sites(events)
+        assert len(s) == 1, (
+            "under subject-only discrimination a marker-less gate subject "
+            "must be counted — the convention dependence is real"
+        )
+
+    def test_review_dispatch_shape_never_owner_wired_no_site(self, env, events):
+        """Review-panel dispatches are EXCLUDED BY DOCUMENTED SEMANTICS: the
+        peer-review path dispatches reviewers without ever writing owner on
+        the task, so no owner write witnesses them. Whatever else lands on
+        such a task — status flips, blocker writes — witnesses nothing. Their
+        dispatches stay visible through the review_dispatch stream; wanting
+        them in this population is remedied by canonical owner wiring at
+        dispatch (practice-side), never by inferring ownership here."""
+        seed(env, owner="", subject="review-coder: review PR #99 on the thing",
+             metadata={"variety": STAMP})
+        # The writes a never-owner-wired task receives: blockers-only and
+        # bare status updates. Neither names an owner.
+        tlg.evaluate_lifecycle(wiring(owner=None, blockers=("5",)))
+        tlg.evaluate_lifecycle({"tool_name": "TaskUpdate",
+                                "tool_input": {"taskId": "42",
+                                               "status": "in_progress"},
+                                "agent_type": LEAD})
+        assert sites(events) == []
+
+
+class TestRealJournalSeam:
+    """NON-MOCKED SEAM INTEGRATION — the real session-journal write path.
+
+    Every other class in this file spies ``sj.append_event`` to CAPTURE
+    events; that mock is exactly the seam a regression hides behind, because
+    an emit that never reaches a real journal still "fires" against the spy.
+    These arms use the ``env`` fixture ONLY (real team config, real task
+    store, real O_EXCL marker root, real context) and leave the journal write
+    entirely real, then read the journal FILE bytes back from disk. A seam
+    regression — the emit resolving the wrong session dir, or the write
+    failing on the real path — turns these red while the spied arms stay
+    green. Do NOT "tidy" these to use the events fixture.
+    """
+
+    def _journal_lines(self, env):
+        path = sj.get_journal_path()
+        p = Path(path)
+        assert p.is_file(), f"no journal file at {path} — the write never landed"
+        return [json.loads(line) for line in
+                p.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def test_live_shape_owner_wiring_lands_in_the_real_journal(self, env):
+        """The acceptance shape: a live-shape owner-wiring dispatch (owner
+        set in a split write) must produce a dispatch_site event IN THE REAL
+        JOURNAL FILE, not merely in a spied capture list."""
+        seed(env, metadata={"variety": STAMP})
+        tlg.evaluate_lifecycle(wiring(blockers=()))
+        site_events = [e for e in self._journal_lines(env)
+                       if e.get("type") == "dispatch_site"]
+        assert len(site_events) == 1
+        assert site_events[0]["task_id"] == "42"
+        assert site_events[0]["variety"]["total"] == 11
+
+    def test_repeat_write_yields_ONE_site_in_the_real_journal(self, env):
+        """Dedup through the REAL O_EXCL marker root and a REAL journal file:
+        a second owner-bearing write appends nothing new."""
+        seed(env, metadata={"variety": STAMP})
+        tlg.evaluate_lifecycle(wiring(blockers=()))
+        tlg.evaluate_lifecycle(wiring(blockers=()))
+        site_events = [e for e in self._journal_lines(env)
+                       if e.get("type") == "dispatch_site"]
+        assert len(site_events) == 1
