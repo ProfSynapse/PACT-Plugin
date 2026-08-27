@@ -371,22 +371,133 @@ class TestResumeOwnSummaryClause:
         assert str(canonical) in clause
         assert str(archive) not in clause
 
-    def test_root_drain_producer_named_by_clause(self, tmp_path, monkeypatch):
-        """F-TE-2: the SECOND producer of the named archive. The arms above
-        pin the helper's selection; the integration arms in
-        test_session_init pin the own-dir-clear producer. This arm composes
-        the REAL root drain with the REAL clause helper: a degraded write
-        lands at the root singleton, the resume-time drain moves it into the
-        session dir as compact-summary-<stamp>.txt, and the clause must then
-        name THAT archive — never the root path itself. Carrier-present
-        control: the same fixture BEFORE the drain (bytes at root, no
-        session-dir archive) yields no clause, so the clause's input is
-        proven to be the drain's output."""
+    # ── Cycle-2 first-surface gate (architect-confirmed semantics) ─────────
+    #
+    # A candidate (canonical or archive) is named only if NO consuming
+    # session_start (source in {resume, startup, clear}; absent/unknown
+    # NON-consuming) has ts strictly after its mtime. Newest unsuppressed
+    # archive wins. Missing/unreadable/empty journal fails OPEN to naming.
+    #
+    # Fixture clock: archives get fixed mtimes via os.utime; journal events
+    # get explicit ts via make_event (setdefault-honored). 1e9 = 2001-09-09,
+    # 2e9 = 2033-05-18, 1.5e9 = 2017-07-14T02:40:00Z sits strictly between.
+
+    def _plant_journal(self, session_dir, events):
+        """Write real-shaped session_start events to the session journal."""
+        from shared.session_journal import make_event
+
+        lines = [json.dumps(make_event("session_start", **e)) for e in events]
+        (session_dir / "session-journal.jsonl").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
+
+    def _archive(self, session_dir, name, mtime):
+        """Plant one archive with a FORCED mtime (deterministic clock)."""
+        p = session_dir / name
+        p.write_text(f"BYTES-{name}", encoding="utf-8")
+        import os
+
+        os.utime(p, (mtime, mtime))
+        return p
+
+    def test_first_surface_names_when_consuming_start_predates(self, tmp_path):
+        """Primary case (resume-after-compact world): the archive is named
+        when every consuming session_start in the journal PREDATES its
+        mtime — a startup long ago does not suppress a fresh archive."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        archive = self._archive(
+            session_dir, "compact-summary-2026-08-27T00-00-00.txt", 1_000_000_000
+        )
+        self._plant_journal(
+            session_dir, [{"ts": "2000-01-01T00:00:00Z", "source": "startup"}]
+        )
+
+        clause = self._clause(session_dir)
+
+        assert str(archive) in clause
+
+    def test_second_resume_consuming_start_suppresses_clause(self, tmp_path):
+        """Second-resume suppression: a consuming session_start(resume)
+        whose ts postdates the archive mtime means a later session already
+        surfaced this summary — NO clause. Carrier-present control in the
+        same fixture: a NON-consuming source (compact) postdating the same
+        archive leaves the clause in place, proving the suppression is
+        gated on the consuming source set, not on any session_start."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        archive = self._archive(
+            session_dir, "compact-summary-2026-08-27T00-00-00.txt", 1_000_000_000
+        )
+
+        # Control FIRST: non-consuming postdating start → still names.
+        self._plant_journal(
+            session_dir, [{"ts": "2030-01-01T00:00:00Z", "source": "compact"}]
+        )
+        assert str(archive) in self._clause(session_dir)
+
+        # Now the consuming shape: same ts, source=resume → suppressed.
+        self._plant_journal(
+            session_dir, [{"ts": "2030-01-01T00:00:00Z", "source": "resume"}]
+        )
+        assert self._clause(session_dir) == ""
+
+    def test_missing_or_empty_journal_fails_open_to_naming(self, tmp_path):
+        """Fail-open: no journal file at all, then an EMPTY journal file —
+        both worlds cannot prove consumption, and the gate must NAME (the
+        cycle-1 behavior) rather than suppress on absent evidence."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        archive = self._archive(
+            session_dir, "compact-summary-2026-08-27T00-00-00.txt", 1_000_000_000
+        )
+
+        assert not (session_dir / "session-journal.jsonl").exists()
+        assert str(archive) in self._clause(session_dir)
+
+        (session_dir / "session-journal.jsonl").write_text("", encoding="utf-8")
+        assert str(archive) in self._clause(session_dir)
+
+    def test_multi_archive_consumed_old_suppressed_fresh_named(self, tmp_path):
+        """Newest UNSUPPRESSED archive wins: a consuming start at 1.5e9
+        postdates the old archive (1e9 — consumed, suppressed) but predates
+        the fresh one (2e9 — never surfaced) → the fresh archive is named
+        and the old one is not."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        old = self._archive(
+            session_dir, "compact-summary-2026-01-01T00-00-00.txt", 1_000_000_000
+        )
+        fresh = self._archive(
+            session_dir, "compact-summary-2026-08-27T00-00-00.txt", 2_000_000_000
+        )
+        self._plant_journal(
+            session_dir, [{"ts": "2017-07-14T02:40:00Z", "source": "resume"}]
+        )
+
+        clause = self._clause(session_dir)
+
+        assert str(fresh) in clause
+        assert str(old) not in clause
+
+    def test_root_drain_artifact_distinct_prefix_never_named(
+        self, tmp_path, monkeypatch
+    ):
+        """F-TE-2 INVERTED for cycle 2 (F-SEC-2): drained root bytes are
+        UNATTRIBUTABLE to this session's compactions — they carry a DISTINCT
+        prefix and are NEVER named by the clause. Cycle 1 pinned the drain
+        artifact AS named; the architect ruling reversed that, so this arm
+        now composes the REAL root drain with the REAL clause helper and
+        asserts: the drain still RUNS (root singleton moved away, exactly
+        one compact-summary* artifact lands in the session dir), but the
+        landed artifact is not the canonical slot and the clause names
+        NOTHING — under fail-open (no journal planted), so ONLY the
+        prefix/shape separation can be what prevents the naming."""
         from session_init import (
             _archive_stale_compact_summary,
             _resume_own_summary_clause,
         )
-        from shared.constants import get_compact_summary_path
+        from shared.constants import COMPACT_SUMMARY_NAME, get_compact_summary_path
 
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", _PROJECT)
@@ -396,19 +507,25 @@ class TestResumeOwnSummaryClause:
         session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
 
         # Control: no drain ran — bytes still at root, session dir absent,
-        # and the clause names nothing (the drain's output does not exist).
+        # and the clause names nothing.
         assert _resume_own_summary_clause(str(session_dir)) == ""
 
         _archive_stale_compact_summary(_SID_A, _PROJECT)
 
-        archives = list(session_dir.glob("compact-summary-*.txt"))
-        assert len(archives) == 1, (
-            f"the root drain should land exactly one archive in the session "
-            f"dir, found {archives}"
+        landed = sorted(
+            p.name for p in session_dir.glob("compact-summary*")
         )
-        clause = _resume_own_summary_clause(str(session_dir))
-        assert str(archives[0]) in clause
-        # Moved-not-copied, and the clause names the session-scoped archive —
-        # never the root-singleton path the bytes started at.
+        assert len(landed) == 1, (
+            f"the root drain should land exactly one compact-summary* "
+            f"artifact in the session dir, found {landed}"
+        )
+        assert landed[0] != COMPACT_SUMMARY_NAME
+        # Moved-not-copied: the root singleton slot is empty afterwards.
         assert not root_singleton.exists()
-        assert str(root_singleton) not in clause
+        # F-SEC-2 core: no journal exists (fail-open would name ANY valid
+        # archive), yet the drained artifact is not named — only its
+        # distinct, non-archive prefix/shape can be the blocker.
+        assert _resume_own_summary_clause(str(session_dir)) == ""
+        assert str(root_singleton) not in _resume_own_summary_clause(
+            str(session_dir)
+        )
