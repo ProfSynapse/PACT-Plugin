@@ -770,13 +770,31 @@ def _clear_bootstrap_marker(session_path: Path) -> None:
         pass  # Fail-open: don't block session init for marker cleanup
 
 
+# Root-drained artifact prefix: what _archive_stale_compact_summary names
+# the moved ROOT-singleton bytes when it drains them into a session dir.
+# Distinct from every real archive name the plugin writes, but KEEPING the
+# compact-summary stem so globbing consumers (the legacy-drain tests) still
+# find the drained artifact as a compact-summary file. The resume pointer's
+# strict stamp shape (_ARCHIVE_STAMP_SHAPE_RE) still never matches it — the
+# segment after the stem is "root-drained-", not a timestamp — so drained
+# bytes can never be named as this session's own compaction output.
+_ROOT_DRAINED_SUMMARY_PREFIX = "compact-summary-root-drained-"
+
+
 def _stale_summary_destination(session_id: str, project_dir: str) -> Path:
     """Where a stale compact summary goes when this hook clears the path.
 
     Session-scoped when the session can be identified, which is the normal
-    case and matches where the secretary archives. Falls back to a single
-    fixed-name slot in the sessions root, NEVER a timestamped one — see
-    COMPACT_SUMMARY_ORPHAN_NAME for the bound and the trade it accepts.
+    case — but under a DISTINCT root-drained prefix, NOT the archive
+    convention the session's own compactions produce: the drained bytes are
+    ROOT-singleton bytes (degraded or legacy writes with no attributable
+    producer), so the resume pointer's strict-shape selector must never name
+    them as if this session had compacted. A distinct prefix makes that
+    exclusion structural — the selector's shape admits only plugin-written
+    archive names, and this name is not one by construction, no deny-list.
+    Falls back to a single fixed-name slot in the sessions root, NEVER a
+    timestamped one — see COMPACT_SUMMARY_ORPHAN_NAME for the bound and the
+    trade it accepts.
 
     build_session_path is used rather than get_session_dir() because the
     context cache is not built until later in main(); the bootstrap-marker
@@ -785,7 +803,7 @@ def _stale_summary_destination(session_id: str, project_dir: str) -> Path:
     if session_id and project_dir:
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
         return build_session_path(Path(project_dir).name, str(session_id)) / (
-            f"{COMPACT_SUMMARY_ARCHIVE_PREFIX}{stamp}.txt"
+            f"{_ROOT_DRAINED_SUMMARY_PREFIX}{stamp}.txt"
         )
     return get_compact_summary_path().parent / COMPACT_SUMMARY_ORPHAN_NAME
 
@@ -872,6 +890,52 @@ _ARCHIVE_STAMP_SHAPE_RE = re.compile(
     r"compact-summary-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.txt"
 )
 
+# First-surface gate (F-ARCH-1): session_start sources that CONSUME a
+# surfaced summary. A resume/startup/clear start after a candidate's mtime
+# means a later start already had the pointer available — re-naming at every
+# subsequent start would re-surface consumed state. compact is the PRODUCER
+# (a post-summary compact writes a NEWER summary, it does not consume this
+# one), and absent/unknown-source old-era events are non-consuming too: the
+# costs are asymmetric (a false suppression kills the pointer's primary
+# purpose; a false naming costs one sentence), so ambiguity fails toward
+# naming.
+_FIRST_SURFACE_CONSUMING_SOURCES = frozenset({"resume", "startup", "clear"})
+
+
+def _latest_consuming_start_ts(session_dir: str) -> float | None:
+    """Epoch seconds of the NEWEST consuming session_start in this session's
+    journal, or None when there is none (or the journal is missing,
+    unreadable, or has no parseable consuming event — every fail-open path
+    returns None, which the gate reads as "not suppressed").
+
+    The ts format is the journal's write format (UTC ISO-8601 with a Z
+    suffix); unparseable stamps are skipped, never fatal.
+    """
+    try:
+        from shared.session_journal import read_events_from
+
+        latest: float | None = None
+        for event in read_events_from(session_dir, event_type="session_start"):
+            event_source = event.get("source")
+            if (
+                not isinstance(event_source, str)
+                or event_source not in _FIRST_SURFACE_CONSUMING_SOURCES
+            ):
+                continue
+            raw_ts = str(event.get("ts", ""))
+            try:
+                parsed = datetime.fromisoformat(
+                    raw_ts.replace("Z", "+00:00")
+                ).timestamp()
+            except ValueError:
+                continue
+            if latest is None or parsed > latest:
+                latest = parsed
+        return latest
+    except Exception:
+        # Fail-open: the gate is an upgrade path, never a new raise source.
+        return None
+
 
 def _resume_own_summary_clause(session_dir: str) -> str:
     """One sentence naming this session's own compact summary, or "".
@@ -883,11 +947,23 @@ def _resume_own_summary_clause(session_dir: str) -> str:
     so name the canonical file when it still exists, else the NEWEST archive
     by mtime. Read-only: a probe, never a move.
 
+    FIRST-SURFACE GATE (F-ARCH-1): a candidate (canonical or archive,
+    uniformly) is SUPPRESSED when a consuming session_start event
+    (resume/startup/clear — see _FIRST_SURFACE_CONSUMING_SOURCES) has a ts
+    STRICTLY after the candidate's mtime: that later start already had the
+    pointer available, so naming again would re-surface consumed state at
+    every subsequent start. Among archives, the NEWEST UNSUPPRESSED
+    shape-conforming one wins. Fail-open toward naming: a missing/unreadable/
+    empty journal is no consuming event (today's behavior). The conservative
+    edge this accepts: compact then clear then resume names nothing, because
+    the clear consumed.
+
     Both probes require a regular FILE (is_file): a directory named like
     either slot is not a readable summary, and naming it would send the lead
     to a path whose read can only error. Archives are additionally selected
     by the exact stamp shape (_ARCHIVE_STAMP_SHAPE_RE) — hostile names never
-    render rather than rendering stripped.
+    render rather than rendering stripped, and root-drained artifacts
+    (_ROOT_DRAINED_SUMMARY_PREFIX) never match the shape by construction.
 
     Ownership-neutral on purpose ("from an earlier point of this session"):
     the clause carries information, not an attribution claim, and the
@@ -901,14 +977,21 @@ def _resume_own_summary_clause(session_dir: str) -> str:
     if not session_dir:
         return ""
     try:
+        gate_ts = _latest_consuming_start_ts(session_dir)
         base = Path(session_dir)
         canonical = base / COMPACT_SUMMARY_NAME
-        if canonical.is_file():
+        if canonical.is_file() and not (
+            gate_ts is not None and gate_ts > canonical.stat().st_mtime
+        ):
             target = str(canonical)
         else:
             archives = [
                 p for p in base.glob(f"{COMPACT_SUMMARY_ARCHIVE_PREFIX}*.txt")
                 if p.is_file() and _ARCHIVE_STAMP_SHAPE_RE.fullmatch(p.name)
+                and not (
+                    gate_ts is not None
+                    and gate_ts > p.stat().st_mtime
+                )
             ]
             if not archives:
                 return ""
@@ -1492,6 +1575,34 @@ def main():
                 # Fail-open: context file is best-effort; hooks fall back to empty strings
                 print(f"session_init: could not write context file: {e}", file=sys.stderr)
 
+        # Resolve session_dir early so substitution instructions can include it.
+        # get_session_dir() works here because build_context_cache() populated _cache above.
+        # Suppress session_dir for the unknown-* sentinel so the literal
+        # `.../unknown-xxxx/` path never leaks into the substitution instructions
+        # block — otherwise the orchestrator would obediently mkdir that path
+        # for any command that uses {session_dir}, bypassing the CLAUDE.md guard
+        # below.
+        # HOISTED above the session_start journal append below (F-ARCH-1): the
+        # resume-limb summary probe must read the journal BEFORE this run's own
+        # anchor lands in it — see the probe comment right after the append.
+        session_dir = get_session_dir() if not session_id_was_missing else ""
+
+        # Resume-limb summary probe (first-surface gate, F-ARCH-1): computed
+        # HERE — after session_dir resolves, BEFORE the session_start journal
+        # append below — as a STRUCTURAL INVARIANT: the journal never contains
+        # the current run's anchor at probe time. A post-append probe would
+        # compare this run's own anchor ts (now) against every candidate mtime
+        # (always older) and suppress permanently; the gate would defeat
+        # itself on the very first resume. Gated on source == "resume" only:
+        # the clause is consumed by exactly that limb, and other sources pay
+        # nothing for the probe.
+        resume_summary_clause = (
+            _resume_own_summary_clause(session_dir)
+            if source == "resume"
+            else ""
+        )
+
+        if not session_id_was_missing:
             # Write session_start event to journal (after build_context_cache so
             # path is available). Lead-only (#877): the journal session_start anchor is a
             # lead-only write — a teammate/plain frame would append a phantom
@@ -1512,15 +1623,6 @@ def main():
                         source=source,
                     ),
                 )
-
-        # Resolve session_dir early so substitution instructions can include it.
-        # get_session_dir() works here because build_context_cache() populated _cache above.
-        # Suppress session_dir for the unknown-* sentinel so the literal
-        # `.../unknown-xxxx/` path never leaks into the substitution instructions
-        # block — otherwise the orchestrator would obediently mkdir that path
-        # for any command that uses {session_dir}, bypassing the CLAUDE.md guard
-        # below.
-        session_dir = get_session_dir() if not session_id_was_missing else ""
 
         # Build context message based on source (post-collapse: the team always
         # exists — the platform pre-creates exactly one team per session).
@@ -1790,13 +1892,15 @@ def main():
                 # summary from an earlier compaction of this session may sit
                 # in the session's own dir — usually archived-in-place, since
                 # the non-compact clears above run BEFORE this limb renders.
-                # The pointer sentence is PROBE-CONDITIONAL (empty string when
-                # no summary exists), so the limb stays one contiguous block.
-                _summary_clause = _resume_own_summary_clause(session_dir)
+                # The pointer sentence is PRECOMPUTED above (probe hoisted
+                # before the session_start journal append — the F-ARCH-1
+                # first-surface invariant) and is PROBE-CONDITIONAL (empty
+                # string when no unsuppressed summary exists), so the limb
+                # stays one contiguous block.
                 context_parts.insert(0, (
                     f'{_team_directive} '
                     f'Check session journal for paused state from /PACT:pause.'
-                    f'{_summary_clause}'
+                    f'{resume_summary_clause}'
                 ))
             elif source == "startup":
                 # Fresh session: bare directive (no extra recovery guidance)

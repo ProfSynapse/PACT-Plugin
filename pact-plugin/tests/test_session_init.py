@@ -4624,6 +4624,265 @@ class TestResumeOwnSummaryPointer:
 
         assert _resume_own_summary_clause(str(session_dir)) == ""
 
+    # --- F-ARCH-1 first-surface gate + F-SEC-2 drain-prefix isolation ---
+
+    @staticmethod
+    def _iso_from_epoch(epoch: float) -> str:
+        from datetime import datetime, timezone
+
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+    def _plant_start_event(
+        self, tmp_path, source, ts_epoch, session_id=_TEST_SESSION_ID,
+    ):
+        """Append one session_start event to the session's journal using the
+        writer's own field set (v/type/session_id/project_dir/team/worktree/
+        source/ts) so a schema-validating reader sees a real event."""
+        session_dir = self._session_dir(tmp_path)
+        session_dir.mkdir(parents=True, exist_ok=True)
+        event = {
+            "v": 1,
+            "type": "session_start",
+            "session_id": session_id,
+            "project_dir": "/Users/example/Sites/test-project",
+            "team": "session-aabb1122",
+            "worktree": "",
+            "source": source,
+            "ts": self._iso_from_epoch(ts_epoch),
+        }
+        with open(session_dir / "session-journal.jsonl", "a",
+                  encoding="utf-8") as f:
+            f.write(json.dumps(event) + "\n")
+
+    def _clause_direct(self, tmp_path):
+        from session_init import _resume_own_summary_clause
+
+        return _resume_own_summary_clause(str(self._session_dir(tmp_path)))
+
+    def test_hoist_ordering_journal_without_current_anchor_names(
+        self, monkeypatch, tmp_path
+    ):
+        """HOIST-ORDERING PIN (F-ARCH-1). A planted archive with NO journal
+        gets named by a FULL main() run at source=resume — even though the
+        run itself appends a session_start(resume, ts=now) anchor whose ts
+        strictly postdates the archive. That is only possible because the
+        probe reads the journal BEFORE the append (the structural
+        invariant). A refactor that moves the probe after the append makes
+        the run's own anchor suppress every candidate: THIS arm goes red,
+        not silently green."""
+        session_dir = self._session_dir(tmp_path)
+        session_dir.mkdir(parents=True)
+        (session_dir / "compact-summary-2026-08-26T00-00-00.txt").write_text(
+            "ARCHIVE BYTES", encoding="utf-8"
+        )
+
+        additional = self._run_resume_with_planted_summary(
+            monkeypatch, tmp_path, plant="none",
+        )
+
+        assert self._CLAUSE_PHRASE in additional
+        assert "compact-summary-2026-08-26T00-00-00.txt" in additional
+
+    def test_postdating_consuming_event_suppresses_end_to_end(
+        self, monkeypatch, tmp_path
+    ):
+        """A consuming session_start (resume) whose ts strictly postdates the
+        candidate suppresses the clause through the full main() flow."""
+        import time as _time
+
+        session_dir = self._session_dir(tmp_path)
+        session_dir.mkdir(parents=True)
+        (session_dir / "compact-summary-2026-08-26T00-00-00.txt").write_text(
+            "ARCHIVE BYTES", encoding="utf-8"
+        )
+        self._plant_start_event(
+            tmp_path, source="resume", ts_epoch=_time.time() + 3600,
+        )
+
+        additional = self._run_resume_with_planted_summary(
+            monkeypatch, tmp_path, plant="none",
+        )
+
+        assert "paused state" in additional  # the limb still rendered
+        assert self._CLAUSE_PHRASE not in additional
+
+    def test_consumed_canonical_suppression_with_control(self, tmp_path):
+        """Unit arm: a consuming event after the CANONICAL file's mtime
+        suppresses it. Carrier-present control: the identical fixture with
+        the journal event removed names the canonical — the suppression is
+        the gate's verdict, not a broken fixture."""
+        import os
+        import time as _time
+
+        session_dir = self._session_dir(tmp_path)
+        session_dir.mkdir(parents=True)
+        canonical = session_dir / "compact-summary.txt"
+        canonical.write_text("CANONICAL BYTES", encoding="utf-8")
+        os.utime(canonical, (1_000_000_000, 1_000_000_000))
+
+        assert self._clause_direct(tmp_path) != ""  # control: no journal
+
+        self._plant_start_event(
+            tmp_path, source="resume", ts_epoch=_time.time() + 3600,
+        )
+        assert self._clause_direct(tmp_path) == ""
+
+    def test_multi_archive_unsuppressed_wins(self, tmp_path):
+        """Two archives, one consuming event BETWEEN their mtimes: the older
+        is suppressed, the fresher is named — newest among UNSUPPRESSED,
+        not newest overall."""
+        session_dir = self._session_dir(tmp_path)
+        session_dir.mkdir(parents=True)
+        old_archive = session_dir / "compact-summary-2026-01-01T00-00-00.txt"
+        new_archive = session_dir / "compact-summary-2026-08-26T00-00-00.txt"
+        old_archive.write_text("OLD", encoding="utf-8")
+        new_archive.write_text("NEW", encoding="utf-8")
+        import os
+
+        os.utime(old_archive, (1_000_000_000, 1_000_000_000))
+        os.utime(new_archive, (1_800_000_000, 1_800_000_000))
+        # Consuming event AFTER old, BEFORE new.
+        self._plant_start_event(
+            tmp_path, source="resume", ts_epoch=1_500_000_000,
+        )
+
+        clause = self._clause_direct(tmp_path)
+
+        assert str(new_archive) in clause
+        assert str(old_archive) not in clause
+
+    def test_clear_consumes_edge(self, tmp_path):
+        """The conservative edge, pinned: a clear start after the candidate
+        consumes it — compact then clear then resume names nothing (pre-fix
+        status quo for that world, accepted by design)."""
+        import time as _time
+
+        session_dir = self._session_dir(tmp_path)
+        session_dir.mkdir(parents=True)
+        archive = session_dir / "compact-summary-2026-08-26T00-00-00.txt"
+        archive.write_text("BYTES", encoding="utf-8")
+        import os
+
+        os.utime(archive, (1_000_000_000, 1_000_000_000))
+        self._plant_start_event(
+            tmp_path, source="clear", ts_epoch=_time.time() + 3600,
+        )
+
+        assert self._clause_direct(tmp_path) == ""
+
+    def test_unknown_source_is_non_consuming(self, tmp_path):
+        """Absent-source and unknown-source old-era events never consume:
+        ambiguity fails toward naming (false suppression kills the primary
+        purpose; false naming costs one sentence)."""
+        import time as _time
+
+        session_dir = self._session_dir(tmp_path)
+        session_dir.mkdir(parents=True)
+        archive = session_dir / "compact-summary-2026-08-26T00-00-00.txt"
+        archive.write_text("BYTES", encoding="utf-8")
+        import os
+
+        os.utime(archive, (1_000_000_000, 1_000_000_000))
+        future = _time.time() + 3600
+
+        self._plant_start_event(tmp_path, source="unknown", ts_epoch=future)
+        assert self._clause_direct(tmp_path) != ""
+
+        # Absent source: rewrite the journal without the source key.
+        journal = session_dir / "session-journal.jsonl"
+        event = json.loads(journal.read_text(encoding="utf-8").splitlines()[0])
+        del event["source"]
+        journal.write_text(json.dumps(event) + "\n", encoding="utf-8")
+        assert self._clause_direct(tmp_path) != ""
+
+    def test_compact_producer_is_non_consuming(self, tmp_path):
+        """A compact start after the candidate does not consume it — compact
+        PRODUCES summaries; suppressing on it would hide a summary the very
+        compaction that preceded the resume just wrote."""
+        import time as _time
+
+        session_dir = self._session_dir(tmp_path)
+        session_dir.mkdir(parents=True)
+        archive = session_dir / "compact-summary-2026-08-26T00-00-00.txt"
+        archive.write_text("BYTES", encoding="utf-8")
+        import os
+
+        os.utime(archive, (1_000_000_000, 1_000_000_000))
+        self._plant_start_event(
+            tmp_path, source="compact", ts_epoch=_time.time() + 3600,
+        )
+
+        assert self._clause_direct(tmp_path) != ""
+
+    def test_drained_prefix_artifact_never_named_with_control(self, tmp_path):
+        """F-SEC-2: a root-drained artifact (distinct prefix) in the session
+        dir is NEVER named — the strict archive shape excludes it by
+        construction. Carrier-present control: add ONE real archive to the
+        same fixture and the clause names that one, proving the empty
+        verdict is the selector's, not a broken fixture."""
+        from session_init import _ROOT_DRAINED_SUMMARY_PREFIX
+
+        session_dir = self._session_dir(tmp_path)
+        session_dir.mkdir(parents=True)
+        drained = session_dir / (
+            f"{_ROOT_DRAINED_SUMMARY_PREFIX}2026-08-26T00-00-00.txt"
+        )
+        drained.write_text("DRAINED ROOT BYTES", encoding="utf-8")
+
+        assert self._clause_direct(tmp_path) == ""
+
+        real = session_dir / "compact-summary-2026-08-26T00-00-00.txt"
+        real.write_text("REAL ARCHIVE BYTES", encoding="utf-8")
+        clause = self._clause_direct(tmp_path)
+        assert str(real) in clause
+        assert str(drained) not in clause
+
+    def test_root_drain_lands_under_distinct_prefix(self, monkeypatch, tmp_path):
+        """The root-drain MOVE itself lands under the distinct prefix (the
+        producer side of F-SEC-2): after a non-compact session_init run over
+        a root singleton, the recovered bytes carry the root-drained name,
+        never the archive convention."""
+        from session_init import _ROOT_DRAINED_SUMMARY_PREFIX
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/example/Sites/test-project")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        sessions_dir = tmp_path / ".claude" / "pact-sessions"
+        sessions_dir.mkdir(parents=True)
+        singleton = sessions_dir / "compact-summary.txt"
+        singleton.write_text("ROOT BYTES", encoding="utf-8")
+
+        from session_init import main
+
+        with patch("session_init.get_compact_summary_path", lambda: singleton), \
+             patch("session_init.setup_plugin_symlinks", return_value=None), \
+             patch("session_init.ensure_project_memory_md", return_value=None), \
+             patch("session_init.check_pinned_staleness", return_value=None), \
+             patch("session_init.update_session_info", return_value=None), \
+             patch("session_init.get_task_list", return_value=None), \
+             patch("session_init.restore_last_session", return_value=None), \
+             patch("session_init.check_resume_state", return_value=None), \
+             patch("sys.stdin", io.StringIO(json.dumps(
+                 {"session_id": _TEST_SESSION_ID, "source": "resume"}))), \
+             patch("sys.stdout", new_callable=io.StringIO):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 0
+        session_dir = self._session_dir(tmp_path)
+        drained = list(
+            session_dir.glob(f"{_ROOT_DRAINED_SUMMARY_PREFIX}*.txt")
+        )
+        assert len(drained) == 1, (
+            f"root-drained bytes must land under the distinct prefix in the "
+            f"session dir, found {drained}"
+        )
+        assert drained[0].read_text(encoding="utf-8") == "ROOT BYTES"
+        # And the drain never feeds the archive convention.
+        assert list(session_dir.glob("compact-summary-2*.txt")) == []
+
 
 class TestTeamCreateStringFreshSession:
     """The fresh-session team-create string must follow the #444 4-sentence prelude."""
