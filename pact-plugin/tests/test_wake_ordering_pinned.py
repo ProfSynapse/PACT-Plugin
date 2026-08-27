@@ -23,7 +23,12 @@ wake/idle delivery-ordering race:
   stall-detection (protocols/pact-agent-stall.md + its byte-mirrored
   region in pact-protocols.md):
     - post-wake / live-intentional_wait idles are delivery-ordering
-      artifacts, not stalls.
+      artifacts, not stalls, and the exemption is bidirectional: an idle
+      crossing a just-sent directive in either order is not stall
+      evidence (a predating tick is a straggler).
+  persona (agents/pact-orchestrator.md):
+    - the §12 crossed-wake summary incl. the predating-straggler outcome
+      ("take no action at all").
 
 PRESENCE pins, not counts. Unlike the Read-Trigger marker phrase (see
 test_read_trigger_precondition_pinned.py EXPECTED_COUNTS), none of these
@@ -207,6 +212,15 @@ PHRASE_PINS = [
     # The anti-acceleration rule: faster sends feed the crossed-message
     # rhythm; patience is the counter.
     (COMPLETION_AUTHORITY, "Never accelerate nudging in response to idle ticks"),
+    # The ambiguity resolution: one durable read settles an unclear
+    # timestamp; the predicate's claim-present outcome and claim-absent
+    # fallthrough are the operative halves of the same bullet.
+    (COMPLETION_AUTHORITY, "one durable read settles it"),
+    (COMPLETION_AUTHORITY, "a claim absent falls through to the postdating procedure"),
+    # The two-idle gate: a single tick is never evidence, and predating
+    # straggler ticks are excluded from the count entirely.
+    (COMPLETION_AUTHORITY, "A single tick is never evidence"),
+    (COMPLETION_AUTHORITY, "a tick that predates your directive send never counts"),
     # The directive-reflection aphorism naming the failure mode the check
     # exists for. Matching is case-sensitive by design; this surface carries
     # the sentence-initial capitalized form.
@@ -219,6 +233,10 @@ PHRASE_PINS = [
     (PROTOCOLS_SSOT, "predates your directive send is a straggler"),
     (PROTOCOLS_SSOT, "Discriminate by direction"),
     (PROTOCOLS_SSOT, "Never accelerate nudging in response to idle ticks"),
+    (PROTOCOLS_SSOT, "one durable read settles it"),
+    (PROTOCOLS_SSOT, "a claim absent falls through to the postdating procedure"),
+    (PROTOCOLS_SSOT, "A single tick is never evidence"),
+    (PROTOCOLS_SSOT, "a tick that predates your directive send never counts"),
     (PROTOCOLS_SSOT, "Delivery is not processing"),
     # --- orchestrator persona ---
     (ORCHESTRATOR, "exactly ONE redundant confirm"),
@@ -226,6 +244,10 @@ PHRASE_PINS = [
     # it, the persona's no-reply-to-idle-turns reflex suppresses the one
     # legitimate redundant confirm.
     (ORCHESTRATOR, "the single redundant confirm after a crossed wake"),
+    # The persona §12 straggler outcome: a predating tick gets NO action at
+    # all — the strongest form, distinct from §5's shorter parenthetical
+    # "take no action" (this pin requires the "at all" tail).
+    (ORCHESTRATOR, "take no action at all"),
     # The replacement content-arrival signal after the Read-Trigger rule was
     # reframed from the retired Monitor-token 4-point form to 3 points.
     (ORCHESTRATOR, "wake-signal SendMessage is the content-arrival signal"),
@@ -242,7 +264,12 @@ PHRASE_PINS = [
     # not stall evidence.
     (AGENT_STALL, "delivery-ordering artifacts, not stalls"),
     (AGENT_STALL, "task-file-mtime plus sustained-silence"),
+    # The stall-exemption clause is bidirectional: an idle crossing a just-
+    # sent directive in EITHER order is exempt from immediate stall
+    # treatment (predating ticks are stragglers, not stall evidence).
+    (AGENT_STALL, "crosses a directive you just sent in either order"),
     (PROTOCOLS_SSOT, "delivery-ordering artifacts, not stalls"),
+    (PROTOCOLS_SSOT, "crosses a directive you just sent in either order"),
 ]
 
 
@@ -399,4 +426,19 @@ def test_retired_inbox_grew_token_absent(doc_path: Path):
 # (terminator guard); deleting a section heading while leaving a fenced
 # code example of the same heading line flips the heading pin RED
 # (fence exclusion). Neither hardening changes the flip-set above.
+#
+# 2026-08-27 addendum (pre-directive idle-straggler cycle): the phrase-pin
+# inventory above grew 33 (authoring) -> 39 (#1525 rule pins: straggler
+# classification, bidirectional opener, anti-acceleration x both mirrored
+# surfaces) -> 50 (remediation cycle 1: ambiguity durable-read + claim-absent
+# fallthrough + two-idle gate + straggler-exclusion x both mirrored surfaces,
+# stall-exemption bidirectional clause x stall + SSOT, persona straggler
+# outcome). Module cases 61 -> 67 -> 78. Counter-test for the #1525 pins
+# (measured 2026-08-27): identical both-surface reword of the straggler
+# phrase — extract/SSOT byte-parity preserved, so the audit gate stays
+# green and this module is the sole red source — flips exactly the 2
+# per-surface pins for that phrase (predicted pre-run; observed exactly
+# 2 failed). All 17 post-authoring phrase pins go RED under a pre-#1525
+# revert: none of their phrases pre-existed on any surface
+# (occurrence-verified at pin time).
 # ---------------------------------------------------------------------------
