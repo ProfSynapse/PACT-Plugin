@@ -15,7 +15,9 @@ wake/idle delivery-ordering race:
   region in protocols/pact-protocols.md, and agents/pact-orchestrator.md):
     - "Crossed-Wake Idles: One Redundant Confirm, Then Stop" — including
       the behavioral non-goal note that synchronous wake/send detection is
-      dead-by-construction.
+      dead-by-construction, and the pre-directive idle-straggler
+      discrimination (a tick predating the directive send is a straggler,
+      never a stall signal).
     - "Directive-Reflection Check" — mid-turn directives verified against
       boundary-message deliverables before acting.
   stall-detection (protocols/pact-agent-stall.md + its byte-mirrored
@@ -194,6 +196,17 @@ PHRASE_PINS = [
     (COMPLETION_AUTHORITY, "boundary-drain: inbox empty"),
     # The evidence bar for escalating an idle to stall diagnosis.
     (COMPLETION_AUTHORITY, "task-file-mtime plus sustained-silence"),
+    # The pre-directive straggler discrimination: an idle tick whose
+    # timestamp predates the lead's directive send is prior-turn state,
+    # not a stall signal.
+    (COMPLETION_AUTHORITY, "predates your directive send is a straggler"),
+    # The bidirectional opener: the section's first sentence must name
+    # BOTH crossing orders, correcting a heading-level scan that reads the
+    # title as postdating-only.
+    (COMPLETION_AUTHORITY, "Discriminate by direction"),
+    # The anti-acceleration rule: faster sends feed the crossed-message
+    # rhythm; patience is the counter.
+    (COMPLETION_AUTHORITY, "Never accelerate nudging in response to idle ticks"),
     # The directive-reflection aphorism naming the failure mode the check
     # exists for. Matching is case-sensitive by design; this surface carries
     # the sentence-initial capitalized form.
@@ -203,6 +216,9 @@ PHRASE_PINS = [
     (PROTOCOLS_SSOT, "in-process and tmux teammateMode"),
     (PROTOCOLS_SSOT, "boundary-drain: inbox empty"),
     (PROTOCOLS_SSOT, "task-file-mtime plus sustained-silence"),
+    (PROTOCOLS_SSOT, "predates your directive send is a straggler"),
+    (PROTOCOLS_SSOT, "Discriminate by direction"),
+    (PROTOCOLS_SSOT, "Never accelerate nudging in response to idle ticks"),
     (PROTOCOLS_SSOT, "Delivery is not processing"),
     # --- orchestrator persona ---
     (ORCHESTRATOR, "exactly ONE redundant confirm"),
