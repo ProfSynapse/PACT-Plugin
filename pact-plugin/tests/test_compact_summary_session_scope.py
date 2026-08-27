@@ -253,3 +253,94 @@ class TestDegradationIsLossFree:
                  "compact_summary": "DEGRADED-NO-PROJ"}
         assert _run_postcompact_main(frame, monkeypatch, tmp_path) == 0
         self._assert_bytes_under_root(tmp_path, "DEGRADED-NO-PROJ")
+
+
+class TestResumeOwnSummaryClause:
+    """Unit arms for ``session_init._resume_own_summary_clause`` — the
+    read-side resume-limb pointer (re-scoped #1520). Canonical name first,
+    NEWEST archive by mtime as fallback, read-only, OSError fail-open to "".
+
+    The canonical branch is unreachable through a full main() run with
+    source="resume" (the own-dir clear archives the live slot before the
+    limbs render — the integration arms in test_session_init.py pin THAT
+    world); it is live only when the clear failed or has not run, which is
+    why these direct-call arms exist. Vacuity discipline: every absence
+    arm's fixture is the positive arm's fixture minus exactly one element.
+    """
+
+    def _clause(self, session_dir):
+        from session_init import _resume_own_summary_clause
+
+        return _resume_own_summary_clause(str(session_dir))
+
+    def test_canonical_present_named_by_absolute_path(self, tmp_path):
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        (session_dir / "compact-summary.txt").write_text(
+            "CANONICAL-BYTES", encoding="utf-8"
+        )
+
+        clause = self._clause(session_dir)
+
+        assert str(session_dir / "compact-summary.txt") in clause
+        assert clause.startswith(
+            " A compact summary from an earlier point of this session is "
+            "available at"
+        )
+        assert clause.endswith(".")
+
+    def test_newest_archive_wins_by_mtime(self, tmp_path):
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        old_archive = session_dir / "compact-summary-2026-01-01T00-00-00.txt"
+        new_archive = session_dir / "compact-summary-2026-08-27T00-00-00.txt"
+        old_archive.write_text("OLD", encoding="utf-8")
+        new_archive.write_text("NEW", encoding="utf-8")
+        # mtime, not the name, decides: force the lexically-older stamp to be
+        # the mtime-newest file.
+        import os
+
+        os.utime(old_archive, (2_000_000_000, 2_000_000_000))
+        os.utime(new_archive, (1_000_000_000, 1_000_000_000))
+
+        clause = self._clause(session_dir)
+
+        assert str(old_archive) in clause
+        assert str(new_archive) not in clause
+
+    def test_empty_dir_no_clause_carrier_control(self, tmp_path):
+        """Absence arm + carrier-present control: the same fixture with a
+        file planted yields a clause (control), without it yields "" — so the
+        empty verdict is the probe's, not a broken fixture."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+
+        assert self._clause(session_dir) == ""
+        (session_dir / "compact-summary.txt").write_text(
+            "CONTROL", encoding="utf-8"
+        )
+        assert self._clause(session_dir) != ""
+
+    def test_missing_dir_no_clause(self, tmp_path):
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        assert self._clause(session_dir) == ""
+
+    def test_empty_session_dir_string_no_clause(self):
+        from session_init import _resume_own_summary_clause
+
+        assert _resume_own_summary_clause("") == ""
+
+    def test_named_path_never_contains_sid_free_root_fragment(self, tmp_path):
+        """Degraded-pointer substring pin keeps discriminating: the clause's
+        named path embeds slug + session id between 'pact-sessions/' and the
+        filename, so the sid-free ROOT-singleton fragment never appears."""
+        session_dir = tmp_path / "pact-sessions" / "my-project" / _SID_A
+        session_dir.mkdir(parents=True)
+        (session_dir / "compact-summary.txt").write_text(
+            "BYTES", encoding="utf-8"
+        )
+
+        clause = self._clause(session_dir)
+
+        assert "pact-sessions/compact-summary.txt" not in clause
+        assert f"pact-sessions/my-project/{_SID_A}/compact-summary.txt" in clause

@@ -859,6 +859,48 @@ def _archive_own_dir_stale_summary(session_id: str, project_dir: str) -> None:
         pass  # Fail-open: keep the bytes; never block session init for cleanup
 
 
+def _resume_own_summary_clause(session_dir: str) -> str:
+    """One sentence naming this session's own compact summary, or "".
+
+    The resume-limb read-side counterpart of the clears above: the summary
+    produced by an earlier compaction of THIS session sits in the session's
+    own dir, and the non-compact clears above have usually already MOVED the
+    live slot to a timestamped archive by the time the source limbs render —
+    so name the canonical file when it still exists, else the NEWEST archive
+    by mtime. Read-only: a probe, never a move.
+
+    Ownership-neutral on purpose ("from an earlier point of this session"):
+    the clause carries information, not an attribution claim, and the
+    session-scoped path it names embeds this session's id.
+
+    Fail-open like the clears: on OSError the sentence is "" (no clause) —
+    a dropped pointer costs a manual rediscovery, a raised one would break
+    session init. Empty session_dir (unknown-* sentinel path) also yields ""
+    — there is no own dir to name.
+    """
+    if not session_dir:
+        return ""
+    try:
+        base = Path(session_dir)
+        canonical = base / COMPACT_SUMMARY_NAME
+        if canonical.exists():
+            target = str(canonical)
+        else:
+            archives = [
+                p for p in base.glob(f"{COMPACT_SUMMARY_ARCHIVE_PREFIX}*.txt")
+                if p.is_file()
+            ]
+            if not archives:
+                return ""
+            target = str(max(archives, key=lambda p: p.stat().st_mtime))
+    except OSError:
+        return ""
+    return (
+        f' A compact summary from an earlier point of this session is '
+        f'available at {target}.'
+    )
+
+
 # ─── PACT Runtime Config injection (SessionStart LLM bridge) ────────────────
 
 # Fixed label table for the injected "PACT Runtime Config" block. This is the
@@ -1724,10 +1766,17 @@ def main():
                     f"message='Context cleared: deliver fresh briefing with current project state.')."
                 ))
             elif source == "resume":
-                # Normal resume: model retains context, team exists
+                # Normal resume: model retains context, team exists. A compact
+                # summary from an earlier compaction of this session may sit
+                # in the session's own dir — usually archived-in-place, since
+                # the non-compact clears above run BEFORE this limb renders.
+                # The pointer sentence is PROBE-CONDITIONAL (empty string when
+                # no summary exists), so the limb stays one contiguous block.
+                _summary_clause = _resume_own_summary_clause(session_dir)
                 context_parts.insert(0, (
                     f'{_team_directive} '
                     f'Check session journal for paused state from /PACT:pause.'
+                    f'{_summary_clause}'
                 ))
             elif source == "startup":
                 # Fresh session: bare directive (no extra recovery guidance)

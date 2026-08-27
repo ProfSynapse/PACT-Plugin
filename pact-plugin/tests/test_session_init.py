@@ -4410,6 +4410,163 @@ class TestSourceAwareness:
         assert '"unknown"' in additional
 
 
+class TestResumeOwnSummaryPointer:
+    """The resume-limb own-dir summary pointer (re-scoped #1520 fix).
+
+    The resume limb names the session's OWN compact summary — canonical
+    filename first, newest archive as fallback — because the interactive
+    capture showed stdin id stays OLD across resume (prev == current; no
+    new-id dir), so the summary is never in a sibling dir; it sits, usually
+    archived-in-place by the non-compact clears that run BEFORE the source
+    limbs render, in this session's own dir.
+
+    Driver world note: `_run_main_with_source` leaves CLAUDE_CONFIG_DIR
+    unset, so the config root is the patched home (tmp_path / ".claude"),
+    and the session dir is
+    ``tmp_path/.claude/pact-sessions/test-project/<_TEST_SESSION_ID>/``.
+
+    Absence-arm pairing: ``test_resume_team_exists_reuse`` above (no summary
+    planted → no clause) is the ABSENCE half of every carrier-present arm
+    here — vacuity discipline, one control per absence cell.
+    """
+
+    _CLAUSE_PHRASE = (
+        "A compact summary from an earlier point of this session is "
+        "available at"
+    )
+    # The sid-free ROOT-singleton fragment: text naming it would point at
+    # the DEGRADED writer's path (no slug, no session id). The session-
+    # scoped path must never render this shape.
+    _SID_FREE_FRAGMENT = "pact-sessions/compact-summary.txt"
+
+    def _session_dir(self, tmp_path) -> Path:
+        return (
+            tmp_path / ".claude" / "pact-sessions" / "test-project"
+            / _TEST_SESSION_ID
+        )
+
+    def _run_resume_with_planted_summary(
+        self, monkeypatch, tmp_path, plant, source="resume",
+    ):
+        """Run main() with a summary planted in the session's own dir FIRST.
+
+        ``plant="canonical"`` writes compact-summary.txt BEFORE main() runs —
+        so the own-dir clear (which fires for every non-compact source before
+        the source limbs render) MOVES it to a timestamped archive by limb
+        time. This is the REAL resumed world: the planted-canonical arm
+        asserts the clause names the ARCHIVE the clear produced, proving the
+        ordering interaction end-to-end. ``plant="none"`` plants the session
+        dir only (carrier-present control substrate).
+        """
+        from session_init import main
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/example/Sites/test-project")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        session_dir = self._session_dir(tmp_path)
+        session_dir.mkdir(parents=True, exist_ok=True)
+        if plant == "canonical":
+            (session_dir / "compact-summary.txt").write_text(
+                "PLANTED SUMMARY BYTES", encoding="utf-8"
+            )
+
+        stdin_data = _stdin_payload(source=source)
+        with patch("session_init.setup_plugin_symlinks", return_value=None), \
+             patch("session_init.ensure_project_memory_md", return_value=None), \
+             patch("session_init.check_pinned_staleness", return_value=None), \
+             patch("session_init.update_session_info", return_value=None), \
+             patch("session_init.get_task_list", return_value=None), \
+             patch("session_init.restore_last_session", return_value=None), \
+             patch("session_init.check_resume_state", return_value=None), \
+             patch("sys.stdin", io.StringIO(stdin_data)), \
+             patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 0
+        output = json.loads(mock_stdout.getvalue())
+        return output["hookSpecificOutput"]["additionalContext"]
+
+    def test_planted_canonical_lands_as_named_archive(self, monkeypatch, tmp_path):
+        """Canonical planted pre-run → the clear archives it → the clause
+        names that ARCHIVE by absolute path (the both-orders integration
+        arm: plant canonical, assert the archive is what gets named)."""
+        additional = self._run_resume_with_planted_summary(
+            monkeypatch, tmp_path, plant="canonical",
+        )
+
+        session_dir = self._session_dir(tmp_path)
+        archives = list(session_dir.glob("compact-summary-*.txt"))
+        assert len(archives) == 1, (
+            f"the own-dir clear should have archived the planted canonical, "
+            f"found {archives}"
+        )
+        assert self._CLAUSE_PHRASE in additional
+        assert str(archives[0]) in additional
+        # The canonical slot itself must NOT be named — it is empty by limb
+        # time, and naming it would send the lead to a vacated path. The
+        # archive name ("compact-summary-<stamp>.txt") does not contain the
+        # canonical filename as a substring, so this is a clean discriminator.
+        assert str(session_dir / "compact-summary.txt") not in additional
+
+    def test_no_summary_no_clause_with_carrier_control(self, monkeypatch, tmp_path):
+        """No summary in the session dir → no clause. Carrier-present
+        control: the limb ITSELF is proven rendered ("paused state" present)
+        and the session dir exists (the probe genuinely ran and found
+        nothing), so the absence is the probe's verdict, not a skipped limb."""
+        additional = self._run_resume_with_planted_summary(
+            monkeypatch, tmp_path, plant="none",
+        )
+
+        assert "paused state" in additional
+        assert self._CLAUSE_PHRASE not in additional
+        assert "compact-summary" not in additional
+        assert self._session_dir(tmp_path).is_dir()
+
+    def test_clause_wording_is_ownership_neutral_and_sid_scoped(
+        self, monkeypatch, tmp_path
+    ):
+        """Wording pin: the clause phrase is the ownership-neutral exact
+        form, and the named path NEVER contains the sid-free root-singleton
+        fragment — the session-scoped path embeds slug + session id between
+        'pact-sessions/' and the filename, so the degraded-pointer substring
+        pin keeps discriminating."""
+        additional = self._run_resume_with_planted_summary(
+            monkeypatch, tmp_path, plant="canonical",
+        )
+
+        assert self._CLAUSE_PHRASE in additional
+        assert self._SID_FREE_FRAGMENT not in additional
+        # Non-ownership: no possessive attribution to a prior/other session.
+        assert "another session" not in additional
+        assert "previous session" not in additional
+
+    def test_compact_source_keeps_compact_limb_naming(self, monkeypatch, tmp_path):
+        """source=compact: the compact limb owns summary naming — the resume
+        pointer phrase must NOT appear (belt-and-suspenders; the compact limb
+        renders its own recovery bullets naming the summary)."""
+        additional = self._run_resume_with_planted_summary(
+            monkeypatch, tmp_path, plant="none", source="compact",
+        )
+
+        assert "After bootstrap, recover session state:" in additional
+        assert self._CLAUSE_PHRASE not in additional
+
+    def test_probe_oserror_fails_open_to_no_clause(self, monkeypatch, tmp_path):
+        """OSError during the probe → no clause, hook continues (fail-open).
+        Driven at the helper seam: Path.exists raising models an unstattable
+        session dir; the helper must return "" rather than raise."""
+        from session_init import _resume_own_summary_clause
+
+        session_dir = self._session_dir(tmp_path)
+        session_dir.mkdir(parents=True)
+        (session_dir / "compact-summary.txt").write_text(
+            "BYTES", encoding="utf-8"
+        )
+        with patch.object(Path, "exists", side_effect=OSError("probe")):
+            assert _resume_own_summary_clause(str(session_dir)) == ""
+
+
 class TestTeamCreateStringFreshSession:
     """The fresh-session team-create string must follow the #444 4-sentence prelude."""
 
