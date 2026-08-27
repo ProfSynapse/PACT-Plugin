@@ -47,7 +47,7 @@ cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .
 
 Inspect the HANDOFF before flipping status. If `metadata.handoff` is missing or empty, do NOT mark the task completed — request the teammate write the HANDOFF first.
 
-### Crossed-Wake Idles: One Redundant Confirm, Then Stop
+### Crossed-Wake Idles: Discriminate by Timestamp Direction
 
 Your wake-signal SendMessage races the teammate's turn-end idle notification: inbox
 files are written asynchronously on delivery, so a teammate's idle notification can

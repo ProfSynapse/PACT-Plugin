@@ -583,7 +583,7 @@ Teammates signal protocol-defined waits via the `intentional_wait` task metadata
   wake-send is a straggler from prior-turn state — take no action at all.
   Discriminate by direction and escalate to stall diagnosis only on
   task-file-mtime plus sustained-silence evidence. Applies under both
-  teammateModes. See [pact-completion-authority §Crossed-Wake Idles](../protocols/pact-completion-authority.md#crossed-wake-idles-one-redundant-confirm-then-stop).
+  teammateModes. See [pact-completion-authority §Crossed-Wake Idles](../protocols/pact-completion-authority.md#crossed-wake-idles-discriminate-by-timestamp-direction).
 - **Drive resolution on your own cadence.** Track outstanding waits across your teammates; send the resolving message (approval / commit confirmation / peer reply routed / user decision) when appropriate.
 - **Reading the flag**: `TaskGet` does NOT surface task metadata. Read the task file directly: `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team}/{taskId}.json" | jq .metadata.intentional_wait`. Fields: `reason`, `expected_resolver`, `since`.
 - **Staleness signal**: the 30-min threshold (`wait_stale` in `shared.intentional_wait`) renders the flag stale for your audit and inspection purposes; the `missed_wake_scan` hook (UserPromptSubmit + SessionStart) re-surfaces tasks idling on `awaiting_lead_completion` past this threshold, while all other reasons have no hook consumer — inspect manually. If a flagged wait has been pending past 30 min, the teammate should re-SET with a fresh `since` — or the wait has hung and you should investigate and drive resolution.

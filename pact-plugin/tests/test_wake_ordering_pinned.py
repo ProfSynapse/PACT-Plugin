@@ -13,7 +13,7 @@ wake/idle delivery-ordering race:
       protocol-boundary message.
   lead-side (protocols/pact-completion-authority.md + its byte-mirrored
   region in protocols/pact-protocols.md, and agents/pact-orchestrator.md):
-    - "Crossed-Wake Idles: One Redundant Confirm, Then Stop" — including
+    - "Crossed-Wake Idles: Discriminate by Timestamp Direction" — including
       the behavioral non-goal note that synchronous wake/send detection is
       dead-by-construction, and the pre-directive idle-straggler
       discrimination (a tick predating the directive send is a straggler,
@@ -116,9 +116,9 @@ HEADING_PINS = [
     (SKILL, "### On Wake: Disk-First Re-Read (Seam-Agnostic)"),
     (SKILL, "### Counter-Confirm Suppression"),
     (SKILL, "## Boundary-Drain Rule"),
-    (COMPLETION_AUTHORITY, "### Crossed-Wake Idles: One Redundant Confirm, Then Stop"),
+    (COMPLETION_AUTHORITY, "### Crossed-Wake Idles: Discriminate by Timestamp Direction"),
     (COMPLETION_AUTHORITY, "### Directive-Reflection Check"),
-    (PROTOCOLS_SSOT, "### Crossed-Wake Idles: One Redundant Confirm, Then Stop"),
+    (PROTOCOLS_SSOT, "### Crossed-Wake Idles: Discriminate by Timestamp Direction"),
     (PROTOCOLS_SSOT, "### Directive-Reflection Check"),
     # The orchestrator persona carries a summary of the lead-side check as
     # an H4 under its Teachback Review section (not a full H3 mirror).
@@ -298,7 +298,7 @@ def test_rule_phrase_present(doc_path: Path, phrase: str):
 # Cross-ref pins — literal anchor slugs (what markdown actually navigates to).
 # ---------------------------------------------------------------------------
 
-CROSSED_WAKE_SLUG = "#crossed-wake-idles-one-redundant-confirm-then-stop"
+CROSSED_WAKE_SLUG = "#crossed-wake-idles-discriminate-by-timestamp-direction"
 DIRECTIVE_REFLECTION_SLUG = "#directive-reflection-check"
 ON_WAKE_SLUG = "#on-wake-disk-first-re-read-seam-agnostic"
 BOUNDARY_DRAIN_SLUG = "#boundary-drain-rule"
@@ -360,7 +360,7 @@ def _github_slug(heading: str) -> str:
 
 
 ANCHOR_INTEGRITY = [
-    ("### Crossed-Wake Idles: One Redundant Confirm, Then Stop", CROSSED_WAKE_SLUG),
+    ("### Crossed-Wake Idles: Discriminate by Timestamp Direction", CROSSED_WAKE_SLUG),
     ("### Directive-Reflection Check", DIRECTIVE_REFLECTION_SLUG),
     ("### On Wake: Disk-First Re-Read (Seam-Agnostic)", ON_WAKE_SLUG),
     ("## Boundary-Drain Rule", BOUNDARY_DRAIN_SLUG),

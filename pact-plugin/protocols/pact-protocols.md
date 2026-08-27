@@ -1490,7 +1490,7 @@ either order (a tick whose timestamp predates your send is a straggler from
 prior-turn state; a tick that postdates it may simply not have been acted on
 yet), or the task carries a live `intentional_wait`: those idles are
 delivery-ordering artifacts, not stalls. Discriminate by direction in
-[pact-completion-authority.md](pact-completion-authority.md#crossed-wake-idles-one-redundant-confirm-then-stop)
+[pact-completion-authority.md](pact-completion-authority.md#crossed-wake-idles-discriminate-by-timestamp-direction)
 — a predating tick takes no action, a postdating tick gets the
 one-redundant-confirm rule — and escalate to stall diagnosis only on
 task-file-mtime plus sustained-silence evidence.
@@ -2160,7 +2160,7 @@ cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .
 
 Inspect the HANDOFF before flipping status. If `metadata.handoff` is missing or empty, do NOT mark the task completed — request the teammate write the HANDOFF first.
 
-### Crossed-Wake Idles: One Redundant Confirm, Then Stop
+### Crossed-Wake Idles: Discriminate by Timestamp Direction
 
 Your wake-signal SendMessage races the teammate's turn-end idle notification: inbox
 files are written asynchronously on delivery, so a teammate's idle notification can

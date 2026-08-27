@@ -11,7 +11,7 @@ either order (a tick whose timestamp predates your send is a straggler from
 prior-turn state; a tick that postdates it may simply not have been acted on
 yet), or the task carries a live `intentional_wait`: those idles are
 delivery-ordering artifacts, not stalls. Discriminate by direction in
-[pact-completion-authority.md](pact-completion-authority.md#crossed-wake-idles-one-redundant-confirm-then-stop)
+[pact-completion-authority.md](pact-completion-authority.md#crossed-wake-idles-discriminate-by-timestamp-direction)
 — a predating tick takes no action, a postdating tick gets the
 one-redundant-confirm rule — and escalate to stall diagnosis only on
 task-file-mtime plus sustained-silence evidence.
