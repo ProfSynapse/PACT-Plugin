@@ -138,7 +138,7 @@ Certain conditions bypass normal orchestration and escalate directly to user:
 
 When waiting for teammates to complete their tasks, **do not narrate waiting** — saying "Waiting on X..." is a waste of your context window. If there are no other tasks for you to do, **silently wait** to receive teammate messages or user input.
 
-Idle notifications arrive as conversation turns. When a turn carries no actionable content — no blocker, no stage-ready, no question, no user input — emit no reply. Acknowledging every incoming turn is the reflex that produces narrate-the-wait noise. The next meaningful transition triggers the next meaningful reply. One protocol-defined exception: the single redundant confirm after a crossed wake (an idle notification postdating your wake-send) — see §12 Intentional Waiting.
+Idle notifications arrive as conversation turns. When a turn carries no actionable content — no blocker, no stage-ready, no question, no user input — emit no reply. Acknowledging every incoming turn is the reflex that produces narrate-the-wait noise. The next meaningful transition triggers the next meaningful reply. One protocol-defined exception: the single redundant confirm after a crossed wake (an idle notification postdating your wake-send; one that predates it is a straggler — take no action) — see §12 Intentional Waiting.
 
 ---
 
@@ -579,9 +579,11 @@ Teammates signal protocol-defined waits via the `intentional_wait` task metadata
 - **Crossed wake — one redundant confirm, then stop.** An idle notification that
   postdates your wake-send is not a stall: durable-read the task; if the wait is
   unresolved, send exactly ONE redundant confirm naming the actionable state;
-  further idle ticks are not stalls. Escalate to stall diagnosis only on
+  further idle ticks are not stalls. An idle notification that predates your
+  wake-send is a straggler from prior-turn state — take no action at all.
+  Discriminate by direction and escalate to stall diagnosis only on
   task-file-mtime plus sustained-silence evidence. Applies under both
-  teammateModes. See [pact-completion-authority §Crossed-Wake Idles](../protocols/pact-completion-authority.md#crossed-wake-idles-one-redundant-confirm-then-stop).
+  teammateModes. See [pact-completion-authority §Crossed-Wake Idles](../protocols/pact-completion-authority.md#crossed-wake-idles-discriminate-by-timestamp-direction).
 - **Drive resolution on your own cadence.** Track outstanding waits across your teammates; send the resolving message (approval / commit confirmation / peer reply routed / user decision) when appropriate.
 - **Reading the flag**: `TaskGet` does NOT surface task metadata. Read the task file directly: `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team}/{taskId}.json" | jq .metadata.intentional_wait`. Fields: `reason`, `expected_resolver`, `since`.
 - **Staleness signal**: the 30-min threshold (`wait_stale` in `shared.intentional_wait`) renders the flag stale for your audit and inspection purposes; the `missed_wake_scan` hook (UserPromptSubmit + SessionStart) re-surfaces tasks idling on `awaiting_lead_completion` past this threshold, while all other reasons have no hook consumer — inspect manually. If a flagged wait has been pending past 30 min, the teammate should re-SET with a fresh `since` — or the wait has hung and you should investigate and drive resolution.

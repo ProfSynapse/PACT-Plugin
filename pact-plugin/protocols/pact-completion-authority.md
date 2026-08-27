@@ -47,7 +47,7 @@ cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .
 
 Inspect the HANDOFF before flipping status. If `metadata.handoff` is missing or empty, do NOT mark the task completed — request the teammate write the HANDOFF first.
 
-### Crossed-Wake Idles: One Redundant Confirm, Then Stop
+### Crossed-Wake Idles: Discriminate by Timestamp Direction
 
 Your wake-signal SendMessage races the teammate's turn-end idle notification: inbox
 files are written asynchronously on delivery, so a teammate's idle notification can
@@ -57,6 +57,33 @@ commit confirmation, rejection — and identically under in-process and tmux
 teammateMode: the race is delivery-ordering, not mode-specific. The idle
 notification alone cannot distinguish "idle because my wake has not landed yet"
 from "idle because the teammate stalled".
+
+Discriminate by direction — the race crosses your directive in BOTH orders.
+An idle notification from a teammate you have just directed (any wake,
+confirm, or other send that resolves the teammate's wait) either predates
+your directive send or postdates it, and the two cases get different
+handling:
+
+- **A notification that predates your directive send is a straggler.** The
+  idle event fires at the end of the teammate's turn, so a tick generated
+  before your directive was sent is a late delivery of prior-turn state.
+  Take no action and proceed — it is not a stall signal at all.
+- **On ambiguous timestamps, one durable read settles it.** Take the durable
+  read of step 1 below (raw JSON — `TaskGet` is metadata-blind) and apply its
+  predicate: a claim present means the teammate is proceeding on the
+  directive; a claim absent falls through to the postdating procedure (one
+  redundant confirm, then stop).
+- **Two idle ticks before any stall diagnosis.** A single tick is never
+  evidence, and a tick that predates your directive send never counts —
+  count only ticks that postdate the send or remain ambiguous. Escalate
+  only on task-file-mtime plus sustained-silence
+  evidence (see [pact-agent-stall.md](pact-agent-stall.md)).
+- **Never accelerate nudging in response to idle ticks.** Patience is the
+  counter: faster sends produce the crossed-message rhythm, they do not
+  resolve it.
+
+When the notification postdates your directive send, the teammate may not
+have acted on it yet — apply the redundant-confirm procedure:
 
 1. **On an idle notification that postdates your wake-send**, take a durable read
    of the teammate's task (raw JSON — `TaskGet` is metadata-blind). If the read

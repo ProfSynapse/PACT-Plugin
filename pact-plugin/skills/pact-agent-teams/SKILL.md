@@ -416,7 +416,7 @@ This rule generalizes the wake-then-raw-read flow of §On Rejection to every wai
 resolution, and it is what makes the team-lead's wake message redundant-by-design:
 ordering-immune at every seam, with no hook required (a synchronous wake-detection
 hook cannot exist — see the non-goal note in
-[pact-completion-authority](../../protocols/pact-completion-authority.md#crossed-wake-idles-one-redundant-confirm-then-stop)).
+[pact-completion-authority](../../protocols/pact-completion-authority.md#crossed-wake-idles-discriminate-by-timestamp-direction)).
 The no-poll discipline is unchanged: you still cannot poll while idle; this rule
 fires ON wake, whatever woke you.
 
