@@ -38,7 +38,7 @@ A reply to the user that contains content the team-lead needs to act on (a block
 1. Check `TaskList` for tasks assigned to you (by your name)
 2. Claim your assigned task: `TaskUpdate(taskId, status="in_progress")`
 3. Read the task description — it contains your full mission (CONTEXT, MISSION, INSTRUCTIONS, GUIDELINES). If upstream tasks are referenced, read them via `TaskGet`.
-4. **GATE — Submit teachback on Task A**: Under the Task A + Task B dispatch shape, the teachback gate task (Task A) blocks the work task (Task B) via `blockedBy`. Store your teachback in `metadata.teachback_submit` on Task A per the [pact-teachback](../pact-teachback/SKILL.md) skill, **notify the team-lead via `SendMessage`**, SET `intentional_wait{reason=awaiting_lead_completion}`, and idle. **Ordering invariant**: metadata write FIRST → `SendMessage` SECOND → `intentional_wait` SET THIRD (load-bearing; see [pact-teachback §Action: store teachback now](../pact-teachback/SKILL.md#action-store-teachback-now) for rationale). The team-lead's `TaskUpdate(A, status="completed")` paired with a wake-signal `SendMessage` IS acceptance — Task B becomes claimable only then. The teachback notify is a protocol-boundary message — run the [Boundary-Drain Rule](#boundary-drain-rule) before composing it: a scope change that crossed your in-flight turn must be reflected in the teachback you submit, not discovered after acceptance.
+4. **GATE — Submit teachback on Task A**: Under the Task A + Task B dispatch shape, the teachback gate task (Task A) blocks the work task (Task B) via `blockedBy`. Store your teachback in `metadata.teachback_submit` on Task A per the [pact-teachback](../pact-teachback/SKILL.md) skill, **notify the team-lead via `SendMessage` carrying the canonical payload (pact-teachback Step 2)**, SET `intentional_wait{reason=awaiting_lead_completion}`, and idle. **Ordering invariant**: metadata write FIRST → `SendMessage` SECOND → `intentional_wait` SET THIRD (load-bearing; see [pact-teachback §Action: store teachback now](../pact-teachback/SKILL.md#action-store-teachback-now) for rationale). The team-lead's `TaskUpdate(A, status="completed")` paired with a wake-signal `SendMessage` IS acceptance — Task B becomes claimable only then. The teachback notify is a protocol-boundary message — run the [Boundary-Drain Rule](#boundary-drain-rule) before composing it: a scope change that crossed your in-flight turn must be reflected in the teachback you submit, not discovered after acceptance.
    - **DO NOT** call `Edit`, `Write`, or `Bash` for implementation work before storing your teachback
    - See [Teachback](#teachback-conversation-verification) below for the full skill reference
 5. **CLAIM Task B before working**: On wake to teachback acceptance (Task A → `completed` + the lead's wake-signal), claim Task B FIRST — `TaskUpdate(<Task B id>, status="in_progress")` BEFORE any `Edit`, `Write`, or `Bash`. Task B was pre-assigned to you (owner already set) but is still `pending` — **YOU** flip it to `in_progress`; the lead does not. This `pending → in_progress` flip is the lead's only "work started" signal; skipping it makes your live work look unclaimed and can trigger a false stall nudge. The durable Task A read is authoritative: if Task A already shows `completed` on disk, claim Task B and proceed even if the wake-signal message is not yet visible — wake messages can trail the status flip (see [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic)).
@@ -179,7 +179,7 @@ When your work is done, you store the HANDOFF and remain `in_progress`. **You do
 
 If ANY precondition is unmet, KEEP WORKING. Do not write `metadata.handoff` to "reserve a spot" or "draft the handoff while tests run." The handoff metadata write is a commitment that the work IS done, NOT a wrap-up artifact you build in parallel with finishing.
 
-> **Ordering invariant** (audit anchor): the three steps below MUST execute in the order Step 1 → Step 2 → Step 3 — `metadata.handoff` write FIRST, then notify `SendMessage` to team-lead, then `intentional_wait` SET. This ordering is load-bearing for the team-lead's [Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition): the lead must wait for teammate's wake-signal `SendMessage` before treating the raw `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/.../{taskId}.json" | jq .metadata.handoff` read as authoritative, but the `SendMessage` is only safe to send AFTER the metadata write has landed on disk. Reversing Step 1 and Step 2 produces false-empty raw reads on the lead side that have triggered false-positive HANDOFF rejection cycles. Reversing Step 2 and Step 3 (idle before `SendMessage`) silently strands the lead — they will never see the wake-signal because you went idle without sending it. Editors of this skill: do NOT re-order these steps.
+> **Ordering invariant** (audit anchor): the three steps below MUST execute in the order Step 1 → Step 2 → Step 3 — `metadata.handoff` write FIRST, then notify `SendMessage` to team-lead, then `intentional_wait` SET. This ordering is load-bearing for the team-lead's [Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition): the lead must wait for teammate's wake-signal `SendMessage` before treating the raw `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/.../{taskId}.json" | jq .metadata.handoff` read as authoritative, but the `SendMessage` is only safe to send AFTER the metadata write has landed on disk. The write persists the durable copy the harvest and recovery paths read; the notify now also carries that payload verbatim, so the lead's acceptance decision keys on the message and the disk read becomes their deferred audit. Reversing Step 1 and Step 2 produces false-empty raw reads on the lead side that have triggered false-positive HANDOFF rejection cycles. Reversing Step 2 and Step 3 (idle before `SendMessage`) silently strands the lead — they will never see the wake-signal because you went idle without sending it. Editors of this skill: do NOT re-order these steps.
 
 1. **Store HANDOFF in task metadata**:
    ```
@@ -192,14 +192,17 @@ If ANY precondition is unmet, KEEP WORKING. Do not write `metadata.handoff` to "
      "open_questions": [...]
    }})
    ```
-   If `TaskUpdate` fails, include the full HANDOFF in your `SendMessage` content as a fallback.
+   If the metadata write fails, still send the payload-carrying notify and state the write failure in it; the lead treats the missing disk copy as an integrity finding, never as a reason to skip your submission.
 
 2. **Notify the team-lead**:
    ```
    SendMessage(to="team-lead",
-     message="[{sender}→team-lead] Task complete. [1-2 sentences: what was done + any HIGH uncertainties] boundary-drain: [inbox empty | reconciled <n> directive(s) — <one-line summary>]",
+     message="[{sender}→team-lead] Task complete. HANDOFF-PAYLOAD-BEGIN produced: [<files/deliverables>] decisions: [<key decisions>] reasoning_chain: <chain, when written> uncertainty: [<prioritized items>] integration: [<integration notes>] open_questions: [<questions>] HANDOFF-PAYLOAD-END The payload above is a verbatim copy of metadata.handoff. boundary-drain: [inbox empty | reconciled <n> directive(s) — <one-line summary>]",
      summary="Task complete: [brief]")
    ```
+
+   > The payload block carries every field you wrote to `metadata.handoff`, verbatim, single-line; omit fields you did not write. The `summary` never carries payload content (it truncates at 200 chars).
+   > Keep the payload under 5KB — the metadata write silently truncates oversize payloads.
 
 3. **SET `intentional_wait` and idle**:
    ```
@@ -210,7 +213,7 @@ If ANY precondition is unmet, KEEP WORKING. Do not write `metadata.handoff` to "
    }})
    ```
 
-4. **Idle.** The team-lead reads `metadata.handoff`, judges acceptance, and either:
+4. **Idle.** The team-lead judges acceptance on the payload your notify carries (the disk copy is their deferred audit), and either:
    - **Accepts**: `TaskUpdate(taskId, status="completed")` plus a wake-signal `SendMessage`. On wake, CLEAR `intentional_wait` and check `TaskList` for follow-up work.
    - **Rejects**: writes `metadata.handoff_rejection = {reason, corrections, since, revision_number}` plus a wake-signal `SendMessage`. Follow §On Rejection below.
 
@@ -222,7 +225,7 @@ After wake on acceptance, check `TaskList` for unblocked tasks you OWN or can cl
 
 ## On Rejection (Wake-Signal Receipt)
 
-If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `SendMessage`. Your task remains `in_progress`; the team-lead has written rejection details to metadata. This wake-then-raw-read flow is one instance of the seam-agnostic rule in [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic); the residual-race mitigation there (never act on a single empty read) applies to the rejection-metadata read below.
+If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `SendMessage` carrying the rejection payload verbatim — read the corrections in the message; the disk copy is confirmation, not the primary. Your task remains `in_progress`; the team-lead has also written rejection details to metadata. This wake-then-confirm flow is the content-carrying class of the seam-agnostic rule in [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic) (pure-signal wakes keep disk-first authority there); the residual-race mitigation there (never act on a single empty read) applies to the confirmation read below.
 
 **On wake**:
 
@@ -231,7 +234,7 @@ If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `Sen
    TaskUpdate(taskId, metadata={"intentional_wait": None})
    ```
 
-2. **Read the rejection metadata** via raw JSON (`TaskGet` does NOT surface `metadata.*` keys — see [pact-completion-authority §`TaskGet` metadata-blindness reminder](../../protocols/pact-completion-authority.md#completion-authority) and the symmetric rejection-receipt rule in [§Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition)):
+2. **Read the rejection payload the wake-signal `SendMessage` carries** — the field-labeled block between `REJECTION-PAYLOAD-BEGIN` and `REJECTION-PAYLOAD-END`: `reason`, `corrections`, `since`, `revision_number`. The disk copy is confirmation, not the primary; confirm via raw JSON when you need it (`TaskGet` does NOT surface `metadata.*` keys — see [pact-completion-authority §`TaskGet` metadata-blindness reminder](../../protocols/pact-completion-authority.md#completion-authority) and the symmetric rejection-receipt rule in [§Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition)):
    - For Task A (teachback): `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.teachback_rejection`
    - For Task B (work): `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff_rejection`
 
@@ -243,7 +246,7 @@ If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `Sen
 
 4. **Re-submit on the SAME task** (do NOT create a new task):
    - Increment `metadata.revision_number`. The team-lead writes `revision_number=1` in the rejection record. On your first revision, increment to `2`. On each subsequent revision, increment again. This count is the rejection-cycle audit trail — it feeds the imPACT META-BLOCK 3-cycle signal, not harvest routing. It does NOT gate whether your revised content is preserved: the team-lead's acceptance (the single completion) emits whatever `metadata.handoff` holds at that moment, so the revised content reaches the journal regardless of the count.
-   - `SendMessage` the team-lead: `"[{sender}→team-lead] Revised teachback/HANDOFF on Task #{id}. See metadata.{teachback_submit|handoff} (revision {N})."`
+   - `SendMessage` the team-lead carrying the revised payload verbatim in the same form as the first submission: `"[{sender}→team-lead] Revised teachback/HANDOFF on Task #{id} (revision {N})."` followed by the payload block — `pact-teachback` Step 2 for a teachback, On Completion Step 2 for a HANDOFF. The team-lead accepts the revision on the message-carried payload; the disk read is their deferred audit.
    - Re-SET `intentional_wait{reason=awaiting_lead_completion, since=<fresh canonical_since() output>}`.
    - Idle.
 
@@ -304,7 +307,7 @@ output (even zero-content) blocks the next inbox delivery.
 - **Idle-waiting for a protocol-defined resolution** (teachback, team-lead commit,
   peer reply, user decision)? Use the `intentional_wait` task metadata per
   the Intentional Waiting section below.
-- **Awaiting lead completion?** SET `intentional_wait{reason=awaiting_lead_completion, expected_resolver=lead, since=<canonical_since() output>}` after storing your HANDOFF or teachback metadata AND sending the notify `SendMessage` to the team-lead. **Ordering invariant** (audit anchor, lead-side mirror): metadata write FIRST → notify `SendMessage` SECOND → intentional_wait SET THIRD. This ordering exists because the team-lead must wait for teammate's wake-signal `SendMessage` before treating their raw `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/.../{id}.json" | jq .metadata.{handoff,teachback_submit}` read as authoritative — see [pact-completion-authority §Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition). Sending the `SendMessage` before the metadata write lands produces false-empty raw reads on the lead side; going idle before the `SendMessage` strands the lead silently. Do NOT poll `TaskList` while idle — you cannot self-wake to do so. The team-lead's wake-signal `SendMessage` is the resolver.
+- **Awaiting lead completion?** SET `intentional_wait{reason=awaiting_lead_completion, expected_resolver=lead, since=<canonical_since() output>}` after storing your HANDOFF or teachback metadata AND sending the notify `SendMessage` to the team-lead. **Ordering invariant** (audit anchor, lead-side mirror): metadata write FIRST → notify `SendMessage` SECOND → intentional_wait SET THIRD. This ordering exists because the team-lead must wait for teammate's wake-signal `SendMessage` before treating their raw `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/.../{id}.json" | jq .metadata.{handoff,teachback_submit}` read as authoritative — see [pact-completion-authority §Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition). Sending the `SendMessage` before the metadata write lands produces false-empty raw reads on the lead side; going idle before the `SendMessage` strands the lead silently. Do NOT poll `TaskList` while idle — you cannot self-wake to do so. The team-lead's wake-signal `SendMessage` is the resolver. Because your notify carries the payload, that raw read is now the lead's deferred audit, not their acceptance input.
 - **Genuinely stuck**? Follow the On Blocker section.
 
 If you have nothing to say that advances the work, say nothing.
@@ -334,8 +337,9 @@ in a way the team-lead must act on; when the fresh read shows exactly the state 
 team-lead themselves resolved, the report carries zero information — suppress it.
 
 This suppression rule and [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic)
-are complements, not substitutes: disk-first fixes how you INTERPRET inbound
-messages; suppression stops stale OUTBOUND noise. Applying one does not discharge
+are complements, not substitutes: disk-first governs how you INTERPRET inbound
+signal messages (content-carrying messages are read from the message itself);
+suppression stops stale OUTBOUND noise. Applying one does not discharge
 the other.
 
 ## Intentional Waiting
@@ -382,43 +386,56 @@ could have crossed a turn you had in flight. It applies identically under in-pro
 and tmux teammateMode: the race is message-delivery ordering, not mode-specific.
 Inbox delivery is asynchronous, so a wake message can trail the durable write it
 describes, arrive after an unrelated message, or describe a scope your in-flight
-work predates.
+work predates. Wakes come in two classes: a PURE-SIGNAL wake (acceptance, commit
+confirmation, crossed ping) reports that durable state changed; a CONTENT-CARRYING
+wake (rejection corrections, a payload-carrying notify) delivers its content in the
+message body itself.
 
-1. **Re-read durable state FIRST.** Before acting on any wake-message content,
-   re-read your gate/work tasks from disk — `status`, `blockedBy`, current
-   description, and the relevant metadata keys (`teachback_rejection`,
-   `handoff_rejection`, or whichever key your wait names). Use the raw task file
-   (`{taskId}.json` in the `Task list:` directory the platform names in your
-   context, via the `Read` tool) — `TaskGet` does not surface metadata.
-2. **Durable state is authoritative; message content is advisory confirmation.** If
-   durable state shows your wait resolved — the gate task `completed`, a commit
-   confirmation implied by task state, a rejection record present — CLEAR the wait
-   and proceed immediately, even if no wake message describing the resolution is
-   visible yet. Do not wait for the message that durable state has already made
-   redundant.
-3. **If durable state shows the wait unresolved, keep waiting.** A wake that
+1. **Classify the wake, then read accordingly.** On a pure-signal wake, re-read
+   durable state FIRST, before acting on any wake-message content — `status`,
+   `blockedBy`, current description, and the relevant metadata keys
+   (`teachback_rejection`, `handoff_rejection`, or whichever key your wait names).
+   Use the raw task file (`{taskId}.json` in the `Task list:` directory the platform
+   names in your context, via the `Read` tool) — `TaskGet` does not surface metadata.
+   On a content-carrying wake, read the content from the message — the field-labeled
+   payload block between its delimiters — and use the same disk read as
+   confirmation, not as the primary.
+2. **Durable state is authoritative; message content is advisory confirmation — for
+   signal wakes.** If durable state shows your wait resolved — the gate task
+   `completed`, a commit confirmation implied by task state, a rejection record
+   present — CLEAR the wait and proceed immediately, even if no wake message
+   describing the resolution is visible yet. Do not wait for the message that
+   durable state has already made redundant. For a content-carrying wake the
+   authority inverts: the message is the reading copy for the content it carries,
+   and the disk copy confirms it.
+3. **If durable state shows the wait unresolved, keep waiting — for signal wakes.** A wake that
    resolves nothing (a crossed or redundant message, a peer ping) gets no reply —
    return to idle silently per §Idle Discipline and §Counter-Confirm Suppression.
-   If the wake ASSERTS a resolution the disk does not yet show (e.g., "rejected —
-   see metadata" but the metadata read returns empty), the durable write may still
-   be in flight: re-read once after a brief pause; never act on a single empty
+   If the wake ASSERTS a resolution the disk does not yet show (e.g., the wake
+   reports a rejection but the metadata read returns empty), the durable write may
+   still be in flight: re-read once after a brief pause; never act on a single empty
    read; if still empty, keep waiting — the team-lead's follow-up confirm covers
-   the crossed case.
+   the crossed case. On a content-carrying wake that mitigation governs the
+   CONFIRMATION read, not the content read — act on the message-carried content; an
+   empty or diverging confirmation read is a discrepancy to surface, never a reason
+   to discard content you have already received.
 4. **Crossed mid-turn directives reconcile the same way.** If an inbound directive
    (a scope change, a correction) could have crossed work you had in flight — your
    teachback or HANDOFF was being composed when it was sent — re-read the task's
    CURRENT description and metadata from disk and act on the current state, not on
-   the state your in-flight work assumed. If your already-submitted deliverable
-   reflects the pre-directive scope, revise it on the same task without waiting to
-   be asked.
+   the state your in-flight work assumed (a directive carrying its content in the
+   message is read from the message; the disk re-read confirms it). If your
+   already-submitted deliverable reflects the pre-directive scope, revise it on the
+   same task without waiting to be asked.
 
-This rule generalizes the wake-then-raw-read flow of §On Rejection to every wait
+This rule generalizes the wake-then-read flow of §On Rejection to every wait
 resolution, and it is what makes the team-lead's wake message redundant-by-design:
 ordering-immune at every seam, with no hook required (a synchronous wake-detection
 hook cannot exist — see the non-goal note in
 [pact-completion-authority](../../protocols/pact-completion-authority.md#crossed-wake-idles-discriminate-by-timestamp-direction)).
-The no-poll discipline is unchanged: you still cannot poll while idle; this rule
-fires ON wake, whatever woke you.
+A content-carrying wake's message is not redundant — it is the content channel —
+and its disk read runs as confirmation. The no-poll discipline is unchanged: you
+still cannot poll while idle; this rule fires ON wake, whatever woke you.
 
 ### Vocabulary
 
@@ -539,6 +556,6 @@ When you receive a `shutdown_request`:
 
 ## Completion Integrity (SACROSANCT)
 
-Only report work as ready for team-lead-review if you actually performed the changes. Never fabricate a completion HANDOFF; the team-lead inspects `metadata.handoff` before transitioning status to `completed`. If files don't exist, can't be edited, or tools fail, report a BLOCKER via `SendMessage` — never invent results.
+Only report work as ready for team-lead-review if you actually performed the changes. Never fabricate a completion HANDOFF; the team-lead accepts on the payload your notify carries and audits the disk copy deferred, before transitioning status to `completed`. If files don't exist, can't be edited, or tools fail, report a BLOCKER via `SendMessage` — never invent results.
 
 **Do not create git commits.** All staging and committing is the team-lead's responsibility. Your job ends at the HANDOFF.

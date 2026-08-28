@@ -5,8 +5,11 @@ Pins the reader-facing instruction surfaces that teach both sides of the
 wake/idle delivery-ordering race:
 
   teammate-side (skills/pact-agent-teams/SKILL.md):
-    - "On Wake: Disk-First Re-Read (Seam-Agnostic)" — durable state is
-      authoritative on every wake; message content is advisory.
+    - "On Wake: Disk-First Re-Read (Seam-Agnostic)" — wake classes split
+      the reading authority: pure-signal wakes read durable state first
+      (durable state authoritative, message content advisory — scoped to
+      signal wakes); content-carrying wakes read the field-labeled
+      payload from the message body, with the disk read as confirmation.
     - "Counter-Confirm Suppression" — fresh disk read before any
       state-clarification message; suppress when already resolved.
     - "Boundary-Drain Rule" — inbox drain + drain report before every
@@ -174,8 +177,26 @@ def test_rule_heading_present(doc_path: Path, heading: str):
 
 PHRASE_PINS = [
     # --- teammate-side SKILL ---
-    # The load-bearing interpretation rule for every wake.
+    # The load-bearing interpretation rule for every wake. The F7 wake-
+    # class split SCOPED this sentence to signal wakes; the short form
+    # stays as the vocabulary pin, and the scoped long form below is the
+    # anchored companion that catches an unscope-revert (a regression
+    # that restores the unscoped sentence keeps this short pin green).
     (SKILL, "Durable state is authoritative"),
+    # The F7 scoping marker itself: point 2's authority rule now names
+    # its class. 1x-unique (premise-verified); deleting the scope tail
+    # or reverting the scoping flips exactly this case.
+    (SKILL, "Durable state is authoritative; message content is advisory confirmation — for signal wakes"),
+    # The F7 class inversion — the sentence that resolves the authority
+    # contradiction with §On Rejection: for content-carrying wakes the
+    # message is the reading copy and the disk confirms. Without this
+    # witness the section could revert to disk-first-everywhere while
+    # the (green) short vocabulary pin above claims coverage.
+    (SKILL, "For a content-carrying wake the authority inverts: the message is the reading copy for the content it carries, and the disk copy confirms it"),
+    # The F7 class taxonomy defining the two wake classes; the scoping
+    # and inversion pins above are meaningless without their terms
+    # defined. Deleting the taxonomy alone flips exactly this case.
+    (SKILL, "a CONTENT-CARRYING wake (rejection corrections, a payload-carrying notify) delivers its content in the message body itself"),
     # Residual-race mitigation: a wake asserting a resolution the disk does
     # not yet show gets a re-read, never a single-empty-read action.
     (SKILL, "never act on a single empty read"),
@@ -206,7 +227,9 @@ PHRASE_PINS = [
     # The shorter "never act on a single empty read" pin above is ALSO
     # satisfied by the On-Rejection parenthetical cross-ref, so deleting
     # the rule home alone would keep that pin green; this longer contiguous
-    # span exists only at the rule home.
+    # span exists only at the rule home. (Hardening-audit re-verification:
+    # rewording the rule home leaves the short pin green via the cross-ref
+    # decoy and flips exactly this companion — measured, unchanged.)
     (SKILL, "re-read once after a brief pause; never act on a single empty read"),
     # The crossed mid-turn directive rule: an already-submitted deliverable
     # that reflects pre-directive scope is revised proactively, not on
@@ -221,6 +244,13 @@ PHRASE_PINS = [
     (COMPLETION_AUTHORITY, "in-process and tmux teammateMode"),
     (COMPLETION_AUTHORITY, "boundary-drain: inbox empty"),
     # The evidence bar for escalating an idle to stall diagnosis.
+    # (Hardening-audit census: 2x on the extract — the escalation bar and
+    # the stall-definition parenthetical, both governing — and 3x on the
+    # SSOT, whose extra occurrence is the agent-stall mirrored region.
+    # Deleting both extract-region occurrences lockstep leaves the SSOT
+    # case green via the stall-region decoy while the extract case flips;
+    # compensated by the extract pin + the byte-parity gate. Measured,
+    # leave as designed.)
     (COMPLETION_AUTHORITY, "task-file-mtime plus sustained-silence"),
     # The pre-directive straggler discrimination: an idle tick whose
     # timestamp predates the lead's directive send is prior-turn state,
@@ -239,7 +269,12 @@ PHRASE_PINS = [
     (COMPLETION_AUTHORITY, "On an idle notification that postdates your directive send"),
     # The bidirectional opener: the section's first sentence must name
     # BOTH crossing orders, correcting a heading-level scan that reads the
-    # title as postdating-only.
+    # title as postdating-only. (Hardening-audit census: on the SSOT the
+    # phrase recurs 2x — the mirrored opener and the agent-stall region's
+    # cross-ref — so the SSOT case alone stays green under a lockstep
+    # opener reword; that decoy is compensated: the completion-authority
+    # case is 1x-unique and flips, and the byte-parity gate forces any
+    # extract edit to mirror. Measured, leave as designed.)
     (COMPLETION_AUTHORITY, "Discriminate by direction"),
     # The anti-acceleration rule: faster sends feed the crossed-message
     # rhythm; patience is the counter.

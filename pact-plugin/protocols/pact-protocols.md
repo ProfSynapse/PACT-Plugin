@@ -408,8 +408,8 @@ When a downstream agent receives an upstream handoff (via `TaskGet`), their firs
 1. Agent dispatched as a Task A (TEACHBACK gate) + Task B (primary work, blockedBy=[A]) pair
 2. Agent claims Task A, reads the upstream handoff/mission via `TaskGet`
 3. Agent writes its teachback to Task A metadata (`metadata.teachback_submit`, 5 canonical
-   fields) and sends a wake-signal `SendMessage` to team-lead:
-   "[{sender}→team-lead] Teachback submitted on Task #A. Idling on awaiting_lead_completion."
+   fields) and sends a wake-signal `SendMessage` carrying the canonical payload verbatim
+   (per pact-teachback Step 2).
 4. Agent SETs `intentional_wait{reason=awaiting_lead_completion}` and idles — it does NOT
    begin Task B (blocking)
 5. Team-lead reviews the teachback. On acceptance:
@@ -1265,7 +1265,7 @@ Feature Task (created by orchestrator)
 | Phase | Orchestrator | Orchestrator | Active during phase |
 | Agent | Orchestrator | Specialist (claim-only); Orchestrator (completion authority) | Specialist claims via `TaskUpdate(status="in_progress")`; orchestrator completes via `TaskUpdate(status="completed")` paired with a wake-signal `SendMessage` |
 
-Under Agent Teams, specialists claim agent tasks (`pending → in_progress`) and store HANDOFFs in `metadata.handoff`, but the orchestrator transitions agent tasks to `completed` after inspecting the HANDOFF. Two narrow carve-outs (signal-tasks; secretary session briefing + memory-save) self-complete; see [Completion Authority](pact-completion-authority.md#completion-authority).
+Under Agent Teams, specialists claim agent tasks (`pending → in_progress`) and store HANDOFFs in `metadata.handoff`, but the orchestrator transitions agent tasks to `completed` after accepting the HANDOFF payload the notify `SendMessage` carries (the raw read is the deferred audit). Two narrow carve-outs (signal-tasks; secretary session briefing + memory-save) self-complete; see [Completion Authority](pact-completion-authority.md#completion-authority).
 
 ### Task States
 
@@ -2132,7 +2132,7 @@ Both calls are **required**, `TaskUpdate` FIRST — the wake-signal `SendMessage
 ### Rejection — two-call atomic pair (BOTH required, `TaskUpdate` FIRST)
 
 1. `TaskUpdate(taskId, metadata={"teachback_rejection": {...}})` (Task A) OR `TaskUpdate(taskId, metadata={"handoff_rejection": {...}})` (Task B) — payload `{reason, corrections, since, revision_number}`
-2. `SendMessage(to="<teammate>", "[team-lead→<teammate>] Rejected on Task #<id>. See metadata.{teachback,handoff}_rejection. Revise.", summary="Rejected; revise")` — wakes the teammate so they read the corrections
+2. `SendMessage(to="<teammate>", "[team-lead→<teammate>] Rejected on Task #<id>. REJECTION-PAYLOAD-BEGIN reason: <one-line summary> corrections: [<correction 1>, <correction 2>, ...] since: <canonical_since() output> revision_number: <N> REJECTION-PAYLOAD-END The payload is a verbatim copy of metadata.{teachback,handoff}_rejection. Revise.", summary="Rejected; revise")` — wakes the teammate; the corrections they act on ride the message
 
 Both calls are **required**, and the ordering matches Acceptance for the same reason: the wake-signal `SendMessage` is what un-idles the teammate, who cannot self-observe the rejection metadata on a pull-only wait. If the `TaskUpdate` succeeds and the `SendMessage` errors, retry the send on the tool error. Skipping the `SendMessage` leaves the teammate idle on stale `awaiting_lead_completion`, never seeing the corrections — symmetric failure to skipping wake on acceptance. The teammate's `intentional_wait` does not auto-clear when you write rejection metadata; only the wake-signal triggers their CLEAR-and-revise flow. **3+ rejection cycles** on the same task is an imPACT META-BLOCK signal.
 
@@ -2159,7 +2159,7 @@ The canonical predicate `is_self_complete_exempt(task, team_name)` in `shared/in
 cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff
 ```
 
-Inspect the HANDOFF before flipping status. If `metadata.handoff` is missing or empty, do NOT mark the task completed — request the teammate write the HANDOFF first.
+Accept or reject on the payload carried by the teammate's notify `SendMessage` — its arrival is demonstrable; it is the wake. The raw metadata read is a DEFERRED audit: run it at your next turn boundary, before acting on that teammate's next submission. A disk copy that is missing or diverges from the message copy is a data-integrity finding — record it per the Read-Trigger Precondition's deferred-audit point and, when the disk copy is absent, repair it by re-writing the payload to metadata from the message copy while it is still in your context. It is never a basis for rejecting a submission you have already acted on.
 
 ### Crossed-Wake Idles: Discriminate by Timestamp Direction
 
@@ -2229,7 +2229,7 @@ mitigation layer is: redundant-by-design wake handling on both sides (this rule
 plus the teammate-side disk-first re-read in
 [pact-agent-teams §On Wake](../skills/pact-agent-teams/SKILL.md#on-wake-disk-first-re-read-seam-agnostic))
 plus the duration-keyed `missed_wake_scan` hook that re-surfaces stale
-`awaiting_lead_completion` waits at your next user prompt or session start. The
+`awaiting_lead_completion` waits at your next user prompt or session start. The same construction bars hook-based content comparison for the deferred audit: the delivered message drains from disk on recipient consumption and survives only in the recipient's conversation context, so no hook running at a later turn boundary can read the message bytes — the deferred disk-vs-message audit is instruction-layer by necessity; reject future proposals to mechanize it. The
 two-call atomic pairs above are unchanged by this rule — TaskUpdate-first ordering
 stays load-bearing.
 
@@ -2259,8 +2259,9 @@ Before the raw JSON read above is load-bearing, you MUST wait for teammate's wak
 1. **Wake-signal `SendMessage` is the load-bearing content-arrival signal.** The teammate's notify `SendMessage` (sent immediately after their `metadata.teachback_submit` write per [pact-teachback Step 2](../skills/pact-teachback/SKILL.md)) is the only durable signal that the metadata write has landed on disk. Acting on a raw JSON read before that `SendMessage` arrives risks reading empty or stale metadata mid-write.
 2. **Raw read MUST follow `SendMessage` receipt, not precede it.** The ordering is: teammate writes `metadata.teachback_submit` → teammate sends notify `SendMessage` → platform poller delivers between-tool-call → your turn opens with the `SendMessage` in context → THEN you read `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{A_id}.json" | jq .metadata.teachback_submit`. Reversing this order produces false-empty reads that have historically triggered false-positive rejection cycles.
 3. **Mitigation for residual race.** If your raw read returns empty `{}` immediately after the wake-signal `SendMessage` receipt, the metadata write may still be in flight on the platform side. Mitigations (any one suffices): (a) brief 1-2s delay before re-reading; (b) read twice with a short interval and only treat empty as authoritative if both reads agree; (c) trust the `SendMessage`'s GREEN/RED summary as primary and treat the raw read as audit-only. Do NOT reject a teachback or HANDOFF on a single empty raw read.
+4. **Deferred audit — disk vs message.** After acting on a message-carried payload, compare it field-by-field against a fresh raw read of the task metadata at your next turn boundary, BEFORE acting on that teammate's next submission. A disk copy that is missing or diverges from the message copy is a data-integrity finding regardless of origin (the divergence can be a failed disk write OR sender-side composition drift — the channel is faithful, the composer is fallible): record `metadata.integrity_finding` on the affected task and surface it; never reject an already-acted-on submission for it, and never re-attempt it with a hook — the message copy has no durable on-disk home (the inbox drains on delivery), so no later-turn hook can read the message bytes. `metadata.integrity_finding` is advisory by design — no automated reader consumes it; you record the divergence and act on it. When the disk copy is absent, repair it by re-writing the payload to metadata from the message copy while it is still in your context.
 
-The symmetric rule applies to HANDOFF inspection (the raw `cat ... | jq .metadata.handoff` read in §Completion Authority above): wait for teammate's wake-signal `SendMessage` there too before treating the raw read as authoritative.
+The symmetric rule applies to HANDOFF inspection (the raw `cat ... | jq .metadata.handoff` read in §Completion Authority above): wait for teammate's wake-signal `SendMessage` there too before treating the raw read as authoritative. The deferred audit of point 4 applies identically to the HANDOFF path.
 
 The same precondition applies symmetrically to the **rejection-receipt path** (see [Rejection Flow](#rejection-flow) below): the teammate must wait for the lead's wake-signal `SendMessage` notifying of `metadata.teachback_rejection` or `metadata.handoff_rejection` BEFORE reading the rejection metadata via raw JSON. The asymmetry on either side produces the same read-after-write race class.
 
@@ -2354,7 +2355,13 @@ SendMessage(
     to="<teammate>",
     message=(
         "[team-lead→<teammate>] Teachback rejected on Task #<A_id>. "
-        "See metadata.teachback_rejection. Revise and re-submit. "
+        "REJECTION-PAYLOAD-BEGIN "
+        "reason: <one-line summary> "
+        "corrections: [<correction 1>, <correction 2>, ...] "
+        "since: <canonical_since() output> "
+        "revision_number: 1 "
+        "REJECTION-PAYLOAD-END "
+        "The payload is a verbatim copy of metadata.teachback_rejection. Revise and re-submit. "
         "Task A remains in_progress."
     ),
     summary="Teachback rejected; revise"
@@ -2374,20 +2381,26 @@ SendMessage(
     to="<teammate>",
     message=(
         "[team-lead→<teammate>] HANDOFF rejected on Task #<B_id>. "
-        "See metadata.handoff_rejection. Revise."
+        "REJECTION-PAYLOAD-BEGIN "
+        "reason: <one-line summary> "
+        "corrections: [<correction 1>, <correction 2>, ...] "
+        "since: <canonical_since() output> "
+        "revision_number: 1 "
+        "REJECTION-PAYLOAD-END "
+        "The payload is a verbatim copy of metadata.handoff_rejection. Revise."
     ),
     summary="HANDOFF rejected; revise"
 )
 ```
 
-**Why dual-channel**: metadata gives the durable revision spec the teammate reads on wake; `SendMessage` gives the wake itself. Single-channel via metadata only fails because the idle teammate can't self-wake to read it. Single-channel via `SendMessage` only loses durability — the corrections need to survive teammate compaction or agent restart.
+**Why dual-channel**: metadata gives the durable revision spec; the wake-signal `SendMessage` carries that payload verbatim, so the teammate wakes and reads the corrections in the message itself — the disk copy is confirmation, not the primary. Single-channel via metadata only fails because the idle teammate can't self-wake to read it. Single-channel via `SendMessage` only loses durability — the corrections need to survive teammate compaction or agent restart.
 
 **Recovery flow on rejection**:
 
 1. Lead writes rejection metadata + sends wake-signal.
-2. Teammate wakes, CLEARs `intentional_wait`, reads rejection metadata.
+2. Teammate wakes on the message, CLEARs `intentional_wait`, reads the rejection payload the message carries (the disk copy is confirmation).
 3. Teammate revises (`metadata.teachback_submit` for A, or revises deliverable + `metadata.handoff` for B).
-4. Teammate re-SETs `intentional_wait` with fresh `since`, increments `metadata.revision_number`, `SendMessage` notifies team-lead "revised."
+4. Teammate increments `metadata.revision_number`, sends the notify `SendMessage` carrying the revised payload verbatim, re-SETs `intentional_wait` with fresh `since`.
 5. Lead reviews; either accepts (per [Completion Authority](#completion-authority)) or rejects again (revision_number = N+1).
 
 > **Cycle limit**: 3+ rejection cycles on the same task is an imPACT META-BLOCK signal. See [imPACT.md](../commands/imPACT.md).

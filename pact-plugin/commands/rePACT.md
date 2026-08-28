@@ -231,6 +231,7 @@ A_id = TaskCreate(
     subject="{scope-prefixed-name}: TEACHBACK for {sub-task}",
     description="DOGFOOD TEACHBACK GATE.\n\n"
                 "Submit TEACHBACK by writing metadata.teachback_submit using the CANONICAL field schema (do NOT improvise key names): understanding, most_likely_wrong, least_confident_item, first_action, variety_acknowledgment (an OBJECT). See the pact-teachback skill for field semantics. "
+                "Then send the notify SendMessage carrying the canonical payload verbatim (pact-teachback Step 2). "
                 "SET intentional_wait{reason=awaiting_lead_completion}. Idle. "
                 "DO NOT mark this task completed — team-lead-only completion.\n\n"
                 "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\n"
