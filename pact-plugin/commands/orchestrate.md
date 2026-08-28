@@ -73,6 +73,7 @@ A_id = TaskCreate(
     subject="{role}: TEACHBACK for {feature}",
     description="DOGFOOD TEACHBACK GATE for {feature}.\n\n"
                 "Submit TEACHBACK by writing metadata.teachback_submit using the CANONICAL field schema (do NOT improvise key names): understanding, most_likely_wrong, least_confident_item, first_action, variety_acknowledgment (an OBJECT). See the pact-teachback skill for field semantics. "
+                "Then send the notify SendMessage carrying the canonical payload verbatim (pact-teachback Step 2). "
                 "SET intentional_wait{reason=awaiting_lead_completion, expected_resolver=lead, since=<canonical_since() output>}. Idle. "
                 "DO NOT mark this task completed — team-lead-only completion. Lead will mark completed "
                 "after teachback acceptance, then send a wake-signal SendMessage confirming Task B is claimable. "
@@ -89,7 +90,7 @@ B_id = TaskCreate(
     description="{full mission per Recommended Agent Prompting Structure}\n\n"
                 "FIRST claim this task (TaskUpdate status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\n"
                 "DO NOT mark this task completed yourself. "
-                "After staging artifacts, write metadata.handoff, send notify SendMessage to team-lead, "
+                "After staging artifacts, write metadata.handoff, send notify SendMessage carrying the canonical HANDOFF payload (pact-agent-teams On Completion Step 2) to team-lead, "
                 "SET intentional_wait{reason=awaiting_lead_completion}. Idle. Lead will mark "
                 "completed after HANDOFF validation. If team-lead rejects, team-lead writes metadata.handoff_rejection; "
                 "revise on this same task.\n\nWrite the HANDOFF whatever the size of the diff — a task whose deliverable is a JUDGEMENT rather than a CHANGE carries its value in the rationale, not in the diff.\n\nUpstream: TEACHBACK Task #{A_id}.",

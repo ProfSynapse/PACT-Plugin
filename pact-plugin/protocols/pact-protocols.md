@@ -2159,7 +2159,7 @@ The canonical predicate `is_self_complete_exempt(task, team_name)` in `shared/in
 cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff
 ```
 
-Inspect the HANDOFF before flipping status. If `metadata.handoff` is missing or empty, do NOT mark the task completed — request the teammate write the HANDOFF first.
+Accept or reject on the payload carried by the teammate's notify `SendMessage` — its arrival is demonstrable; it is the wake. The raw metadata read is a DEFERRED audit: run it at your next turn boundary, before acting on that teammate's next submission. A disk copy that is missing or diverges from the message copy is a data-integrity finding — record it per the Read-Trigger Precondition's deferred-audit point and, when the disk copy is absent, repair it by re-writing the payload to metadata from the message copy while it is still in your context. It is never a basis for rejecting a submission you have already acted on.
 
 ### Crossed-Wake Idles: Discriminate by Timestamp Direction
 
@@ -2229,7 +2229,7 @@ mitigation layer is: redundant-by-design wake handling on both sides (this rule
 plus the teammate-side disk-first re-read in
 [pact-agent-teams §On Wake](../skills/pact-agent-teams/SKILL.md#on-wake-disk-first-re-read-seam-agnostic))
 plus the duration-keyed `missed_wake_scan` hook that re-surfaces stale
-`awaiting_lead_completion` waits at your next user prompt or session start. The
+`awaiting_lead_completion` waits at your next user prompt or session start. The same construction bars hook-based content comparison for the deferred audit: the delivered message drains from disk on recipient consumption and survives only in the recipient's conversation context, so no hook running at a later turn boundary can read the message bytes — the deferred disk-vs-message audit is instruction-layer by necessity; reject future proposals to mechanize it. The
 two-call atomic pairs above are unchanged by this rule — TaskUpdate-first ordering
 stays load-bearing.
 
@@ -2259,8 +2259,9 @@ Before the raw JSON read above is load-bearing, you MUST wait for teammate's wak
 1. **Wake-signal `SendMessage` is the load-bearing content-arrival signal.** The teammate's notify `SendMessage` (sent immediately after their `metadata.teachback_submit` write per [pact-teachback Step 2](../skills/pact-teachback/SKILL.md)) is the only durable signal that the metadata write has landed on disk. Acting on a raw JSON read before that `SendMessage` arrives risks reading empty or stale metadata mid-write.
 2. **Raw read MUST follow `SendMessage` receipt, not precede it.** The ordering is: teammate writes `metadata.teachback_submit` → teammate sends notify `SendMessage` → platform poller delivers between-tool-call → your turn opens with the `SendMessage` in context → THEN you read `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{A_id}.json" | jq .metadata.teachback_submit`. Reversing this order produces false-empty reads that have historically triggered false-positive rejection cycles.
 3. **Mitigation for residual race.** If your raw read returns empty `{}` immediately after the wake-signal `SendMessage` receipt, the metadata write may still be in flight on the platform side. Mitigations (any one suffices): (a) brief 1-2s delay before re-reading; (b) read twice with a short interval and only treat empty as authoritative if both reads agree; (c) trust the `SendMessage`'s GREEN/RED summary as primary and treat the raw read as audit-only. Do NOT reject a teachback or HANDOFF on a single empty raw read.
+4. **Deferred audit — disk vs message.** After acting on a message-carried payload, compare it field-by-field against a fresh raw read of the task metadata at your next turn boundary, BEFORE acting on that teammate's next submission. A disk copy that is missing or diverges from the message copy is a data-integrity finding regardless of origin (the divergence can be a failed disk write OR sender-side composition drift — the channel is faithful, the composer is fallible): record `metadata.integrity_finding` on the affected task and surface it; never reject an already-acted-on submission for it, and never re-attempt it with a hook — the message copy has no durable on-disk home (the inbox drains on delivery), so no later-turn hook can read the message bytes.
 
-The symmetric rule applies to HANDOFF inspection (the raw `cat ... | jq .metadata.handoff` read in §Completion Authority above): wait for teammate's wake-signal `SendMessage` there too before treating the raw read as authoritative.
+The symmetric rule applies to HANDOFF inspection (the raw `cat ... | jq .metadata.handoff` read in §Completion Authority above): wait for teammate's wake-signal `SendMessage` there too before treating the raw read as authoritative. The deferred audit of point 4 applies identically to the HANDOFF path.
 
 The same precondition applies symmetrically to the **rejection-receipt path** (see [Rejection Flow](#rejection-flow) below): the teammate must wait for the lead's wake-signal `SendMessage` notifying of `metadata.teachback_rejection` or `metadata.handoff_rejection` BEFORE reading the rejection metadata via raw JSON. The asymmetry on either side produces the same read-after-write race class.
 
