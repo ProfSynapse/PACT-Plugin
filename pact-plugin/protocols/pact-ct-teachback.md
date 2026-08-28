@@ -37,7 +37,7 @@ When a downstream agent receives an upstream handoff (via `TaskGet`), their firs
    begin Task B (blocking)
 5. Team-lead reviews the teachback. On acceptance:
    `TaskUpdate(A, status="completed")` FIRST — this unblocks Task B — then
-   the wake-`SendMessage`. On misunderstanding: write
+   the wake-signal `SendMessage`. On misunderstanding: write
    `metadata.teachback_rejection` + a correction `SendMessage`; the agent revises on Task A.
    The block holds until acceptance.
 ```

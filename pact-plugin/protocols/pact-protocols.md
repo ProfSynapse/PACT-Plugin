@@ -414,7 +414,7 @@ When a downstream agent receives an upstream handoff (via `TaskGet`), their firs
    begin Task B (blocking)
 5. Team-lead reviews the teachback. On acceptance:
    `TaskUpdate(A, status="completed")` FIRST — this unblocks Task B — then
-   the wake-`SendMessage`. On misunderstanding: write
+   the wake-signal `SendMessage`. On misunderstanding: write
    `metadata.teachback_rejection` + a correction `SendMessage`; the agent revises on Task A.
    The block holds until acceptance.
 ```
@@ -2127,7 +2127,7 @@ You — the team-lead — are the **only** actor who marks teammate-owned tasks 
 1. `TaskUpdate(taskId, status="completed")` — status flip; auto-unblocks any tasks with `blockedBy=[<id>]`
 2. `SendMessage(to="<teammate>", "[team-lead→<teammate>] Task #<id> accepted. Work complete.", summary="Task accepted")` — wakes the idle teammate so they can claim the next task
 
-Both calls are **required**, TaskUpdate FIRST — the wake-signal SendMessage is the last call. If the TaskUpdate succeeds and the SendMessage errors, retry the send on the tool error; a teammate left gate-open with no wake is recovered by their next idle-boundary disk re-read. Skipping the SendMessage entirely strands the teammate idle on `awaiting_lead_completion` until something else (peer message, your next dispatch) wakes them; `blockedBy` resolution is invisible without the wake.
+Both calls are **required**, TaskUpdate FIRST — the wake-signal SendMessage is the last call. If the TaskUpdate succeeds and the SendMessage errors, retry the send on the tool error; a teammate left gate-open with no wake is recovered only when something wakes them (the retried send, a peer message, your next dispatch) — their disk-first re-read then resolves the open gate. Skipping the SendMessage entirely strands the teammate idle on `awaiting_lead_completion` until something else (peer message, your next dispatch) wakes them; `blockedBy` resolution is invisible without the wake.
 
 ### Rejection — two-call atomic pair (BOTH required, TaskUpdate FIRST)
 
@@ -2168,7 +2168,10 @@ files are written asynchronously on delivery, so a teammate's idle notification 
 reach you AFTER your directive send while the teammate has not yet seen the wake. This
 happens at every wait-resolution seam — teachback acceptance, HANDOFF acceptance,
 commit confirmation, rejection — and identically under in-process and tmux
-teammateMode: the race is delivery-ordering, not mode-specific. The idle
+teammateMode: the race is delivery-ordering, not mode-specific. The
+teachback-acceptance seam named here is this delivery-ordering race — your wake
+crossing the teammate's idle notification — not the disk-read stranding race the
+TaskUpdate-first pair ordering removed. The idle
 notification alone cannot distinguish "idle because my wake has not landed yet"
 from "idle because the teammate stalled".
 
