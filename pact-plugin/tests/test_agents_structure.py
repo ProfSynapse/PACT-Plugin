@@ -574,11 +574,18 @@ class TestTeachbackMicroSkillExtraction:
     # instruction under the fence. Measured size after the edit:
     # 17498 chars. Budget ceiling provides 2-char headroom.
     #
+    # Bumped to 18000 to accommodate the payload-compactness instruction
+    # under the Step 2 template (one operative sentence: keep the
+    # payload under 5KB — the metadata write silently truncates oversize
+    # payloads, and the envelope keeps the message copy inside measured
+    # territory). Measured size after the edit: 17653 chars. Budget
+    # ceiling provides ~347-char headroom.
+    #
     # Tighten-back trigger: if a future PR removes optional content
     # (e.g., if a future PR removes the transitional permissiveness
     # paragraph), reduce MAX_SKILL_CHARS to keep this budget a
     # meaningful ceiling and not a ratchet.
-    MAX_SKILL_CHARS = 17500
+    MAX_SKILL_CHARS = 18000
 
     # Key protocol elements that must be in the extracted skill.
     # Presence-only checks are deliberately strict — any drop indicates
