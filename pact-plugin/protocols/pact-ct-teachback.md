@@ -31,8 +31,8 @@ When a downstream agent receives an upstream handoff (via `TaskGet`), their firs
 1. Agent dispatched as a Task A (TEACHBACK gate) + Task B (primary work, blockedBy=[A]) pair
 2. Agent claims Task A, reads the upstream handoff/mission via `TaskGet`
 3. Agent writes its teachback to Task A metadata (`metadata.teachback_submit`, 5 canonical
-   fields) and sends a wake-signal `SendMessage` to team-lead:
-   "[{sender}→team-lead] Teachback submitted on Task #A. Idling on awaiting_lead_completion."
+   fields) and sends a wake-signal `SendMessage` carrying the canonical payload verbatim
+   (per pact-teachback Step 2).
 4. Agent SETs `intentional_wait{reason=awaiting_lead_completion}` and idles — it does NOT
    begin Task B (blocking)
 5. Team-lead reviews the teachback. On acceptance:

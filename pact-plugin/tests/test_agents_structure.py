@@ -565,11 +565,20 @@ class TestTeachbackMicroSkillExtraction:
     # ceiling, so no callout of any useful length fit. Budget ceiling
     # provides ~470-char headroom for future small edits.
     #
+    # Bumped to 17500 to accommodate the dual-channel teachback notify:
+    # the Step 2 lightweight-notice template became the canonical
+    # payload carried verbatim — field-labeled single line inside
+    # TEACHBACK-PAYLOAD-BEGIN/END delimiters, dotted nested keys for
+    # variety_acknowledgment and reasoning_reconstruction, the
+    # absent-optional omission note, and the one-line encoding
+    # instruction under the fence. Measured size after the edit:
+    # 17498 chars. Budget ceiling provides 2-char headroom.
+    #
     # Tighten-back trigger: if a future PR removes optional content
     # (e.g., if a future PR removes the transitional permissiveness
     # paragraph), reduce MAX_SKILL_CHARS to keep this budget a
     # meaningful ceiling and not a ratchet.
-    MAX_SKILL_CHARS = 17000
+    MAX_SKILL_CHARS = 17500
 
     # Key protocol elements that must be in the extracted skill.
     # Presence-only checks are deliberately strict — any drop indicates

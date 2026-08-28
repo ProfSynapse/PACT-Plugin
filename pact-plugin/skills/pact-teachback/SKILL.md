@@ -70,7 +70,7 @@ The 5 canonical fields (Step 1) are the L1 (procedure-level) gate; the optional 
 
 ## Action: store teachback now
 
-> **Ordering invariant** (audit anchor): the three steps below MUST execute in the order Step 1 → Step 2 → Step 3 — `metadata.teachback_submit` write FIRST, then notify `SendMessage`, then `intentional_wait` SET. This ordering is load-bearing for the team-lead's [Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition): the lead must wait for teammate's wake-signal `SendMessage` before treating the raw JSON read as authoritative, but the `SendMessage` is only safe to send AFTER the metadata write has landed on disk. Reversing Step 1 and Step 2 produces false-empty raw reads on the lead side that have triggered false-positive teachback rejection cycles. Reversing Step 2 and Step 3 (idle before `SendMessage`) silently strands the lead — they will never see the wake-signal because you went idle without sending it. Editors of this skill: do NOT re-order these steps.
+> **Ordering invariant** (audit anchor): the three steps below MUST execute in the order Step 1 → Step 2 → Step 3 — `metadata.teachback_submit` write FIRST, then notify `SendMessage`, then `intentional_wait` SET. This ordering is load-bearing for the team-lead's [Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition): the lead must wait for teammate's wake-signal `SendMessage` before treating the raw JSON read as authoritative, but the `SendMessage` is only safe to send AFTER the metadata write has landed on disk. Reversing Step 1 and Step 2 produces false-empty raw reads on the lead side that have triggered false-positive teachback rejection cycles. Reversing Step 2 and Step 3 (idle before `SendMessage`) silently strands the lead — they will never see the wake-signal because you went idle without sending it. Editors of this skill: do NOT re-order these steps. The write persists the durable copy; the notify carries it verbatim, so the lead's acceptance keys on the message and their raw read becomes the deferred audit.
 
 **Step 1 — write the teachback to task metadata** (5 canonical fields + 1 optional nested field):
 
@@ -118,19 +118,33 @@ TaskUpdate(taskId, metadata={"teachback_submit": {
 
 Before composing your teachback, read Task B's `metadata.variety` (via Task A's `blocks[0]`). Judge each of the four per-dimension rationales against THIS dispatch's complexity and record `yes` / `no` / `concern`; when not `yes`, name the smell in `concern`. Full review workflow: [`protocols/pact-variety.md` §Variety Calibration Record](../../protocols/pact-variety.md#variety-calibration-record).
 
-**Step 2 — notify the team-lead** (lightweight prose, NOT the full payload):
+**Step 2 — notify the team-lead** (carrying the canonical payload verbatim):
 
 ```
 SendMessage(
     to="team-lead",
     message=(
         "[<your-agent-name>→team-lead] Teachback submitted on Task #<A_id>. "
-        "See metadata.teachback_submit. Idling on awaiting_lead_completion. "
+        "TEACHBACK-PAYLOAD-BEGIN "
+        "understanding: <...> "
+        "most_likely_wrong: <...> "
+        "least_confident_item: <...> "
+        "first_action: <...> "
+        "variety_acknowledgment.rationale_articulates_this_dispatch: <yes|no|concern> "
+        "variety_acknowledgment.concern: <... only when non-empty> "
+        "reasoning_reconstruction.decision_attribution: <... when written> "
+        "reasoning_reconstruction.assumption_trace: <... when written> "
+        "reasoning_reconstruction.contingency_clause: <... when written> "
+        "TEACHBACK-PAYLOAD-END "
+        "The payload is a verbatim copy of metadata.teachback_submit; fields you did not write are omitted. "
+        "Idling on awaiting_lead_completion. "
         "boundary-drain: [inbox empty | reconciled <n> directive(s) — <one-line summary>]"
     ),
     summary="Teachback submitted: <topic>"
 )
 ```
+
+> One line, space-joined; the `summary` never carries payload content (it truncates at 200 chars).
 
 > # ANTI-PATTERN: Step 1 and Step 3 are SEPARATE `TaskUpdate` calls writing
 > SEPARATE top-level metadata keys. Nesting `intentional_wait` INSIDE
