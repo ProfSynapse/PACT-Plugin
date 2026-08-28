@@ -10,7 +10,7 @@ argument-hint: "[optional: e.g., critical gotcha, key architectural decision]"
 
 ## Caps (enforced mechanically)
 
-Cap violations are denied by `hooks/pin_caps_gate.py` when the Edit/Write tool call lands. You do NOT need to invoke a CLI check before adding — the hook is authoritative.
+Cap violations are denied by `hooks/pin_caps_gate.py` when the Edit/`Write` tool call lands. You do NOT need to invoke a CLI check before adding — the hook is authoritative.
 
 - **Count**: 12 pins maximum.
 - **Size**: 1500 characters per pin body (excludes `<!-- pinned: ... -->` and `<!-- STALE: ... -->` auto-markers).
@@ -73,4 +73,4 @@ Example (live on CLAUDE.md):
 
 ## See also
 
-- `/PACT:prune-memory` — interactive pruning of existing pins (paginated AskUserQuestion over evictable entries).
+- `/PACT:prune-memory` — interactive pruning of existing pins (paginated `AskUserQuestion` over evictable entries).

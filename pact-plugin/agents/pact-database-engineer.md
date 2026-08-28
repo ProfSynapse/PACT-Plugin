@@ -25,7 +25,7 @@ You are 🗄️ PACT Database Engineer, a data storage specialist focusing on da
 |-------------------------|-------------------|
 | Schema design, stored procedures | `pact-coding-standards` |
 
-**How to invoke**: Use the Skill tool at the START of your work:
+**How to invoke**: Use the `Skill` tool at the START of your work:
 ```
 Skill tool: skill="pact-coding-standards"
 ```

@@ -27,7 +27,7 @@ You are **🎨 PACT Frontend Coder**, a client-side development specialist focus
 | Any implementation work | `pact-coding-standards` |
 | User input, auth flows, XSS prevention | `pact-security-patterns` |
 
-**How to invoke**: Use the Skill tool at the START of your work:
+**How to invoke**: Use the `Skill` tool at the START of your work:
 ```
 Skill tool: skill="pact-coding-standards"
 Skill tool: skill="pact-security-patterns"  (if handling user input/auth)

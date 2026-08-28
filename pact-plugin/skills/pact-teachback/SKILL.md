@@ -61,7 +61,7 @@ wrong implementation.
 
 Under the Task A + Task B dispatch shape, your teachback is the deliverable
 of Task A. Task B (the primary work) is `blockedBy=[A]`: it remains VISIBLE and
-readable in your TaskList (annotated as blocked) but is not claimable — the
+readable in your `TaskList` (annotated as blocked) but is not claimable — the
 `blockedBy` edge filters it from the claimable set, it does not hide or lock it —
 until the team-lead accepts your teachback by transitioning Task A to `completed`,
 which makes Task B claimable.
@@ -70,7 +70,7 @@ The 5 canonical fields (Step 1) are the L1 (procedure-level) gate; the optional 
 
 ## Action: store teachback now
 
-> **Ordering invariant** (audit anchor): the three steps below MUST execute in the order Step 1 → Step 2 → Step 3 — `metadata.teachback_submit` write FIRST, then notify SendMessage, then `intentional_wait` SET. This ordering is load-bearing for the team-lead's [Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition): the lead must wait for teammate's wake-signal SendMessage before treating the raw JSON read as authoritative, but the SendMessage is only safe to send AFTER the metadata write has landed on disk. Reversing Step 1 and Step 2 produces false-empty raw reads on the lead side that have triggered false-positive teachback rejection cycles. Reversing Step 2 and Step 3 (idle before SendMessage) silently strands the lead — they will never see the wake-signal because you went idle without sending it. Editors of this skill: do NOT re-order these steps.
+> **Ordering invariant** (audit anchor): the three steps below MUST execute in the order Step 1 → Step 2 → Step 3 — `metadata.teachback_submit` write FIRST, then notify `SendMessage`, then `intentional_wait` SET. This ordering is load-bearing for the team-lead's [Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition): the lead must wait for teammate's wake-signal `SendMessage` before treating the raw JSON read as authoritative, but the `SendMessage` is only safe to send AFTER the metadata write has landed on disk. Reversing Step 1 and Step 2 produces false-empty raw reads on the lead side that have triggered false-positive teachback rejection cycles. Reversing Step 2 and Step 3 (idle before `SendMessage`) silently strands the lead — they will never see the wake-signal because you went idle without sending it. Editors of this skill: do NOT re-order these steps.
 
 **Step 1 — write the teachback to task metadata** (5 canonical fields + 1 optional nested field):
 
@@ -132,9 +132,9 @@ SendMessage(
 )
 ```
 
-> # ANTI-PATTERN: Step 1 and Step 3 are SEPARATE TaskUpdate calls writing
+> # ANTI-PATTERN: Step 1 and Step 3 are SEPARATE `TaskUpdate` calls writing
 > SEPARATE top-level metadata keys. Nesting `intentional_wait` INSIDE
-> `teachback_submit` (one combined TaskUpdate) hides it from
+> `teachback_submit` (one combined `TaskUpdate`) hides it from
 > `missed_wake_scan.py`, which reads `metadata.intentional_wait` and does
 > not descend into nested objects, so no missed-wake alarm is emitted.
 > `is_self_complete_exempt` governs self-completion exemption instead and
@@ -152,20 +152,20 @@ TaskUpdate(taskId, metadata={"intentional_wait": {
 }})
 ```
 
-Do NOT begin Task B until Task A's status transitions to `completed`. The team-lead's wake-signal SendMessage confirms acceptance — you cannot self-wake to poll TaskList while idle.
+Do NOT begin Task B until Task A's status transitions to `completed`. The team-lead's wake-signal `SendMessage` confirms acceptance — you cannot self-wake to poll `TaskList` while idle.
 
 **On rejection** (team-lead writes `metadata.teachback_rejection`): see [pact-agent-teams §On Rejection](../pact-agent-teams/SKILL.md#on-rejection-wake-signal-receipt).
 
 ## Common mistakes
 
-The 4 wrong shapes below are the ones the runtime advisory layer at `hooks/task_lifecycle_gate.py` catches at TaskUpdate write time. Each row names the wrong shape, the canonical correction (cross-referenced to [§Canonical schema at a glance](#canonical-schema-at-a-glance) above), and the rejection-reason enum the lead-side gate emits if the wrong shape reaches completion-time. The row numbers are stable grep-anchors: if the runtime advisory text says "See Common mistakes row N", that row is the canonical correction.
+The 4 wrong shapes below are the ones the runtime advisory layer at `hooks/task_lifecycle_gate.py` catches at `TaskUpdate` write time. Each row names the wrong shape, the canonical correction (cross-referenced to [§Canonical schema at a glance](#canonical-schema-at-a-glance) above), and the rejection-reason enum the lead-side gate emits if the wrong shape reaches completion-time. The row numbers are stable grep-anchors: if the runtime advisory text says "See Common mistakes row N", that row is the canonical correction.
 
 | # | Wrong shape | Canonical shape | Rejection-reason enum (write-time advisory / lead-side gate) |
 |---|---|---|---|
 | 1 | `variety_acknowledgment` as a free-text STRING describing your work, or as an OBJECT whose `rationale_articulates_this_dispatch` value is outside the set `{yes, no, concern}` | OBJECT with `{rationale_articulates_this_dispatch: "yes" \| "no" \| "concern", concern: "..." (required when value != "yes")}` — see the field in [§Canonical schema at a glance](#canonical-schema-at-a-glance) | `variety_acknowledgment_schema_invalid_at_write_time` (advisory) / schema-gate rejection at completion-time |
 | 2 | `reasoning_reconstruction` placed inside `metadata.handoff` (the sender-side reasoning slot) | TOP-LEVEL sibling on `metadata.teachback_submit`, alongside `understanding` / `most_likely_wrong` / `least_confident_item` / `first_action` / `variety_acknowledgment` — see [§Canonical schema at a glance](#canonical-schema-at-a-glance) | `reasoning_reconstruction_in_handoff` (advisory) / `malformed_reasoning_reconstruction` (lead-side schema gate) |
 | 3 | `reasoning_reconstruction` with non-canonical sub-key names (e.g. `what-I-learned`, `falsification-attempts`, `most-likely-wrong-prediction`), or sub-keys whose values are empty / whitespace / non-string | Exactly 3 sub-keys: `decision_attribution`, `assumption_trace`, `contingency_clause`, each a non-empty string — see [§Canonical schema at a glance](#canonical-schema-at-a-glance) | `reasoning_reconstruction_subkeys_invalid` (advisory) / `malformed_reasoning_reconstruction` or `empty_reasoning_reconstruction_field` (lead-side schema gate) |
-| 4 | `intentional_wait` nested inside `teachback_submit` (one combined TaskUpdate call) | SEPARATE `TaskUpdate` calls with `intentional_wait` as a TOP-LEVEL metadata sibling of `teachback_submit` — see Step 3 and [§Canonical schema at a glance](#canonical-schema-at-a-glance) | `intentional_wait_nested_in_teachback_submit` (advisory) |
+| 4 | `intentional_wait` nested inside `teachback_submit` (one combined `TaskUpdate` call) | SEPARATE `TaskUpdate` calls with `intentional_wait` as a TOP-LEVEL metadata sibling of `teachback_submit` — see Step 3 and [§Canonical schema at a glance](#canonical-schema-at-a-glance) | `intentional_wait_nested_in_teachback_submit` (advisory) |
 
 Rows 1–4 align 1:1 with the 4 write-time advisory rules in `task_lifecycle_gate.py`. The advisory text ends with `See pact-teachback skill Common mistakes row N` — that N maps directly to a row in this table. If a rule name above ever drifts, this section drifts with it.
 
@@ -176,8 +176,8 @@ Include the nested `reasoning_reconstruction` sub-object whenever the dispatchin
 | Variety score | Workflow route | reasoning_reconstruction | Lead behavior on absence |
 |---|---|---|---|
 | 4–6 | `ROUTE_COMPACT` | Skipped — not expected | Accept teachback; absence is the expected default. |
-| 7–10 | `ROUTE_ORCHESTRATE` | Recommended (NOT required) | Accept teachback; lead MAY SendMessage requesting reconstruction on follow-up if upstream decisions are non-trivial. |
-| 11–14 | `ROUTE_PLAN_MODE` (plan-mode + orchestrate) | REQUIRED | Reject teachback with `metadata.teachback_rejection{reason="missing_reasoning_reconstruction"}` plus a correction SendMessage. |
+| 7–10 | `ROUTE_ORCHESTRATE` | Recommended (NOT required) | Accept teachback; lead MAY `SendMessage` requesting reconstruction on follow-up if upstream decisions are non-trivial. |
+| 11–14 | `ROUTE_PLAN_MODE` (plan-mode + orchestrate) | REQUIRED | Reject teachback with `metadata.teachback_rejection{reason="missing_reasoning_reconstruction"}` plus a correction `SendMessage`. |
 | 15–16 | `ROUTE_RESEARCH_SPIKE` | REQUIRED (treated identically to plan-mode) | Same as `ROUTE_PLAN_MODE` — reject on absence. |
 
 Source of truth for the band cuts: `hooks/shared/variety_scorer.py` (`COMPACT_MAX` / `ORCHESTRATE_MAX` / `PLAN_MODE_MAX`); this table mirrors the SSOT at [pact-ct-teachback.md §When to Method-Reconstruct](../../protocols/pact-ct-teachback.md#when-to-method-reconstruct) — do not paraphrase the `ROUTE_*` literals. Variety **10** is the TOP of `ROUTE_ORCHESTRATE` (recommended-not-required); variety **11** is the BOTTOM of `ROUTE_PLAN_MODE` (required). The 10|11 boundary is the cut.
@@ -188,9 +188,9 @@ If you are dispatched as an owner in `TEACHBACK_EXEMPT_AGENT_TYPES` (currently `
 
 ## Ordering rule
 
-You must store your teachback (`metadata.teachback_submit` write) before any Edit/Write/Bash call used for implementation work. Reading files to understand the task (Read, Glob, Grep) is permitted before teachback; those are understanding actions, not implementation actions.
+You must store your teachback (`metadata.teachback_submit` write) before any `Edit`/`Write`/`Bash` call used for implementation work. Reading files to understand the task (`Read`, `Glob`, `Grep`) is permitted before teachback; those are understanding actions, not implementation actions.
 
-Under the Task A + Task B dispatch shape, this ordering is structurally reinforced: Task B is gated behind `blockedBy=[A]` (visible but not claimable) until Task A's status transitions to `completed`. The `metadata.teachback_submit` write IS your teachback delivery; the team-lead's `TaskUpdate(A, status="completed")` paired with a wake-signal SendMessage IS approval.
+Under the Task A + Task B dispatch shape, this ordering is structurally reinforced: Task B is gated behind `blockedBy=[A]` (visible but not claimable) until Task A's status transitions to `completed`. The `metadata.teachback_submit` write IS your teachback delivery; the team-lead's `TaskUpdate(A, status="completed")` paired with a wake-signal `SendMessage` IS approval.
 
 ## Post-store behavior
 

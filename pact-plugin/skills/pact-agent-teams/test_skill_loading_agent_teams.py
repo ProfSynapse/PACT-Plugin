@@ -224,16 +224,16 @@ class TestOnStartTeachbackGateSendMessageVisible:
         return skill_content[start : next_h2 if next_h2 != -1 else len(skill_content)]
 
     def test_teachback_gate_names_send_message_explicitly(self, skill_content):
-        section = self._on_start_section(skill_content)
+        section = self._on_start_section(skill_content).replace("`", "")
         assert "notify the team-lead via SendMessage" in section, (
             "On Start teachback gate step must explicitly name 'notify the team-lead via "
             "SendMessage' — eliding it strands the lead without a wake signal"
         )
 
     def test_teachback_gate_pins_ordering_invariant_inline(self, skill_content):
-        section = self._on_start_section(skill_content)
+        section = self._on_start_section(skill_content).replace("`", "")
         assert "metadata write FIRST" in section and "SendMessage SECOND" in section and (
-            "intentional_wait` SET THIRD" in section
+            "intentional_wait SET THIRD" in section
         ), (
             "On Start teachback gate must inline the metadata→SendMessage→intentional_wait "
             "ordering invariant; reversing Step 1 and Step 2 produces false-empty raw reads "

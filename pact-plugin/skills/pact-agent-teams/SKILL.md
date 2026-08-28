@@ -19,26 +19,26 @@ You are a member of a PACT Agent Team. You coordinate with the team through the 
 Before any response output, identify the addressee and pick the channel (post-channel-choice complement: [Pre-Send Self-Check](../../protocols/pact-communication-charter.md#pre-send-self-check)):
 
 - Addressee is **user** (or self-narration) → text output is appropriate.
-- Addressee is **team-lead or teammate** → SendMessage is REQUIRED. Plain text is invisible to other agents.
-- Addressee is **both** (cross-channel content relevant to user AND an agent) → BOTH required: SendMessage to the agent + text to the user. Neither alone delivers the content to both audiences.
+- Addressee is **team-lead or teammate** → `SendMessage` is REQUIRED. Plain text is invisible to other agents.
+- Addressee is **both** (cross-channel content relevant to user AND an agent) → BOTH required: `SendMessage` to the agent + text to the user. Neither alone delivers the content to both audiences.
 
 ### Failure modes this gate catches
 
-- **Format-cue hijack.** Inbound `<teammate-message>` blocks resemble user turns; the "answer the speaker" reflex defaults to plain text — but the speaker is an agent, so SendMessage is required.
+- **Format-cue hijack.** Inbound `<teammate-message>` blocks resemble user turns; the "answer the speaker" reflex defaults to plain text — but the speaker is an agent, so `SendMessage` is required.
 - **Candor-question / conversational-register pull.** Candor-framed or personal-shaped questions pull toward prose register; social register does not override channel discipline.
 
 If you are unsure who the addressee is, choose **both**.
 
 ### Teammate-side gray-area trap
 
-A reply to the user that contains content the team-lead needs to act on (a blocker, partial result, scope flag) requires also sending via SendMessage — the team-lead's inbox does not see your text. Cross-channel content is **both**.
+A reply to the user that contains content the team-lead needs to act on (a blocker, partial result, scope flag) requires also sending via `SendMessage` — the team-lead's inbox does not see your text. Cross-channel content is **both**.
 
 ## On Start
 
 1. Check `TaskList` for tasks assigned to you (by your name)
 2. Claim your assigned task: `TaskUpdate(taskId, status="in_progress")`
 3. Read the task description — it contains your full mission (CONTEXT, MISSION, INSTRUCTIONS, GUIDELINES). If upstream tasks are referenced, read them via `TaskGet`.
-4. **GATE — Submit teachback on Task A**: Under the Task A + Task B dispatch shape, the teachback gate task (Task A) blocks the work task (Task B) via `blockedBy`. Store your teachback in `metadata.teachback_submit` on Task A per the [pact-teachback](../pact-teachback/SKILL.md) skill, **notify the team-lead via SendMessage**, SET `intentional_wait{reason=awaiting_lead_completion}`, and idle. **Ordering invariant**: metadata write FIRST → SendMessage SECOND → `intentional_wait` SET THIRD (load-bearing; see [pact-teachback §Action: store teachback now](../pact-teachback/SKILL.md#action-store-teachback-now) for rationale). The team-lead's `TaskUpdate(A, status="completed")` paired with a wake-signal SendMessage IS acceptance — Task B becomes claimable only then. The teachback notify is a protocol-boundary message — run the [Boundary-Drain Rule](#boundary-drain-rule) before composing it: a scope change that crossed your in-flight turn must be reflected in the teachback you submit, not discovered after acceptance.
+4. **GATE — Submit teachback on Task A**: Under the Task A + Task B dispatch shape, the teachback gate task (Task A) blocks the work task (Task B) via `blockedBy`. Store your teachback in `metadata.teachback_submit` on Task A per the [pact-teachback](../pact-teachback/SKILL.md) skill, **notify the team-lead via `SendMessage`**, SET `intentional_wait{reason=awaiting_lead_completion}`, and idle. **Ordering invariant**: metadata write FIRST → `SendMessage` SECOND → `intentional_wait` SET THIRD (load-bearing; see [pact-teachback §Action: store teachback now](../pact-teachback/SKILL.md#action-store-teachback-now) for rationale). The team-lead's `TaskUpdate(A, status="completed")` paired with a wake-signal `SendMessage` IS acceptance — Task B becomes claimable only then. The teachback notify is a protocol-boundary message — run the [Boundary-Drain Rule](#boundary-drain-rule) before composing it: a scope change that crossed your in-flight turn must be reflected in the teachback you submit, not discovered after acceptance.
    - **DO NOT** call `Edit`, `Write`, or `Bash` for implementation work before storing your teachback
    - See [Teachback](#teachback-conversation-verification) below for the full skill reference
 5. **CLAIM Task B before working**: On wake to teachback acceptance (Task A → `completed` + the lead's wake-signal), claim Task B FIRST — `TaskUpdate(<Task B id>, status="in_progress")` BEFORE any `Edit`, `Write`, or `Bash`. Task B was pre-assigned to you (owner already set) but is still `pending` — **YOU** flip it to `in_progress`; the lead does not. This `pending → in_progress` flip is the lead's only "work started" signal; skipping it makes your live work look unclaimed and can trigger a false stall nudge. The durable Task A read is authoritative: if Task A already shows `completed` on disk, claim Task B and proceed even if the wake-signal message is not yet visible — wake messages can trail the status flip (see [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic)).
@@ -141,7 +141,7 @@ Drain mechanics — all four points are load-bearing:
 
 - **Read-only.** Read the inbox file; NEVER write, truncate, or delete it — the
   platform owns delivery.
-- **Use the Read tool**, not a piped Bash command — Bash permission patterns on
+- **Use the `Read` tool**, not a piped Bash command — Bash permission patterns on
   config-root paths are fragile (see §Bash Commands in Config-Root Paths). The file
   is a JSON list of pending messages; each message carries `from`, `text`,
   `timestamp`, and `type` (act on `from` + `text`; other fields vary by platform
@@ -179,7 +179,7 @@ When your work is done, you store the HANDOFF and remain `in_progress`. **You do
 
 If ANY precondition is unmet, KEEP WORKING. Do not write `metadata.handoff` to "reserve a spot" or "draft the handoff while tests run." The handoff metadata write is a commitment that the work IS done, NOT a wrap-up artifact you build in parallel with finishing.
 
-> **Ordering invariant** (audit anchor): the three steps below MUST execute in the order Step 1 → Step 2 → Step 3 — `metadata.handoff` write FIRST, then notify SendMessage to team-lead, then `intentional_wait` SET. This ordering is load-bearing for the team-lead's [Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition): the lead must wait for teammate's wake-signal SendMessage before treating the raw `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/.../{taskId}.json" | jq .metadata.handoff` read as authoritative, but the SendMessage is only safe to send AFTER the metadata write has landed on disk. Reversing Step 1 and Step 2 produces false-empty raw reads on the lead side that have triggered false-positive HANDOFF rejection cycles. Reversing Step 2 and Step 3 (idle before SendMessage) silently strands the lead — they will never see the wake-signal because you went idle without sending it. Editors of this skill: do NOT re-order these steps.
+> **Ordering invariant** (audit anchor): the three steps below MUST execute in the order Step 1 → Step 2 → Step 3 — `metadata.handoff` write FIRST, then notify `SendMessage` to team-lead, then `intentional_wait` SET. This ordering is load-bearing for the team-lead's [Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition): the lead must wait for teammate's wake-signal `SendMessage` before treating the raw `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/.../{taskId}.json" | jq .metadata.handoff` read as authoritative, but the `SendMessage` is only safe to send AFTER the metadata write has landed on disk. Reversing Step 1 and Step 2 produces false-empty raw reads on the lead side that have triggered false-positive HANDOFF rejection cycles. Reversing Step 2 and Step 3 (idle before `SendMessage`) silently strands the lead — they will never see the wake-signal because you went idle without sending it. Editors of this skill: do NOT re-order these steps.
 
 1. **Store HANDOFF in task metadata**:
    ```
@@ -211,18 +211,18 @@ If ANY precondition is unmet, KEEP WORKING. Do not write `metadata.handoff` to "
    ```
 
 4. **Idle.** The team-lead reads `metadata.handoff`, judges acceptance, and either:
-   - **Accepts**: `TaskUpdate(taskId, status="completed")` plus a wake-signal SendMessage. On wake, CLEAR `intentional_wait` and check `TaskList` for follow-up work.
-   - **Rejects**: writes `metadata.handoff_rejection = {reason, corrections, since, revision_number}` plus a wake-signal SendMessage. Follow §On Rejection below.
+   - **Accepts**: `TaskUpdate(taskId, status="completed")` plus a wake-signal `SendMessage`. On wake, CLEAR `intentional_wait` and check `TaskList` for follow-up work.
+   - **Rejects**: writes `metadata.handoff_rejection = {reason, corrections, since, revision_number}` plus a wake-signal `SendMessage`. Follow §On Rejection below.
 
 > ⚠️ Do NOT call `TaskUpdate(taskId, status="completed")` on your own task. The team-lead-as-completion-gate is the discipline; teammate self-completion bypasses HANDOFF inspection. Two narrow exemptions (signal-tasks; secretary session briefing + memory-save) are documented at the relevant agent bodies — those carve-outs apply only to those agents, not to you unless your agent body says so.
 
-> **Why idle, not poll?** You cannot self-wake while idle. The team-lead's wake-signal SendMessage brings you back to read the acceptance/rejection. Trust the wake; do not poll TaskList speculatively.
+> **Why idle, not poll?** You cannot self-wake while idle. The team-lead's wake-signal `SendMessage` brings you back to read the acceptance/rejection. Trust the wake; do not poll `TaskList` speculatively.
 
 After wake on acceptance, check `TaskList` for unblocked tasks you OWN or can claim — **including your PRE-ASSIGNED Task B** (owner already you, still `pending`). Claiming is a status flip, not only an ownership grab: pre-assigned → `TaskUpdate(taskId, status="in_progress")`; unowned → `TaskUpdate(taskId, owner="your-name", status="in_progress")`. Do this BEFORE any implementation work. If none, idle (you may be consulted or shut down).
 
 ## On Rejection (Wake-Signal Receipt)
 
-If the team-lead rejects your teachback or HANDOFF, you wake on the inbound SendMessage. Your task remains `in_progress`; the team-lead has written rejection details to metadata. This wake-then-raw-read flow is one instance of the seam-agnostic rule in [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic); the residual-race mitigation there (never act on a single empty read) applies to the rejection-metadata read below.
+If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `SendMessage`. Your task remains `in_progress`; the team-lead has written rejection details to metadata. This wake-then-raw-read flow is one instance of the seam-agnostic rule in [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic); the residual-race mitigation there (never act on a single empty read) applies to the rejection-metadata read below.
 
 **On wake**:
 
@@ -231,7 +231,7 @@ If the team-lead rejects your teachback or HANDOFF, you wake on the inbound Send
    TaskUpdate(taskId, metadata={"intentional_wait": None})
    ```
 
-2. **Read the rejection metadata** via raw JSON (TaskGet does NOT surface `metadata.*` keys — see [pact-completion-authority §TaskGet metadata-blindness reminder](../../protocols/pact-completion-authority.md#completion-authority) and the symmetric rejection-receipt rule in [§Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition)):
+2. **Read the rejection metadata** via raw JSON (`TaskGet` does NOT surface `metadata.*` keys — see [pact-completion-authority §`TaskGet` metadata-blindness reminder](../../protocols/pact-completion-authority.md#completion-authority) and the symmetric rejection-receipt rule in [§Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition)):
    - For Task A (teachback): `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.teachback_rejection`
    - For Task B (work): `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff_rejection`
 
@@ -243,7 +243,7 @@ If the team-lead rejects your teachback or HANDOFF, you wake on the inbound Send
 
 4. **Re-submit on the SAME task** (do NOT create a new task):
    - Increment `metadata.revision_number`. The team-lead writes `revision_number=1` in the rejection record. On your first revision, increment to `2`. On each subsequent revision, increment again. This count is the rejection-cycle audit trail — it feeds the imPACT META-BLOCK 3-cycle signal, not harvest routing. It does NOT gate whether your revised content is preserved: the team-lead's acceptance (the single completion) emits whatever `metadata.handoff` holds at that moment, so the revised content reaches the journal regardless of the count.
-   - SendMessage the team-lead: `"[{sender}→team-lead] Revised teachback/HANDOFF on Task #{id}. See metadata.{teachback_submit|handoff} (revision {N})."`
+   - `SendMessage` the team-lead: `"[{sender}→team-lead] Revised teachback/HANDOFF on Task #{id}. See metadata.{teachback_submit|handoff} (revision {N})."`
    - Re-SET `intentional_wait{reason=awaiting_lead_completion, since=<fresh canonical_since() output>}`.
    - Idle.
 
@@ -304,7 +304,7 @@ output (even zero-content) blocks the next inbox delivery.
 - **Idle-waiting for a protocol-defined resolution** (teachback, team-lead commit,
   peer reply, user decision)? Use the `intentional_wait` task metadata per
   the Intentional Waiting section below.
-- **Awaiting lead completion?** SET `intentional_wait{reason=awaiting_lead_completion, expected_resolver=lead, since=<canonical_since() output>}` after storing your HANDOFF or teachback metadata AND sending the notify SendMessage to the team-lead. **Ordering invariant** (audit anchor, lead-side mirror): metadata write FIRST → notify SendMessage SECOND → intentional_wait SET THIRD. This ordering exists because the team-lead must wait for teammate's wake-signal SendMessage before treating their raw `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/.../{id}.json" | jq .metadata.{handoff,teachback_submit}` read as authoritative — see [pact-completion-authority §Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition). Sending the SendMessage before the metadata write lands produces false-empty raw reads on the lead side; going idle before the SendMessage strands the lead silently. Do NOT poll TaskList while idle — you cannot self-wake to do so. The team-lead's wake-signal SendMessage is the resolver.
+- **Awaiting lead completion?** SET `intentional_wait{reason=awaiting_lead_completion, expected_resolver=lead, since=<canonical_since() output>}` after storing your HANDOFF or teachback metadata AND sending the notify `SendMessage` to the team-lead. **Ordering invariant** (audit anchor, lead-side mirror): metadata write FIRST → notify `SendMessage` SECOND → intentional_wait SET THIRD. This ordering exists because the team-lead must wait for teammate's wake-signal `SendMessage` before treating their raw `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/.../{id}.json" | jq .metadata.{handoff,teachback_submit}` read as authoritative — see [pact-completion-authority §Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition). Sending the `SendMessage` before the metadata write lands produces false-empty raw reads on the lead side; going idle before the `SendMessage` strands the lead silently. Do NOT poll `TaskList` while idle — you cannot self-wake to do so. The team-lead's wake-signal `SendMessage` is the resolver.
 - **Genuinely stuck**? Follow the On Blocker section.
 
 If you have nothing to say that advances the work, say nothing.
@@ -347,7 +347,7 @@ This flag has a lead-side consumer: the `missed_wake_scan` hook re-surfaces task
 idling on `awaiting_lead_completion` past the staleness threshold at the
 team-lead's next user prompt or session start. The schema primitives
 (`KNOWN_REASONS`, `KNOWN_RESOLVERS`, `wait_stale`) in `shared.intentional_wait`
-define the teammate-facing metadata contract for protocol-defined waits. Using the flag documents the wait intent for the team-lead's TaskGet
+define the teammate-facing metadata contract for protocol-defined waits. Using the flag documents the wait intent for the team-lead's `TaskGet`
 inspection and for post-hoc session review.
 
 ### SET — before going idle
@@ -363,7 +363,7 @@ TaskUpdate(taskId=taskId, metadata={
 })
 ```
 
-`since` must be tz-aware ISO-8601. A naive timestamp fails `validate_wait` and will be surfaced as malformed to any reader of the flag (team-lead TaskGet, audit, future consumers). Fail-loud.
+`since` must be tz-aware ISO-8601. A naive timestamp fails `validate_wait` and will be surfaced as malformed to any reader of the flag (team-lead `TaskGet`, audit, future consumers). Fail-loud.
 
 ### CLEAR — when the wait resolves
 
@@ -389,7 +389,7 @@ work predates.
    description, and the relevant metadata keys (`teachback_rejection`,
    `handoff_rejection`, or whichever key your wait names). Use the raw task file
    (`{taskId}.json` in the `Task list:` directory the platform names in your
-   context, via the Read tool) — `TaskGet` does not surface metadata.
+   context, via the `Read` tool) — `TaskGet` does not surface metadata.
 2. **Durable state is authoritative; message content is advisory confirmation.** If
    durable state shows your wait resolved — the gate task `completed`, a commit
    confirmation implied by task state, a rejection record present — CLEAR the wait
@@ -435,14 +435,14 @@ Unknown keys are preserved (forward-compat).
 The `wait_stale` primitive in `shared.intentional_wait` considers the flag stale after 30
 minutes from `since`. The `missed_wake_scan` hook surfaces `awaiting_lead_completion` waits stale past
 this threshold to the team-lead; for all other reasons the flag is advisory
-metadata the team-lead may inspect via TaskGet. If your wait genuinely takes longer, re-SET with a fresh `since` so
+metadata the team-lead may inspect via `TaskGet`. If your wait genuinely takes longer, re-SET with a fresh `since` so
 later inspection reflects the real duration.
 
 ### When NOT to set
 
 - **Consultant mode** (no owned `in_progress` task): the flag has no current consumer for consultants anyway.
 - **Waits < 30 seconds**: SET+CLEAR bookkeeping isn't worth it for brief waits.
-- **Completion gating**: the flag does NOT suppress the team-lead's HANDOFF-presence check. An empty or missing `metadata.handoff` will be flagged by the team-lead's TaskGet verification — store your HANDOFF before marking the task completed, regardless of intentional_wait state.
+- **Completion gating**: the flag does NOT suppress the team-lead's HANDOFF-presence check. An empty or missing `metadata.handoff` will be flagged by the team-lead's `TaskGet` verification — store your HANDOFF before marking the task completed, regardless of intentional_wait state.
 
 ## Consultant Mode
 
@@ -495,7 +495,7 @@ If task complexity differs significantly from what was delegated:
 
 ## Bash Commands in Config-Root Paths
 
-When running Bash commands that touch config-root paths, use simple standalone commands — one per Bash call. Do **not** add redirects (`2>/dev/null`), compound operators (`;`, `&&`, `||`), pipe chains (`|`), or command substitution (`` `...` ``, `$(...)`). Claude Code's Bash permission patterns are fragile and may not match compound commands, causing unnecessary permission prompts.
+When running Bash commands that touch config-root paths, use simple standalone commands — one per `Bash` call. Do **not** add redirects (`2>/dev/null`), compound operators (`;`, `&&`, `||`), pipe chains (`|`), or command substitution (`` `...` ``, `$(...)`). Claude Code's Bash permission patterns are fragile and may not match compound commands, causing unnecessary permission prompts.
 
 ## Before Completing
 

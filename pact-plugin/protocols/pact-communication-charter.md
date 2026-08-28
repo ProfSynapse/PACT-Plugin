@@ -17,7 +17,7 @@ The rules below govern how messages delivered via this tool actually behave.
 - Messages are queued-async, delivered at the recipient's next idle boundary.
 - Agents read queued messages in FIFO order on reaching idle.
 - No cancellation primitive exists — a follow-up message cannot supersede a queued earlier one.
-- The only mid-turn interrupt mechanism is user-side (Escape). Agent-to-agent SendMessage has no equivalent.
+- The only mid-turn interrupt mechanism is user-side (Escape). Agent-to-agent `SendMessage` has no equivalent.
 - `SendMessage` requires a specific `to=` recipient name. There is no broadcast addressing mode; reaching multiple teammates means iterating and sending one message per recipient (see [Lead-Side HALT Fan-Out](algedonic.md#lead-side-halt-fan-out) for the canonical pattern).
 
 ### Lead-Side Discipline — Verify Before Dispatching
@@ -42,15 +42,15 @@ Supersede-the-last-message does not exist. If message A is wrong and you send B,
 
 #### Escalation for In-Flight Halt
 
-For in-flight damage that is unacceptable, escalate to the user for manual interrupt — do not attempt to fake sync interrupt via rapid-fire SendMessage.
+For in-flight damage that is unacceptable, escalate to the user for manual interrupt — do not attempt to fake sync interrupt via rapid-fire `SendMessage`.
 
 *Failure shape: team-lead detects a teammate executing destructive work mid-turn; queues rapid-fire HALT messages instead of asking the user to press Escape. Each HALT lands at the teammate's next idle; the destructive tool call completes before any HALT is read.*
 
 #### Dispatch Commit Point
 
-Treat task creation + `TaskUpdate(owner)` as the dispatch commit point; SendMessage is supplemental context.
+Treat task creation + `TaskUpdate(owner)` as the dispatch commit point; `SendMessage` is supplemental context.
 
-*Failure shape: team-lead sends a SendMessage with task instructions but skips the TaskUpdate(owner) step. The teammate's TaskList shows no assigned task; the SendMessage lands as orphan context with no work-tracking anchor, no teachback gate, and no completion handle.*
+*Failure shape: team-lead sends a `SendMessage` with task instructions but skips the `TaskUpdate(owner)` step. The teammate's `TaskList` shows no assigned task; the `SendMessage` lands as orphan context with no work-tracking anchor, no teachback gate, and no completion handle.*
 
 #### Wait for In-Flight Context
 
@@ -60,7 +60,7 @@ Wait for in-flight context before composing your dispatch. If a peer has an outs
 
 #### Pre-Send Self-Check
 
-Before every SendMessage, run through:
+Before every `SendMessage`, run through:
 
 1. **Is the teammate idle?** If not, my message queues; accept that or wait.
 2. **Is more context likely incoming?** A peer's outstanding query, an unfulfilled dispatch I issued, or my own pending Read/Bash result I have not yet read — wait for it.
@@ -72,7 +72,7 @@ Before every SendMessage, run through:
 
 #### Forwarding-Chain Hygiene
 
-If teammate A produces info teammate B needs, prefer direct A→B SendMessage with a brief CC-summary to the team-lead, rather than A→lead→B routing. Halves idle-boundary latency. Reserve team-lead-routing for cases where the team-lead specifically owns the routing decision (priority arbitration, scope reassignment).
+If teammate A produces info teammate B needs, prefer direct A→B `SendMessage` with a brief CC-summary to the team-lead, rather than A→lead→B routing. Halves idle-boundary latency. Reserve team-lead-routing for cases where the team-lead specifically owns the routing decision (priority arbitration, scope reassignment).
 
 - **DON'T** relay design notes, query results, or HANDOFF excerpts from one teammate to another — that's a routing hop with no team-lead-owned decision in it. Send direct.
 - **DO** ask the team-lead to choose which of two teammates should take a task, or to arbitrate a scope conflict — those are decisions the team-lead owns.
@@ -81,7 +81,7 @@ If teammate A produces info teammate B needs, prefer direct A→B SendMessage wi
 
 #### Wait for In-Flight Context
 
-Before composing any outbound SendMessage (peer-to-peer or to lead), wait for your own pending inputs. If you have an unread Read/Bash result, an outstanding peer query, or a dispatch you yourself issued that has not yet completed, hold the outbound until inputs land. Same **premature-dispatch** failure shape as team-lead-side — see [the team-lead-side rule](#wait-for-in-flight-context).
+Before composing any outbound `SendMessage` (peer-to-peer or to lead), wait for your own pending inputs. If you have an unread Read/Bash result, an outstanding peer query, or a dispatch you yourself issued that has not yet completed, hold the outbound until inputs land. Same **premature-dispatch** failure shape as team-lead-side — see [the team-lead-side rule](#wait-for-in-flight-context).
 
 *Failure shape: backend-coder mid-task with a pending Bash result; a peer pings; backend-coder drafts a peer-to-peer reply now and an addendum after the Bash returns. Two messages queue at the peer's idle; the first is composed against framing the Bash result would have shaped.*
 
@@ -109,10 +109,10 @@ Before resending an apparently-unacknowledged message, verify the addressee has 
 
 - Peer-to-peer: do not assume a peer saw your message before their next tool call. Peer's in-flight action runs to completion before they read inbound.
 - Prefer peer-to-peer for context forwarding — see [the team-lead-side Forwarding-Chain Hygiene rule](#forwarding-chain-hygiene). If your work produces info another teammate would benefit from, send directly to them with a brief CC-summary to the team-lead.
-- Apply the **Pre-Send Self-Check** above before any outbound SendMessage — the questions are universal to any sender, not team-lead-only.
+- Apply the **Pre-Send Self-Check** above before any outbound `SendMessage` — the questions are universal to any sender, not team-lead-only.
 
 ### Algedonic-Signal Latency Caveat
-- HALT signals via SendMessage have idle-boundary latency like any other message.
+- HALT signals via `SendMessage` have idle-boundary latency like any other message.
 - For immediate halt of in-flight teammate work, user-side manual interrupt is required.
 - The team-lead's responsibility to "surface immediately" means at the team-lead's next idle, not at arbitrary real-time.
 

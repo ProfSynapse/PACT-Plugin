@@ -27,7 +27,7 @@ Spawn the session secretary using single-task dispatch — the `pact-secretary` 
 
 The secretary delivers the session briefing at spawn, answers memory queries during the session, and processes HANDOFFs at workflow boundaries. The briefing task is a discrete deliverable: the secretary MUST self-complete it (`TaskUpdate(status="completed")`) as the final act of delivering the briefing — you do NOT complete it, and you MUST NOT expect to. Completing the task does NOT end the secretary's role; it continues as memory consultant and HANDOFF harvester for the rest of the session. Memory queries from any other agent are blocked until the secretary is alive.
 
-Spawn the secretary **only once per session** — reuse the same secretary for any subsequent memory queries or HANDOFF harvesting — AND respawn it after `/PACT:refresh`, whose shutdown stopped the previous secretary process. Post-refresh, respawning is MANDATORY BEFORE any SendMessage to the secretary name: a send to the stopped name resurrects its stale pre-refresh transcript instead of starting fresh.
+Spawn the secretary **only once per session** — reuse the same secretary for any subsequent memory queries or HANDOFF harvesting — AND respawn it after `/PACT:refresh`, whose shutdown stopped the previous secretary process. Post-refresh, respawning is MANDATORY BEFORE any `SendMessage` to the secretary name: a send to the stopped name resurrects its stale pre-refresh transcript instead of starting fresh.
 
 ## Step 3 — Surface paused state
 

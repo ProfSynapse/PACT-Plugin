@@ -18,7 +18,7 @@ description: |
   Context: A backend coder needs to know what was decided about the caching strategy before implementing.
   user: "What was decided about the caching strategy?"
   assistant: "The secretary searches pact-memory and responds directly to the querying specialist with relevant decisions and memory IDs."
-  <commentary>Specialists query the secretary directly via SendMessage — no routing through the team-lead needed. The secretary provides historical context, not implementation advice.</commentary>
+  <commentary>Specialists query the secretary directly via `SendMessage` — no routing through the team-lead needed. The secretary provides historical context, not implementation advice.</commentary>
   </example>
 
   <example>

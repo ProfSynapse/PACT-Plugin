@@ -77,7 +77,7 @@ Derive agent state from progress signals (see agent-teams skill, Progress Signal
 |-------|-----------|-------------------|
 | **Converging** | Progress signals show forward movement (files modified, tests passing) | No intervention needed |
 | **Exploring** | Progress signals show searching behavior (reading files, no modifications yet) | Normal for early task stages; intervene if persists past ~50% of expected duration |
-| **Stuck** | No progress signals for extended period; stall detection triggers | Send context/guidance via SendMessage; escalate to imPACT if unresponsive |
+| **Stuck** | No progress signals for extended period; stall detection triggers | Send context/guidance via `SendMessage`; escalate to imPACT if unresponsive |
 
 **State transitions**:
 - Exploring → Converging: Normal (agent found approach, started implementing)
@@ -115,7 +115,7 @@ CalibrationRecord:
 
 **Post-cycle comparison**: During HANDOFF processing, the secretary:
 1. Reads feature task metadata for initial_variety_score
-2. Scans TaskList for blocker count and phase rerun count
+2. Scans `TaskList` for blocker count and phase rerun count
 3. Asks the team-lead for a brief difficulty assessment (higher, lower, or about the same)
 4. Computes the full CalibrationRecord and saves to pact-memory
 5. If drift exceeds 2 in any dimension, notes as significant for future Learning II queries
@@ -161,7 +161,7 @@ Portability is not the fault. A rationale that names a coupled file pair or a pe
 
 The wrap-up retrospective's Q5 reports the CALIBRATION DELTA — the feature-level variety estimate against the distribution of per-dispatch variety the arc actually produced. It does NOT report a stamping-compliance ratio: stamping is refused at the dispatch-wiring write per the Enforcement split above, so compliance has no variance left to measure. Whether the estimate was well-calibrated is the question enforcement cannot answer, and it is the one this question keeps.
 
-**Population — the `dispatch_site` journal stream, scoped to the current arc.** Its membership is the OWNER-WITNESSED dispatch sites: the emit fires on a TaskUpdate that names a pact-specialist `owner` on a non-teachback, non-exempt task, and on nothing else — one event means one dispatch by construction, never by inference. An owner write in a SPLIT wiring (owner set in one update, blockers at creation or in another) is a full witness; the composite owner+addBlockedBy write is NOT required. Review-panel dispatches are EXCLUDED, because the peer-review path dispatches reviewers without ever writing owner on the task — no owner write witnesses them, and covering them would mean inferring ownership from a display convention, which keys membership on something that moves. Wanting them counted is remedied by canonical owner wiring at dispatch — a practice-side change, never a widening of the emit's inference — and they stay visible through the `review_dispatch` stream. MEMBERSHIP DEPENDS ON THE TEACHBACK SUBJECT CONVENTION: a teachback Task-A gate receives the same owner-only split wiring a work task does, so the subject carve-out is the SOLE discriminator excluding those gates, and a gate whose subject loses the TEACHBACK marker is counted as a site. Because the platform reuses task_ids across arcs in a resumed session, the stream MUST be scoped to the current arc before use. Do NOT widen the population to another source — a scan of the task store answers "which tasks happen to carry a stamp", whose membership moves with any later decision about which sites get stamped, and the substitution is silent because the wrong population still yields a mean that renders.
+**Population — the `dispatch_site` journal stream, scoped to the current arc.** Its membership is the OWNER-WITNESSED dispatch sites: the emit fires on a `TaskUpdate` that names a pact-specialist `owner` on a non-teachback, non-exempt task, and on nothing else — one event means one dispatch by construction, never by inference. An owner write in a SPLIT wiring (owner set in one update, blockers at creation or in another) is a full witness; the composite owner+addBlockedBy write is NOT required. Review-panel dispatches are EXCLUDED, because the peer-review path dispatches reviewers without ever writing owner on the task — no owner write witnesses them, and covering them would mean inferring ownership from a display convention, which keys membership on something that moves. Wanting them counted is remedied by canonical owner wiring at dispatch — a practice-side change, never a widening of the emit's inference — and they stay visible through the `review_dispatch` stream. MEMBERSHIP DEPENDS ON THE TEACHBACK SUBJECT CONVENTION: a teachback Task-A gate receives the same owner-only split wiring a work task does, so the subject carve-out is the SOLE discriminator excluding those gates, and a gate whose subject loses the TEACHBACK marker is counted as a site. Because the platform reuses task_ids across arcs in a resumed session, the stream MUST be scoped to the current arc before use. Do NOT widen the population to another source — a scan of the task store answers "which tasks happen to carry a stamp", whose membership moves with any later decision about which sites get stamped, and the substitution is silent because the wrong population still yields a mean that renders.
 
 **Terms.** One pass of the pure helper `extract_final_dispatch_coverage` over the `dispatch_site` stream and the `task_metadata_snapshot` stream returns a dict of ten values. MEMBERSHIP comes from `dispatch_site` and the VALUE comes from the latest `task_metadata_snapshot` for the same task, so the distribution holds the FINAL total rather than the as-dispatched one:
 
@@ -212,7 +212,7 @@ The lead reviews `variety_acknowledgment` as part of teachback acceptance per [p
 
 - **`"yes"`**: standard teachback acceptance; lead marks Task A completed + sends paired wake-SendMessage.
 - **`"no"` or `"concern"`**: lead has two corrective options before acceptance:
-  - *Orchestrator-side correction* (preferred when teammate's flag is correct): re-stamp `metadata.variety` on Task B via TaskUpdate with refined per-dimension rationales, THEN accept the teachback. The teammate's acknowledgment becomes part of the audit trail; no rejection needed.
+  - *Orchestrator-side correction* (preferred when teammate's flag is correct): re-stamp `metadata.variety` on Task B via `TaskUpdate` with refined per-dimension rationales, THEN accept the teachback. The teammate's acknowledgment becomes part of the audit trail; no rejection needed.
 
     > ⚠️ To re-stamp, RE-SEND THE FULL `variety` OBJECT in ONE `TaskUpdate` call, and include each field you did not revise, unchanged. A write that names `variety` REPLACES the whole object, and it erases each field you omit. It reports no error. Then read the task file back and enumerate the keys of `metadata.variety`.
 

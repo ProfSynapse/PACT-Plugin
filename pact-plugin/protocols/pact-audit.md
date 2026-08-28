@@ -27,8 +27,8 @@ The auditor operates primarily through file observation, not messaging. This min
 | Method | When | Cost |
 |--------|------|------|
 | **File reading** (git diff, Read) | Primary — every observation cycle | Zero disruption |
-| **TaskList monitoring** | Check coder progress, task status | Zero disruption |
-| **SendMessage to coder** | Only when file observation raises a question code alone can't answer | Low disruption (one specific question per message) |
+| **`TaskList` monitoring** | Check coder progress, task status | Zero disruption |
+| **`SendMessage` to coder** | Only when file observation raises a question code alone can't answer | Low disruption (one specific question per message) |
 | **RED signal to orchestrator** | Clear architecture violation or requirement misunderstanding | Appropriate disruption |
 
 **Rule of thumb**: 80%+ of observation should be silent file reading. If the auditor is messaging coders frequently, it's disrupting more than observing.
@@ -38,7 +38,7 @@ The auditor operates primarily through file observation, not messaging. This min
 **Phase A: Warm-up** (while coders start):
 1. Read all available references (architecture doc, plan, dispatch context)
 2. Identify key interfaces, high-risk dimensions, cross-cutting requirements
-3. Note coder assignments from TaskList
+3. Note coder assignments from `TaskList`
 4. Wait for coders to produce initial output before observing. The wake is the orchestrator's stage-ready relay — no PACT hook sends a message, so do not end the turn with a background process as the route back; backgrounding a long command is fine while the auditor stays in its turn and polls it. If no relay has arrived, poll `git status --porcelain` on a bounded cadence within the current turn rather than ending it. If the cadence is exhausted and the turn must end, SET `intentional_wait` (reason `awaiting_coder_output`, resolver `lead`) first, and CLEAR it on the relay.
 
 **Phase B: Observation cycles** (periodic):
@@ -47,7 +47,7 @@ The auditor operates primarily through file observation, not messaging. This min
 3. Assess concern level and respond:
    - No concern → silent, continue next cycle
    - Minor concern → log internally, observe next cycle (may self-resolve)
-   - Significant but ambiguous → SendMessage to coder (one specific question)
+   - Significant but ambiguous → `SendMessage` to coder (one specific question)
    - Clear violation → RED signal to orchestrator immediately
 
 **Phase C: Final observation** (triggered by an orchestrator message, or by all coders completing — a state the auditor checks, not a message that arrives):
@@ -110,7 +110,7 @@ Action: [None (GREEN) / Route to test (YELLOW) / Intervene (RED)]
 |--------|---------|------|---------------------|
 | **GREEN** | On track | Final summary; silence during cycles is implicit GREEN | None needed |
 | **YELLOW** | Worth noting | Minor drift, convention inconsistency, potential edge case | Pass finding to test engineer as focus area |
-| **RED** | Intervene now | Architecture violation, requirement misunderstanding, security concern | SendMessage to affected coder; may pause coder's work |
+| **RED** | Intervene now | Architecture violation, requirement misunderstanding, security concern | `SendMessage` to affected coder; may pause coder's work |
 
 **Before emitting RED**: Verify via targeted question to the coder when practical. Skip verification for clear-cut violations (e.g., wrong module boundary, missing auth check on sensitive endpoint).
 
@@ -150,7 +150,7 @@ The auditor uses signal-based completion rather than standard HANDOFF:
 
 The auditor is **non-blocking**: never hold the workflow waiting for its verdict. Absence of `audit_summary` is not a verdict — do not read silence as GREEN, as RED, or as "no findings," and never write or overwrite a verdict on inferred silence. Nor is absence a guarantee that a verdict is still coming: a concurrent auditor can be waiting on a wake it never received.
 
-Treat absence as a prompt to act, not to conclude. Before dispatching TEST, confirm one of: `audit_summary` is present, or an audit has been dispatched against the committed artifact. If neither holds, SendMessage the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
+Treat absence as a prompt to act, not to conclude. Before dispatching TEST, confirm one of: `audit_summary` is present, or an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
 
 The team-lead retains the authority to override an auditor verdict (a `TaskUpdate` that rewrites `audit_summary`), and that override is made safe rather than blocked. When a lead `TaskUpdate` overwrites an auditor-authored verdict, the lifecycle gate preserves the auditor's original to `metadata.audit_summary_authored`, routes the lead's value to `metadata.lead_close_note`, and emits an `audit_summary_overwrite` advisory (severity-escalated when the override lowers the verdict, e.g. RED→GREEN). The verdict is therefore never silently lost; a consumer reading the authoritative auditor signal should prefer `metadata.audit_summary_authored` when present. This front-line discipline (never overwrite on inferred silence) reduces how often the gate fires — the gate is the durable backstop, not a substitute for the discipline.
 

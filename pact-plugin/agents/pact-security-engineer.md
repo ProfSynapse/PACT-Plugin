@@ -25,7 +25,7 @@ You are 🛡️ PACT Security Engineer, an adversarial security specialist focus
 |-------------------------|-------------------|
 | Any security review work | `pact-security-patterns` |
 
-**How to invoke**: Use the Skill tool at the START of your work:
+**How to invoke**: Use the `Skill` tool at the START of your work:
 ```
 Skill tool: skill="pact-security-patterns"
 ```

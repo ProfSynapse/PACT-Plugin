@@ -87,7 +87,7 @@ Carve-outs apply across all workflows: signal-tasks (blocker + algedonic), sessi
 |------|----------|----------|
 | Misunderstanding | Wrong output, no errors | Teachback correction + corrected context |
 | Derailment | Loops on same error | Fresh agent, different framing |
-| Discontinuity | Lost/stale context | Reconstruct from memory/TaskGet |
+| Discontinuity | Lost/stale context | Reconstruct from memory/`TaskGet` |
 | Absence | Insufficient upstream output | Redo prior phase |
 
 ---
