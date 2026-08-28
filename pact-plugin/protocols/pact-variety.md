@@ -210,7 +210,7 @@ The teammate becomes the peer reviewer of the orchestrator's variety scoring. Th
 
 The lead reviews `variety_acknowledgment` as part of teachback acceptance per [pact-completion-authority.md §Teachback Review](pact-completion-authority.md#teachback-review). Two acceptance paths:
 
-- **`"yes"`**: standard teachback acceptance; lead marks Task A completed + sends paired wake-SendMessage.
+- **`"yes"`**: standard teachback acceptance; lead marks Task A completed + sends paired wake-signal `SendMessage`.
 - **`"no"` or `"concern"`**: lead has two corrective options before acceptance:
   - *Orchestrator-side correction* (preferred when teammate's flag is correct): re-stamp `metadata.variety` on Task B via `TaskUpdate` with refined per-dimension rationales, THEN accept the teachback. The teammate's acknowledgment becomes part of the audit trail; no rejection needed.
 

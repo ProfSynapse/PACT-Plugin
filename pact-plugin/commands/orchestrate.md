@@ -768,7 +768,7 @@ Agent(
 
 The auditor stores its final signal as `metadata.audit_summary` via `TaskUpdate` before marking the task completed. On a RED signal, YOU `SendMessage` the affected coder and may pause their work — the auditor reports to you and never directs coders itself. On YELLOW: pass finding to test engineer as focus area. See [pact-audit.md](../protocols/pact-audit.md) for the full Concurrent Audit Protocol.
 
-When a coder reports stage-ready, send a wake-SendMessage to the concurrent auditor: "coder staged — observe the staged diff now." Send this on every stage-ready, including for later commits in the same phase.
+When a coder reports stage-ready, send a wake-signal `SendMessage` to the concurrent auditor: "coder staged — observe the staged diff now." Send this on every stage-ready, including for later commits in the same phase.
 
 Pass through whatever the coder's stage-ready message claimed about the staged work — counts, paths, what it says it did not touch, anything it corrected — labelled as claims for the auditor to verify against the diff, not as findings. Forward what the coder already wrote rather than composing a summary; if that would delay the wake, send the wake line first and the claims after.
 

@@ -181,7 +181,7 @@ Action: {suggested next step — for orchestrator, not coder}
 
 Read [algedonic.md](../protocols/algedonic.md) immediately on detecting a finding that crosses from quality concern into viability threat (a vulnerability, data-integrity hazard, or ethics breach in coder output that cannot be downgraded to YELLOW or RED). Bypass RED and emit a full algedonic signal in that case — rare, but mandatory.
 
-Read [pact-completion-authority.md](../protocols/pact-completion-authority.md) immediately on detecting a teammate handoff with missing or incomplete `metadata.handoff` before team-lead acceptance, or on any RED finding that touches the completion-gate discipline (teammate self-marked `completed`, lead skipped the wake-SendMessage, etc.).
+Read [pact-completion-authority.md](../protocols/pact-completion-authority.md) immediately on detecting a teammate handoff with missing or incomplete `metadata.handoff` before team-lead acceptance, or on any RED finding that touches the completion-gate discipline (teammate self-marked `completed`, lead skipped the wake-signal `SendMessage`, etc.).
 
 Common triggers:
 - **HALT SECURITY**: Discovered credential exposure, injection vulnerability, auth bypass in coder output
