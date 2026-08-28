@@ -75,9 +75,9 @@ A_id = TaskCreate(
                 "Submit TEACHBACK by writing metadata.teachback_submit using the CANONICAL field schema (do NOT improvise key names): understanding, most_likely_wrong, least_confident_item, first_action, variety_acknowledgment (an OBJECT). See the pact-teachback skill for field semantics. "
                 "SET intentional_wait{reason=awaiting_lead_completion, expected_resolver=lead, since=<canonical_since() output>}. Idle. "
                 "DO NOT mark this task completed — team-lead-only completion. Lead will mark completed "
-                "after teachback acceptance, then send a wake-SendMessage confirming Task B is claimable. "
+                "after teachback acceptance, then send a wake-signal SendMessage confirming Task B is claimable. "
                 "If TEACHBACK is rejected, team-lead writes metadata.teachback_rejection and sends a "
-                "wake-SendMessage with corrections; revise on this same task.\n\n"
+                "wake-signal SendMessage with corrections; revise on this same task.\n\n"
                 "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\n"
                 "Mission for Task B: the primary-work task assigned to you in your TaskList (the work task, NOT this TEACHBACK gate task), identified by its subject (the '{role}: {mission}' pattern). Claim it after this teachback is accepted."
 )
