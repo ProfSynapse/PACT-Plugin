@@ -33,6 +33,10 @@ read is demoted to the lead's DEFERRED audit (disk channel):
     - P11: the ct-teachback Flow step-3 payload-carrying-notify reference
       (extract + SSOT mirror) — its lockstep revert kept both this module
       and the byte-mirror gate green before this case.
+    - P12: the payload compactness envelope (<5KB + silent-truncation
+      mechanism) on both teammate notify surfaces — unpinned before this
+      case; the dual-channel design carries the payload on the measured
+      message channel AND the silently-truncating metadata channel.
 
 Inherited vocabulary guard (P9, no new case here): the NEW lead-side
 prose is covered by the existing retired-"wake-send"/"wake send" absence
@@ -392,6 +396,51 @@ def test_ct_teachback_flow_names_payload_carrying_notify(doc_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# P12 — payload compactness envelope (both teammate notify surfaces).
+# ---------------------------------------------------------------------------
+
+# The <5KB envelope keeps the payload inside the channel's measured
+# territory AND inside the metadata write's non-truncating range (the
+# TaskUpdate silent-truncation sibling failure is live). Measured before
+# this pin: the compactness sentence had no pin on either surface — a
+# revert was caught only by review. The anchored span covers both the
+# instruction and its mechanism; "under 5KB" alone would stay green under
+# a reword that kept the number but dropped the silent-truncation reason.
+COMPACTNESS_PINS = [
+    (
+        AGENT_TEAMS_SKILL,
+        "Keep the payload under 5KB — the metadata write silently "
+        "truncates oversize payloads",
+    ),
+    (
+        TEACHBACK_SKILL,
+        "Keep the payload under 5KB — the metadata write silently "
+        "truncates oversize payloads",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path, phrase",
+    COMPACTNESS_PINS,
+    ids=[f"{p.name}::compactness" for p, _ in COMPACTNESS_PINS],
+)
+def test_payload_compactness_envelope_pinned(doc_path: Path, phrase: str):
+    """Both teammate notify templates must keep teaching the payload
+    compactness envelope — the dual-channel design carries the payload on
+    two channels, and only one of them (the message) was measured
+    non-truncating through 32KB; the metadata write silently truncates
+    oversize payloads. Dropping the envelope instruction re-opens the
+    silent-truncation path the <5KB discipline exists to bound."""
+    assert _phrase(phrase) in _normalized(doc_path), (
+        f"{doc_path.name}: payload compactness envelope {phrase!r} not "
+        f"found. The notify template must keep the <5KB envelope with its "
+        f"silent-truncation mechanism; if the envelope was reworded "
+        f"intentionally, update this pin in lockstep on both surfaces."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Counter-test flip-set record (measured at authoring time in a TEMP COPY
 # of the plugin tree; see module docstring). Each edited file restored
 # individually to its pre-change state (git show e2afa3e5:<path> over the
@@ -413,6 +462,14 @@ def test_ct_teachback_flow_names_payload_carrying_notify(doc_path: Path):
 # write-order triple pre-dates this arc (the arc appended clauses to the
 # blockquote), so the pre-change file already carries the pinned wording —
 # P10 flips under the in-place deletion below instead.
+#
+# P12 (added after the compactness envelope landed): the envelope sentence
+# post-dates e2afa3e5, so a file revert to e2afa3e5 also flips it — per-file
+# revert counts become agent-teams 4 (P1, P5, P7-absence, P12) and teachback
+# 4 (P2, P5, P6-absence, P12), total 22 cases. Verified by targeted
+# mutation: deleting the envelope sentence from either surface flips
+# exactly that surface's P12 case (1 failed per single-surface deletion,
+# 2 failed under both-surface deletion).
 #
 # Targeted in-place mutations (file otherwise at HEAD), measured in the same
 # temp copy — predicted cardinalities all confirmed:
