@@ -35,8 +35,9 @@ When a downstream agent receives an upstream handoff (via `TaskGet`), their firs
    "[{sender}→team-lead] Teachback submitted on Task #A. Idling on awaiting_lead_completion."
 4. Agent SETs `intentional_wait{reason=awaiting_lead_completion}` and idles — it does NOT
    begin Task B (blocking)
-5. Team-lead reviews the teachback. On acceptance: wake-`SendMessage` FIRST, then
-   `TaskUpdate(A, status="completed")`, which unblocks Task B. On misunderstanding: write
+5. Team-lead reviews the teachback. On acceptance:
+   `TaskUpdate(A, status="completed")` FIRST — this unblocks Task B — then
+   the wake-`SendMessage`. On misunderstanding: write
    `metadata.teachback_rejection` + a correction `SendMessage`; the agent revises on Task A.
    The block holds until acceptance.
 ```

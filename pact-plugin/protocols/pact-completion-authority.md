@@ -1,6 +1,6 @@
 ## Completion Authority
 
-> **Purpose**: Lead-only completion of teammate-owned tasks. Acceptance is a two-call atomic pair (wake-signal SendMessage FIRST, then status flip); rejection is dual-channel (wake-signal SendMessage FIRST, then metadata write).
+> **Purpose**: Lead-only completion of teammate-owned tasks. Acceptance is a two-call atomic pair (status flip FIRST, then wake-signal SendMessage); rejection is dual-channel (metadata write FIRST, then wake-signal SendMessage).
 >
 > **Audience**: PACT team-lead (orchestrator). Teammate-side rules live in [pact-agent-teams §On Completion](../skills/pact-agent-teams/SKILL.md#on-completion--handoff-required) and [pact-agent-teams §On Rejection](../skills/pact-agent-teams/SKILL.md#on-rejection-wake-signal-receipt).
 
@@ -8,19 +8,19 @@ You — the team-lead — are the **only** actor who marks teammate-owned tasks 
 
 `blockedBy` is pull-only at the platform level — the platform does NOT push a wake on blocker resolution; `blockedBy` is computed at TaskList query time. Idle teammates cannot self-wake to re-poll, so the wake-signal SendMessage is paired with each metadata or status write that resolves their wait.
 
-### Acceptance — two-call atomic pair (BOTH required, SendMessage FIRST)
+### Acceptance — two-call atomic pair (BOTH required, TaskUpdate FIRST)
 
-1. `SendMessage(to="<teammate>", "[team-lead→<teammate>] Task #<id> accepted. Work complete.", summary="Task accepted")` — wakes the idle teammate so they can claim the next task; writes the wake to the inbox file BEFORE the status flip
-2. `TaskUpdate(taskId, status="completed")` — status flip; auto-unblocks any tasks with `blockedBy=[<id>]`
+1. `TaskUpdate(taskId, status="completed")` — status flip; auto-unblocks any tasks with `blockedBy=[<id>]`
+2. `SendMessage(to="<teammate>", "[team-lead→<teammate>] Task #<id> accepted. Work complete.", summary="Task accepted")` — wakes the idle teammate so they can claim the next task
 
-Both calls are **required**, SendMessage FIRST. Send the wake before the status flip so acceptance mirrors the teammate's own metadata-before-wake ordering — the wake-signal is the teammate's content-arrival trigger, the same role the teammate's notify SendMessage plays for your read. Skipping the SendMessage entirely strands the teammate idle on `awaiting_lead_completion` until something else (peer message, your next dispatch) wakes them; `blockedBy` resolution is invisible without the wake.
+Both calls are **required**, TaskUpdate FIRST — the wake-signal SendMessage is the last call. If the TaskUpdate succeeds and the SendMessage errors, retry the send on the tool error; a teammate left gate-open with no wake is recovered by their next idle-boundary disk re-read. Skipping the SendMessage entirely strands the teammate idle on `awaiting_lead_completion` until something else (peer message, your next dispatch) wakes them; `blockedBy` resolution is invisible without the wake.
 
-### Rejection — two-call atomic pair (BOTH required, SendMessage FIRST)
+### Rejection — two-call atomic pair (BOTH required, TaskUpdate FIRST)
 
-1. `SendMessage(to="<teammate>", "[team-lead→<teammate>] Rejected on Task #<id>. See metadata.{teachback,handoff}_rejection. Revise.", summary="Rejected; revise")` — wakes the teammate so they read the corrections; writes the wake to the inbox file BEFORE the metadata write
-2. `TaskUpdate(taskId, metadata={"teachback_rejection": {...}})` (Task A) OR `TaskUpdate(taskId, metadata={"handoff_rejection": {...}})` (Task B) — payload `{reason, corrections, since, revision_number}`
+1. `TaskUpdate(taskId, metadata={"teachback_rejection": {...}})` (Task A) OR `TaskUpdate(taskId, metadata={"handoff_rejection": {...}})` (Task B) — payload `{reason, corrections, since, revision_number}`
+2. `SendMessage(to="<teammate>", "[team-lead→<teammate>] Rejected on Task #<id>. See metadata.{teachback,handoff}_rejection. Revise.", summary="Rejected; revise")` — wakes the teammate so they read the corrections
 
-Both calls are **required**, and the ordering matches Acceptance for the same reason: the wake-signal `SendMessage` is what un-idles the teammate, who cannot self-observe the rejection metadata on a pull-only wait. Skipping the SendMessage leaves the teammate idle on stale `awaiting_lead_completion`, never seeing the corrections — symmetric failure to skipping wake on acceptance. The teammate's `intentional_wait` does not auto-clear when you write rejection metadata; only the wake-signal triggers their CLEAR-and-revise flow. **3+ rejection cycles** on the same task is an imPACT META-BLOCK signal.
+Both calls are **required**, and the ordering matches Acceptance for the same reason: the wake-signal `SendMessage` is what un-idles the teammate, who cannot self-observe the rejection metadata on a pull-only wait. If the TaskUpdate succeeds and the SendMessage errors, retry the send on the tool error. Skipping the SendMessage leaves the teammate idle on stale `awaiting_lead_completion`, never seeing the corrections — symmetric failure to skipping wake on acceptance. The teammate's `intentional_wait` does not auto-clear when you write rejection metadata; only the wake-signal triggers their CLEAR-and-revise flow. **3+ rejection cycles** on the same task is an imPACT META-BLOCK signal.
 
 **Teammate self-completion carve-outs (predicate-witnessed)** — narrow exemptions where the teammate marks `completed` themselves:
 
@@ -113,7 +113,7 @@ plus the teammate-side disk-first re-read in
 [pact-agent-teams §On Wake](../skills/pact-agent-teams/SKILL.md#on-wake-disk-first-re-read-seam-agnostic))
 plus the duration-keyed `missed_wake_scan` hook that re-surfaces stale
 `awaiting_lead_completion` waits at your next user prompt or session start. The
-two-call atomic pairs above are unchanged by this rule — SendMessage-first ordering
+two-call atomic pairs above are unchanged by this rule — TaskUpdate-first ordering
 stays load-bearing.
 
 ---
@@ -160,9 +160,10 @@ TaskUpdate(A_id, metadata={"teachback_resolution": {
 
 This write is optional but recommended for audit. It is NOT one of the required calls below.
 
-**Approving the TEACHBACK — two-call atomic pair (BOTH required, SendMessage FIRST)**:
+**Approving the TEACHBACK — two-call atomic pair (BOTH required, TaskUpdate FIRST)**:
 
 ```
+TaskUpdate(A_id, status="completed")
 SendMessage(
     to="<teammate>",
     message=(
@@ -171,10 +172,9 @@ SendMessage(
     ),
     summary="Teachback accepted; Task B claimable"
 )
-TaskUpdate(A_id, status="completed")
 ```
 
-The status flip is the load-bearing approval action; the SendMessage is the load-bearing wake. Ordering is load-bearing for the same reason as the top-of-file Acceptance pair — SendMessage-first ensures the lifecycle gate's PostToolUse scan sees the wake on disk before the status flip fires.
+The status flip is the load-bearing approval action; the SendMessage is the load-bearing wake. Ordering is load-bearing for the same reason as the top-of-file Acceptance pair — TaskUpdate first, then the wake-signal SendMessage as the last call; if the TaskUpdate succeeds and the SendMessage errors, retry the send on the tool error.
 
 **Rejecting the TEACHBACK** — see [Rejection Flow](#rejection-flow) below.
 
@@ -224,9 +224,15 @@ teammate misunderstanding the original dispatch.
 
 Teachback or HANDOFF inadequate? Reject with **dual-channel delivery** (metadata + SendMessage). Same shape for both rejection types:
 
-**Teachback rejection** (SendMessage FIRST):
+**Teachback rejection** (TaskUpdate FIRST):
 
 ```
+TaskUpdate(A_id, metadata={"teachback_rejection": {
+    "reason": "<one-line summary>",
+    "corrections": ["<correction 1>", "<correction 2>", ...],
+    "since": "<canonical_since() output>",
+    "revision_number": 1
+}})
 SendMessage(
     to="<teammate>",
     message=(
@@ -236,17 +242,17 @@ SendMessage(
     ),
     summary="Teachback rejected; revise"
 )
-TaskUpdate(A_id, metadata={"teachback_rejection": {
-    "reason": "<one-line summary>",
-    "corrections": ["<correction 1>", "<correction 2>", ...],
+```
+
+**HANDOFF rejection** (Task B, TaskUpdate FIRST):
+
+```
+TaskUpdate(B_id, metadata={"handoff_rejection": {
+    "reason": "...",
+    "corrections": [...],
     "since": "<canonical_since() output>",
     "revision_number": 1
 }})
-```
-
-**HANDOFF rejection** (Task B, SendMessage FIRST):
-
-```
 SendMessage(
     to="<teammate>",
     message=(
@@ -255,12 +261,6 @@ SendMessage(
     ),
     summary="HANDOFF rejected; revise"
 )
-TaskUpdate(B_id, metadata={"handoff_rejection": {
-    "reason": "...",
-    "corrections": [...],
-    "since": "<canonical_since() output>",
-    "revision_number": 1
-}})
 ```
 
 **Why dual-channel**: metadata gives the durable revision spec the teammate reads on wake; SendMessage gives the wake itself. Single-channel via metadata only fails because the idle teammate can't self-wake to read it. Single-channel via SendMessage only loses durability — the corrections need to survive teammate compaction or agent restart.

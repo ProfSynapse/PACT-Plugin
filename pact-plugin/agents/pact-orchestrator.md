@@ -456,7 +456,7 @@ Use the same iterate-by-name pattern for any other team-lead-to-many signal (`pl
 | Before dispatching agent | TaskCreate Task A (TEACHBACK) + Task B (work); `TaskUpdate(A, owner=name, addBlocks=[B])` + `TaskUpdate(B, owner=name, addBlockedBy=[A])` — see §11 Dispatch pattern |
 | After dispatching agent | Teammate self-claims Task B via `TaskUpdate(taskId, status="in_progress")` **before any implementation tool-use** once it unblocks; the team-lead does NOT pre-set `in_progress` |
 | Teachback submitted (Task A) | Read raw JSON `metadata.teachback_submit`, validate per §12 Teachback Review, then Acceptance two-call atomic pair (§12) auto-unblocks Task B |
-| HANDOFF submitted (Task B) | Read raw JSON `metadata.handoff` (TaskGet is metadata-blind), then Acceptance two-call atomic pair (§12) — paired wake-`SendMessage` + `TaskUpdate(taskId, status="completed")` (SendMessage FIRST per the lifecycle-gate ordering invariant) |
+| HANDOFF submitted (Task B) | Read raw JSON `metadata.handoff` (TaskGet is metadata-blind), then Acceptance two-call atomic pair (§12) — `TaskUpdate(taskId, status="completed")` then the paired wake-signal `SendMessage` (TaskUpdate FIRST) |
 | Reading agent's full HANDOFF | `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" \| jq .metadata.handoff` (on-demand, raw JSON; `TaskGet` does NOT surface metadata.handoff) |
 | Creating downstream phase task | Include upstream task IDs in description for chain-read |
 | Agent reports blocker | `TaskCreate(subject: "BLOCKER: ...", metadata={"type": "blocker"})` then `TaskUpdate(agent_taskId, addBlockedBy: [blocker_taskId])`. **`metadata.type` is required** — `agent_handoff_emitter.py` inline-checks `metadata.type in ("blocker", "algedonic")` and SUPPRESSES journal emission for signal tasks; `shared/task_utils.py` and `shared/session_resume.py` use the same literal to CATEGORIZE signal tasks for recovery display. The subject prefix has no special meaning. |
@@ -484,19 +484,19 @@ When an agent reports a blocker or algedonic signal via `SendMessage`:
 
 You — the team-lead — are the **only** actor who marks teammate-owned tasks `completed`. `blockedBy` is pull-only at the platform level — idle teammates cannot self-wake to re-poll, so the wake-signal SendMessage paired with each metadata/status write is load-bearing.
 
-**Acceptance — two-call atomic pair (BOTH required, SendMessage FIRST)**
+**Acceptance — two-call atomic pair (BOTH required, TaskUpdate FIRST)**
 
-1. `SendMessage(to=<teammate>, "[team-lead→<teammate>] Task #<id> accepted...", summary="Task accepted")`
-2. `TaskUpdate(taskId, status="completed")`
+1. `TaskUpdate(taskId, status="completed")`
+2. `SendMessage(to=<teammate>, "[team-lead→<teammate>] Task #<id> accepted...", summary="Task accepted")`
 
-Both calls are required, in this order. SendMessage must precede TaskUpdate. Skipping the SendMessage leaves the teammate idle on `awaiting_lead_completion`; `blockedBy` resolution is invisible without the wake.
+Both calls are required, in this order. TaskUpdate must precede the wake-signal SendMessage — the wake is the last call. If the TaskUpdate succeeds and the SendMessage errors, retry the send on the tool error. Skipping the SendMessage leaves the teammate idle on `awaiting_lead_completion`; `blockedBy` resolution is invisible without the wake.
 
-**Rejection — two-call atomic pair (BOTH required, SendMessage FIRST)**
+**Rejection — two-call atomic pair (BOTH required, TaskUpdate FIRST)**
 
-1. `SendMessage(to=<teammate>, "[team-lead→<teammate>] Rejected on Task #<id>. See metadata...; revise.")`
-2. `TaskUpdate(taskId, metadata={"teachback_rejection": {...}})` OR `metadata={"handoff_rejection": {...}}` — payload `{reason, corrections, since, revision_number}`
+1. `TaskUpdate(taskId, metadata={"teachback_rejection": {...}})` OR `metadata={"handoff_rejection": {...}}` — payload `{reason, corrections, since, revision_number}`
+2. `SendMessage(to=<teammate>, "[team-lead→<teammate>] Rejected on Task #<id>. See metadata...; revise.")`
 
-Both calls are required, in this order. SendMessage must precede TaskUpdate. 3+ rejection cycles on the same task is an imPACT META-BLOCK signal.
+Both calls are required, in this order. TaskUpdate must precede the wake-signal SendMessage — the wake is the last call. If the TaskUpdate succeeds and the SendMessage errors, retry the send on the tool error. 3+ rejection cycles on the same task is an imPACT META-BLOCK signal.
 
 Teammate self-completion carve-outs (predicate-witnessed): signal-tasks (`metadata.completion_type == "signal"` AND `metadata.type ∈ {"blocker", "algedonic"}`); secretary session briefing + memory-save (owner's team-config `agentType` ∈ `SELF_COMPLETE_EXEMPT_AGENT_TYPES` — currently `{pact-secretary}`; resolved via team-config lookup, so the carve-out applies regardless of spawn name). Canonical predicate: `is_self_complete_exempt(task, team_name)` in `shared/intentional_wait.py`. Separate path: imPACT force-termination (`metadata.terminated == true`) is team-lead-driven.
 
@@ -552,7 +552,7 @@ When the teachback payload includes the optional `reasoning_reconstruction` sub-
 
 If the (a)(b)(c) prompts surface a flagged assumption that turns out to be false, the teammate has already done the heavy lifting — the contingency clause names the answer. Your job is to: (1) recognize the contingency clause as the actual answer, (2) SendMessage the teammate with the correction OR cross-dispatch the upstream architect with the assumption flag, (3) pause teachback acceptance until the correction lands.
 
-**Rejection path** reuses the existing two-call atomic pair from Completion Authority above: SendMessage FIRST (wake-signal), TaskUpdate SECOND (writes `metadata.teachback_rejection` with `reason` + `corrections`). The `metadata.teachback_rejection` shape is unchanged — only the `reason` enum gains the new values (`missing_reasoning_reconstruction`, `malformed_reasoning_reconstruction`, `empty_reasoning_reconstruction_field`).
+**Rejection path** reuses the existing two-call atomic pair from Completion Authority above: TaskUpdate FIRST (writes `metadata.teachback_rejection` with `reason` + `corrections`), then the wake-signal SendMessage. The `metadata.teachback_rejection` shape is unchanged — only the `reason` enum gains the new values (`missing_reasoning_reconstruction`, `malformed_reasoning_reconstruction`, `empty_reasoning_reconstruction_field`).
 
 This is the L1.5 entailment-mesh discipline — distinct from L2 (purpose) verification (which still runs only at final gates per [pact-ct-teachback §Agreement Verification](../protocols/pact-ct-teachback.md#agreement-verification-orchestrator-side)).
 

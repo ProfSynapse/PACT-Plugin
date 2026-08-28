@@ -454,6 +454,63 @@ def test_retired_wake_send_term_absent(doc_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Acceptance-pair ordering pins — TaskUpdate-first two-call atomic pair.
+# ---------------------------------------------------------------------------
+
+# The five command files teach the teachback-acceptance one-sentence form of
+# the pair. They join the absence set (the retired ordering tokens must not
+# reappear there) but not the presence set — the commands' sentence form is
+# "`TaskUpdate(A, status="completed")` FIRST", which does not contain the
+# contiguous "TaskUpdate FIRST" token the normative surfaces carry.
+COMMAND_SURFACES = [
+    PLUGIN_ROOT / "commands" / "orchestrate.md",
+    PLUGIN_ROOT / "commands" / "peer-review.md",
+    PLUGIN_ROOT / "commands" / "plan-mode.md",
+    PLUGIN_ROOT / "commands" / "comPACT.md",
+    PLUGIN_ROOT / "commands" / "rePACT.md",
+]
+
+ORDERING_PRESENCE_SURFACES = [COMPLETION_AUTHORITY, PROTOCOLS_SSOT, ORCHESTRATOR]
+ORDERING_ABSENCE_SURFACES = ORDERING_PRESENCE_SURFACES + COMMAND_SURFACES
+
+
+@pytest.mark.parametrize("doc_path", ORDERING_PRESENCE_SURFACES, ids=lambda p: p.name)
+def test_acceptance_pair_taskupdate_first_present(doc_path: Path):
+    """The lead-side acceptance/rejection two-call atomic pair orders the
+    durable write FIRST: the status flip (or rejection-metadata write) lands,
+    then the wake-signal SendMessage is the last call. "TaskUpdate FIRST" on
+    each normative surface locks that ordering — its erosion means the pair's
+    ordering instruction reverted or was reworded away on a runtime-loaded
+    surface. Matching is whitespace-normalized like the phrase pins so a
+    re-wrap of the heading line does not fail the pin while a re-word does."""
+    assert "TaskUpdate FIRST" in _normalized(doc_path), (
+        f"{doc_path.name}: acceptance-pair ordering token 'TaskUpdate FIRST' "
+        f"not found. The two-call atomic pair is TaskUpdate-first (wake is "
+        f"the last call); if the ordering was changed intentionally, update "
+        f"this pin in lockstep with every surface that teaches the pair."
+    )
+
+
+@pytest.mark.parametrize("doc_path", ORDERING_ABSENCE_SURFACES, ids=lambda p: p.name)
+def test_retired_sendmessage_first_ordering_absent(doc_path: Path):
+    """Regression guard: the acceptance/rejection pair was flipped from
+    SendMessage-first to TaskUpdate-first, so any disk read the wake triggers
+    observes already-correct state. The retired ordering tokens must not
+    reappear on any surface that teaches the pair — reintroduction would
+    resurrect the stranding-prone order on a runtime-loaded surface. Both
+    tokens are checked against whitespace-normalized text so a hard-wrapped
+    rendering of the retired phrase cannot slip past a raw-substring scan."""
+    text = _normalized(doc_path)
+    for retired in ("SendMessage FIRST", "SendMessage must precede"):
+        assert retired not in text, (
+            f"{doc_path.name}: retired ordering token {retired!r} present. "
+            f"The two-call atomic pair is TaskUpdate-first; do not "
+            f"reintroduce the SendMessage-first order (if a future rule "
+            f"genuinely needs it, update this guard deliberately)."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Counter-test flip-set record (measured at authoring time; see module
 # docstring). With the five surfaces reverted to their pre-hardening state
 # and this module run against them: {53 failed, 8 passed}. Heading pins
@@ -505,4 +562,19 @@ def test_retired_wake_send_term_absent(doc_path: Path):
 # docs reverted to pre-unification in an isolated copy): exactly 6 failed
 # = the 3 unified-term presence pins + the 3 retired-term absence cases;
 # 78 passed; post-unification 84/84 green.
+#
+# 2026-08-28 addendum (acceptance-pair flip cycle): the lead-side
+# acceptance/rejection two-call atomic pair was flipped from
+# SendMessage-first to TaskUpdate-first across 9 files (persona, 5
+# commands, completion-authority extract, ct-teachback extract, SSOT
+# mirrors). New arm: 3 "TaskUpdate FIRST" presence cases (normative
+# surfaces) + 8 retired-ordering absence cases (3 normative + 5
+# commands); module cases 84 -> 95. Counter-test (measured 2026-08-28,
+# 9 doc files stash-reverted to pre-flip): exactly 6 failed = the 3
+# presence cases + the absence cases on the 3 normative surfaces (the
+# retired tokens pre-existed there); the 5 command absence cases stayed
+# GREEN pre-flip (the commands' retired form was
+# "`SendMessage(to=X, ...)` FIRST" — not the contiguous token this pin
+# locks out), so they guard reintroduction, not the flip itself.
+# Post-flip 95/95 green.
 # ---------------------------------------------------------------------------
