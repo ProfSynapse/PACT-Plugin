@@ -510,6 +510,33 @@ def test_retired_sendmessage_first_ordering_absent(doc_path: Path):
         )
 
 
+@pytest.mark.parametrize("doc_path", COMMAND_SURFACES, ids=lambda p: p.name)
+def test_retired_command_call_ordering_absent(doc_path: Path):
+    """Regression guard for the command surfaces' own retired rendering of
+    the acceptance pair. The five commands taught the pair as
+    `SendMessage(to=X, ...)` FIRST, then `TaskUpdate(A, status="completed")`
+    — a call-syntax rendering that contains neither contiguous token the
+    ordering-absence pin above locks out, so that pin stayed green pre-flip
+    on exactly these five surfaces (it guards reintroduction of the
+    normative-form tokens there, not the rendering these files carried).
+    This pin locks out the retired rendering's load-bearing fragment: FIRST
+    immediately followed by the TaskUpdate call. The flipped form cannot
+    produce it — the wake-SendMessage is the last call, so no "FIRST, then
+    `TaskUpdate" sequence can appear on a TaskUpdate-first surface. Verified
+    against both forms before pinning: the fragment is present in all five
+    pre-flip files and absent from all five flipped files (and from every
+    other agents/commands/protocols/skills file). Whitespace-normalized like
+    the sibling absence pin so a hard-wrapped rendering cannot slip past."""
+    assert "FIRST, then `TaskUpdate" not in _normalized(doc_path), (
+        f"{doc_path.name}: retired command-form ordering token "
+        f"'FIRST, then `TaskUpdate' present. The two-call atomic pair is "
+        f"TaskUpdate-first (`TaskUpdate(A, status=...)` FIRST, then the "
+        f"wake-signal SendMessage); do not reintroduce the SendMessage-first "
+        f"call-syntax rendering (if a future rule genuinely needs it, update "
+        f"this guard deliberately)."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Counter-test flip-set record (measured at authoring time; see module
 # docstring). With the five surfaces reverted to their pre-hardening state
@@ -577,4 +604,17 @@ def test_retired_sendmessage_first_ordering_absent(doc_path: Path):
 # "`SendMessage(to=X, ...)` FIRST" — not the contiguous token this pin
 # locks out), so they guard reintroduction, not the flip itself.
 # Post-flip 95/95 green.
+#
+# 2026-08-28 follow-up (TEST-phase, lead-ordered): the gap noted above —
+# the command surfaces' own retired call-syntax rendering was unpinned —
+# closed by test_retired_command_call_ordering_absent: 5 absence cases
+# over COMMAND_SURFACES locking the fragment "FIRST, then `TaskUpdate"
+# (the retired rendering's load-bearing sequence; the flipped form cannot
+# produce it). Discriminator verified against BOTH forms before pinning:
+# present in all 5 pre-flip files, absent from all 5 flipped files and
+# every other instruction file. Module cases 95 -> 100. Counter-test
+# (measured 2026-08-28): orchestrate.md alone reverted to pre-flip —
+# exactly 1 failed = this test's orchestrate.md case (the 8 sibling
+# ordering cases stayed green, as the original addendum predicted);
+# post-restore 100/100 green.
 # ---------------------------------------------------------------------------
