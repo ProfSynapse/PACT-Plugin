@@ -879,11 +879,11 @@ class TestPerLoopDispatchSites:
         ("orchestrate.md", 570, "ARCHITECT"),
         ("orchestrate.md", 706, "CODE"),
         ("orchestrate.md", 858, "TEST"),
-        ("comPACT.md", 233, "MultipleSpecialists"),
-        ("comPACT.md", 294, "SingleSpecialist"),
-        ("peer-review.md", 192, "Reviewers"),
-        ("plan-mode.md", 236, "Consultants"),
-        ("rePACT.md", 263, "SubScopeSpecialists"),
+        ("comPACT.md", 234, "MultipleSpecialists"),
+        ("comPACT.md", 295, "SingleSpecialist"),
+        ("peer-review.md", 193, "Reviewers"),
+        ("plan-mode.md", 237, "Consultants"),
+        ("rePACT.md", 264, "SubScopeSpecialists"),
     ]
 
     @staticmethod
