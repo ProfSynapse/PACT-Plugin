@@ -661,7 +661,10 @@ class TestTeachbackMicroSkillExtraction:
 
     def test_teachback_skill_contains_protocol(self, teachback_skill):
         """T3: skill must contain actual protocol, not just metadata."""
-        text = teachback_skill.read_text(encoding="utf-8")
+        # Backticks stripped: required elements pin WORDS; the tool-name
+        # backtick convention (e.g. `Edit`/`Write`/`Bash`) must not fail
+        # the presence check.
+        text = teachback_skill.read_text(encoding="utf-8").replace("`", "")
         for element in self.REQUIRED_PROTOCOL_ELEMENTS:
             assert element in text, (
                 f"pact-teachback missing required protocol element: "

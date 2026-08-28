@@ -116,7 +116,7 @@ Claude Code compaction has three durability mechanisms for orchestrator content:
 
 | Mechanism | What Survives | Durability |
 |-----------|---------------|------------|
-| **Explicit Read calls** | Files loaded via Read tool at bootstrap | **Lossless** — Read tracker auto-re-issues tracked Reads after compaction; `Skills restored` event independently re-processes references above the truncation cut. Two independent restoration paths. |
+| **Explicit `Read` calls** | Files loaded via `Read` tool at bootstrap | **Lossless** — Read tracker auto-re-issues tracked Reads after compaction; `Skills restored` event independently re-processes references above the truncation cut. Two independent restoration paths. |
 | **Inline skill body text** | Content written directly in the skill `.md` file | **Partial** — truncated at a cut boundary (~halfway for large files). Late sections silently dropped. |
 | **CLAUDE.md / additionalContext** | Routing block, session info, pinned context | **Structural** — re-injected on every turn; highest durability. |
 

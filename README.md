@@ -278,7 +278,7 @@ Consent-gated decisions (merge, push, destructive bash, plan approval, version b
 
 Several PACT protocols are designed so that the system literally cannot fabricate the conditions for an action — only verify them on disk.
 
-**Two-call atomic acceptance pair** — From [`protocols/pact-completion-authority.md`](pact-plugin/protocols/pact-completion-authority.md): when accepting teammate work, the orchestrator MUST send a wake-signal `SendMessage` FIRST, then write `TaskUpdate(status="completed")`. The wake is load-bearing — `blockedBy` is pull-only, so an idle teammate cannot self-observe the status flip; the wake-signal is their content-arrival trigger, and the send is confirmed by a success receipt the orchestrator cannot forge.
+**Two-call atomic acceptance pair** — From [`protocols/pact-completion-authority.md`](pact-plugin/protocols/pact-completion-authority.md): when accepting teammate work, the orchestrator MUST write `TaskUpdate(status="completed")` FIRST, then send the wake-signal `SendMessage`. The wake is load-bearing — `blockedBy` is pull-only, so an idle teammate cannot self-observe the status flip; the wake-signal is their content-arrival trigger, and the send is confirmed by a success receipt the orchestrator cannot forge.
 
 **First-spawn HARD-STOP verification** — From the orchestrator persona (§11 Agent Teams Dispatch): after the first specialist spawn in a session, the teammate's first message MUST demonstrate access to `TaskList`, `TaskUpdate`, and `SendMessage`. If any tool is reported missing, this is **not degraded mode** and **not something to work around** — the dispatch was malformed (typically `Task(...)` was used instead of `Agent(...)`, or `name=` / `team_name=` was omitted). The orchestrator stops the teammate, corrects the dispatch shape, and re-spawns. The teammate cannot self-recover from a malformed spawn.
 
@@ -338,7 +338,7 @@ Knowledge memory (pact-memory) and workflow state (session journal) are intentio
 
 ### Conversation Theory
 
-PACT uses Gordon Pask's Conversation Theory to ensure shared understanding between agents. Every specialist dispatch creates a Task A (teachback) + Task B (work) pair with `blockedBy=[A]`. The teammate writes `metadata.teachback_submit` restating their understanding, idles on `awaiting_lead_completion`, and waits. The orchestrator reviews the teachback against the dispatched task, then accepts via a two-call atomic pair (wake-signal `SendMessage` first, then `TaskUpdate(A, completed)`), which auto-unblocks Task B. Misunderstandings surface before they propagate. Full protocol in [`pact-ct-teachback.md`](pact-plugin/protocols/pact-ct-teachback.md).
+PACT uses Gordon Pask's Conversation Theory to ensure shared understanding between agents. Every specialist dispatch creates a Task A (teachback) + Task B (work) pair with `blockedBy=[A]`. The teammate writes `metadata.teachback_submit` restating their understanding, idles on `awaiting_lead_completion`, and waits. The orchestrator reviews the teachback against the dispatched task, then accepts via a two-call atomic pair (`TaskUpdate(A, completed)` first, then the wake-signal `SendMessage`), which auto-unblocks Task B. Misunderstandings surface before they propagate. Full protocol in [`pact-ct-teachback.md`](pact-plugin/protocols/pact-ct-teachback.md).
 
 ---
 
@@ -652,7 +652,7 @@ When installed as a plugin, PACT lives in your plugin cache:
 │   └── cache/
 │       └── pact-plugin/
 │           └── PACT/
-│               └── 4.6.48/     # Plugin version
+│               └── 4.6.49/     # Plugin version
 │                   ├── agents/
 │                   ├── commands/
 │                   ├── skills/

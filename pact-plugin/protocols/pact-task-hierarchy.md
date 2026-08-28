@@ -19,7 +19,7 @@ Feature Task (created by orchestrator)
 |-------|------------|----------|-----------|
 | Feature | Orchestrator | Orchestrator | Spans entire workflow |
 | Phase | Orchestrator | Orchestrator | Active during phase |
-| Agent | Orchestrator | Specialist (claim-only); Orchestrator (completion authority) | Specialist claims via `TaskUpdate(status="in_progress")`; orchestrator completes via `TaskUpdate(status="completed")` paired with a wake-signal SendMessage |
+| Agent | Orchestrator | Specialist (claim-only); Orchestrator (completion authority) | Specialist claims via `TaskUpdate(status="in_progress")`; orchestrator completes via `TaskUpdate(status="completed")` paired with a wake-signal `SendMessage` |
 
 Under Agent Teams, specialists claim agent tasks (`pending → in_progress`) and store HANDOFFs in `metadata.handoff`, but the orchestrator transitions agent tasks to `completed` after inspecting the HANDOFF. Two narrow carve-outs (signal-tasks; secretary session briefing + memory-save) self-complete; see [Completion Authority](pact-completion-authority.md#completion-authority).
 
@@ -37,13 +37,13 @@ Tasks progress through: `pending` → `in_progress` → `completed`
 |---|---|---|
 | `pending → in_progress` (claim) | Teammate | Owns the task; `blockedBy` is empty |
 | `in_progress → in_progress` (metadata work) | Teammate | Writes `metadata.handoff` / `metadata.teachback_submit` |
-| `in_progress → in_progress` (rejection metadata) | Lead | Writes `metadata.teachback_rejection` / `metadata.handoff_rejection` + sends wake-signal SendMessage |
-| `in_progress → completed` | **LEAD ONLY** on teammate-owned tasks | Pairs with wake-signal SendMessage; carve-outs: signal-tasks, secretary session briefing + memory-save, imPACT force-term |
+| `in_progress → in_progress` (rejection metadata) | Lead | Writes `metadata.teachback_rejection` / `metadata.handoff_rejection` + sends wake-signal `SendMessage` |
+| `in_progress → completed` | **LEAD ONLY** on teammate-owned tasks | Pairs with wake-signal `SendMessage`; carve-outs: signal-tasks, secretary session briefing + memory-save, imPACT force-term |
 | `pending → completed` (skip) | Lead | Phase-skip with `metadata.skipped = true` |
 
 ### Task A + Task B Dispatch Shape
 
-Every specialist dispatch creates a Task A (teachback) + Task B (primary work) pair, with Task A created FIRST so the teachback gate gets the LOWER id (creating B first inverts the intuitive "lower id = earlier" reading; canonical create sequence in `agents/pact-orchestrator.md` §11). Task B has `blockedBy=[A]`. Lead-completion of Task A auto-unblocks Task B in the task graph; the team-lead pairs the status flip with a wake-signal SendMessage so the idle teammate (on `intentional_wait{reason=awaiting_lead_completion}`) wakes to claim B. The platform does not push a wake on blocker resolution — `blockedBy` is computed at TaskList query time, so the wake-signal SendMessage is required.
+Every specialist dispatch creates a Task A (teachback) + Task B (primary work) pair, with Task A created FIRST so the teachback gate gets the LOWER id (creating B first inverts the intuitive "lower id = earlier" reading; canonical create sequence in `agents/pact-orchestrator.md` §11). Task B has `blockedBy=[A]`. Lead-completion of Task A auto-unblocks Task B in the task graph; the team-lead pairs the status flip with a wake-signal `SendMessage` so the idle teammate (on `intentional_wait{reason=awaiting_lead_completion}`) wakes to claim B. The platform does not push a wake on blocker resolution — `blockedBy` is computed at `TaskList` query time, so the wake-signal `SendMessage` is required.
 
 ### Blocking Relationships
 

@@ -4,7 +4,7 @@ argument-hint:
 ---
 # pact-telegram Setup
 
-Walk the user through configuring the pact-telegram bridge. This is an interactive setup -- use AskUserQuestion at each step and Bash for automation.
+Walk the user through configuring the pact-telegram bridge. This is an interactive setup -- use `AskUserQuestion` at each step and Bash for automation.
 
 **Security**: NEVER echo, log, or display bot tokens or API keys in any tool output. Store values in variables only. All curl commands must use `-s` (silent mode).
 
@@ -18,7 +18,7 @@ Check if `~/.claude/pact-telegram/.env` (matches a default-root pin in code — 
 test -f ~/.claude/pact-telegram/.env && echo "EXISTS" || echo "MISSING"  # matches a default-root pin in code — do not migrate
 ```
 
-- If **EXISTS**: Tell the user "pact-telegram is already configured." Use AskUserQuestion to ask: "Would you like to (A) reconfigure from scratch, (B) test the existing setup, or (C) cancel?"
+- If **EXISTS**: Tell the user "pact-telegram is already configured." Use `AskUserQuestion` to ask: "Would you like to (A) reconfigure from scratch, (B) test the existing setup, or (C) cancel?"
   - A: Continue to Step 2 (will overwrite existing config)
   - B: Skip to Step 9 (send test notification)
   - C: Stop -- tell user setup cancelled
@@ -27,7 +27,7 @@ test -f ~/.claude/pact-telegram/.env && echo "EXISTS" || echo "MISSING"  # match
 ## Step 2: Create a Telegram Bot
 
 1. Tell the user: "Open Telegram and message **@BotFather**. Send `/newbot`, follow the prompts to name your bot, then paste the **bot token** here. It looks like `123456789:ABCdefGHIjklMNOpqrsTUVwxyz_0123456`."
-2. Use AskUserQuestion to collect the bot token.
+2. Use `AskUserQuestion` to collect the bot token.
 3. Store the token -- do NOT echo or log it.
 
 ## Step 3: Validate Token Format
@@ -39,24 +39,24 @@ echo "$TOKEN" | grep -qE '^\d+:[A-Za-z0-9_-]{35}$'
 ```
 
 - If **valid**: Continue to Step 4.
-- If **invalid**: Tell the user the format looks wrong and ask them to paste it again (AskUserQuestion). Retry up to 2 more times, then give up with an error message.
+- If **invalid**: Tell the user the format looks wrong and ask them to paste it again (`AskUserQuestion`). Retry up to 2 more times, then give up with an error message.
 
 ## Step 4: Detect Chat ID
 
 1. Tell the user: "Now send `/start` (or any message) to your new bot in Telegram. I will detect your chat ID automatically."
-2. Use AskUserQuestion to confirm the user has sent the message.
+2. Use `AskUserQuestion` to confirm the user has sent the message.
 3. Call the Telegram getUpdates API:
    ```bash
    curl -s "https://api.telegram.org/bot${TOKEN}/getUpdates"
    ```
 4. Parse the JSON response to extract `result[0].message.chat.id`.
 5. If no updates found, ask the user to send another message and retry (up to 3 attempts with a 3-second wait between each).
-6. Once detected, show the chat ID and ask the user to confirm: "Detected chat ID: **{chat_id}**. Is this correct?" (AskUserQuestion)
+6. Once detected, show the chat ID and ask the user to confirm: "Detected chat ID: **{chat_id}**. Is this correct?" (`AskUserQuestion`)
 
 ## Step 5: Optional Voice Transcription
 
 1. Tell the user: "**Optional**: To enable voice note transcription, paste your OpenAI API key. This uses the Whisper API (~$0.006/min). Leave blank to skip."
-2. Use AskUserQuestion to collect the key (or empty to skip).
+2. Use `AskUserQuestion` to collect the key (or empty to skip).
 3. If provided, validate it starts with `sk-`. If invalid format, warn and offer to re-enter or skip.
 4. Store the key if provided -- do NOT echo or log it.
 
@@ -119,7 +119,7 @@ sys.exit(0 if ok else 1)
 
 2. Tell the user: "The pact-telegram MCP server is bundled with the PACT plugin. To enable it, run `/plugin`, find **PACT** in the Installed list, expand it, and toggle **pact-telegram MCP** on. You can toggle it off anytime from the same view."
 
-3. Use AskUserQuestion to confirm the user has enabled the MCP server before proceeding.
+3. Use `AskUserQuestion` to confirm the user has enabled the MCP server before proceeding.
 
 ## Step 9: Send Test Notification
 
@@ -132,7 +132,7 @@ curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
 ```
 
 1. Check the API response for `"ok": true`.
-2. Ask the user: "Did you receive the test message in Telegram?" (AskUserQuestion)
+2. Ask the user: "Did you receive the test message in Telegram?" (`AskUserQuestion`)
 3. If **yes**: Continue to Step 10.
 4. If **no**: Troubleshoot -- check token, chat ID, internet connectivity. Offer to retry or reconfigure.
 

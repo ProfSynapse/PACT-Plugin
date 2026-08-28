@@ -149,7 +149,7 @@ Each reviewer dispatch creates **two tasks**, not one:
 - **Task A** — TEACHBACK gate. `subject = "{reviewer-type}: TEACHBACK for review of {feature}"`, owner = reviewer. Description: state which review angle the reviewer is taking (consistency check vs adversarial vs design coherence) before reading the diff.
 - **Task B** — primary review work. `subject = "{reviewer-type}: review {feature}"`, owner = reviewer, `blockedBy = [<Task A id>]`.
 
-Both are created BEFORE the `Agent(...)` spawn call. The reviewer claims A, submits teachback metadata, idles on `awaiting_lead_completion`. You review the TEACHBACK (does it state the review angle clearly?), then accept via the two-call atomic pair: `SendMessage(to=reviewer, ...)` FIRST, then `TaskUpdate(A, status="completed")` — see [Teachback Review](../protocols/pact-completion-authority.md#teachback-review) for the rationale. On accept, the reviewer wakes to claim B and read the diff.
+Both are created BEFORE the `Agent(...)` spawn call. The reviewer claims A, submits teachback metadata, idles on `awaiting_lead_completion`. You review the TEACHBACK (does it state the review angle clearly?), then accept via the two-call atomic pair: `TaskUpdate(A, status="completed")` FIRST, then the wake-signal `SendMessage(to=reviewer, ...)` — see [Teachback Review](../protocols/pact-completion-authority.md#teachback-review) for the rationale. On accept, the reviewer wakes to claim B and read the diff.
 
 ```
 # A-FIRST ORDERING (required): create Task A (the teachback gate) BEFORE Task B so the gate gets the LOWER id. Creating Task B first — giving the gate the HIGHER id — is WRONG: it inverts the intuitive "lower id = earlier" reading. The blocking wiring below legitimately names both ids because it runs AFTER both tasks exist.
@@ -185,7 +185,7 @@ TaskUpdate(B_id, owner="{reviewer-name}", addBlockedBy=[A_id])
 TaskUpdate(A_id, addBlocks=[B_id])
 ```
 
-The `Agent()` `prompt` does NOT change shape — the Teachback-Gated Dispatch is encoded in the surrounding TaskCreate sequence.
+The `Agent()` `prompt` does NOT change shape — the Teachback-Gated Dispatch is encoded in the surrounding `TaskCreate` sequence.
 
 ---
 
@@ -347,7 +347,7 @@ JSON
 
      **Step A — Initial Gate Question** (Yes/No only) — **default path; preempted when `PR greedy-fix: ON`** (see Greedy-fix mode above):
 
-     **Pre-form a gate-level recommendation BEFORE constructing the AskUserQuestion call.** The gate recommendation is BINARY (Yes or No across the entire minor+future population) — distinct from Step C's per-finding recommendations. Apply these POPULATION-LEVEL criteria:
+     **Pre-form a gate-level recommendation BEFORE constructing the `AskUserQuestion` call.** The gate recommendation is BINARY (Yes or No across the entire minor+future population) — distinct from Step C's per-finding recommendations. Apply these POPULATION-LEVEL criteria:
        - **Aggregate Substance** — Are the minors/futures substantive (convention violations, latent risks, real ergonomic wins) or cosmetic-only (whitespace, naming preference, stylistic nits)? Substantive → recommend Yes. Cosmetic-only → recommend No.
        - **PR size + scope-tightness signals from the session** — If the user has expressed scope-tight preferences earlier and findings are cosmetic, recommend No. If PR is small and findings are substantive, recommend Yes.
        - **Time/cost of remediation** — If minors batch cleanly into one remediation cycle (Yes path is cheap), lean Yes. If each minor would require its own dispatch + verify cycle (Yes path is expensive) AND findings are not high-substance, lean No.
@@ -373,7 +373,7 @@ JSON
 
      **Step C — Per-Recommendation Questions** (after context presented):
 
-     **C.1 — Pre-form a recommendation BEFORE constructing the AskUserQuestion call.** <!-- ANCHOR-STABLE: C.1 --> For every minor and future finding, you MUST decide which option you would recommend BEFORE you call `AskUserQuestion`. Asking the user "what do you recommend?" or constructing an option set where no option carries a `(recommended)` suffix is a protocol violation — the user-facing checkpoint surfaces your prior, it does not elicit one. Apply these criteria when forming the recommendation:
+     **C.1 — Pre-form a recommendation BEFORE constructing the `AskUserQuestion` call.** <!-- ANCHOR-STABLE: C.1 --> For every minor and future finding, you MUST decide which option you would recommend BEFORE you call `AskUserQuestion`. Asking the user "what do you recommend?" or constructing an option set where no option carries a `(recommended)` suffix is a protocol violation — the user-facing checkpoint surfaces your prior, it does not elicit one. Apply these criteria when forming the recommendation:
        - **Scope** — Does fixing now stay inside this PR's stated scope, or does it expand the diff into adjacent concerns? In-scope → lean toward fix now; out-of-scope → lean toward defer/issue.
        - **Convention alignment** — Does the finding flag a divergence from an established project convention (pinned rules, repeated patterns, audit anchors)? Convention violation → lean toward fix now even if minor.
        - **Risk** — What is the cost of NOT addressing? Latent correctness, security, or data-integrity risk → lean toward fix now; pure ergonomics with no failure mode → lean toward defer.
@@ -442,7 +442,7 @@ JSON
 
    Calibration runs unconditionally after all reviewers complete. Skip only for trivial single-file PRs.
 
-   **Verify agent task completion**: After each reviewer completes, check their task status via TaskList. If still "in_progress", mark it completed: `TaskUpdate(taskId, status="completed")`.
+   **Verify agent task completion**: After each reviewer completes, check their task status via `TaskList`. If still "in_progress", mark it completed: `TaskUpdate(taskId, status="completed")`.
 
 6. ⚠️ **Merge Authorization Checkpoint**
 

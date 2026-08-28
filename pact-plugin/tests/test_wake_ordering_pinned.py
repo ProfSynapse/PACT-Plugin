@@ -38,9 +38,13 @@ shape. No new EXPECTED_COUNTS-style lockstep is introduced by this module.
 
 PHRASES, not line shapes. Several pinned sentences are hard-wrapped in the
 shipped markdown and several rule sentences share a line with pre-existing
-list-item text (semantically identical markdown renderings). Phrase pins
-therefore match against whitespace-NORMALIZED text (`" ".join(text.split())`)
-so they survive re-wrapping; heading pins match line-anchored raw lines
+list-item text (semantically identical markdown renderings), and tool
+language inside a pinned span is inline-code formatted. Phrase pins
+therefore match against backtick-AND-whitespace-NORMALIZED text (see
+_phrase: strip backticks, then `" ".join(text.split())`) so they survive
+re-wrapping and inline-code rendering alike — a retired rendering whose
+backtick sits inside the phrase span ("`SendMessage` FIRST") is caught,
+not masked. Heading pins match line-anchored raw lines
 (per the section-presence convention in test_read_trigger_precondition_
 pinned.py — substring matching for headings is a phantom-green shape: an
 H4 line contains its H3 prefix as a substring).
@@ -72,6 +76,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 SKILL = PLUGIN_ROOT / "skills" / "pact-agent-teams" / "SKILL.md"
 COMPLETION_AUTHORITY = PLUGIN_ROOT / "protocols" / "pact-completion-authority.md"
 PROTOCOLS_SSOT = PLUGIN_ROOT / "protocols" / "pact-protocols.md"
+CT_TEACHBACK = PLUGIN_ROOT / "protocols" / "pact-ct-teachback.md"
 ORCHESTRATOR = PLUGIN_ROOT / "agents" / "pact-orchestrator.md"
 AGENT_STALL = PLUGIN_ROOT / "protocols" / "pact-agent-stall.md"
 
@@ -82,12 +87,28 @@ def _raw(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _phrase(text: str) -> str:
+    """Phrase-matching normalization: strip backticks, then collapse any
+    whitespace run (including newlines from hard-wrapping) to a single
+    space. Tool language is inline-code formatted in the shipped markdown,
+    so a pinned phrase must match a subject rendered with backticks inside
+    the phrase span. Measured blindness this closes: the retired rendering
+    "`SendMessage` FIRST" was invisible to the contiguous "SendMessage
+    FIRST" absence token — the backtick sat between the token halves, and a
+    whitespace-only normalizer keeps it there. Applied to BOTH sides (file
+    text and pinned phrase) so phrases stored with or without backticks
+    match consistently."""
+    return " ".join(text.replace("`", "").split())
+
+
 def _normalized(path: Path) -> str:
-    """Whitespace-normalized file text: any run of whitespace (including
-    newlines from hard-wrapping) collapses to a single space. Phrase pins
-    match against this so an intentional re-wrap of a rule sentence does
-    not fail the pin while a re-WORD still does."""
-    return " ".join(_raw(path).split())
+    """Backtick-and-whitespace-normalized file text for phrase pins: an
+    intentional re-wrap of a rule sentence does not fail the pin while a
+    re-WORD still does, and inline-code backticks inside a phrase span do
+    not mask a retired rendering. Heading pins deliberately match RAW
+    lines (see _lines_outside_fences) — backticks are part of the heading
+    contract there and are NOT stripped."""
+    return _phrase(_raw(path))
 
 
 def _lines_outside_fences(path: Path) -> list:
@@ -300,10 +321,10 @@ def test_rule_phrase_present(doc_path: Path, phrase: str):
     renderings both satisfy the pin; a re-WORD does not. If a phrase was
     changed intentionally, update the pin in lockstep — otherwise the rule
     has eroded on a surface an LLM loads at runtime."""
-    normalized_phrase = " ".join(phrase.split())
+    normalized_phrase = _phrase(phrase)
     assert normalized_phrase in _normalized(doc_path), (
         f"{doc_path.name}: rule phrase {phrase!r} not found "
-        f"(whitespace-normalized match). If the wording was changed "
+        f"(backtick-and-whitespace-normalized match). If the wording was changed "
         f"intentionally, update this pin in lockstep; otherwise the "
         f"wake-ordering rule this phrase carries is missing from a "
         f"runtime-loaded surface."
@@ -454,6 +475,114 @@ def test_retired_wake_send_term_absent(doc_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Acceptance-pair ordering pins — TaskUpdate-first two-call atomic pair.
+# ---------------------------------------------------------------------------
+
+# The five command files teach the teachback-acceptance one-sentence form of
+# the pair. They join the absence set (the retired ordering tokens must not
+# reappear there) but not the presence set — the commands' sentence form is
+# "`TaskUpdate(A, status="completed")` FIRST", which does not contain the
+# contiguous "TaskUpdate FIRST" token the normative surfaces carry.
+COMMAND_SURFACES = [
+    PLUGIN_ROOT / "commands" / "orchestrate.md",
+    PLUGIN_ROOT / "commands" / "peer-review.md",
+    PLUGIN_ROOT / "commands" / "plan-mode.md",
+    PLUGIN_ROOT / "commands" / "comPACT.md",
+    PLUGIN_ROOT / "commands" / "rePACT.md",
+]
+
+ORDERING_PRESENCE_SURFACES = [COMPLETION_AUTHORITY, PROTOCOLS_SSOT, ORCHESTRATOR]
+ORDERING_ABSENCE_SURFACES = ORDERING_PRESENCE_SURFACES + COMMAND_SURFACES
+
+# The ct-teachback extract (and its byte-mirrored teachback-flow region in
+# the SSOT) taught the pair in the SAME retired call-syntax rendering as the
+# commands — wake-`SendMessage` FIRST, then `TaskUpdate(A, ...)`. Neither
+# surface carries the contiguous ordering tokens the arms above lock, and
+# the extract and its SSOT region can revert to the retired rendering in
+# LOCKSTEP without tripping the byte-parity audit (extract and region stay
+# mutually byte-equal), so this arm is the only witness on those surfaces.
+# Fragment verified green on both at the flipped HEAD and present in both
+# pre-flip forms (whitespace-normalized; the retired rendering hard-wraps
+# mid-fragment).
+COMMAND_FORM_SURFACES = COMMAND_SURFACES + [CT_TEACHBACK, PROTOCOLS_SSOT]
+
+
+@pytest.mark.parametrize("doc_path", ORDERING_PRESENCE_SURFACES, ids=lambda p: p.name)
+def test_acceptance_pair_taskupdate_first_present(doc_path: Path):
+    """The lead-side acceptance/rejection two-call atomic pair orders the
+    durable write FIRST: the status flip (or rejection-metadata write) lands,
+    then the wake-signal SendMessage is the last call. "TaskUpdate FIRST" on
+    each normative surface locks that ordering — its erosion means the pair's
+    ordering instruction reverted or was reworded away on a runtime-loaded
+    surface. Matching is whitespace-normalized like the phrase pins so a
+    re-wrap of the heading line does not fail the pin while a re-word does."""
+    assert _phrase("TaskUpdate FIRST") in _normalized(doc_path), (
+        f"{doc_path.name}: acceptance-pair ordering token 'TaskUpdate FIRST' "
+        f"not found. The two-call atomic pair is TaskUpdate-first (wake is "
+        f"the last call); if the ordering was changed intentionally, update "
+        f"this pin in lockstep with every surface that teaches the pair."
+    )
+
+
+@pytest.mark.parametrize("doc_path", ORDERING_ABSENCE_SURFACES, ids=lambda p: p.name)
+def test_retired_sendmessage_first_ordering_absent(doc_path: Path):
+    """Regression guard: the acceptance/rejection pair was flipped from
+    SendMessage-first to TaskUpdate-first, so any disk read the wake triggers
+    observes already-correct state. The retired ordering tokens must not
+    reappear on any surface that teaches the pair — reintroduction would
+    resurrect the stranding-prone order on a runtime-loaded surface. Both
+    tokens are checked against backtick-and-whitespace-normalized text so
+    neither a hard-wrapped rendering nor the inline-code rendering (the
+    backticked "`SendMessage` FIRST" form — the original retired rendering
+    class, invisible to a whitespace-only matcher because the backtick sits
+    between the token halves) can slip past a raw-substring scan."""
+    text = _normalized(doc_path)
+    for retired in ("SendMessage FIRST", "SendMessage must precede"):
+        assert _phrase(retired) not in text, (
+            f"{doc_path.name}: retired ordering token {retired!r} present. "
+            f"The two-call atomic pair is TaskUpdate-first; do not "
+            f"reintroduce the SendMessage-first order (if a future rule "
+            f"genuinely needs it, update this guard deliberately)."
+        )
+
+
+@pytest.mark.parametrize("doc_path", COMMAND_FORM_SURFACES, ids=lambda p: p.name)
+def test_retired_command_call_ordering_absent(doc_path: Path):
+    """Regression guard for the retired call-syntax rendering of the
+    acceptance pair. The five commands taught the pair as
+    `SendMessage(to=X, ...)` FIRST, then `TaskUpdate(A, status="completed")`
+    — a call-syntax rendering that contains neither contiguous token the
+    ordering-absence pin above locks out, so that pin stayed green pre-flip
+    on exactly these five surfaces (it guards reintroduction of the
+    normative-form tokens there, not the rendering these files carried).
+    The ct-teachback extract and its byte-mirrored teachback-flow region in
+    the SSOT carried the same rendering (wake-`SendMessage` FIRST, then
+    `TaskUpdate(A, status="completed")`) and are pinned here for the same
+    reason — plus one specific to the mirrored pair: a lockstep revert of
+    extract and SSOT region leaves them mutually byte-equal, so the
+    protocol-extract audit passes and NOTHING but this arm witnesses.
+    This pin locks out the retired rendering's load-bearing fragment: FIRST
+    immediately followed by the TaskUpdate call. The flipped form cannot
+    produce it — the wake-SendMessage is the last call, so no "FIRST, then
+    `TaskUpdate" sequence can appear on a TaskUpdate-first surface. Verified
+    against both forms before pinning: the fragment is present in all five
+    pre-flip command files, both pre-flip ct-teachback surfaces, and absent
+    from every flipped file (and from every other agents/commands/protocols/
+    skills file). Backtick-and-whitespace-normalized like the sibling
+    absence pin (both sides through _phrase) so a hard-wrapped rendering
+    cannot slip past and the pinned fragment's own backtick cannot mask
+    it."""
+    assert _phrase("FIRST, then `TaskUpdate") not in _normalized(doc_path), (
+        f"{doc_path.name}: retired command-form ordering token "
+        f"'FIRST, then `TaskUpdate' present. The two-call atomic pair is "
+        f"TaskUpdate-first (`TaskUpdate(A, status=...)` FIRST, then the "
+        f"wake-signal SendMessage); do not reintroduce the SendMessage-first "
+        f"call-syntax rendering (if a future rule genuinely needs it, update "
+        f"this guard deliberately)."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Counter-test flip-set record (measured at authoring time; see module
 # docstring). With the five surfaces reverted to their pre-hardening state
 # and this module run against them: {53 failed, 8 passed}. Heading pins
@@ -505,4 +634,66 @@ def test_retired_wake_send_term_absent(doc_path: Path):
 # docs reverted to pre-unification in an isolated copy): exactly 6 failed
 # = the 3 unified-term presence pins + the 3 retired-term absence cases;
 # 78 passed; post-unification 84/84 green.
+#
+# 2026-08-28 addendum (acceptance-pair flip cycle): the lead-side
+# acceptance/rejection two-call atomic pair was flipped from
+# SendMessage-first to TaskUpdate-first across 9 files (persona, 5
+# commands, completion-authority extract, ct-teachback extract, SSOT
+# mirrors). New arm: 3 "TaskUpdate FIRST" presence cases (normative
+# surfaces) + 8 retired-ordering absence cases (3 normative + 5
+# commands); module cases 84 -> 95. Counter-test (measured 2026-08-28,
+# 9 doc files stash-reverted to pre-flip): exactly 6 failed = the 3
+# presence cases + the absence cases on the 3 normative surfaces (the
+# retired tokens pre-existed there); the 5 command absence cases stayed
+# GREEN pre-flip (the commands' retired form was
+# "`SendMessage(to=X, ...)` FIRST" — not the contiguous token this pin
+# locks out), so they guard reintroduction, not the flip itself.
+# Post-flip 95/95 green.
+#
+# 2026-08-28 follow-up (TEST-phase, lead-ordered): the gap noted above —
+# the command surfaces' own retired call-syntax rendering was unpinned —
+# closed by test_retired_command_call_ordering_absent: 5 absence cases
+# over COMMAND_SURFACES locking the fragment "FIRST, then `TaskUpdate"
+# (the retired rendering's load-bearing sequence; the flipped form cannot
+# produce it). Discriminator verified against BOTH forms before pinning:
+# present in all 5 pre-flip files, absent from all 5 flipped files and
+# every other instruction file. Module cases 95 -> 100. Counter-test
+# (measured 2026-08-28): orchestrate.md alone reverted to pre-flip —
+# exactly 1 failed = this test's orchestrate.md case (the 8 sibling
+# ordering cases stayed green, as the original addendum predicted);
+# post-restore 100/100 green.
+#
+# 2026-08-28 review-cycle extension (review-test fixer, lead-ordered): the
+# same retired call-syntax rendering was unpinned on the ct-teachback
+# extract and its byte-mirrored SSOT region — surfaces in NO arm of this
+# module — and a LOCKSTEP revert of the pair leaves extract and region
+# mutually byte-equal, so the protocol-extract audit passes too (measured
+# during review: module + audit green with both reverted). The arm now
+# parametrizes over COMMAND_FORM_SURFACES (5 commands + ct-teachback +
+# SSOT): module cases 100 -> 102. Fragment discriminator verified in
+# whitespace-normalized text (the retired rendering hard-wraps mid-fragment,
+# so a raw line grep reads absent on both sides): present at base on both
+# new surfaces, absent at flipped HEAD on both. Counter-test (measured
+# 2026-08-28): ct-teachback.md alone reverted to pre-flip — exactly 1
+# failed = this test's pact-ct-teachback.md case (101 passed); post-restore
+# 102/102 green, audit module green alongside.
+#
+# 2026-08-28 cycle 2 (review-test, lead-ordered, user-directed EXCL-1
+# adoption): _normalized now strips backticks via _phrase (applied to BOTH
+# the file text and every pinned phrase), closing the rendering class where
+# a backtick sits inside a phrase span — the retired "`SendMessage` FIRST"
+# form was invisible to the contiguous absence token under a
+# whitespace-only matcher. Full pin audit at HEAD under the new matcher:
+# 79 pin x surface verdicts compared (53 phrase pins + 3 ordering-presence
+# + 16 ordering-absence + 7 command-form) — ZERO verdict changes; module
+# 102/102 green before and after. Counter-tests in a TEMP CLONE (no
+# live-worktree mutation), all predictions exact: cell 1 — minimal
+# backticked form "`SendMessage` FIRST" appended to orchestrate.md: OLD
+# matcher 102 passed (blind), NEW matcher exactly 1 failed =
+# ordering-absence[orchestrate.md]; cell 2 — full retired rendering
+# wake-`SendMessage` FIRST, then `TaskUpdate(A, ...)`: NEW matcher exactly
+# 2 failed (ordering-absence + command-form, both orchestrate.md), OLD
+# matcher exactly 1 failed (command-form only — the measured pre-change
+# blindness). Heading/slug/anchor/INBOX_GREW/wake-send pins match raw
+# text or pure functions by design and are untouched.
 # ---------------------------------------------------------------------------

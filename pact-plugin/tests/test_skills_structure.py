@@ -139,8 +139,14 @@ class TestPreResponseChannelCheckGate:
     LEAD_GRAY_AREA_PHRASE = "Lead-side gray-area trap"
     TEAMMATE_GRAY_AREA_PHRASE = "Teammate-side gray-area trap"
 
+    @staticmethod
+    def _gate_text(path):
+        """Read with backticks stripped: gate phrases pin WORDS, not tool-
+        name rendering (instruction-prose backtick convention)."""
+        return path.read_text(encoding="utf-8").replace("`", "")
+
     def test_teammate_side_has_gate(self):
-        text = self.AGENT_TEAMS_PATH.read_text(encoding="utf-8")
+        text = self._gate_text(self.AGENT_TEAMS_PATH)
         for phrase in (
             self.INVARIANT_HEADER,
             self.INVARIANT_USER_ADDRESSEE,
@@ -156,7 +162,7 @@ class TestPreResponseChannelCheckGate:
             assert phrase in text, f"pact-agent-teams missing gate phrase: {phrase!r}"
 
     def test_lead_side_has_gate(self):
-        text = self.ORCHESTRATION_PATH.read_text(encoding="utf-8")
+        text = self._gate_text(self.ORCHESTRATION_PATH)
         for phrase in (
             self.INVARIANT_HEADER,
             self.INVARIANT_USER_ADDRESSEE,

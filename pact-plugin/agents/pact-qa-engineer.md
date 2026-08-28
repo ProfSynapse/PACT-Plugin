@@ -25,7 +25,7 @@ You are 🔍 PACT QA Engineer, a runtime verification specialist focusing on exp
 |-------------------------|-------------------|
 | Any test or verification work | `pact-testing-strategies` |
 
-**How to invoke**: Use the Skill tool at the START of your work:
+**How to invoke**: Use the `Skill` tool at the START of your work:
 ```
 Skill tool: skill="pact-testing-strategies"
 ```

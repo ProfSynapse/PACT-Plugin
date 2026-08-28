@@ -35,8 +35,9 @@ When a downstream agent receives an upstream handoff (via `TaskGet`), their firs
    "[{sender}→team-lead] Teachback submitted on Task #A. Idling on awaiting_lead_completion."
 4. Agent SETs `intentional_wait{reason=awaiting_lead_completion}` and idles — it does NOT
    begin Task B (blocking)
-5. Team-lead reviews the teachback. On acceptance: wake-`SendMessage` FIRST, then
-   `TaskUpdate(A, status="completed")`, which unblocks Task B. On misunderstanding: write
+5. Team-lead reviews the teachback. On acceptance:
+   `TaskUpdate(A, status="completed")` FIRST — this unblocks Task B — then
+   the wake-signal `SendMessage`. On misunderstanding: write
    `metadata.teachback_rejection` + a correction `SendMessage`; the agent revises on Task A.
    The block holds until acceptance.
 ```
@@ -80,8 +81,8 @@ The L1.5 gate runs against the dispatching task's variety score (see `hooks/shar
 | Variety score | Workflow route | Method reconstruction | Lead behavior on absence |
 |---|---|---|---|
 | 4–6 | `ROUTE_COMPACT` (comPACT) | **Skipped** — not required, not recommended | Accept teachback; absence is the expected default. |
-| 7–10 | `ROUTE_ORCHESTRATE` (orchestrate) | **Recommended** — teammate may include; lead MAY ask for it on follow-up | Accept teachback; lead may SendMessage requesting reconstruction on follow-up if upstream decisions are non-trivial. |
-| 11–14 | `ROUTE_PLAN_MODE` (plan-mode + orchestrate) | **Required** — teammate MUST include; absence is rejection signal | Reject teachback with `metadata.teachback_rejection{reason="missing_reasoning_reconstruction"}` plus a correction SendMessage. |
+| 7–10 | `ROUTE_ORCHESTRATE` (orchestrate) | **Recommended** — teammate may include; lead MAY ask for it on follow-up | Accept teachback; lead may `SendMessage` requesting reconstruction on follow-up if upstream decisions are non-trivial. |
+| 11–14 | `ROUTE_PLAN_MODE` (plan-mode + orchestrate) | **Required** — teammate MUST include; absence is rejection signal | Reject teachback with `metadata.teachback_rejection{reason="missing_reasoning_reconstruction"}` plus a correction `SendMessage`. |
 | 15–16 | `ROUTE_RESEARCH_SPIKE` (research-spike) | **Required** (treated identically to plan-mode) | Same as plan-mode — reject on absence. |
 
 The lead-side validation gate emits one of 3 rejection reasons in `metadata.teachback_rejection.reason`:

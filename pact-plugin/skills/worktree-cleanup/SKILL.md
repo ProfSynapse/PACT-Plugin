@@ -59,7 +59,7 @@ REPO_ROOT=$(cd "$(dirname "$MAIN_GIT_DIR")" && pwd)
 cd "$REPO_ROOT" && git worktree remove "$REPO_ROOT/.worktrees/{branch}"
 ```
 
-Note: Claude Code's Bash tool persists the working directory between calls. After this command, subsequent calls will run from `$REPO_ROOT`.
+Note: Claude Code's `Bash` tool persists the working directory between calls. After this command, subsequent calls will run from `$REPO_ROOT`.
 
 **If removal fails** (uncommitted changes):
 

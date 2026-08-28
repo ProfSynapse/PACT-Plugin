@@ -1,5 +1,5 @@
 ---
-description: Interactively prune pins from CLAUDE.md via paginated AskUserQuestion
+description: Interactively prune pins from CLAUDE.md via paginated `AskUserQuestion`
 ---
 
 ## What this command does

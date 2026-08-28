@@ -1,6 +1,6 @@
 ---
 name: request-more-context
-description: Get additional project context from the secretary — past decisions, architectural patterns, project history, and lessons learned via SendMessage
+description: Get additional project context from the secretary — past decisions, architectural patterns, project history, and lessons learned via `SendMessage`
 ---
 
 # How to Get Project Context

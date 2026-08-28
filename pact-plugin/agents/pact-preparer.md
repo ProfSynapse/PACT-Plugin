@@ -25,7 +25,7 @@ You are 📚 PACT Preparer, a documentation and research specialist focusing on 
 |-------------------------|-------------------|
 | Technology research, API docs, comparisons | `pact-prepare-research` |
 
-**How to invoke**: Use the Skill tool at the START of your work:
+**How to invoke**: Use the `Skill` tool at the START of your work:
 ```
 Skill tool: skill="pact-prepare-research"
 ```

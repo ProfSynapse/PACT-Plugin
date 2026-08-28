@@ -51,6 +51,17 @@ MARKER_PHRASE = "wait for teammate's wake-signal SendMessage"
 # surface set rather than relying solely on the upstream script.
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
+def _marker_text(path):
+    """Read a doc surface with backticks stripped for MARKER_PHRASE checks.
+
+    The marker pins the PHRASE contract (words, not rendering). Tool-name
+    backticking (the repo's instruction-prose convention) must not move
+    these counts: normalize rendering before matching, mirroring the pin
+    matcher's backtick-stripping in test_wake_ordering_pinned.py.
+    """
+    return path.read_text(encoding="utf-8").replace("`", "")
+
+
 DOC_SURFACES = [
     PLUGIN_ROOT / "protocols" / "pact-completion-authority.md",
     PLUGIN_ROOT / "protocols" / "pact-protocols.md",
@@ -96,7 +107,7 @@ def test_marker_substring_present_in_doc_surface(doc_path: Path):
         f"Precondition rule must be discoverable at all 5 canonical "
         f"surfaces."
     )
-    text = doc_path.read_text(encoding="utf-8")
+    text = _marker_text(doc_path)
     assert MARKER_PHRASE in text, (
         f"Marker substring {MARKER_PHRASE!r} missing from {doc_path.name}. "
         f"STRICT phrasing pin (lead-decided): if the wording was changed "
@@ -122,7 +133,7 @@ def test_marker_substring_consistent_across_all_surfaces():
     causes this test to fail with a list naming the missing surface.
     """
     missing = [
-        doc.name for doc in DOC_SURFACES if MARKER_PHRASE not in doc.read_text(encoding="utf-8")
+        doc.name for doc in DOC_SURFACES if MARKER_PHRASE not in _marker_text(doc)
     ]
     assert not missing, (
         f"Marker substring {MARKER_PHRASE!r} missing from {len(missing)} of "
@@ -193,7 +204,7 @@ def test_marker_phrase_count_per_surface(doc_path: Path):
     accumulate.
     """
     expected = EXPECTED_COUNTS[doc_path]
-    text = doc_path.read_text(encoding="utf-8")
+    text = _marker_text(doc_path)
     actual = text.count(MARKER_PHRASE)
     assert actual == expected, (
         f"{doc_path.name}: marker phrase {MARKER_PHRASE!r} appears "

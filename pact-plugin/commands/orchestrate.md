@@ -62,7 +62,7 @@ Every specialist dispatch creates **two tasks**, not one:
 - **Task A** — TEACHBACK gate. `subject = "{role}: TEACHBACK for {feature}"`, owner = teammate. Description: teachback expectations + dispatch context.
 - **Task B** — primary work. `subject = "{role}: {mission}"`, owner = teammate, `blockedBy = [<Task A id>]`.
 
-Both are created BEFORE the `Agent(...)` spawn call so the teammate sees them on first `TaskList`. The teammate claims A, submits teachback metadata, idles on `awaiting_lead_completion`. You review the TEACHBACK, then accept via the two-call atomic pair: `SendMessage(to=teammate, ...)` FIRST, then `TaskUpdate(A, status="completed")` — see [Teachback Review](../protocols/pact-completion-authority.md#teachback-review) for the rationale. The teammate wakes to claim B.
+Both are created BEFORE the `Agent(...)` spawn call so the teammate sees them on first `TaskList`. The teammate claims A, submits teachback metadata, idles on `awaiting_lead_completion`. You review the TEACHBACK, then accept via the two-call atomic pair: `TaskUpdate(A, status="completed")` FIRST, then the wake-signal `SendMessage(to=teammate, ...)` — see [Teachback Review](../protocols/pact-completion-authority.md#teachback-review) for the rationale. The teammate wakes to claim B.
 
 **Dispatch sequence (replaces single-task dispatch)**:
 
@@ -75,9 +75,9 @@ A_id = TaskCreate(
                 "Submit TEACHBACK by writing metadata.teachback_submit using the CANONICAL field schema (do NOT improvise key names): understanding, most_likely_wrong, least_confident_item, first_action, variety_acknowledgment (an OBJECT). See the pact-teachback skill for field semantics. "
                 "SET intentional_wait{reason=awaiting_lead_completion, expected_resolver=lead, since=<canonical_since() output>}. Idle. "
                 "DO NOT mark this task completed — team-lead-only completion. Lead will mark completed "
-                "after teachback acceptance, then send a wake-SendMessage confirming Task B is claimable. "
+                "after teachback acceptance, then send a wake-signal SendMessage confirming Task B is claimable. "
                 "If TEACHBACK is rejected, team-lead writes metadata.teachback_rejection and sends a "
-                "wake-SendMessage with corrections; revise on this same task.\n\n"
+                "wake-signal SendMessage with corrections; revise on this same task.\n\n"
                 "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\n"
                 "Mission for Task B: the primary-work task assigned to you in your TaskList (the work task, NOT this TEACHBACK gate task), identified by its subject (the '{role}: {mission}' pattern). Claim it after this teachback is accepted."
 )
@@ -113,7 +113,7 @@ TaskUpdate(A_id, addBlocks=[B_id])
 # 3. Spawn the teammate via the canonical Agent() form above.
 ```
 
-The `Agent()` `prompt` does NOT change shape — the Teachback-Gated Dispatch is encoded in the surrounding TaskCreate sequence, not in the `Agent()` call. The teammate discovers Task A + Task B via `TaskList` and follows pact-agent-teams §On Start.
+The `Agent()` `prompt` does NOT change shape — the Teachback-Gated Dispatch is encoded in the surrounding `TaskCreate` sequence, not in the `Agent()` call. The teammate discovers Task A + Task B via `TaskList` and follows pact-agent-teams §On Start.
 
 **Carve-outs** — single-task dispatch still applies for:
 
@@ -766,9 +766,9 @@ Agent(
 )
 ```
 
-The auditor stores its final signal as `metadata.audit_summary` via `TaskUpdate` before marking the task completed. On a RED signal, YOU SendMessage the affected coder and may pause their work — the auditor reports to you and never directs coders itself. On YELLOW: pass finding to test engineer as focus area. See [pact-audit.md](../protocols/pact-audit.md) for the full Concurrent Audit Protocol.
+The auditor stores its final signal as `metadata.audit_summary` via `TaskUpdate` before marking the task completed. On a RED signal, YOU `SendMessage` the affected coder and may pause their work — the auditor reports to you and never directs coders itself. On YELLOW: pass finding to test engineer as focus area. See [pact-audit.md](../protocols/pact-audit.md) for the full Concurrent Audit Protocol.
 
-When a coder reports stage-ready, send a wake-SendMessage to the concurrent auditor: "coder staged — observe the staged diff now." Send this on every stage-ready, including for later commits in the same phase.
+When a coder reports stage-ready, send a wake-signal `SendMessage` to the concurrent auditor: "coder staged — observe the staged diff now." Send this on every stage-ready, including for later commits in the same phase.
 
 Pass through whatever the coder's stage-ready message claimed about the staged work — counts, paths, what it says it did not touch, anything it corrected — labelled as claims for the auditor to verify against the diff, not as findings. Forward what the coder already wrote rather than composing a summary; if that would delay the wake, send the wake line first and the claims after.
 
@@ -777,7 +777,7 @@ Pass through whatever the coder's stage-ready message claimed about the staged w
 - [ ] All tests passing (full test suite; fix any tests your changes break)
 - [ ] Specialist HANDOFF(s) received
 - [ ] If blocker reported → `/PACT:imPACT`
-- [ ] **Create atomic commit(s)** of CODE phase work (preserves work before strategic re-assessment). Lead owns commits; specialists stage + SendMessage "stage-ready" and wait. A staging specialist should SET the `intentional_wait` task metadata (reason `awaiting_lead_commit`, resolver `lead`) before the stage-ready notify so TeammateIdle hooks do not nag while the team-lead works through the commit sequence; CLEAR on the team-lead's commit confirmation. See the "Intentional Waiting" section in `pact-agent-teams/SKILL.md` for the SET/CLEAR contract.
+- [ ] **Create atomic commit(s)** of CODE phase work (preserves work before strategic re-assessment). Lead owns commits; specialists stage + `SendMessage` "stage-ready" and wait. A staging specialist should SET the `intentional_wait` task metadata (reason `awaiting_lead_commit`, resolver `lead`) before the stage-ready notify so TeammateIdle hooks do not nag while the team-lead works through the commit sequence; CLEAR on the team-lead's commit confirmation. See the "Intentional Waiting" section in `pact-agent-teams/SKILL.md` for the SET/CLEAR contract.
 - [ ] **Journal event**: After each commit, write a `commit` event:
   ```bash
   set -e
@@ -804,8 +804,8 @@ JSON
   TaskUpdate(taskId, owner="secretary")
   ```
   Do not block on completion — TEST phase proceeds in parallel.
-- [ ] **Primary HANDOFF-presence check**: on receiving each Task-complete SendMessage, verify via TaskGet — confirm status=completed AND metadata.handoff populated/non-empty. If missing, SendMessage the agent to complete HANDOFF before downstream dispatch proceeds.
-- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — `metadata.audit_summary` is present (verify via TaskGet), OR an audit has been dispatched against the committed artifact. If neither holds, SendMessage the auditor with the committed SHA, or dispatch a post-artifact audit, before TEST dispatch proceeds.
+- [ ] **Primary HANDOFF-presence check**: on receiving each Task-complete `SendMessage`, verify via `TaskGet` — confirm status=completed AND metadata.handoff populated/non-empty. If missing, `SendMessage` the agent to complete HANDOFF before downstream dispatch proceeds.
+- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — `metadata.audit_summary` is present (verify via `TaskGet`), OR an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, before TEST dispatch proceeds.
 - [ ] **S4 Checkpoint**: Environment stable? Model aligned? Plan viable?
 
 #### Handling Complex Sub-Tasks During CODE

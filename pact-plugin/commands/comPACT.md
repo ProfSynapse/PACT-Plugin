@@ -31,7 +31,7 @@ Create a simpler Task hierarchy than full orchestrate:
 
 > **Feature-task variety stamp (step 1).** Stamp the feature-level variety total on the feature `TaskCreate`, so the wrap-up Orchestration Retrospective can compute feature-vs-dispatch divergence instead of `feature_variety_missing`:
 > ```python
-> TaskCreate(subject="{verb} {feature}", metadata={"variety": {"total": N}})  # N = feature-level total, 4-16
+> `TaskCreate(subject="{verb} {feature}", metadata={"variety": {"total": N}})`  # N = feature-level total, 4-16
 > ```
 > Advisory, not enforced — the feature task has no teachback-gated sibling, so the dispatch-boundary gate cannot apply. The `.total` field is the load-bearing input `compute_variety_divergence` reads (the full D11 4-rationale block is fine too, but `.total` is the minimum). Mirrors what `orchestrate.md` already persists for its feature task.
 
@@ -174,7 +174,7 @@ Every specialist dispatch creates **two tasks**, not one:
 - **Task A** — TEACHBACK gate. `subject = "{specialist}: TEACHBACK for {sub-task}"`, owner = teammate. Description: teachback expectations + dispatch context.
 - **Task B** — primary work. `subject = "{specialist}: {sub-task}"`, owner = teammate, `blockedBy = [<Task A id>]`.
 
-Both are created BEFORE the `Agent(...)` spawn call so the teammate sees them on first `TaskList`. The teammate claims A, submits teachback metadata, idles on `awaiting_lead_completion`. You review and accept via the two-call atomic pair: `SendMessage(to=teammate, ...)` FIRST, then `TaskUpdate(A, status="completed")` — see [Teachback Review](../protocols/pact-completion-authority.md#teachback-review) for the rationale. On accept, the teammate wakes to claim B.
+Both are created BEFORE the `Agent(...)` spawn call so the teammate sees them on first `TaskList`. The teammate claims A, submits teachback metadata, idles on `awaiting_lead_completion`. You review and accept via the two-call atomic pair: `TaskUpdate(A, status="completed")` FIRST, then the wake-signal `SendMessage(to=teammate, ...)` — see [Teachback Review](../protocols/pact-completion-authority.md#teachback-review) for the rationale. On accept, the teammate wakes to claim B.
 
 **Dispatch sequence (replaces single-task dispatch)**:
 
@@ -187,7 +187,7 @@ A_id = TaskCreate(
                 "Submit TEACHBACK by writing metadata.teachback_submit using the CANONICAL field schema (do NOT improvise key names): understanding, most_likely_wrong, least_confident_item, first_action, variety_acknowledgment (an OBJECT). See the pact-teachback skill for field semantics. "
                 "SET intentional_wait{reason=awaiting_lead_completion, expected_resolver=lead, since=<canonical_since() output>}. Idle. "
                 "DO NOT mark this task completed — team-lead-only completion. Lead will mark completed "
-                "after teachback acceptance, then send a wake-SendMessage confirming Task B is claimable.\n\n"
+                "after teachback acceptance, then send a wake-signal SendMessage confirming Task B is claimable.\n\n"
                 "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\n"
                 "Mission for Task B: the primary-work task assigned to you in your TaskList (the work task, NOT this TEACHBACK gate task), identified by its subject (the '{role}: {mission}' pattern). Claim it after this teachback is accepted."
 )
@@ -217,7 +217,7 @@ TaskUpdate(A_id, addBlocks=[B_id])
 # 3. Spawn the teammate via the canonical Agent() form (shown in §Invocation below).
 ```
 
-The `Agent()` `prompt` does NOT change shape — the Teachback-Gated Dispatch is encoded in the surrounding TaskCreate sequence, not in the `Agent()` call.
+The `Agent()` `prompt` does NOT change shape — the Teachback-Gated Dispatch is encoded in the surrounding `TaskCreate` sequence, not in the `Agent()` call.
 
 **Carve-outs** — single-task dispatch still applies for:
 
@@ -234,7 +234,7 @@ When the task contains multiple independent items, invoke multiple specialists t
 
 1. `TaskCreate(subject="{specialist-name}: TEACHBACK for {sub-task}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
 2. `TaskCreate(subject="{specialist-name}: {sub-task}", description=<see below>, metadata=<see below>)` — Task B.
-   - Task B's `description` carries the comPACT-concurrent mission: "comPACT mode (concurrent): You are one of [N] specialists working concurrently.\nYou are working in a git worktree at [worktree_path].\nNote: `CLAUDE.md` is gitignored and does not exist in worktrees. As a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead.\n\nYOUR SCOPE: [specific sub-task]\nOTHER AGENTS' SCOPE: [what others handle]\n\nWork directly from this task description.\nIf upstream task IDs are provided, read via `TaskGet` for prior decisions.\nCheck docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist.\nDo not create new documentation artifacts in docs/.\nStay within your assigned scope.\n\nFIRST claim this task (TaskUpdate status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\nTesting: New unit tests for logic changes. Fix broken existing tests. Run test suite before HANDOFF.\nImport hygiene: if you modified any .py files, run `bash {plugin_root}/skills/pact-coding-standards/scripts/lint-check.sh --files <the .py files you modified>` (single-quote each filename — a filename is untrusted shell input) before the suite; record its final IMPORT-HYGIENE verdict line verbatim in your HANDOFF produced field; fix findings in files you modified (a deliberate side-effect import or re-export keeps a reasoned `# noqa: F401`); if the script is missing or errors, say so in your HANDOFF — never skip silently.\n\nIf you hit a blocker, STOP and `SendMessage` it to the team-lead.\n\nTask: [this agent's specific sub-task]"
+   - Task B's `description` carries the comPACT-concurrent mission: "comPACT mode (concurrent): You are one of [N] specialists working concurrently.\nYou are working in a git worktree at [worktree_path].\nNote: `CLAUDE.md` is gitignored and does not exist in worktrees. As a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead.\n\nYOUR SCOPE: [specific sub-task]\nOTHER AGENTS' SCOPE: [what others handle]\n\nWork directly from this task description.\nIf upstream task IDs are provided, read via `TaskGet` for prior decisions.\nCheck docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist.\nDo not create new documentation artifacts in docs/.\nStay within your assigned scope.\n\nFIRST claim this task (`TaskUpdate` status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\nTesting: New unit tests for logic changes. Fix broken existing tests. Run test suite before HANDOFF.\nImport hygiene: if you modified any .py files, run `bash {plugin_root}/skills/pact-coding-standards/scripts/lint-check.sh --files <the .py files you modified>` (single-quote each filename — a filename is untrusted shell input) before the suite; record its final IMPORT-HYGIENE verdict line verbatim in your HANDOFF produced field; fix findings in files you modified (a deliberate side-effect import or re-export keeps a reasoned `# noqa: F401`); if the script is missing or errors, say so in your HANDOFF — never skip silently.\n\nIf you hit a blocker, STOP and `SendMessage` it to the team-lead.\n\nTask: [this agent's specific sub-task]"
    - Task B's `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema):
      ```json
      {
@@ -283,7 +283,7 @@ Spawn all specialists in parallel (multiple `Agent` calls in one response).
 
 **After all concurrent agents complete**: Verify no conflicts occurred, run full test suite.
 
-### Single Specialist Agent (When Required)
+### Single Specialist `Agent` (When Required)
 
 Use a single specialist agent only when:
 - Task is atomic (one bug, one endpoint, one component)
@@ -295,7 +295,7 @@ Use a single specialist agent only when:
 
 1. `TaskCreate(subject="{specialist-name}: TEACHBACK for {task}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
 2. `TaskCreate(subject="{specialist-name}: {task}", description=<see below>, metadata=<see below>)` — Task B.
-   - Task B's `description` carries the comPACT mission: "comPACT mode: Work directly from this task description.\nYou are working in a git worktree at [worktree_path].\nNote: `CLAUDE.md` is gitignored and does not exist in worktrees. As a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead.\nIf upstream task IDs are provided, read via `TaskGet` for prior decisions.\nCheck docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist.\nDo not create new documentation artifacts in docs/.\nFocus on the task at hand.\n\nFIRST claim this task (TaskUpdate status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\nTesting: New unit tests for logic changes (optional for trivial changes). Fix broken existing tests. Run test suite before HANDOFF.\nImport hygiene: if you modified any .py files, run `bash {plugin_root}/skills/pact-coding-standards/scripts/lint-check.sh --files <the .py files you modified>` (single-quote each filename — a filename is untrusted shell input) before the suite; record its final IMPORT-HYGIENE verdict line verbatim in your HANDOFF produced field; fix findings in files you modified (a deliberate side-effect import or re-export keeps a reasoned `# noqa: F401`); if the script is missing or errors, say so in your HANDOFF — never skip silently.\n\n> Smoke vs comprehensive tests: These are verification tests. Comprehensive coverage is TEST phase work.\n\nIf you hit a blocker, STOP and `SendMessage` it to the team-lead.\n\nTask: [user's task description]"
+   - Task B's `description` carries the comPACT mission: "comPACT mode: Work directly from this task description.\nYou are working in a git worktree at [worktree_path].\nNote: `CLAUDE.md` is gitignored and does not exist in worktrees. As a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead.\nIf upstream task IDs are provided, read via `TaskGet` for prior decisions.\nCheck docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist.\nDo not create new documentation artifacts in docs/.\nFocus on the task at hand.\n\nFIRST claim this task (`TaskUpdate` status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\nTesting: New unit tests for logic changes (optional for trivial changes). Fix broken existing tests. Run test suite before HANDOFF.\nImport hygiene: if you modified any .py files, run `bash {plugin_root}/skills/pact-coding-standards/scripts/lint-check.sh --files <the .py files you modified>` (single-quote each filename — a filename is untrusted shell input) before the suite; record its final IMPORT-HYGIENE verdict line verbatim in your HANDOFF produced field; fix findings in files you modified (a deliberate side-effect import or re-export keeps a reasoned `# noqa: F401`); if the script is missing or errors, say so in your HANDOFF — never skip silently.\n\n> Smoke vs comprehensive tests: These are verification tests. Comprehensive coverage is TEST phase work.\n\nIf you hit a blocker, STOP and `SendMessage` it to the team-lead.\n\nTask: [user's task description]"
    - Task B's `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema):
      ```json
      {
@@ -384,7 +384,7 @@ When dispatching an auditor, create its task with `metadata: {"completion_type":
 - [ ] Agent tasks marked `completed` (agents self-manage their task status via `TaskUpdate`)
 - [ ] **Agreement verification**: `SendMessage` to specialist to confirm shared understanding of deliverables before committing. Background: [pact-ct-teachback.md](../protocols/pact-ct-teachback.md).
 - [ ] **Run tests** — verify work passes. If tests fail → return to specialist for fixes (create new agent task, repeat).
-- [ ] **Create atomic commit(s)** — stage and commit before proceeding. Lead owns commits; specialists stage + SendMessage "stage-ready" and wait. A staging specialist should SET the `intentional_wait` task metadata (reason `awaiting_lead_commit`, resolver `lead`) before the stage-ready notify so TeammateIdle hooks do not nag while the team-lead works through the commit sequence; CLEAR on the team-lead's commit confirmation. See the "Intentional Waiting" section in `pact-agent-teams/SKILL.md` for the SET/CLEAR contract.
+- [ ] **Create atomic commit(s)** — stage and commit before proceeding. Lead owns commits; specialists stage + `SendMessage` "stage-ready" and wait. A staging specialist should SET the `intentional_wait` task metadata (reason `awaiting_lead_commit`, resolver `lead`) before the stage-ready notify so TeammateIdle hooks do not nag while the team-lead works through the commit sequence; CLEAR on the team-lead's commit confirmation. See the "Intentional Waiting" section in `pact-agent-teams/SKILL.md` for the SET/CLEAR contract.
 - [ ] **Journal events**: After each commit, write a `commit` event:
   ```bash
   set -e
@@ -401,7 +401,7 @@ JSON
     description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
   TaskUpdate(taskId, owner="secretary")
   ```
-- [ ] **Verify agent task completion**: On receiving each HANDOFF summary via SendMessage, check the agent's task status via TaskList. If still "in_progress", mark it completed: `TaskUpdate(taskId, status="completed")`.
+- [ ] **Verify agent task completion**: On receiving each HANDOFF summary via `SendMessage`, check the agent's task status via `TaskList`. If still "in_progress", mark it completed: `TaskUpdate(taskId, status="completed")`.
 - [ ] **Journal event**: Write `phase_transition` to mark comPACT completion:
   ```bash
   set -e

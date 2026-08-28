@@ -412,8 +412,9 @@ When a downstream agent receives an upstream handoff (via `TaskGet`), their firs
    "[{sender}→team-lead] Teachback submitted on Task #A. Idling on awaiting_lead_completion."
 4. Agent SETs `intentional_wait{reason=awaiting_lead_completion}` and idles — it does NOT
    begin Task B (blocking)
-5. Team-lead reviews the teachback. On acceptance: wake-`SendMessage` FIRST, then
-   `TaskUpdate(A, status="completed")`, which unblocks Task B. On misunderstanding: write
+5. Team-lead reviews the teachback. On acceptance:
+   `TaskUpdate(A, status="completed")` FIRST — this unblocks Task B — then
+   the wake-signal `SendMessage`. On misunderstanding: write
    `metadata.teachback_rejection` + a correction `SendMessage`; the agent revises on Task A.
    The block holds until acceptance.
 ```
@@ -457,8 +458,8 @@ The L1.5 gate runs against the dispatching task's variety score (see `hooks/shar
 | Variety score | Workflow route | Method reconstruction | Lead behavior on absence |
 |---|---|---|---|
 | 4–6 | `ROUTE_COMPACT` (comPACT) | **Skipped** — not required, not recommended | Accept teachback; absence is the expected default. |
-| 7–10 | `ROUTE_ORCHESTRATE` (orchestrate) | **Recommended** — teammate may include; lead MAY ask for it on follow-up | Accept teachback; lead may SendMessage requesting reconstruction on follow-up if upstream decisions are non-trivial. |
-| 11–14 | `ROUTE_PLAN_MODE` (plan-mode + orchestrate) | **Required** — teammate MUST include; absence is rejection signal | Reject teachback with `metadata.teachback_rejection{reason="missing_reasoning_reconstruction"}` plus a correction SendMessage. |
+| 7–10 | `ROUTE_ORCHESTRATE` (orchestrate) | **Recommended** — teammate may include; lead MAY ask for it on follow-up | Accept teachback; lead may `SendMessage` requesting reconstruction on follow-up if upstream decisions are non-trivial. |
+| 11–14 | `ROUTE_PLAN_MODE` (plan-mode + orchestrate) | **Required** — teammate MUST include; absence is rejection signal | Reject teachback with `metadata.teachback_rejection{reason="missing_reasoning_reconstruction"}` plus a correction `SendMessage`. |
 | 15–16 | `ROUTE_RESEARCH_SPIKE` (research-spike) | **Required** (treated identically to plan-mode) | Same as plan-mode — reject on absence. |
 
 The lead-side validation gate emits one of 3 rejection reasons in `metadata.teachback_rejection.reason`:
@@ -878,7 +879,7 @@ Derive agent state from progress signals (see agent-teams skill, Progress Signal
 |-------|-----------|-------------------|
 | **Converging** | Progress signals show forward movement (files modified, tests passing) | No intervention needed |
 | **Exploring** | Progress signals show searching behavior (reading files, no modifications yet) | Normal for early task stages; intervene if persists past ~50% of expected duration |
-| **Stuck** | No progress signals for extended period; stall detection triggers | Send context/guidance via SendMessage; escalate to imPACT if unresponsive |
+| **Stuck** | No progress signals for extended period; stall detection triggers | Send context/guidance via `SendMessage`; escalate to imPACT if unresponsive |
 
 **State transitions**:
 - Exploring → Converging: Normal (agent found approach, started implementing)
@@ -916,7 +917,7 @@ CalibrationRecord:
 
 **Post-cycle comparison**: During HANDOFF processing, the secretary:
 1. Reads feature task metadata for initial_variety_score
-2. Scans TaskList for blocker count and phase rerun count
+2. Scans `TaskList` for blocker count and phase rerun count
 3. Asks the team-lead for a brief difficulty assessment (higher, lower, or about the same)
 4. Computes the full CalibrationRecord and saves to pact-memory
 5. If drift exceeds 2 in any dimension, notes as significant for future Learning II queries
@@ -962,7 +963,7 @@ Portability is not the fault. A rationale that names a coupled file pair or a pe
 
 The wrap-up retrospective's Q5 reports the CALIBRATION DELTA — the feature-level variety estimate against the distribution of per-dispatch variety the arc actually produced. It does NOT report a stamping-compliance ratio: stamping is refused at the dispatch-wiring write per the Enforcement split above, so compliance has no variance left to measure. Whether the estimate was well-calibrated is the question enforcement cannot answer, and it is the one this question keeps.
 
-**Population — the `dispatch_site` journal stream, scoped to the current arc.** Its membership is the OWNER-WITNESSED dispatch sites: the emit fires on a TaskUpdate that names a pact-specialist `owner` on a non-teachback, non-exempt task, and on nothing else — one event means one dispatch by construction, never by inference. An owner write in a SPLIT wiring (owner set in one update, blockers at creation or in another) is a full witness; the composite owner+addBlockedBy write is NOT required. Review-panel dispatches are EXCLUDED, because the peer-review path dispatches reviewers without ever writing owner on the task — no owner write witnesses them, and covering them would mean inferring ownership from a display convention, which keys membership on something that moves. Wanting them counted is remedied by canonical owner wiring at dispatch — a practice-side change, never a widening of the emit's inference — and they stay visible through the `review_dispatch` stream. MEMBERSHIP DEPENDS ON THE TEACHBACK SUBJECT CONVENTION: a teachback Task-A gate receives the same owner-only split wiring a work task does, so the subject carve-out is the SOLE discriminator excluding those gates, and a gate whose subject loses the TEACHBACK marker is counted as a site. Because the platform reuses task_ids across arcs in a resumed session, the stream MUST be scoped to the current arc before use. Do NOT widen the population to another source — a scan of the task store answers "which tasks happen to carry a stamp", whose membership moves with any later decision about which sites get stamped, and the substitution is silent because the wrong population still yields a mean that renders.
+**Population — the `dispatch_site` journal stream, scoped to the current arc.** Its membership is the OWNER-WITNESSED dispatch sites: the emit fires on a `TaskUpdate` that names a pact-specialist `owner` on a non-teachback, non-exempt task, and on nothing else — one event means one dispatch by construction, never by inference. An owner write in a SPLIT wiring (owner set in one update, blockers at creation or in another) is a full witness; the composite owner+addBlockedBy write is NOT required. Review-panel dispatches are EXCLUDED, because the peer-review path dispatches reviewers without ever writing owner on the task — no owner write witnesses them, and covering them would mean inferring ownership from a display convention, which keys membership on something that moves. Wanting them counted is remedied by canonical owner wiring at dispatch — a practice-side change, never a widening of the emit's inference — and they stay visible through the `review_dispatch` stream. MEMBERSHIP DEPENDS ON THE TEACHBACK SUBJECT CONVENTION: a teachback Task-A gate receives the same owner-only split wiring a work task does, so the subject carve-out is the SOLE discriminator excluding those gates, and a gate whose subject loses the TEACHBACK marker is counted as a site. Because the platform reuses task_ids across arcs in a resumed session, the stream MUST be scoped to the current arc before use. Do NOT widen the population to another source — a scan of the task store answers "which tasks happen to carry a stamp", whose membership moves with any later decision about which sites get stamped, and the substitution is silent because the wrong population still yields a mean that renders.
 
 **Terms.** One pass of the pure helper `extract_final_dispatch_coverage` over the `dispatch_site` stream and the `task_metadata_snapshot` stream returns a dict of ten values. MEMBERSHIP comes from `dispatch_site` and the VALUE comes from the latest `task_metadata_snapshot` for the same task, so the distribution holds the FINAL total rather than the as-dispatched one:
 
@@ -1011,9 +1012,9 @@ The teammate becomes the peer reviewer of the orchestrator's variety scoring. Th
 
 The lead reviews `variety_acknowledgment` as part of teachback acceptance per [pact-completion-authority.md §Teachback Review](pact-completion-authority.md#teachback-review). Two acceptance paths:
 
-- **`"yes"`**: standard teachback acceptance; lead marks Task A completed + sends paired wake-SendMessage.
+- **`"yes"`**: standard teachback acceptance; lead marks Task A completed + sends paired wake-signal `SendMessage`.
 - **`"no"` or `"concern"`**: lead has two corrective options before acceptance:
-  - *Orchestrator-side correction* (preferred when teammate's flag is correct): re-stamp `metadata.variety` on Task B via TaskUpdate with refined per-dimension rationales, THEN accept the teachback. The teammate's acknowledgment becomes part of the audit trail; no rejection needed.
+  - *Orchestrator-side correction* (preferred when teammate's flag is correct): re-stamp `metadata.variety` on Task B via `TaskUpdate` with refined per-dimension rationales, THEN accept the teachback. The teammate's acknowledgment becomes part of the audit trail; no rejection needed.
 
     > ⚠️ To re-stamp, RE-SEND THE FULL `variety` OBJECT in ONE `TaskUpdate` call, and include each field you did not revise, unchanged. A write that names `variety` REPLACES the whole object, and it erases each field you omit. It reports no error. Then read the task file back and enumerate the keys of `metadata.variety`.
 
@@ -1123,7 +1124,7 @@ Carve-outs apply across all workflows: signal-tasks (blocker + algedonic), sessi
 |------|----------|----------|
 | Misunderstanding | Wrong output, no errors | Teachback correction + corrected context |
 | Derailment | Loops on same error | Fresh agent, different framing |
-| Discontinuity | Lost/stale context | Reconstruct from memory/TaskGet |
+| Discontinuity | Lost/stale context | Reconstruct from memory/`TaskGet` |
 | Absence | Insufficient upstream output | Redo prior phase |
 
 ---
@@ -1262,7 +1263,7 @@ Feature Task (created by orchestrator)
 |-------|------------|----------|-----------|
 | Feature | Orchestrator | Orchestrator | Spans entire workflow |
 | Phase | Orchestrator | Orchestrator | Active during phase |
-| Agent | Orchestrator | Specialist (claim-only); Orchestrator (completion authority) | Specialist claims via `TaskUpdate(status="in_progress")`; orchestrator completes via `TaskUpdate(status="completed")` paired with a wake-signal SendMessage |
+| Agent | Orchestrator | Specialist (claim-only); Orchestrator (completion authority) | Specialist claims via `TaskUpdate(status="in_progress")`; orchestrator completes via `TaskUpdate(status="completed")` paired with a wake-signal `SendMessage` |
 
 Under Agent Teams, specialists claim agent tasks (`pending → in_progress`) and store HANDOFFs in `metadata.handoff`, but the orchestrator transitions agent tasks to `completed` after inspecting the HANDOFF. Two narrow carve-outs (signal-tasks; secretary session briefing + memory-save) self-complete; see [Completion Authority](pact-completion-authority.md#completion-authority).
 
@@ -1280,13 +1281,13 @@ Tasks progress through: `pending` → `in_progress` → `completed`
 |---|---|---|
 | `pending → in_progress` (claim) | Teammate | Owns the task; `blockedBy` is empty |
 | `in_progress → in_progress` (metadata work) | Teammate | Writes `metadata.handoff` / `metadata.teachback_submit` |
-| `in_progress → in_progress` (rejection metadata) | Lead | Writes `metadata.teachback_rejection` / `metadata.handoff_rejection` + sends wake-signal SendMessage |
-| `in_progress → completed` | **LEAD ONLY** on teammate-owned tasks | Pairs with wake-signal SendMessage; carve-outs: signal-tasks, secretary session briefing + memory-save, imPACT force-term |
+| `in_progress → in_progress` (rejection metadata) | Lead | Writes `metadata.teachback_rejection` / `metadata.handoff_rejection` + sends wake-signal `SendMessage` |
+| `in_progress → completed` | **LEAD ONLY** on teammate-owned tasks | Pairs with wake-signal `SendMessage`; carve-outs: signal-tasks, secretary session briefing + memory-save, imPACT force-term |
 | `pending → completed` (skip) | Lead | Phase-skip with `metadata.skipped = true` |
 
 ### Task A + Task B Dispatch Shape
 
-Every specialist dispatch creates a Task A (teachback) + Task B (primary work) pair, with Task A created FIRST so the teachback gate gets the LOWER id (creating B first inverts the intuitive "lower id = earlier" reading; canonical create sequence in `agents/pact-orchestrator.md` §11). Task B has `blockedBy=[A]`. Lead-completion of Task A auto-unblocks Task B in the task graph; the team-lead pairs the status flip with a wake-signal SendMessage so the idle teammate (on `intentional_wait{reason=awaiting_lead_completion}`) wakes to claim B. The platform does not push a wake on blocker resolution — `blockedBy` is computed at TaskList query time, so the wake-signal SendMessage is required.
+Every specialist dispatch creates a Task A (teachback) + Task B (primary work) pair, with Task A created FIRST so the teachback gate gets the LOWER id (creating B first inverts the intuitive "lower id = earlier" reading; canonical create sequence in `agents/pact-orchestrator.md` §11). Task B has `blockedBy=[A]`. Lead-completion of Task A auto-unblocks Task B in the task graph; the team-lead pairs the status flip with a wake-signal `SendMessage` so the idle teammate (on `intentional_wait{reason=awaiting_lead_completion}`) wakes to claim B. The platform does not push a wake on blocker resolution — `blockedBy` is computed at `TaskList` query time, so the wake-signal `SendMessage` is required.
 
 ### Blocking Relationships
 
@@ -1960,8 +1961,8 @@ The auditor operates primarily through file observation, not messaging. This min
 | Method | When | Cost |
 |--------|------|------|
 | **File reading** (git diff, Read) | Primary — every observation cycle | Zero disruption |
-| **TaskList monitoring** | Check coder progress, task status | Zero disruption |
-| **SendMessage to coder** | Only when file observation raises a question code alone can't answer | Low disruption (one specific question per message) |
+| **`TaskList` monitoring** | Check coder progress, task status | Zero disruption |
+| **`SendMessage` to coder** | Only when file observation raises a question code alone can't answer | Low disruption (one specific question per message) |
 | **RED signal to orchestrator** | Clear architecture violation or requirement misunderstanding | Appropriate disruption |
 
 **Rule of thumb**: 80%+ of observation should be silent file reading. If the auditor is messaging coders frequently, it's disrupting more than observing.
@@ -1971,7 +1972,7 @@ The auditor operates primarily through file observation, not messaging. This min
 **Phase A: Warm-up** (while coders start):
 1. Read all available references (architecture doc, plan, dispatch context)
 2. Identify key interfaces, high-risk dimensions, cross-cutting requirements
-3. Note coder assignments from TaskList
+3. Note coder assignments from `TaskList`
 4. Wait for coders to produce initial output before observing. The wake is the orchestrator's stage-ready relay — no PACT hook sends a message, so do not end the turn with a background process as the route back; backgrounding a long command is fine while the auditor stays in its turn and polls it. If no relay has arrived, poll `git status --porcelain` on a bounded cadence within the current turn rather than ending it. If the cadence is exhausted and the turn must end, SET `intentional_wait` (reason `awaiting_coder_output`, resolver `lead`) first, and CLEAR it on the relay.
 
 **Phase B: Observation cycles** (periodic):
@@ -1980,7 +1981,7 @@ The auditor operates primarily through file observation, not messaging. This min
 3. Assess concern level and respond:
    - No concern → silent, continue next cycle
    - Minor concern → log internally, observe next cycle (may self-resolve)
-   - Significant but ambiguous → SendMessage to coder (one specific question)
+   - Significant but ambiguous → `SendMessage` to coder (one specific question)
    - Clear violation → RED signal to orchestrator immediately
 
 **Phase C: Final observation** (triggered by an orchestrator message, or by all coders completing — a state the auditor checks, not a message that arrives):
@@ -2043,7 +2044,7 @@ Action: [None (GREEN) / Route to test (YELLOW) / Intervene (RED)]
 |--------|---------|------|---------------------|
 | **GREEN** | On track | Final summary; silence during cycles is implicit GREEN | None needed |
 | **YELLOW** | Worth noting | Minor drift, convention inconsistency, potential edge case | Pass finding to test engineer as focus area |
-| **RED** | Intervene now | Architecture violation, requirement misunderstanding, security concern | SendMessage to affected coder; may pause coder's work |
+| **RED** | Intervene now | Architecture violation, requirement misunderstanding, security concern | `SendMessage` to affected coder; may pause coder's work |
 
 **Before emitting RED**: Verify via targeted question to the coder when practical. Skip verification for clear-cut violations (e.g., wrong module boundary, missing auth check on sensitive endpoint).
 
@@ -2083,7 +2084,7 @@ The auditor uses signal-based completion rather than standard HANDOFF:
 
 The auditor is **non-blocking**: never hold the workflow waiting for its verdict. Absence of `audit_summary` is not a verdict — do not read silence as GREEN, as RED, or as "no findings," and never write or overwrite a verdict on inferred silence. Nor is absence a guarantee that a verdict is still coming: a concurrent auditor can be waiting on a wake it never received.
 
-Treat absence as a prompt to act, not to conclude. Before dispatching TEST, confirm one of: `audit_summary` is present, or an audit has been dispatched against the committed artifact. If neither holds, SendMessage the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
+Treat absence as a prompt to act, not to conclude. Before dispatching TEST, confirm one of: `audit_summary` is present, or an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
 
 The team-lead retains the authority to override an auditor verdict (a `TaskUpdate` that rewrites `audit_summary`), and that override is made safe rather than blocked. When a lead `TaskUpdate` overwrites an auditor-authored verdict, the lifecycle gate preserves the auditor's original to `metadata.audit_summary_authored`, routes the lead's value to `metadata.lead_close_note`, and emits an `audit_summary_overwrite` advisory (severity-escalated when the override lowers the verdict, e.g. RED→GREEN). The verdict is therefore never silently lost; a consumer reading the authoritative auditor signal should prefer `metadata.audit_summary_authored` when present. This front-line discipline (never overwrite on inferred silence) reduces how often the gate fires — the gate is the durable backstop, not a substitute for the discipline.
 
@@ -2113,27 +2114,27 @@ The auditor is additive — it catches issues during CODE that would otherwise o
 
 ## Completion Authority
 
-> **Purpose**: Lead-only completion of teammate-owned tasks. Acceptance is a two-call atomic pair (wake-signal SendMessage FIRST, then status flip); rejection is dual-channel (wake-signal SendMessage FIRST, then metadata write).
+> **Purpose**: Lead-only completion of teammate-owned tasks. Acceptance is a two-call atomic pair (status flip FIRST, then wake-signal `SendMessage`); rejection is dual-channel (metadata write FIRST, then wake-signal `SendMessage`).
 >
 > **Audience**: PACT team-lead (orchestrator). Teammate-side rules live in [pact-agent-teams §On Completion](../skills/pact-agent-teams/SKILL.md#on-completion--handoff-required) and [pact-agent-teams §On Rejection](../skills/pact-agent-teams/SKILL.md#on-rejection-wake-signal-receipt).
 
-You — the team-lead — are the **only** actor who marks teammate-owned tasks `completed`. Teammates write HANDOFFs to `metadata.handoff`, idle on `intentional_wait{reason=awaiting_lead_completion}`, and wait for your acceptance. The `TaskUpdate(status="completed")` flip is the load-bearing approval action; the paired wake-signal SendMessage is the load-bearing wake.
+You — the team-lead — are the **only** actor who marks teammate-owned tasks `completed`. Teammates write HANDOFFs to `metadata.handoff`, idle on `intentional_wait{reason=awaiting_lead_completion}`, and wait for your acceptance. The `TaskUpdate(status="completed")` flip is the load-bearing approval action; the paired wake-signal `SendMessage` is the load-bearing wake.
 
-`blockedBy` is pull-only at the platform level — the platform does NOT push a wake on blocker resolution; `blockedBy` is computed at TaskList query time. Idle teammates cannot self-wake to re-poll, so the wake-signal SendMessage is paired with each metadata or status write that resolves their wait.
+`blockedBy` is pull-only at the platform level — the platform does NOT push a wake on blocker resolution; `blockedBy` is computed at `TaskList` query time. Idle teammates cannot self-wake to re-poll, so the wake-signal `SendMessage` is paired with each metadata or status write that resolves their wait.
 
-### Acceptance — two-call atomic pair (BOTH required, SendMessage FIRST)
+### Acceptance — two-call atomic pair (BOTH required, `TaskUpdate` FIRST)
 
-1. `SendMessage(to="<teammate>", "[team-lead→<teammate>] Task #<id> accepted. Work complete.", summary="Task accepted")` — wakes the idle teammate so they can claim the next task; writes the wake to the inbox file BEFORE the status flip
-2. `TaskUpdate(taskId, status="completed")` — status flip; auto-unblocks any tasks with `blockedBy=[<id>]`
+1. `TaskUpdate(taskId, status="completed")` — status flip; auto-unblocks any tasks with `blockedBy=[<id>]`
+2. `SendMessage(to="<teammate>", "[team-lead→<teammate>] Task #<id> accepted. Work complete.", summary="Task accepted")` — wakes the idle teammate so they can claim the next task
 
-Both calls are **required**, SendMessage FIRST. Send the wake before the status flip so acceptance mirrors the teammate's own metadata-before-wake ordering — the wake-signal is the teammate's content-arrival trigger, the same role the teammate's notify SendMessage plays for your read. Skipping the SendMessage entirely strands the teammate idle on `awaiting_lead_completion` until something else (peer message, your next dispatch) wakes them; `blockedBy` resolution is invisible without the wake.
+Both calls are **required**, `TaskUpdate` FIRST — the wake-signal `SendMessage` is the last call. If the `TaskUpdate` succeeds and the `SendMessage` errors, retry the send on the tool error; a teammate left gate-open with no wake is recovered only when something wakes them (the retried send, a peer message, your next dispatch) — their disk-first re-read then resolves the open gate. Skipping the `SendMessage` entirely strands the teammate idle on `awaiting_lead_completion` until something else (peer message, your next dispatch) wakes them; `blockedBy` resolution is invisible without the wake.
 
-### Rejection — two-call atomic pair (BOTH required, SendMessage FIRST)
+### Rejection — two-call atomic pair (BOTH required, `TaskUpdate` FIRST)
 
-1. `SendMessage(to="<teammate>", "[team-lead→<teammate>] Rejected on Task #<id>. See metadata.{teachback,handoff}_rejection. Revise.", summary="Rejected; revise")` — wakes the teammate so they read the corrections; writes the wake to the inbox file BEFORE the metadata write
-2. `TaskUpdate(taskId, metadata={"teachback_rejection": {...}})` (Task A) OR `TaskUpdate(taskId, metadata={"handoff_rejection": {...}})` (Task B) — payload `{reason, corrections, since, revision_number}`
+1. `TaskUpdate(taskId, metadata={"teachback_rejection": {...}})` (Task A) OR `TaskUpdate(taskId, metadata={"handoff_rejection": {...}})` (Task B) — payload `{reason, corrections, since, revision_number}`
+2. `SendMessage(to="<teammate>", "[team-lead→<teammate>] Rejected on Task #<id>. See metadata.{teachback,handoff}_rejection. Revise.", summary="Rejected; revise")` — wakes the teammate so they read the corrections
 
-Both calls are **required**, and the ordering matches Acceptance for the same reason: the wake-signal `SendMessage` is what un-idles the teammate, who cannot self-observe the rejection metadata on a pull-only wait. Skipping the SendMessage leaves the teammate idle on stale `awaiting_lead_completion`, never seeing the corrections — symmetric failure to skipping wake on acceptance. The teammate's `intentional_wait` does not auto-clear when you write rejection metadata; only the wake-signal triggers their CLEAR-and-revise flow. **3+ rejection cycles** on the same task is an imPACT META-BLOCK signal.
+Both calls are **required**, and the ordering matches Acceptance for the same reason: the wake-signal `SendMessage` is what un-idles the teammate, who cannot self-observe the rejection metadata on a pull-only wait. If the `TaskUpdate` succeeds and the `SendMessage` errors, retry the send on the tool error. Skipping the `SendMessage` leaves the teammate idle on stale `awaiting_lead_completion`, never seeing the corrections — symmetric failure to skipping wake on acceptance. The teammate's `intentional_wait` does not auto-clear when you write rejection metadata; only the wake-signal triggers their CLEAR-and-revise flow. **3+ rejection cycles** on the same task is an imPACT META-BLOCK signal.
 
 **Teammate self-completion carve-outs (predicate-witnessed)** — narrow exemptions where the teammate marks `completed` themselves:
 
@@ -2142,7 +2143,7 @@ Both calls are **required**, and the ordering matches Acceptance for the same re
 | Signal-tasks | `metadata.completion_type == "signal"` AND `metadata.type ∈ {"blocker", "algedonic"}` | Blocker- and algedonic-signal tasks self-complete; the task IS the signal, no HANDOFF to judge. Auditor observation tasks carry `completion_type="signal"` with NO `metadata.type`, so this predicate does not witness them — they self-complete as documented practice in the Concurrent Audit Protocol, not as a predicate-witnessed exemption. Do NOT add `metadata.type` to an auditor dispatch to make it fit the predicate; the carve-out set is a policy surface, not a template detail. |
 | Secretary session briefing + memory-save | Owner's team-config `agentType` ∈ `SELF_COMPLETE_EXEMPT_AGENT_TYPES` (currently `{pact-secretary}`) | Secretary self-completes its session-briefing deliverable (`secretary: deliver session briefing`) as the final act of delivering the briefing, and its memory-save tasks; team-lead has no acceptance criteria for the secretary's own briefing or memory bookkeeping. Self-completion does not end the secretary's role (it stays alive as consultant + harvester). Resolved via team-config lookup on `member.agentType`, so the carve-out applies regardless of spawn name (`session-secretary`, etc.). |
 
-The canonical predicate `is_self_complete_exempt(task, team_name)` in `shared/intentional_wait.py` witnesses ONLY these two surfaces. It is a pure function read by the PostToolUse advisory gate `task_lifecycle_gate.py` (advisory-only — it cannot DENY; it emits a `self_completion` advisory + a `completion_disputed` writeback when a non-exempt teammate self-completes) as well as by your TaskGet inspection and audit tooling. No hook BLOCKS on it; the exemption is not enforced (nothing forces an exempt teammate to self-complete — that remains instruction-level). Pass `team_name` (read from session context) to get accurate exemption signal for surface 1; surface 2 is independent of `team_name`.
+The canonical predicate `is_self_complete_exempt(task, team_name)` in `shared/intentional_wait.py` witnesses ONLY these two surfaces. It is a pure function read by the PostToolUse advisory gate `task_lifecycle_gate.py` (advisory-only — it cannot DENY; it emits a `self_completion` advisory + a `completion_disputed` writeback when a non-exempt teammate self-completes) as well as by your `TaskGet` inspection and audit tooling. No hook BLOCKS on it; the exemption is not enforced (nothing forces an exempt teammate to self-complete — that remains instruction-level). Pass `team_name` (read from session context) to get accurate exemption signal for surface 1; surface 2 is independent of `team_name`.
 
 **Related (dispatch surface)**: `member.agentType="pact-secretary"` also gets a dispatch carve-out — no TEACHBACK (single-task dispatch). Second agentType-keyed carve-out, parallel to `SELF_COMPLETE_EXEMPT_AGENT_TYPES` (completion, above); two frozensets, two behavioral surfaces, fully decoupled. See `agents/pact-orchestrator.md` §11 + `commands/bootstrap.md`.
 
@@ -2152,7 +2153,7 @@ The canonical predicate `is_self_complete_exempt(task, team_name)` in `shared/in
 |---|---|---|
 | imPACT termination | `metadata.terminated == true` | You force-complete an unrecoverable agent's task via `TaskStop` + `TaskUpdate(status="completed", metadata={"terminated": true, "reason": "..."})`. See [imPACT.md](../commands/imPACT.md). The `terminated` marker is recognized directly by audit/inspection; `is_self_complete_exempt` does NOT cover this surface (the team-lead writes status=completed directly). |
 
-**TaskGet metadata-blindness reminder**: `TaskGet` does NOT surface `metadata.handoff`. Read directly:
+**`TaskGet` metadata-blindness reminder**: `TaskGet` does NOT surface `metadata.handoff`. Read directly:
 
 ```
 cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff
@@ -2162,12 +2163,15 @@ Inspect the HANDOFF before flipping status. If `metadata.handoff` is missing or 
 
 ### Crossed-Wake Idles: Discriminate by Timestamp Direction
 
-Your wake-signal SendMessage races the teammate's turn-end idle notification: inbox
+Your wake-signal `SendMessage` races the teammate's turn-end idle notification: inbox
 files are written asynchronously on delivery, so a teammate's idle notification can
 reach you AFTER your directive send while the teammate has not yet seen the wake. This
 happens at every wait-resolution seam — teachback acceptance, HANDOFF acceptance,
 commit confirmation, rejection — and identically under in-process and tmux
-teammateMode: the race is delivery-ordering, not mode-specific. The idle
+teammateMode: the race is delivery-ordering, not mode-specific. The
+teachback-acceptance seam named here is this delivery-ordering race — your wake
+crossing the teammate's idle notification — not the disk-read stranding race the
+TaskUpdate-first pair ordering removed. The idle
 notification alone cannot distinguish "idle because my wake has not landed yet"
 from "idle because the teammate stalled".
 
@@ -2212,7 +2216,7 @@ have acted on it yet — apply the redundant-confirm procedure:
    further confirms and do not read subsequent idle notifications as stall
    evidence. Escalate to stall diagnosis (see [pact-agent-stall.md](pact-agent-stall.md))
    only on task-file-mtime plus sustained-silence evidence: the task file unchanged
-   AND no inbound SendMessage from the teammate across multiple idle cycles well
+   AND no inbound `SendMessage` from the teammate across multiple idle cycles well
    past your directive send.
 
 **Non-goal — no synchronous hook-based detection.** Do not attempt to close this race with a
@@ -2226,7 +2230,7 @@ plus the teammate-side disk-first re-read in
 [pact-agent-teams §On Wake](../skills/pact-agent-teams/SKILL.md#on-wake-disk-first-re-read-seam-agnostic))
 plus the duration-keyed `missed_wake_scan` hook that re-surfaces stale
 `awaiting_lead_completion` waits at your next user prompt or session start. The
-two-call atomic pairs above are unchanged by this rule — SendMessage-first ordering
+two-call atomic pairs above are unchanged by this rule — TaskUpdate-first ordering
 stays load-bearing.
 
 ---
@@ -2238,7 +2242,7 @@ The Task A + Task B dispatch shape gates implementation work behind teachback ap
 - **Task A**: `subject="<role>: TEACHBACK for <feature>"`, owner = teammate. Description states: "Submit TEACHBACK via `metadata.teachback_submit`. SET `intentional_wait{reason=awaiting_lead_completion}`. Do NOT begin Task B."
 - **Task B**: `subject="<role>: <primary mission>"`, owner = teammate, `blockedBy=[<Task A id>]`.
 
-Both tasks are created at dispatch time; the teammate receives both in their initial TaskList view, with B greyed out by `blockedBy`. **Create Task A FIRST**, before Task B, so the teachback gate gets the LOWER id (creating B first inverts the intuitive "lower id = earlier" reading). Task A's description must NOT name Task B by id — point the teammate at Task B by its subject pattern so A is creatable before B exists. Canonical create sequence: `agents/pact-orchestrator.md` §11 + the command dispatch templates' [Teachback-Gated Dispatch](../commands/orchestrate.md#teachback-gated-dispatch).
+Both tasks are created at dispatch time; the teammate receives both in their initial `TaskList` view, with B greyed out by `blockedBy`. **Create Task A FIRST**, before Task B, so the teachback gate gets the LOWER id (creating B first inverts the intuitive "lower id = earlier" reading). Task A's description must NOT name Task B by id — point the teammate at Task B by its subject pattern so A is creatable before B exists. Canonical create sequence: `agents/pact-orchestrator.md` §11 + the command dispatch templates' [Teachback-Gated Dispatch](../commands/orchestrate.md#teachback-gated-dispatch).
 
 **Reviewing the TEACHBACK**:
 
@@ -2250,15 +2254,15 @@ cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{A_id}.json" | jq .me
 
 ### Read-Trigger Precondition
 
-Before the raw JSON read above is load-bearing, you MUST wait for teammate's wake-signal SendMessage. The 3-point rule:
+Before the raw JSON read above is load-bearing, you MUST wait for teammate's wake-signal `SendMessage`. The 3-point rule:
 
-1. **Wake-signal SendMessage is the load-bearing content-arrival signal.** The teammate's notify SendMessage (sent immediately after their `metadata.teachback_submit` write per [pact-teachback Step 2](../skills/pact-teachback/SKILL.md)) is the only durable signal that the metadata write has landed on disk. Acting on a raw JSON read before that SendMessage arrives risks reading empty or stale metadata mid-write.
-2. **Raw read MUST follow SendMessage receipt, not precede it.** The ordering is: teammate writes `metadata.teachback_submit` → teammate sends notify SendMessage → platform poller delivers between-tool-call → your turn opens with the SendMessage in context → THEN you read `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{A_id}.json" | jq .metadata.teachback_submit`. Reversing this order produces false-empty reads that have historically triggered false-positive rejection cycles.
-3. **Mitigation for residual race.** If your raw read returns empty `{}` immediately after the wake-signal SendMessage receipt, the metadata write may still be in flight on the platform side. Mitigations (any one suffices): (a) brief 1-2s delay before re-reading; (b) read twice with a short interval and only treat empty as authoritative if both reads agree; (c) trust the SendMessage's GREEN/RED summary as primary and treat the raw read as audit-only. Do NOT reject a teachback or HANDOFF on a single empty raw read.
+1. **Wake-signal `SendMessage` is the load-bearing content-arrival signal.** The teammate's notify `SendMessage` (sent immediately after their `metadata.teachback_submit` write per [pact-teachback Step 2](../skills/pact-teachback/SKILL.md)) is the only durable signal that the metadata write has landed on disk. Acting on a raw JSON read before that `SendMessage` arrives risks reading empty or stale metadata mid-write.
+2. **Raw read MUST follow `SendMessage` receipt, not precede it.** The ordering is: teammate writes `metadata.teachback_submit` → teammate sends notify `SendMessage` → platform poller delivers between-tool-call → your turn opens with the `SendMessage` in context → THEN you read `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{A_id}.json" | jq .metadata.teachback_submit`. Reversing this order produces false-empty reads that have historically triggered false-positive rejection cycles.
+3. **Mitigation for residual race.** If your raw read returns empty `{}` immediately after the wake-signal `SendMessage` receipt, the metadata write may still be in flight on the platform side. Mitigations (any one suffices): (a) brief 1-2s delay before re-reading; (b) read twice with a short interval and only treat empty as authoritative if both reads agree; (c) trust the `SendMessage`'s GREEN/RED summary as primary and treat the raw read as audit-only. Do NOT reject a teachback or HANDOFF on a single empty raw read.
 
-The symmetric rule applies to HANDOFF inspection (the raw `cat ... | jq .metadata.handoff` read in §Completion Authority above): wait for teammate's wake-signal SendMessage there too before treating the raw read as authoritative.
+The symmetric rule applies to HANDOFF inspection (the raw `cat ... | jq .metadata.handoff` read in §Completion Authority above): wait for teammate's wake-signal `SendMessage` there too before treating the raw read as authoritative.
 
-The same precondition applies symmetrically to the **rejection-receipt path** (see [Rejection Flow](#rejection-flow) below): the teammate must wait for the lead's wake-SendMessage notifying of `metadata.teachback_rejection` or `metadata.handoff_rejection` BEFORE reading the rejection metadata via raw JSON. The asymmetry on either side produces the same read-after-write race class.
+The same precondition applies symmetrically to the **rejection-receipt path** (see [Rejection Flow](#rejection-flow) below): the teammate must wait for the lead's wake-signal `SendMessage` notifying of `metadata.teachback_rejection` or `metadata.handoff_rejection` BEFORE reading the rejection metadata via raw JSON. The asymmetry on either side produces the same read-after-write race class.
 
 Compare against the dispatched task description. Apply the validation discipline from [Validating Incoming Teachbacks](#validating-incoming-teachbacks) — check for both misstatements AND omissions.
 
@@ -2273,9 +2277,10 @@ TaskUpdate(A_id, metadata={"teachback_resolution": {
 
 This write is optional but recommended for audit. It is NOT one of the required calls below.
 
-**Approving the TEACHBACK — two-call atomic pair (BOTH required, SendMessage FIRST)**:
+**Approving the TEACHBACK — two-call atomic pair (BOTH required, `TaskUpdate` FIRST)**:
 
 ```
+TaskUpdate(A_id, status="completed")
 SendMessage(
     to="<teammate>",
     message=(
@@ -2284,10 +2289,9 @@ SendMessage(
     ),
     summary="Teachback accepted; Task B claimable"
 )
-TaskUpdate(A_id, status="completed")
 ```
 
-The status flip is the load-bearing approval action; the SendMessage is the load-bearing wake. Ordering is load-bearing for the same reason as the top-of-file Acceptance pair — SendMessage-first ensures the lifecycle gate's PostToolUse scan sees the wake on disk before the status flip fires.
+The status flip is the load-bearing approval action; the `SendMessage` is the load-bearing wake. Ordering is load-bearing for the same reason as the top-of-file Acceptance pair — `TaskUpdate` first, then the wake-signal `SendMessage` as the last call; if the `TaskUpdate` succeeds and the `SendMessage` errors, retry the send on the tool error.
 
 **Rejecting the TEACHBACK** — see [Rejection Flow](#rejection-flow) below.
 
@@ -2335,11 +2339,17 @@ teammate misunderstanding the original dispatch.
 
 ## Rejection Flow
 
-Teachback or HANDOFF inadequate? Reject with **dual-channel delivery** (metadata + SendMessage). Same shape for both rejection types:
+Teachback or HANDOFF inadequate? Reject with **dual-channel delivery** (metadata + `SendMessage`). Same shape for both rejection types:
 
-**Teachback rejection** (SendMessage FIRST):
+**Teachback rejection** (`TaskUpdate` FIRST):
 
 ```
+TaskUpdate(A_id, metadata={"teachback_rejection": {
+    "reason": "<one-line summary>",
+    "corrections": ["<correction 1>", "<correction 2>", ...],
+    "since": "<canonical_since() output>",
+    "revision_number": 1
+}})
 SendMessage(
     to="<teammate>",
     message=(
@@ -2349,17 +2359,17 @@ SendMessage(
     ),
     summary="Teachback rejected; revise"
 )
-TaskUpdate(A_id, metadata={"teachback_rejection": {
-    "reason": "<one-line summary>",
-    "corrections": ["<correction 1>", "<correction 2>", ...],
+```
+
+**HANDOFF rejection** (Task B, `TaskUpdate` FIRST):
+
+```
+TaskUpdate(B_id, metadata={"handoff_rejection": {
+    "reason": "...",
+    "corrections": [...],
     "since": "<canonical_since() output>",
     "revision_number": 1
 }})
-```
-
-**HANDOFF rejection** (Task B, SendMessage FIRST):
-
-```
 SendMessage(
     to="<teammate>",
     message=(
@@ -2368,22 +2378,16 @@ SendMessage(
     ),
     summary="HANDOFF rejected; revise"
 )
-TaskUpdate(B_id, metadata={"handoff_rejection": {
-    "reason": "...",
-    "corrections": [...],
-    "since": "<canonical_since() output>",
-    "revision_number": 1
-}})
 ```
 
-**Why dual-channel**: metadata gives the durable revision spec the teammate reads on wake; SendMessage gives the wake itself. Single-channel via metadata only fails because the idle teammate can't self-wake to read it. Single-channel via SendMessage only loses durability — the corrections need to survive teammate compaction or agent restart.
+**Why dual-channel**: metadata gives the durable revision spec the teammate reads on wake; `SendMessage` gives the wake itself. Single-channel via metadata only fails because the idle teammate can't self-wake to read it. Single-channel via `SendMessage` only loses durability — the corrections need to survive teammate compaction or agent restart.
 
 **Recovery flow on rejection**:
 
 1. Lead writes rejection metadata + sends wake-signal.
 2. Teammate wakes, CLEARs `intentional_wait`, reads rejection metadata.
 3. Teammate revises (`metadata.teachback_submit` for A, or revises deliverable + `metadata.handoff` for B).
-4. Teammate re-SETs `intentional_wait` with fresh `since`, increments `metadata.revision_number`, SendMessage notifies team-lead "revised."
+4. Teammate re-SETs `intentional_wait` with fresh `since`, increments `metadata.revision_number`, `SendMessage` notifies team-lead "revised."
 5. Lead reviews; either accepts (per [Completion Authority](#completion-authority)) or rejects again (revision_number = N+1).
 
 > **Cycle limit**: 3+ rejection cycles on the same task is an imPACT META-BLOCK signal. See [imPACT.md](../commands/imPACT.md).
@@ -2524,7 +2528,7 @@ Claude Code compaction has three durability mechanisms for orchestrator content:
 
 | Mechanism | What Survives | Durability |
 |-----------|---------------|------------|
-| **Explicit Read calls** | Files loaded via Read tool at bootstrap | **Lossless** — Read tracker auto-re-issues tracked Reads after compaction; `Skills restored` event independently re-processes references above the truncation cut. Two independent restoration paths. |
+| **Explicit `Read` calls** | Files loaded via `Read` tool at bootstrap | **Lossless** — Read tracker auto-re-issues tracked Reads after compaction; `Skills restored` event independently re-processes references above the truncation cut. Two independent restoration paths. |
 | **Inline skill body text** | Content written directly in the skill `.md` file | **Partial** — truncated at a cut boundary (~halfway for large files). Late sections silently dropped. |
 | **CLAUDE.md / additionalContext** | Routing block, session info, pinned context | **Structural** — re-injected on every turn; highest durability. |
 
