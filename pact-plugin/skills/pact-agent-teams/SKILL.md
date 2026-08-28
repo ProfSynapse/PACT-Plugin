@@ -225,7 +225,7 @@ After wake on acceptance, check `TaskList` for unblocked tasks you OWN or can cl
 
 ## On Rejection (Wake-Signal Receipt)
 
-If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `SendMessage` carrying the rejection payload verbatim — read the corrections in the message; the disk copy is confirmation, not the primary. Your task remains `in_progress`; the team-lead has also written rejection details to metadata. This wake-then-confirm flow is one instance of the seam-agnostic rule in [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic); the residual-race mitigation there (never act on a single empty read) applies to the confirmation read below.
+If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `SendMessage` carrying the rejection payload verbatim — read the corrections in the message; the disk copy is confirmation, not the primary. Your task remains `in_progress`; the team-lead has also written rejection details to metadata. This wake-then-confirm flow is the content-carrying class of the seam-agnostic rule in [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic) (pure-signal wakes keep disk-first authority there); the residual-race mitigation there (never act on a single empty read) applies to the confirmation read below.
 
 **On wake**:
 
@@ -337,8 +337,9 @@ in a way the team-lead must act on; when the fresh read shows exactly the state 
 team-lead themselves resolved, the report carries zero information — suppress it.
 
 This suppression rule and [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic)
-are complements, not substitutes: disk-first fixes how you INTERPRET inbound
-messages; suppression stops stale OUTBOUND noise. Applying one does not discharge
+are complements, not substitutes: disk-first governs how you INTERPRET inbound
+signal messages (content-carrying messages are read from the message itself);
+suppression stops stale OUTBOUND noise. Applying one does not discharge
 the other.
 
 ## Intentional Waiting
@@ -385,43 +386,56 @@ could have crossed a turn you had in flight. It applies identically under in-pro
 and tmux teammateMode: the race is message-delivery ordering, not mode-specific.
 Inbox delivery is asynchronous, so a wake message can trail the durable write it
 describes, arrive after an unrelated message, or describe a scope your in-flight
-work predates.
+work predates. Wakes come in two classes: a PURE-SIGNAL wake (acceptance, commit
+confirmation, crossed ping) reports that durable state changed; a CONTENT-CARRYING
+wake (rejection corrections, a payload-carrying notify) delivers its content in the
+message body itself.
 
-1. **Re-read durable state FIRST.** Before acting on any wake-message content,
-   re-read your gate/work tasks from disk — `status`, `blockedBy`, current
-   description, and the relevant metadata keys (`teachback_rejection`,
-   `handoff_rejection`, or whichever key your wait names). Use the raw task file
-   (`{taskId}.json` in the `Task list:` directory the platform names in your
-   context, via the `Read` tool) — `TaskGet` does not surface metadata.
-2. **Durable state is authoritative; message content is advisory confirmation.** If
-   durable state shows your wait resolved — the gate task `completed`, a commit
-   confirmation implied by task state, a rejection record present — CLEAR the wait
-   and proceed immediately, even if no wake message describing the resolution is
-   visible yet. Do not wait for the message that durable state has already made
-   redundant.
+1. **Classify the wake, then read accordingly.** On a pure-signal wake, re-read
+   durable state FIRST, before acting on any wake-message content — `status`,
+   `blockedBy`, current description, and the relevant metadata keys
+   (`teachback_rejection`, `handoff_rejection`, or whichever key your wait names).
+   Use the raw task file (`{taskId}.json` in the `Task list:` directory the platform
+   names in your context, via the `Read` tool) — `TaskGet` does not surface metadata.
+   On a content-carrying wake, read the content from the message — the field-labeled
+   payload block between its delimiters — and use the same disk read as
+   confirmation, not as the primary.
+2. **Durable state is authoritative; message content is advisory confirmation — for
+   signal wakes.** If durable state shows your wait resolved — the gate task
+   `completed`, a commit confirmation implied by task state, a rejection record
+   present — CLEAR the wait and proceed immediately, even if no wake message
+   describing the resolution is visible yet. Do not wait for the message that
+   durable state has already made redundant. For a content-carrying wake the
+   authority inverts: the message is the reading copy for the content it carries,
+   and the disk copy confirms it.
 3. **If durable state shows the wait unresolved, keep waiting.** A wake that
    resolves nothing (a crossed or redundant message, a peer ping) gets no reply —
    return to idle silently per §Idle Discipline and §Counter-Confirm Suppression.
-   If the wake ASSERTS a resolution the disk does not yet show (e.g., "rejected —
-   see metadata" but the metadata read returns empty), the durable write may still
-   be in flight: re-read once after a brief pause; never act on a single empty
+   If the wake ASSERTS a resolution the disk does not yet show (e.g., the wake
+   reports a rejection but the metadata read returns empty), the durable write may
+   still be in flight: re-read once after a brief pause; never act on a single empty
    read; if still empty, keep waiting — the team-lead's follow-up confirm covers
-   the crossed case.
+   the crossed case. On a content-carrying wake that mitigation governs the
+   CONFIRMATION read, not the content read — act on the message-carried content; an
+   empty or diverging confirmation read is a discrepancy to surface, never a reason
+   to discard content you have already received.
 4. **Crossed mid-turn directives reconcile the same way.** If an inbound directive
    (a scope change, a correction) could have crossed work you had in flight — your
    teachback or HANDOFF was being composed when it was sent — re-read the task's
    CURRENT description and metadata from disk and act on the current state, not on
-   the state your in-flight work assumed. If your already-submitted deliverable
-   reflects the pre-directive scope, revise it on the same task without waiting to
-   be asked.
+   the state your in-flight work assumed (a directive carrying its content in the
+   message is read from the message; the disk re-read confirms it). If your
+   already-submitted deliverable reflects the pre-directive scope, revise it on the
+   same task without waiting to be asked.
 
-This rule generalizes the wake-then-raw-read flow of §On Rejection to every wait
+This rule generalizes the signal-class wake flow of §On Rejection to every wait
 resolution, and it is what makes the team-lead's wake message redundant-by-design:
 ordering-immune at every seam, with no hook required (a synchronous wake-detection
 hook cannot exist — see the non-goal note in
 [pact-completion-authority](../../protocols/pact-completion-authority.md#crossed-wake-idles-discriminate-by-timestamp-direction)).
-The no-poll discipline is unchanged: you still cannot poll while idle; this rule
-fires ON wake, whatever woke you.
+A content-carrying wake's message is not redundant — it is the content channel —
+and its disk read runs as confirmation. The no-poll discipline is unchanged: you
+still cannot poll while idle; this rule fires ON wake, whatever woke you.
 
 ### Vocabulary
 
