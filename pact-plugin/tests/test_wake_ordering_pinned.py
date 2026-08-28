@@ -5,8 +5,11 @@ Pins the reader-facing instruction surfaces that teach both sides of the
 wake/idle delivery-ordering race:
 
   teammate-side (skills/pact-agent-teams/SKILL.md):
-    - "On Wake: Disk-First Re-Read (Seam-Agnostic)" — durable state is
-      authoritative on every wake; message content is advisory.
+    - "On Wake: Disk-First Re-Read (Seam-Agnostic)" — wake classes split
+      the reading authority: pure-signal wakes read durable state first
+      (durable state authoritative, message content advisory — scoped to
+      signal wakes); content-carrying wakes read the field-labeled
+      payload from the message body, with the disk read as confirmation.
     - "Counter-Confirm Suppression" — fresh disk read before any
       state-clarification message; suppress when already resolved.
     - "Boundary-Drain Rule" — inbox drain + drain report before every
@@ -174,8 +177,26 @@ def test_rule_heading_present(doc_path: Path, heading: str):
 
 PHRASE_PINS = [
     # --- teammate-side SKILL ---
-    # The load-bearing interpretation rule for every wake.
+    # The load-bearing interpretation rule for every wake. The F7 wake-
+    # class split SCOPED this sentence to signal wakes; the short form
+    # stays as the vocabulary pin, and the scoped long form below is the
+    # anchored companion that catches an unscope-revert (a regression
+    # that restores the unscoped sentence keeps this short pin green).
     (SKILL, "Durable state is authoritative"),
+    # The F7 scoping marker itself: point 2's authority rule now names
+    # its class. 1x-unique (premise-verified); deleting the scope tail
+    # or reverting the scoping flips exactly this case.
+    (SKILL, "Durable state is authoritative; message content is advisory confirmation — for signal wakes"),
+    # The F7 class inversion — the sentence that resolves the authority
+    # contradiction with §On Rejection: for content-carrying wakes the
+    # message is the reading copy and the disk confirms. Without this
+    # witness the section could revert to disk-first-everywhere while
+    # the (green) short vocabulary pin above claims coverage.
+    (SKILL, "For a content-carrying wake the authority inverts: the message is the reading copy for the content it carries, and the disk copy confirms it"),
+    # The F7 class taxonomy defining the two wake classes; the scoping
+    # and inversion pins above are meaningless without their terms
+    # defined. Deleting the taxonomy alone flips exactly this case.
+    (SKILL, "a CONTENT-CARRYING wake (rejection corrections, a payload-carrying notify) delivers its content in the message body itself"),
     # Residual-race mitigation: a wake asserting a resolution the disk does
     # not yet show gets a re-read, never a single-empty-read action.
     (SKILL, "never act on a single empty read"),
