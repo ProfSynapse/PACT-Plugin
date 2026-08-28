@@ -205,6 +205,17 @@ PHRASE_PINS = [
     # timestamp predates the lead's directive send is prior-turn state,
     # not a stall signal.
     (COMPLETION_AUTHORITY, "predates your directive send is a straggler"),
+    # The unified send-term on the postdating side: "directive send" is the
+    # section's single term for the lead's resolving send (the retired
+    # "wake-send" named only the wake archetype and missed acceptance and
+    # confirm crossings). The span is anchored to the postdating item's own
+    # wording — the shorter "postdates your directive send" is ALSO
+    # satisfied by the bidirectional opener's sentence ("When the
+    # notification postdates your directive send"), so it would stay green
+    # if the #1081-era item itself regressed to the retired term (measured:
+    # pre-unification revert flips only 1 of 3 presence pins with the
+    # short form; this anchored form flips all mirrored-surface pins).
+    (COMPLETION_AUTHORITY, "On an idle notification that postdates your directive send"),
     # The bidirectional opener: the section's first sentence must name
     # BOTH crossing orders, correcting a heading-level scan that reads the
     # title as postdating-only.
@@ -231,6 +242,7 @@ PHRASE_PINS = [
     (PROTOCOLS_SSOT, "boundary-drain: inbox empty"),
     (PROTOCOLS_SSOT, "task-file-mtime plus sustained-silence"),
     (PROTOCOLS_SSOT, "predates your directive send is a straggler"),
+    (PROTOCOLS_SSOT, "On an idle notification that postdates your directive send"),
     (PROTOCOLS_SSOT, "Discriminate by direction"),
     (PROTOCOLS_SSOT, "Never accelerate nudging in response to idle ticks"),
     (PROTOCOLS_SSOT, "one durable read settles it"),
@@ -244,6 +256,10 @@ PHRASE_PINS = [
     # it, the persona's no-reply-to-idle-turns reflex suppresses the one
     # legitimate redundant confirm.
     (ORCHESTRATOR, "the single redundant confirm after a crossed wake"),
+    # The persona's §12 crossed-wake bullet carries the unified send-term on
+    # both discrimination arms (postdating arm here; the predating arm is
+    # covered by the "take no action at all" straggler-outcome pin below).
+    (ORCHESTRATOR, "postdates your directive send"),
     # The persona §12 straggler outcome: a predating tick gets NO action at
     # all — the strongest form, distinct from §5's shorter parenthetical
     # "take no action" (this pin requires the "at all" tail).
@@ -407,6 +423,37 @@ def test_retired_inbox_grew_token_absent(doc_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Absence pin — retired "wake-send" send-term.
+# ---------------------------------------------------------------------------
+
+# The surfaces that carried the retired term before the vocabulary
+# unification. The teammate-side SKILL and the stall protocol never used it
+# (verify-only surfaces for the sweep), so the absence set is the three
+# swept surfaces, not ALL_SURFACES.
+SWEPT_SURFACES = [COMPLETION_AUTHORITY, PROTOCOLS_SSOT, ORCHESTRATOR]
+
+
+@pytest.mark.parametrize("doc_path", SWEPT_SURFACES, ids=lambda p: p.name)
+def test_retired_wake_send_term_absent(doc_path: Path):
+    """Regression guard: "directive send" is the single send-term for the
+    lead's resolving send on the crossed-wake surfaces. The retired
+    "wake-send" named only the wake archetype and missed acceptance and
+    confirm crossings — reintroducing it would split the vocabulary again
+    and re-narrow the rule's scope in the reader's eye. Both the hyphenated
+    and spaced renderings are locked out. ("wake-signal" is a different
+    noun — the SendMessage itself — and is NOT covered by this pin.)"""
+    text = _raw(doc_path)
+    for retired in ("wake-send", "wake send"):
+        assert retired not in text, (
+            f"{doc_path.name}: retired send-term {retired!r} reappeared. "
+            f"The crossed-wake surfaces use 'directive send' as the single "
+            f"send-term; do not reintroduce {retired!r} (if a future rule "
+            f"genuinely needs the wake-act archetype, update this guard "
+            f"deliberately and re-split the vocabulary consciously)."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Counter-test flip-set record (measured at authoring time; see module
 # docstring). With the five surfaces reverted to their pre-hardening state
 # and this module run against them: {53 failed, 8 passed}. Heading pins
@@ -441,4 +488,21 @@ def test_retired_inbox_grew_token_absent(doc_path: Path):
 # 2 failed). All 17 post-authoring phrase pins go RED under a pre-#1525
 # revert: none of their phrases pre-existed on any surface
 # (occurrence-verified at pin time).
+#
+# 2026-08-27 addendum (#1530 send-vocabulary unification cycle): the
+# retired "wake-send" term was unified to "directive send" across the
+# three surfaces that carried it (completion-authority extract, its SSOT
+# region, orchestrator persona §5/§12); the teammate SKILL and stall
+# protocol never carried it. Phrase pins 50 -> 53 (unified postdating
+# send-term x 3 surfaces) and a new retired-term absence test x 3 swept
+# surfaces; module cases 78 -> 84. PHANTOM-GREEN CAUGHT BY MEASUREMENT:
+# the short pin "postdates your directive send" is satisfied pre-revert
+# on both mirrored surfaces by the #1529 bidirectional opener's own
+# sentence ("When the notification postdates your directive send"), so
+# the mirrored-surface pins anchor to the longer postdating-item span
+# ("On an idle notification that postdates your directive send"), which
+# exists only at the reworded item. Counter-test (measured 2026-08-27,
+# docs reverted to pre-unification in an isolated copy): exactly 6 failed
+# = the 3 unified-term presence pins + the 3 retired-term absence cases;
+# 78 passed; post-unification 84/84 green.
 # ---------------------------------------------------------------------------

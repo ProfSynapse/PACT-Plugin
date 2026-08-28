@@ -51,7 +51,7 @@ Inspect the HANDOFF before flipping status. If `metadata.handoff` is missing or 
 
 Your wake-signal SendMessage races the teammate's turn-end idle notification: inbox
 files are written asynchronously on delivery, so a teammate's idle notification can
-reach you AFTER your wake-send while the teammate has not yet seen the wake. This
+reach you AFTER your directive send while the teammate has not yet seen the wake. This
 happens at every wait-resolution seam — teachback acceptance, HANDOFF acceptance,
 commit confirmation, rejection — and identically under in-process and tmux
 teammateMode: the race is delivery-ordering, not mode-specific. The idle
@@ -85,7 +85,7 @@ handling:
 When the notification postdates your directive send, the teammate may not
 have acted on it yet — apply the redundant-confirm procedure:
 
-1. **On an idle notification that postdates your wake-send**, take a durable read
+1. **On an idle notification that postdates your directive send**, take a durable read
    of the teammate's task (raw JSON — `TaskGet` is metadata-blind). If the read
    shows the wait resolved AND acted on (e.g., the follow-on task claimed), do
    nothing: the wake landed.
@@ -100,7 +100,7 @@ have acted on it yet — apply the redundant-confirm procedure:
    evidence. Escalate to stall diagnosis (see [pact-agent-stall.md](pact-agent-stall.md))
    only on task-file-mtime plus sustained-silence evidence: the task file unchanged
    AND no inbound SendMessage from the teammate across multiple idle cycles well
-   past your wake-send.
+   past your directive send.
 
 **Non-goal — no synchronous hook-based detection.** Do not attempt to close this race with a
 synchronous hook, and reject future proposals to reintroduce one: `SendMessage`

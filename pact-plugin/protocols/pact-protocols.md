@@ -962,7 +962,7 @@ Portability is not the fault. A rationale that names a coupled file pair or a pe
 
 The wrap-up retrospective's Q5 reports the CALIBRATION DELTA — the feature-level variety estimate against the distribution of per-dispatch variety the arc actually produced. It does NOT report a stamping-compliance ratio: stamping is refused at the dispatch-wiring write per the Enforcement split above, so compliance has no variance left to measure. Whether the estimate was well-calibrated is the question enforcement cannot answer, and it is the one this question keeps.
 
-**Population — the `dispatch_site` journal stream, scoped to the current arc.** Its membership is defined by the dispatch-wiring write this question asks about: the emit fires on that write and nothing else, so one event means one dispatch by construction. Because the platform reuses task_ids across arcs in a resumed session, the stream MUST be scoped to the current arc before use. Do NOT widen the population to another source — a scan of the task store answers "which tasks happen to carry a stamp", whose membership moves with any later decision about which sites get stamped, and the substitution is silent because the wrong population still yields a mean that renders.
+**Population — the `dispatch_site` journal stream, scoped to the current arc.** Its membership is the OWNER-WITNESSED dispatch sites: the emit fires on a TaskUpdate that names a pact-specialist `owner` on a non-teachback, non-exempt task, and on nothing else — one event means one dispatch by construction, never by inference. An owner write in a SPLIT wiring (owner set in one update, blockers at creation or in another) is a full witness; the composite owner+addBlockedBy write is NOT required. Review-panel dispatches are EXCLUDED, because the peer-review path dispatches reviewers without ever writing owner on the task — no owner write witnesses them, and covering them would mean inferring ownership from a display convention, which keys membership on something that moves. Wanting them counted is remedied by canonical owner wiring at dispatch — a practice-side change, never a widening of the emit's inference — and they stay visible through the `review_dispatch` stream. MEMBERSHIP DEPENDS ON THE TEACHBACK SUBJECT CONVENTION: a teachback Task-A gate receives the same owner-only split wiring a work task does, so the subject carve-out is the SOLE discriminator excluding those gates, and a gate whose subject loses the TEACHBACK marker is counted as a site. Because the platform reuses task_ids across arcs in a resumed session, the stream MUST be scoped to the current arc before use. Do NOT widen the population to another source — a scan of the task store answers "which tasks happen to carry a stamp", whose membership moves with any later decision about which sites get stamped, and the substitution is silent because the wrong population still yields a mean that renders.
 
 **Terms.** One pass of the pure helper `extract_final_dispatch_coverage` over the `dispatch_site` stream and the `task_metadata_snapshot` stream returns a dict of ten values. MEMBERSHIP comes from `dispatch_site` and the VALUE comes from the latest `task_metadata_snapshot` for the same task, so the distribution holds the FINAL total rather than the as-dispatched one:
 
@@ -2164,7 +2164,7 @@ Inspect the HANDOFF before flipping status. If `metadata.handoff` is missing or 
 
 Your wake-signal SendMessage races the teammate's turn-end idle notification: inbox
 files are written asynchronously on delivery, so a teammate's idle notification can
-reach you AFTER your wake-send while the teammate has not yet seen the wake. This
+reach you AFTER your directive send while the teammate has not yet seen the wake. This
 happens at every wait-resolution seam — teachback acceptance, HANDOFF acceptance,
 commit confirmation, rejection — and identically under in-process and tmux
 teammateMode: the race is delivery-ordering, not mode-specific. The idle
@@ -2198,7 +2198,7 @@ handling:
 When the notification postdates your directive send, the teammate may not
 have acted on it yet — apply the redundant-confirm procedure:
 
-1. **On an idle notification that postdates your wake-send**, take a durable read
+1. **On an idle notification that postdates your directive send**, take a durable read
    of the teammate's task (raw JSON — `TaskGet` is metadata-blind). If the read
    shows the wait resolved AND acted on (e.g., the follow-on task claimed), do
    nothing: the wake landed.
@@ -2213,7 +2213,7 @@ have acted on it yet — apply the redundant-confirm procedure:
    evidence. Escalate to stall diagnosis (see [pact-agent-stall.md](pact-agent-stall.md))
    only on task-file-mtime plus sustained-silence evidence: the task file unchanged
    AND no inbound SendMessage from the teammate across multiple idle cycles well
-   past your wake-send.
+   past your directive send.
 
 **Non-goal — no synchronous hook-based detection.** Do not attempt to close this race with a
 synchronous hook, and reject future proposals to reintroduce one: `SendMessage`

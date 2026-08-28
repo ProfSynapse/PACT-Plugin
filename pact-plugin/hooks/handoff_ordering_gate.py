@@ -418,14 +418,19 @@ def _evaluate_dispatch_variety(input_data: dict) -> str | None:
     # owner→agentType resolution is a disk read, deferred until after the
     # team_name resolve below (cost-order).
     #
-    # The SHAPE half is delegated to shared.dispatch_helpers so this gate and
-    # the dispatch-coverage denominator recognize the wiring write through ONE
-    # expression instead of two that can drift (the parallel-path class). Only
-    # the shape is shared: the owner→specialist resolution and the exemption
+    # The SHAPE half is delegated to shared.dispatch_helpers. This gate and
+    # the dispatch-coverage denominator deliberately key on DIFFERENT shape
+    # legs — the denominator on the broader owner-BEARING write (live
+    # practice wires owners in split writes), this gate on the composite —
+    # and the composite RECOMPOSES that owner-bearing predicate plus the
+    # blockedBy leg, so the two consumers share the owner leg by
+    # construction: they cannot drift on what "owner-bearing" means, which
+    # is the parallel-path hazard the delegation exists to close. Only the
+    # shape is shared: the owner→specialist resolution and the exemption
     # predicate stay here, because the exemption question this gate asks
     # ("may this owner self-complete?") is NOT the question the denominator
-    # asks. See is_owner_wiring_shape's docstring for the full three-leg
-    # recognition and why the legs are kept separate. NOTE the shared helper
+    # asks. See is_owner_wiring_shape's docstring for the full recognition
+    # and why the legs are kept separate. NOTE the shared helper
     # says "shape" rather than this file's local "terminal", because that
     # term is defined HERE (terminal = both halves present, vs a partial
     # one-half write) and does not travel to a module with other consumers.
