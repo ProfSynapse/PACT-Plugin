@@ -57,6 +57,34 @@ read is demoted to the lead's DEFERRED audit (disk channel):
       The integrity_finding key NAME is deliberately unpinned: no
       reader exists in hooks or tests today, so the name is
       advisory-only until a consumer lands.
+    - P20: the T2 paragraph's OPENING acceptance-keying sentence
+      (extract + SSOT mirror) — hardening-audit finding: every other
+      sentence of that paragraph had a witness (P3/P4/P5/P19) while the
+      core "Accept or reject on the payload carried by the teammate's
+      notify SendMessage" sentence had none (stubbing it alone flipped
+      nothing, measured).
+  rejection-direction pins (fold of the #1540 payload symmetry):
+    - P21/P22: REJECTION-PAYLOAD-BEGIN / END token presence on the three
+      lead-side template surfaces (completion-authority extract, its
+      SSOT mirror, the orchestrator persona). The orchestrate dispatch
+      template teaches the payload-carrying send by PHRASE (P23), not
+      tokens — it does not carry them.
+    - P23: "wake-signal SendMessage carrying the rejection payload
+      verbatim" on the orchestrate dispatch template, the persona's
+      rejection-path paragraph, and the teachback skill's On-rejection
+      cross-ref (one span satisfies all three surfaces).
+    - P24: the teammate-side reading instruction — the agent-teams On
+      Rejection step 2 header span naming the field-labeled block and
+      its four fields.
+    - P25: "the disk copy is confirmation, not the primary" (per-surface
+      casing: lowercase on completion-authority, the SSOT, and the
+      agent-teams intro; sentence-initial capital on the agent-teams
+      step 2).
+    - P26: the integrity_finding advisory ruling — advisory by design,
+      no automated reader consumes it, the lead records and acts.
+    - P27: the retired pointer-format SendMessages ("See
+      metadata.teachback_rejection" / "See metadata.handoff_rejection")
+      absent from every LLM-loaded instruction surface, tree-wide.
 
 Inherited vocabulary guard (P9, no new case here): the NEW lead-side
 prose is covered by the existing retired-"wake-send"/"wake send" absence
@@ -189,13 +217,58 @@ def test_t2_acceptance_keying_phrase_present(doc_path: Path, phrase: str):
     a rejection basis. Pinned on the extract AND its byte-mirrored SSOT
     region: a lockstep revert of the pair leaves them mutually
     byte-equal (the protocol-extract audit stays green), so each surface
-    gets its own witness."""
+    gets its own witness.
+
+    Hardening-audit note (per-pin occurrence census): phrase-1
+    ("integrity finding") occurs TWICE per mirrored surface — the T2
+    sentence and Read-Trigger point 4 — so it is pair-level protection,
+    not T2-anchored (deleting only T2's occurrence leaves it green; the
+    opening sentence carries its own witness at P20, and the paragraph's
+    later sentences at P3 phrase-2 + P19). LEAVE as designed."""
     assert _phrase(phrase) in _normalized(doc_path), (
         f"{doc_path.name}: T2 acceptance-keying phrase {phrase!r} not "
         f"found. The lead accepts on the payload the notify carries; a "
         f"missing or diverging disk copy is an integrity finding, never "
         f"a rejection. If reworded intentionally, update this pin in "
         f"lockstep on both mirrored surfaces."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P20 — T2 opening acceptance-keying sentence (extract + SSOT mirror).
+# ---------------------------------------------------------------------------
+
+# The T2 paragraph's FIRST sentence — the core accept-on-message keying —
+# had no witness of its own (hardening-audit finding, measured: stubbing
+# just this sentence flipped nothing suite-wide while P3/P4/P5/P19 all
+# anchor LATER sentences of the same paragraph). The anchored span covers
+# the instruction and its demonstrability rationale; a shorter
+# "Accept or reject on the payload" would be satisfiable by paraphrase
+# elsewhere on lead surfaces.
+T2_OPENING_PHRASE = (
+    "Accept or reject on the payload carried by the teammate's notify "
+    "SendMessage"
+)
+
+T2_OPENING_SURFACES = [COMPLETION_AUTHORITY, PROTOCOLS_SSOT]
+
+
+@pytest.mark.parametrize(
+    "doc_path",
+    T2_OPENING_SURFACES,
+    ids=lambda p: p.name,
+)
+def test_t2_opening_acceptance_keying_pinned(doc_path: Path):
+    """The Completion-Authority section must keep opening its acceptance
+    rule with the message-carried-payload keying — the sentence the whole
+    dual-channel contract hangs off. Later sentences of the paragraph
+    carry the deferred-audit classification (P3/P5), the trigger (P4),
+    and the repair (P19); this pin closes the opening sentence's gap."""
+    assert _phrase(T2_OPENING_PHRASE) in _normalized(doc_path), (
+        f"{doc_path.name}: T2 opening acceptance-keying sentence "
+        f"{T2_OPENING_PHRASE!r} not found. The lead accepts or rejects on "
+        f"the payload the notify carries; if reworded intentionally, update "
+        f"this pin in lockstep on both mirrored surfaces."
     )
 
 
@@ -251,7 +324,19 @@ def test_deferred_audit_vocabulary_present(doc_path: Path, phrase: str):
     facing surface silently reverts to acceptance-time raw reads while
     others move on. Count-free: the vocabulary legitimately recurs a
     variable number of times per surface; only its presence is the
-    contract."""
+    contract.
+
+    Hardening-audit ruling (occurrence census, leave-as-designed): the
+    lowercase form recurs 5x on the orchestrator persona (both Q-table
+    rows, the metadata-blindness reminder, Teachback Review, the HANDOFF
+    format) and 4x on the agent-teams skill (ordering invariant, Step-4
+    idle, awaiting-lead bullet, and the write-order context) — every
+    occurrence is a legitimate teaching site, none is a mere decoy, so
+    locality is deliberately delegated to the anchored sibling pins
+    (P3/P4/P16/P17/P19/P20 lead-side; P10/P12/P13/P14/P18 teammate-
+    side). Measured boundary: removing ALL persona occurrences flips
+    this pin; removing a strict subset does not (accepted by the
+    presence contract)."""
     assert _phrase(phrase) in _normalized(doc_path), (
         f"{doc_path.name}: deferred-audit vocabulary ({phrase!r}, "
         f"per-surface casing) not found. The surface must name the raw "
@@ -732,43 +817,276 @@ def test_repair_clause_pinned(doc_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# P21/P22 — rejection payload delimiter tokens (lead-side templates).
+# ---------------------------------------------------------------------------
+
+# The rejection-direction mirror of P1/P2/P14: the lead's rejection
+# SendMessage templates must carry the grep-able BEGIN/END frame. On the
+# extract and its SSOT mirror the tokens recur 3x each (the two-call
+# atomic-pair template plus the teachback and HANDOFF rejection-flow
+# blocks) — every occurrence is a template a lead copies, so presence is
+# the contract. The persona carries the compact single-line form 1x. The
+# orchestrate dispatch template deliberately has NO token pins: it
+# teaches the send by phrase (P23), not by the delimiter frame.
+REJECTION_DELIMITER_PINS = [
+    (COMPLETION_AUTHORITY, "REJECTION-PAYLOAD-BEGIN"),
+    (PROTOCOLS_SSOT, "REJECTION-PAYLOAD-BEGIN"),
+    (ORCHESTRATOR, "REJECTION-PAYLOAD-BEGIN"),
+    (COMPLETION_AUTHORITY, "REJECTION-PAYLOAD-END"),
+    (PROTOCOLS_SSOT, "REJECTION-PAYLOAD-END"),
+    (ORCHESTRATOR, "REJECTION-PAYLOAD-END"),
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path, token",
+    REJECTION_DELIMITER_PINS,
+    ids=[f"{p.name}::{t}" for p, t in REJECTION_DELIMITER_PINS],
+)
+def test_rejection_payload_delimiter_present(doc_path: Path, token: str):
+    """Every lead-side rejection template surface must carry the
+    rejection payload's BEGIN/END delimiter frame — the boundary markers
+    the teammate's message-side reading keys on. Delimiters are plain
+    text, so normalized matching is equivalent to raw (uniformity with
+    P1/P2/P14)."""
+    assert _phrase(token) in _normalized(doc_path), (
+        f"{doc_path.name}: rejection payload delimiter {token!r} not "
+        f"found. The lead's rejection SendMessage must carry the payload "
+        f"verbatim inside its BEGIN/END delimiters; if the encoding was "
+        f"changed intentionally, update this pin in lockstep."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P23 — payload-verbatim send phrase (dispatch template + persona + cross-ref).
+# ---------------------------------------------------------------------------
+
+# One span covers all three phrase-teaching surfaces: the orchestrate
+# Task-A dispatch description ("wake-signal SendMessage carrying the
+# rejection payload verbatim"), the persona's rejection-path paragraph,
+# and the teachback skill's On-rejection cross-ref. A dispatch template
+# or persona that reverts to the bare "with corrections" wording sends
+# leads who never carry the payload.
+REJECTION_VERBATIM_PHRASE = (
+    "wake-signal SendMessage carrying the rejection payload verbatim"
+)
+
+REJECTION_VERBATIM_SURFACES = [ORCHESTRATE, ORCHESTRATOR, TEACHBACK_SKILL]
+
+
+@pytest.mark.parametrize(
+    "doc_path",
+    REJECTION_VERBATIM_SURFACES,
+    ids=lambda p: p.name,
+)
+def test_rejection_payload_verbatim_send_named(doc_path: Path):
+    """Each surface that teaches the rejection send by PHRASE must keep
+    naming the payload-carrying form — the corrections the teammate acts
+    on ride the message."""
+    assert _phrase(REJECTION_VERBATIM_PHRASE) in _normalized(doc_path), (
+        f"{doc_path.name}: rejection payload-carrying phrase "
+        f"{REJECTION_VERBATIM_PHRASE!r} not found. The rejection "
+        f"wake-signal must be taught as carrying the payload verbatim; "
+        f"if reworded intentionally, update this pin in lockstep."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P24 — teammate-side rejection reading instruction (agent-teams step 2).
+# ---------------------------------------------------------------------------
+
+# The teammate's primary read is now the message-carried payload block;
+# the disk copy is confirmation. Two spans, because the step header is
+# bold-marked (**...**) and normalization strips backticks, not
+# asterisks — the header span sits inside its markers, the block
+# reference starts after them. Together they cover the header, the
+# delimiter boundaries, and the four fields; a shorter pin would stay
+# green under a reword that kept the header but dropped the field map.
+REJECTION_READING_HEADER = (
+    "Read the rejection payload the wake-signal SendMessage carries"
+)
+REJECTION_READING_BLOCK_REF = (
+    "the field-labeled block between REJECTION-PAYLOAD-BEGIN and "
+    "REJECTION-PAYLOAD-END: reason, corrections, since, revision_number"
+)
+
+
+def test_rejection_reading_instruction_pinned():
+    for span in (REJECTION_READING_HEADER, REJECTION_READING_BLOCK_REF):
+        assert _phrase(span) in _normalized(AGENT_TEAMS_SKILL), (
+            f"{AGENT_TEAMS_SKILL.name}: rejection reading instruction "
+            f"span {span!r} not found. The teammate reads the rejection "
+            f"payload the wake-signal carries; if reworded "
+            f"intentionally, update this pin in lockstep."
+        )
+
+
+# ---------------------------------------------------------------------------
+# P25 — "the disk copy is confirmation, not the primary" (per-surface casing).
+# ---------------------------------------------------------------------------
+
+# The rejection-direction role assignment for the raw read. Per-surface
+# casing like P5/P13: the extract, the SSOT, and the agent-teams intro
+# carry the lowercase mid-sentence form; the agent-teams step 2 carries
+# the sentence-initial capital. Every occurrence is a governing teaching
+# site (censused 1x per surface except agent-teams' two casing variants).
+CONFIRMATION_PINS = [
+    (COMPLETION_AUTHORITY, "the disk copy is confirmation, not the primary"),
+    (PROTOCOLS_SSOT, "the disk copy is confirmation, not the primary"),
+    (AGENT_TEAMS_SKILL, "the disk copy is confirmation, not the primary"),
+    (AGENT_TEAMS_SKILL, "The disk copy is confirmation, not the primary"),
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path, phrase",
+    CONFIRMATION_PINS,
+    ids=[f"{p.name}::{'cap' if ph[0].isupper() else 'low'}-confirmation" for p, ph in CONFIRMATION_PINS],
+)
+def test_disk_copy_is_confirmation_pinned(doc_path: Path, phrase: str):
+    """Each surface teaching the rejection flow must assign the raw read
+    its confirmation role — the message-carried payload is the primary.
+    A surface that reverts to metadata-as-primary silently re-opens the
+    read the dual-channel contract demoted."""
+    assert _phrase(phrase) in _normalized(doc_path), (
+        f"{doc_path.name}: confirmation-role phrase {phrase!r} not found. "
+        f"The disk copy is confirmation, not the primary; if reworded "
+        f"intentionally, update this pin in lockstep (per-surface "
+        f"casing)."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P26 — integrity_finding advisory ruling (extract + SSOT mirror).
+# ---------------------------------------------------------------------------
+
+# The fold ruling on the divergence key: advisory by design, no
+# automated reader, the lead records and acts. The key NAME stays
+# unpinned (P19's note); this pins the RULING sentence that makes the
+# name's advisory status load-bearing.
+ADVISORY_PHRASE = (
+    "advisory by design — no automated reader consumes it; you record "
+    "the divergence and act on it"
+)
+
+ADVISORY_SURFACES = [COMPLETION_AUTHORITY, PROTOCOLS_SSOT]
+
+
+@pytest.mark.parametrize(
+    "doc_path",
+    ADVISORY_SURFACES,
+    ids=lambda p: p.name,
+)
+def test_integrity_finding_advisory_ruling_pinned(doc_path: Path):
+    """The deferred audit's divergence key must stay documented as
+    advisory-by-design. Losing the ruling invites either a speculative
+    reader (the mechanization P17 bans) or the belief that something
+    consumes the key today."""
+    assert _phrase(ADVISORY_PHRASE) in _normalized(doc_path), (
+        f"{doc_path.name}: integrity_finding advisory ruling "
+        f"{ADVISORY_PHRASE!r} not found. The key is advisory by design "
+        f"with no automated reader; if reworded intentionally, update "
+        f"this pin in lockstep on both mirrored surfaces."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P27 — retired pointer-format rejection SendMessages absent, tree-wide.
+# ---------------------------------------------------------------------------
+
+# The retired shape: a rejection notify that points at metadata instead
+# of carrying the payload ("See metadata.teachback_rejection." /
+# "See metadata.handoff_rejection."). Like P6/P7, these absence pins
+# flip RED on file revert (the pointers are present pre-change on BOTH
+# mirrored surfaces, so each P27 case flips under EITHER the extract OR
+# the SSOT revert — a documented deviation from the exactly-one-file
+# property every other case has). The sweep covers every LLM-loaded
+# instruction surface, with a floor on the surface count so a glob
+# regression cannot silently narrow the scan to nothing.
+RETIRED_POINTER_PINS = [
+    "See metadata.teachback_rejection",
+    "See metadata.handoff_rejection",
+]
+
+INSTRUCTION_SURFACE_FLOOR = 60
+
+
+def _instruction_surfaces() -> list:
+    patterns = ("skills/*/SKILL.md", "agents/*.md", "commands/*.md", "protocols/*.md")
+    surfaces = sorted(
+        {p for pattern in patterns for p in PLUGIN_ROOT.glob(pattern)}
+    )
+    assert len(surfaces) >= INSTRUCTION_SURFACE_FLOOR, (
+        f"instruction-surface sweep found only {len(surfaces)} surfaces "
+        f"(floor {INSTRUCTION_SURFACE_FLOOR}) — a glob regression has "
+        f"narrowed the tree-wide absence scan; fix the glob before "
+        f"trusting this pin."
+    )
+    return surfaces
+
+
+@pytest.mark.parametrize("pointer", RETIRED_POINTER_PINS, ids=lambda p: p[:44])
+def test_retired_pointer_format_absent_tree_wide(pointer: str):
+    """No instruction surface may reintroduce the pointer-format
+    rejection notify — a teammate waking on the message alone must be
+    able to read the corrections in the message itself. The sweep is
+    tree-wide over LLM-loaded surfaces, not scoped to the surfaces that
+    previously carried the pointers."""
+    for surface in _instruction_surfaces():
+        assert _phrase(pointer) not in _normalized(surface), (
+            f"{surface.name}: retired pointer-format notify {pointer!r} "
+            f"present. The rejection SendMessage carries the payload "
+            f"verbatim; the pointer form starves a message-only wake. "
+            f"If a future rule genuinely needs the pointer form, update "
+            f"this guard deliberately."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Counter-test flip-set record (measured in TEMP COPIES of the plugin
 # tree; see module docstring). Each edited file restored individually to
 # its pre-change state (git show e2afa3e5:<path> over the copy), module
 # run against the copy, then the edited version restored.
 #
-# POST-REMEDIATION (current record, 35 cases) — re-measured after the
-# review-remediation pins (P13-P19) were added:
+# POST-REJECTION-FOLD (current record, 55 cases) — re-measured after the
+# review-remediation pins (P13-P19), the hardening-audit pin (P20), and
+# the rejection-direction fold pins (P21-P27):
 #
-#   skills/pact-agent-teams/SKILL.md   -> 7 failed (P1, P5, P7-absence,
-#                                          P12, P13, P14, P18)
-#   skills/pact-teachback/SKILL.md     -> 6 failed (P2, P5, P6-absence,
-#                                          P12, P13, P14)
+#   skills/pact-agent-teams/SKILL.md   -> 10 failed (P1, P5, P7-absence,
+#                                          P12, P13, P14, P18, P24,
+#                                          P25-lower, P25-cap)
+#   skills/pact-teachback/SKILL.md     -> 7 failed (P2, P5, P6-absence,
+#                                          P12, P13, P14, P23)
 #   protocols/pact-completion-authority.md
-#                                      -> 7 failed (P3 x2, P4, P5, P16,
-#                                          P17, P19)
-#   protocols/pact-protocols.md        -> 8 failed (P3 x2, P4, P5, P11,
-#                                          P16, P17, P19)
+#                                      -> 14 failed (P3 x2, P4, P5, P16,
+#                                          P17, P19, P20, P21, P22,
+#                                          P25-lower, P26, P27 x2)
+#   protocols/pact-protocols.md        -> 15 failed (P3 x2, P4, P5, P11,
+#                                          P16, P17, P19, P20, P21, P22,
+#                                          P25-lower, P26, P27 x2)
 #   protocols/pact-ct-teachback.md     -> 1 failed  (P11)
-#   agents/pact-orchestrator.md        -> 1 failed  (P5)
-#   commands/orchestrate.md            -> 2 failed (P8 x2)
+#   agents/pact-orchestrator.md        -> 4 failed (P5, P21, P22, P23)
+#   commands/orchestrate.md            -> 3 failed (P8 x2, P23)
 #
-# Measured: 32 of the module's 35 cases flip under exactly one file's
-# revert; the all-edited state is 35/35 green. The three revert-immune
-# cases flip under their targeted in-place mutations instead: P10 (the
-# On Completion write-order triple pre-dates this arc, so the pre-change
-# file already carries the pinned wording — deleting the triple in place
-# flips it) and P15 x2 (absence pins; the foreign delimiter never
-# existed pre-change — planting a stray wrong-type BEGIN flips exactly
-# that surface's case). Absence pins P6/P7 flip RED on revert because
-# the retired renderings are present pre-change, by design.
+# Measured: 52 of the module's 55 cases flip under file revert; the
+# all-edited state is 55/55 green. Per-file sums total 54 because P27's
+# two tree-wide absence cases flip under EITHER the extract OR the SSOT
+# revert (the retired pointers lived on both mirrored surfaces) — a
+# documented deviation from the exactly-one-file property every other
+# case has. The three revert-immune cases flip under their targeted
+# in-place mutations instead: P10 (the On Completion write-order triple
+# pre-dates this arc, so the pre-change file already carries the pinned
+# wording — deleting the triple in place flips it) and P15 x2 (absence
+# pins; the foreign delimiter never existed pre-change — planting a
+# stray wrong-type BEGIN flips exactly that surface's case). Absence
+# pins P6/P7/P27 flip RED on revert because the retired renderings are
+# present pre-change, by design.
 #
 # Earlier milestones of the same record (superseded above, kept for the
-# arc's audit trail): pre-P12 19 of 20 cases flipped under file revert
-# (at 3, tb 3, ca 4, ssot 5, ct 1, orchestrator 1, orchestrate 2);
-# post-P12, pre-remediation 21 of 22 flipped (at 4, tb 4, ca 4, ssot 5,
-# ct 1, orchestrator 1, orchestrate 2), P10 the sole revert-immune case,
-# flipping only under in-place deletion.
+# arc's audit trail): pre-P12 19 of 20; post-P12 21 of 22 (P10 sole
+# revert-immune); post-remediation 32 of 35 (at 7, tb 6, ca 7, ssot 8,
+# ct 1, orchestrator 1, orchestrate 2); post-hardening 34 of 37 (ca 8,
+# ssot 9, rest as prior).
 #
 # Targeted in-place mutations (file otherwise at HEAD), measured in the
 # same temp copies — predicted cardinalities all confirmed, each flip
@@ -810,4 +1128,24 @@ def test_repair_clause_pinned(doc_path: Path):
 #   repair clause deleted (extract + SSOT)
 #                                        -> 2 failed (P19; was 0 before
 #     the pin)
+#   T2 opening sentence stubbed (either mirrored surface)
+#                                        -> 1 failed (P20, that surface;
+#     was 0 before the pin — the hardening-audit gap it closes)
+#   persona rejection-END token deleted  -> 1 failed (P21/P22 persona
+#     case)
+#   ONE of the extract's 3 rejection-END tokens renamed
+#                                        -> 0 failed (presence contract
+#     over the three template occurrences, documented); ALL 3 renamed
+#                                        -> 1 failed
+#   orchestrate rejection phrase reworded -> 1 failed (P23 cmd case)
+#   agent-teams step-2 reading header reworded
+#                                        -> 1 failed (P24)
+#   advisory ruling deleted (extract + SSOT)
+#                                        -> 2 failed (P26)
+#   retired pointer planted on a surface that never carried it
+#                                        -> 1 failed (P27 — the
+#     tree-wide sweep catching reintroduction ANYWHERE, not just on the
+#     surfaces that previously had the pointers)
+#   confirmation phrase reworded (extract)
+#                                        -> 1 failed (P25 that surface)
 # ---------------------------------------------------------------------------

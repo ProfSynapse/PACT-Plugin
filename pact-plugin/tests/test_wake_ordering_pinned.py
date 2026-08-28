@@ -206,7 +206,9 @@ PHRASE_PINS = [
     # The shorter "never act on a single empty read" pin above is ALSO
     # satisfied by the On-Rejection parenthetical cross-ref, so deleting
     # the rule home alone would keep that pin green; this longer contiguous
-    # span exists only at the rule home.
+    # span exists only at the rule home. (Hardening-audit re-verification:
+    # rewording the rule home leaves the short pin green via the cross-ref
+    # decoy and flips exactly this companion — measured, unchanged.)
     (SKILL, "re-read once after a brief pause; never act on a single empty read"),
     # The crossed mid-turn directive rule: an already-submitted deliverable
     # that reflects pre-directive scope is revised proactively, not on
@@ -221,6 +223,13 @@ PHRASE_PINS = [
     (COMPLETION_AUTHORITY, "in-process and tmux teammateMode"),
     (COMPLETION_AUTHORITY, "boundary-drain: inbox empty"),
     # The evidence bar for escalating an idle to stall diagnosis.
+    # (Hardening-audit census: 2x on the extract — the escalation bar and
+    # the stall-definition parenthetical, both governing — and 3x on the
+    # SSOT, whose extra occurrence is the agent-stall mirrored region.
+    # Deleting both extract-region occurrences lockstep leaves the SSOT
+    # case green via the stall-region decoy while the extract case flips;
+    # compensated by the extract pin + the byte-parity gate. Measured,
+    # leave as designed.)
     (COMPLETION_AUTHORITY, "task-file-mtime plus sustained-silence"),
     # The pre-directive straggler discrimination: an idle tick whose
     # timestamp predates the lead's directive send is prior-turn state,
@@ -239,7 +248,12 @@ PHRASE_PINS = [
     (COMPLETION_AUTHORITY, "On an idle notification that postdates your directive send"),
     # The bidirectional opener: the section's first sentence must name
     # BOTH crossing orders, correcting a heading-level scan that reads the
-    # title as postdating-only.
+    # title as postdating-only. (Hardening-audit census: on the SSOT the
+    # phrase recurs 2x — the mirrored opener and the agent-stall region's
+    # cross-ref — so the SSOT case alone stays green under a lockstep
+    # opener reword; that decoy is compensated: the completion-authority
+    # case is 1x-unique and flips, and the byte-parity gate forces any
+    # extract edit to mirror. Measured, leave as designed.)
     (COMPLETION_AUTHORITY, "Discriminate by direction"),
     # The anti-acceleration rule: faster sends feed the crossed-message
     # rhythm; patience is the counter.
