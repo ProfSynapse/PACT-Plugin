@@ -72,6 +72,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 SKILL = PLUGIN_ROOT / "skills" / "pact-agent-teams" / "SKILL.md"
 COMPLETION_AUTHORITY = PLUGIN_ROOT / "protocols" / "pact-completion-authority.md"
 PROTOCOLS_SSOT = PLUGIN_ROOT / "protocols" / "pact-protocols.md"
+CT_TEACHBACK = PLUGIN_ROOT / "protocols" / "pact-ct-teachback.md"
 ORCHESTRATOR = PLUGIN_ROOT / "agents" / "pact-orchestrator.md"
 AGENT_STALL = PLUGIN_ROOT / "protocols" / "pact-agent-stall.md"
 
@@ -473,6 +474,18 @@ COMMAND_SURFACES = [
 ORDERING_PRESENCE_SURFACES = [COMPLETION_AUTHORITY, PROTOCOLS_SSOT, ORCHESTRATOR]
 ORDERING_ABSENCE_SURFACES = ORDERING_PRESENCE_SURFACES + COMMAND_SURFACES
 
+# The ct-teachback extract (and its byte-mirrored teachback-flow region in
+# the SSOT) taught the pair in the SAME retired call-syntax rendering as the
+# commands — wake-`SendMessage` FIRST, then `TaskUpdate(A, ...)`. Neither
+# surface carries the contiguous ordering tokens the arms above lock, and
+# the extract and its SSOT region can revert to the retired rendering in
+# LOCKSTEP without tripping the byte-parity audit (extract and region stay
+# mutually byte-equal), so this arm is the only witness on those surfaces.
+# Fragment verified green on both at the flipped HEAD and present in both
+# pre-flip forms (whitespace-normalized; the retired rendering hard-wraps
+# mid-fragment).
+COMMAND_FORM_SURFACES = COMMAND_SURFACES + [CT_TEACHBACK, PROTOCOLS_SSOT]
+
 
 @pytest.mark.parametrize("doc_path", ORDERING_PRESENCE_SURFACES, ids=lambda p: p.name)
 def test_acceptance_pair_taskupdate_first_present(doc_path: Path):
@@ -510,23 +523,30 @@ def test_retired_sendmessage_first_ordering_absent(doc_path: Path):
         )
 
 
-@pytest.mark.parametrize("doc_path", COMMAND_SURFACES, ids=lambda p: p.name)
+@pytest.mark.parametrize("doc_path", COMMAND_FORM_SURFACES, ids=lambda p: p.name)
 def test_retired_command_call_ordering_absent(doc_path: Path):
-    """Regression guard for the command surfaces' own retired rendering of
-    the acceptance pair. The five commands taught the pair as
+    """Regression guard for the retired call-syntax rendering of the
+    acceptance pair. The five commands taught the pair as
     `SendMessage(to=X, ...)` FIRST, then `TaskUpdate(A, status="completed")`
     — a call-syntax rendering that contains neither contiguous token the
     ordering-absence pin above locks out, so that pin stayed green pre-flip
     on exactly these five surfaces (it guards reintroduction of the
     normative-form tokens there, not the rendering these files carried).
+    The ct-teachback extract and its byte-mirrored teachback-flow region in
+    the SSOT carried the same rendering (wake-`SendMessage` FIRST, then
+    `TaskUpdate(A, status="completed")`) and are pinned here for the same
+    reason — plus one specific to the mirrored pair: a lockstep revert of
+    extract and SSOT region leaves them mutually byte-equal, so the
+    protocol-extract audit passes and NOTHING but this arm witnesses.
     This pin locks out the retired rendering's load-bearing fragment: FIRST
     immediately followed by the TaskUpdate call. The flipped form cannot
     produce it — the wake-SendMessage is the last call, so no "FIRST, then
     `TaskUpdate" sequence can appear on a TaskUpdate-first surface. Verified
     against both forms before pinning: the fragment is present in all five
-    pre-flip files and absent from all five flipped files (and from every
-    other agents/commands/protocols/skills file). Whitespace-normalized like
-    the sibling absence pin so a hard-wrapped rendering cannot slip past."""
+    pre-flip command files, both pre-flip ct-teachback surfaces, and absent
+    from every flipped file (and from every other agents/commands/protocols/
+    skills file). Whitespace-normalized like the sibling absence pin so a
+    hard-wrapped rendering cannot slip past."""
     assert "FIRST, then `TaskUpdate" not in _normalized(doc_path), (
         f"{doc_path.name}: retired command-form ordering token "
         f"'FIRST, then `TaskUpdate' present. The two-call atomic pair is "
@@ -617,4 +637,19 @@ def test_retired_command_call_ordering_absent(doc_path: Path):
 # exactly 1 failed = this test's orchestrate.md case (the 8 sibling
 # ordering cases stayed green, as the original addendum predicted);
 # post-restore 100/100 green.
+#
+# 2026-08-28 review-cycle extension (review-test fixer, lead-ordered): the
+# same retired call-syntax rendering was unpinned on the ct-teachback
+# extract and its byte-mirrored SSOT region — surfaces in NO arm of this
+# module — and a LOCKSTEP revert of the pair leaves extract and region
+# mutually byte-equal, so the protocol-extract audit passes too (measured
+# during review: module + audit green with both reverted). The arm now
+# parametrizes over COMMAND_FORM_SURFACES (5 commands + ct-teachback +
+# SSOT): module cases 100 -> 102. Fragment discriminator verified in
+# whitespace-normalized text (the retired rendering hard-wraps mid-fragment,
+# so a raw line grep reads absent on both sides): present at base on both
+# new surfaces, absent at flipped HEAD on both. Counter-test (measured
+# 2026-08-28): ct-teachback.md alone reverted to pre-flip — exactly 1
+# failed = this test's pact-ct-teachback.md case (101 passed); post-restore
+# 102/102 green, audit module green alongside.
 # ---------------------------------------------------------------------------
