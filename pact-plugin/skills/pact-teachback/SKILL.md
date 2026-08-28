@@ -169,7 +169,7 @@ TaskUpdate(taskId, metadata={"intentional_wait": {
 
 Do NOT begin Task B until Task A's status transitions to `completed`. The team-lead's wake-signal `SendMessage` confirms acceptance — you cannot self-wake to poll `TaskList` while idle.
 
-**On rejection** (team-lead writes `metadata.teachback_rejection`): see [pact-agent-teams §On Rejection](../pact-agent-teams/SKILL.md#on-rejection-wake-signal-receipt).
+**On rejection** (team-lead writes `metadata.teachback_rejection` and sends a wake-signal `SendMessage` carrying the rejection payload verbatim): see [pact-agent-teams §On Rejection](../pact-agent-teams/SKILL.md#on-rejection-wake-signal-receipt).
 
 ## Common mistakes
 

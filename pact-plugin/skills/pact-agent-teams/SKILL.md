@@ -225,7 +225,7 @@ After wake on acceptance, check `TaskList` for unblocked tasks you OWN or can cl
 
 ## On Rejection (Wake-Signal Receipt)
 
-If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `SendMessage`. Your task remains `in_progress`; the team-lead has written rejection details to metadata. This wake-then-raw-read flow is one instance of the seam-agnostic rule in [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic); the residual-race mitigation there (never act on a single empty read) applies to the rejection-metadata read below.
+If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `SendMessage` carrying the rejection payload verbatim — read the corrections in the message; the disk copy is confirmation, not the primary. Your task remains `in_progress`; the team-lead has also written rejection details to metadata. This wake-then-confirm flow is one instance of the seam-agnostic rule in [§On Wake: Disk-First Re-Read](#on-wake-disk-first-re-read-seam-agnostic); the residual-race mitigation there (never act on a single empty read) applies to the confirmation read below.
 
 **On wake**:
 
@@ -234,7 +234,7 @@ If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `Sen
    TaskUpdate(taskId, metadata={"intentional_wait": None})
    ```
 
-2. **Read the rejection metadata** via raw JSON (`TaskGet` does NOT surface `metadata.*` keys — see [pact-completion-authority §`TaskGet` metadata-blindness reminder](../../protocols/pact-completion-authority.md#completion-authority) and the symmetric rejection-receipt rule in [§Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition)):
+2. **Read the rejection payload the wake-signal `SendMessage` carries** — the field-labeled block between `REJECTION-PAYLOAD-BEGIN` and `REJECTION-PAYLOAD-END`: `reason`, `corrections`, `since`, `revision_number`. The disk copy is confirmation, not the primary; confirm via raw JSON when you need it (`TaskGet` does NOT surface `metadata.*` keys — see [pact-completion-authority §`TaskGet` metadata-blindness reminder](../../protocols/pact-completion-authority.md#completion-authority) and the symmetric rejection-receipt rule in [§Read-Trigger Precondition](../../protocols/pact-completion-authority.md#read-trigger-precondition)):
    - For Task A (teachback): `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.teachback_rejection`
    - For Task B (work): `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff_rejection`
 

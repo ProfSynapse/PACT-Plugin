@@ -494,7 +494,7 @@ Both calls are required, in this order. `TaskUpdate` must precede the wake-signa
 **Rejection — two-call atomic pair (BOTH required, `TaskUpdate` FIRST)**
 
 1. `TaskUpdate(taskId, metadata={"teachback_rejection": {...}})` OR `metadata={"handoff_rejection": {...}}` — payload `{reason, corrections, since, revision_number}`
-2. `SendMessage(to=<teammate>, "[team-lead→<teammate>] Rejected on Task #<id>. See metadata...; revise.")`
+2. `SendMessage(to=<teammate>, "[team-lead→<teammate>] Rejected on Task #<id>. REJECTION-PAYLOAD-BEGIN reason: <one-line summary> corrections: [<correction 1>, ...] since: <canonical_since() output> revision_number: <N> REJECTION-PAYLOAD-END The payload is a verbatim copy of metadata.{teachback,handoff}_rejection. Revise.")`
 
 Both calls are required, in this order. `TaskUpdate` must precede the wake-signal `SendMessage` — the wake is the last call. If the `TaskUpdate` succeeds and the `SendMessage` errors, retry the send on the tool error. 3+ rejection cycles on the same task is an imPACT META-BLOCK signal.
 
@@ -552,7 +552,7 @@ When the teachback payload includes the optional `reasoning_reconstruction` sub-
 
 If the (a)(b)(c) prompts surface a flagged assumption that turns out to be false, the teammate has already done the heavy lifting — the contingency clause names the answer. Your job is to: (1) recognize the contingency clause as the actual answer, (2) `SendMessage` the teammate with the correction OR cross-dispatch the upstream architect with the assumption flag, (3) pause teachback acceptance until the correction lands.
 
-**Rejection path** reuses the existing two-call atomic pair from Completion Authority above: `TaskUpdate` FIRST (writes `metadata.teachback_rejection` with `reason` + `corrections`), then the wake-signal `SendMessage`. The `metadata.teachback_rejection` shape is unchanged — only the `reason` enum gains the new values (`missing_reasoning_reconstruction`, `malformed_reasoning_reconstruction`, `empty_reasoning_reconstruction_field`).
+**Rejection path** reuses the existing two-call atomic pair from Completion Authority above: `TaskUpdate` FIRST (writes `metadata.teachback_rejection` with `reason` + `corrections`), then the wake-signal `SendMessage` carrying the rejection payload verbatim. The `metadata.teachback_rejection` shape is unchanged — only the `reason` enum gains the new values (`missing_reasoning_reconstruction`, `malformed_reasoning_reconstruction`, `empty_reasoning_reconstruction_field`).
 
 This is the L1.5 entailment-mesh discipline — distinct from L2 (purpose) verification (which still runs only at final gates per [pact-ct-teachback §Agreement Verification](../protocols/pact-ct-teachback.md#agreement-verification-orchestrator-side)).
 
