@@ -25,6 +25,14 @@ read is demoted to the lead's DEFERRED audit (disk channel):
   dispatch templates (commands/orchestrate.md):
     - both Task-A and Task-B description strings name the payload-carrying
       notify (per-site pins; the two sites carry different full phrases).
+  write order + flow surface (added at TEST-phase review):
+    - P10: the HANDOFF-path On Completion ordering invariant (metadata
+      write → notify → intentional_wait SET) — the teachback-path twin is
+      pinned in test_skill_loading_agent_teams.py; the HANDOFF-path triple
+      had no pin anywhere before this case.
+    - P11: the ct-teachback Flow step-3 payload-carrying-notify reference
+      (extract + SSOT mirror) — its lockstep revert kept both this module
+      and the byte-mirror gate green before this case.
 
 Inherited vocabulary guard (P9, no new case here): the NEW lead-side
 prose is covered by the existing retired-"wake-send"/"wake send" absence
@@ -297,6 +305,93 @@ def test_orchestrate_dispatch_names_payload_carrying_notify(phrase: str):
 
 
 # ---------------------------------------------------------------------------
+# P10 — HANDOFF-path teammate write order (On Completion ordering invariant).
+# ---------------------------------------------------------------------------
+
+# The teachback-path write order (metadata write → SendMessage →
+# intentional_wait SET) is pinned inline by test_skill_loading_agent_teams.py
+# (TestOnStartTeachbackGateSendMessageVisible). The HANDOFF-path twin — the
+# On Completion ordering-invariant blockquote — had no pin anywhere: deleting
+# the whole triple from that blockquote left every plausible guarding module
+# green (measured: test_skill_loading_agent_teams.py,
+# test_dual_channel_acceptance_pinned.py, test_agents_structure.py,
+# test_wake_ordering_pinned.py — all green with the triple removed). This
+# case closes that gap; the acceptance contract "teammate write order
+# unchanged" names exactly this sequence.
+WRITE_ORDER_PINS = [
+    (
+        AGENT_TEAMS_SKILL,
+        "metadata.handoff write FIRST, then notify SendMessage to "
+        "team-lead, then intentional_wait SET",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path, phrase",
+    WRITE_ORDER_PINS,
+    ids=[f"{p.name}::write-order" for p, _ in WRITE_ORDER_PINS],
+)
+def test_handoff_path_write_order_pinned(doc_path: Path, phrase: str):
+    """The On Completion ordering invariant must keep naming the full
+    three-step sequence — metadata.handoff write FIRST, then the notify
+    SendMessage, then the intentional_wait SET. The dual-channel change
+    edits this exact blockquote (it appends the payload-carrying clauses);
+    nothing else in the suite guards the HANDOFF-path ordering, so a reword
+    that drops the triple would silently unpin the teammate write order this
+    arc's acceptance criteria require to stay unchanged."""
+    assert _phrase(phrase) in _normalized(doc_path), (
+        f"{doc_path.name}: HANDOFF-path write-order triple {phrase!r} not "
+        f"found in the On Completion ordering invariant. The teammate write "
+        f"order (metadata write → notify → intentional_wait SET) must stay "
+        f"pinned; if the invariant was reworded intentionally, update this "
+        f"pin in lockstep."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P11 — ct-teachback Flow step 3 notify wording (extract + SSOT mirror).
+# ---------------------------------------------------------------------------
+
+# The ct-teachback extract teaches the teachback notify shape to protocol
+# readers and was edited by this arc (its retired one-line notify template
+# became the payload-carrying reference). Measured gap before this pin: a
+# revert of that edit — extract and SSOT region together, which keeps the
+# byte-mirror gate green — left this module and the mirror gate green. Both
+# surfaces are pinned (same lockstep-revert rationale as T2/P4/P5).
+CT_TEACHBACK_NOTIFY_PHRASE = (
+    "carrying the canonical payload verbatim (per pact-teachback Step 2)"
+)
+
+CT_TEACHBACK_SURFACES = [
+    PLUGIN_ROOT / "protocols" / "pact-ct-teachback.md",
+    PROTOCOLS_SSOT,
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path",
+    CT_TEACHBACK_SURFACES,
+    ids=lambda p: p.name,
+)
+def test_ct_teachback_flow_names_payload_carrying_notify(doc_path: Path):
+    """The ct-teachback Flow step 3 must keep directing the reader to the
+    payload-carrying notify (pact-teachback Step 2), not back to the retired
+    one-line notice. The extract and its byte-mirrored SSOT region each get
+    a witness so a lockstep revert of the pair — which satisfies the
+    protocol-extract mirror gate — still trips this pin."""
+    assert (
+        _phrase(CT_TEACHBACK_NOTIFY_PHRASE) in _normalized(doc_path)
+    ), (
+        f"{doc_path.name}: ct-teachback Flow step-3 payload-carrying notify "
+        f"phrase {CT_TEACHBACK_NOTIFY_PHRASE!r} not found. The Flow must "
+        f"reference the payload-carrying notify, not the retired one-line "
+        f"notice; if reworded intentionally, update this pin in lockstep on "
+        f"both mirrored surfaces."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Counter-test flip-set record (measured at authoring time in a TEMP COPY
 # of the plugin tree; see module docstring). Each edited file restored
 # individually to its pre-change state (git show e2afa3e5:<path> over the
@@ -306,12 +401,35 @@ def test_orchestrate_dispatch_names_payload_carrying_notify(phrase: str):
 #   skills/pact-teachback/SKILL.md     -> 3 failed (P2, P5, P6-absence)
 #   protocols/pact-completion-authority.md
 #                                      -> 4 failed (P3 x2, P4, P5)
-#   protocols/pact-protocols.md        -> 4 failed (P3 x2, P4, P5)
+#   protocols/pact-protocols.md        -> 5 failed (P3 x2, P4, P5, P11)
+#   protocols/pact-ct-teachback.md     -> 1 failed  (P11)
 #   agents/pact-orchestrator.md        -> 1 failed  (P5)
 #   commands/orchestrate.md            -> 2 failed (P8 x2)
 #
-# Measured total flip-set: 17 of the module's 17 cases (every case flips
-# under exactly one file's revert); the all-edited state is 17/17 green.
-# Absence pins flip RED on revert because the retired renderings are
-# present pre-change, by design.
+# Measured: 19 of the module's 20 cases flip under exactly one file's
+# revert; the all-edited state is 20/20 green. Absence pins flip RED on
+# revert because the retired renderings are present pre-change, by design.
+# P10 is the one case file-revert does NOT flip: the On Completion
+# write-order triple pre-dates this arc (the arc appended clauses to the
+# blockquote), so the pre-change file already carries the pinned wording —
+# P10 flips under the in-place deletion below instead.
+#
+# Targeted in-place mutations (file otherwise at HEAD), measured in the same
+# temp copy — predicted cardinalities all confirmed:
+#   point-4 "BEFORE" reworded            -> 1 failed (P4)
+#   T2 sentence reverted in place        -> 2 failed (P3 phrase-2, P5);
+#     P3 phrase-1 stays green — point 4 carries "data-integrity finding"
+#     too, so phrase-1 is pair-level protection, not T2-anchored
+#   T2 "DEFERRED audit" lowercased       -> 1 failed (P5)
+#   retired teachback framing re-added   -> 1 failed (P6)
+#   retired 1-2-sentences shape re-added -> 1 failed (P7)
+#   orchestrate Task-B phrase reworded   -> 1 failed (P8 Task-B case)
+#   HANDOFF-PAYLOAD-BEGIN renamed        -> 1 failed (P1)
+#   "wake-send" planted in new T2 prose  -> 1 failed in
+#     test_wake_ordering_pinned.py (P9 inherited guard, verified live)
+#   On Completion write-order deleted    -> 1 failed (P10; was 0 before
+#     the pin — the gap this case closes)
+#   ct-teachback Flow edit reverted BOTH sides (extract + SSOT, mirror
+#     gate green)                          -> 2 failed (P11; was 0 before
+#     the pin — the gap this case closes)
 # ---------------------------------------------------------------------------
