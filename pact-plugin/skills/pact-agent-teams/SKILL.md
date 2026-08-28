@@ -428,7 +428,7 @@ message body itself.
    already-submitted deliverable reflects the pre-directive scope, revise it on the
    same task without waiting to be asked.
 
-This rule generalizes the signal-class wake flow of §On Rejection to every wait
+This rule generalizes the wake-then-read flow of §On Rejection to every wait
 resolution, and it is what makes the team-lead's wake message redundant-by-design:
 ordering-immune at every seam, with no hook required (a synchronous wake-detection
 hook cannot exist — see the non-goal note in
