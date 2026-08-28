@@ -1265,7 +1265,7 @@ Feature Task (created by orchestrator)
 | Phase | Orchestrator | Orchestrator | Active during phase |
 | Agent | Orchestrator | Specialist (claim-only); Orchestrator (completion authority) | Specialist claims via `TaskUpdate(status="in_progress")`; orchestrator completes via `TaskUpdate(status="completed")` paired with a wake-signal `SendMessage` |
 
-Under Agent Teams, specialists claim agent tasks (`pending → in_progress`) and store HANDOFFs in `metadata.handoff`, but the orchestrator transitions agent tasks to `completed` after inspecting the HANDOFF. Two narrow carve-outs (signal-tasks; secretary session briefing + memory-save) self-complete; see [Completion Authority](pact-completion-authority.md#completion-authority).
+Under Agent Teams, specialists claim agent tasks (`pending → in_progress`) and store HANDOFFs in `metadata.handoff`, but the orchestrator transitions agent tasks to `completed` after accepting the HANDOFF payload the notify `SendMessage` carries (the raw read is the deferred audit). Two narrow carve-outs (signal-tasks; secretary session briefing + memory-save) self-complete; see [Completion Authority](pact-completion-authority.md#completion-authority).
 
 ### Task States
 
@@ -2388,7 +2388,7 @@ SendMessage(
 1. Lead writes rejection metadata + sends wake-signal.
 2. Teammate wakes, CLEARs `intentional_wait`, reads rejection metadata.
 3. Teammate revises (`metadata.teachback_submit` for A, or revises deliverable + `metadata.handoff` for B).
-4. Teammate re-SETs `intentional_wait` with fresh `since`, increments `metadata.revision_number`, `SendMessage` notifies team-lead "revised."
+4. Teammate increments `metadata.revision_number`, sends the notify `SendMessage` carrying the revised payload verbatim, re-SETs `intentional_wait` with fresh `since`.
 5. Lead reviews; either accepts (per [Completion Authority](#completion-authority)) or rejects again (revision_number = N+1).
 
 > **Cycle limit**: 3+ rejection cycles on the same task is an imPACT META-BLOCK signal. See [imPACT.md](../commands/imPACT.md).

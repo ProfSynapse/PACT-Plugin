@@ -246,7 +246,7 @@ If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `Sen
 
 4. **Re-submit on the SAME task** (do NOT create a new task):
    - Increment `metadata.revision_number`. The team-lead writes `revision_number=1` in the rejection record. On your first revision, increment to `2`. On each subsequent revision, increment again. This count is the rejection-cycle audit trail — it feeds the imPACT META-BLOCK 3-cycle signal, not harvest routing. It does NOT gate whether your revised content is preserved: the team-lead's acceptance (the single completion) emits whatever `metadata.handoff` holds at that moment, so the revised content reaches the journal regardless of the count.
-   - `SendMessage` the team-lead: `"[{sender}→team-lead] Revised teachback/HANDOFF on Task #{id}. See metadata.{teachback_submit|handoff} (revision {N})."`
+   - `SendMessage` the team-lead carrying the revised payload verbatim in the same form as the first submission: `"[{sender}→team-lead] Revised teachback/HANDOFF on Task #{id} (revision {N})."` followed by the payload block — `pact-teachback` Step 2 for a teachback, On Completion Step 2 for a HANDOFF. The team-lead accepts the revision on the message-carried payload; the disk read is their deferred audit.
    - Re-SET `intentional_wait{reason=awaiting_lead_completion, since=<fresh canonical_since() output>}`.
    - Idle.
 
