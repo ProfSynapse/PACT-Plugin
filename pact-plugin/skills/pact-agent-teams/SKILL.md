@@ -408,7 +408,7 @@ message body itself.
    durable state has already made redundant. For a content-carrying wake the
    authority inverts: the message is the reading copy for the content it carries,
    and the disk copy confirms it.
-3. **If durable state shows the wait unresolved, keep waiting.** A wake that
+3. **If durable state shows the wait unresolved, keep waiting — for signal wakes.** A wake that
    resolves nothing (a crossed or redundant message, a peer ping) gets no reply —
    return to idle silently per §Idle Discipline and §Counter-Confirm Suppression.
    If the wake ASSERTS a resolution the disk does not yet show (e.g., the wake
