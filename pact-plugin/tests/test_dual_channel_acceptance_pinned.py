@@ -37,6 +37,26 @@ read is demoted to the lead's DEFERRED audit (disk channel):
       mechanism) on both teammate notify surfaces — unpinned before this
       case; the dual-channel design carries the payload on the measured
       message channel AND the silently-truncating metadata channel.
+  review-remediation pins (same module, coverage-review fix):
+    - P13: the summary-never-carries-payload rule (200 chars is the
+      channel's ONLY truncating element) on both teammate surfaces,
+      per-surface casing like P5.
+    - P14: the payload END delimiter tokens — P1/P2 pin BEGIN only.
+    - P15: the OTHER payload type's delimiter ABSENT per surface
+      (delimiter confusion: a stray foreign BEGIN alongside the right
+      one flips no presence pin).
+    - P16: the deferred audit applies identically to the HANDOFF path
+      (extract + SSOT mirror).
+    - P17: the non-goal span — instruction-layer by necessity; reject
+      future proposals to mechanize it (extract + SSOT mirror).
+    - P18: the metadata-write-failure fallback — still send the
+      payload-carrying notify; missing disk copy is an integrity
+      finding, never a skipped submission.
+    - P19: the deferred-audit repair clause — re-write from the message
+      copy while it is still in your context (extract + SSOT mirror).
+      The integrity_finding key NAME is deliberately unpinned: no
+      reader exists in hooks or tests today, so the name is
+      advisory-only until a consumer lands.
 
 Inherited vocabulary guard (P9, no new case here): the NEW lead-side
 prose is covered by the existing retired-"wake-send"/"wake send" absence
@@ -441,38 +461,318 @@ def test_payload_compactness_envelope_pinned(doc_path: Path, phrase: str):
 
 
 # ---------------------------------------------------------------------------
-# Counter-test flip-set record (measured at authoring time in a TEMP COPY
-# of the plugin tree; see module docstring). Each edited file restored
-# individually to its pre-change state (git show e2afa3e5:<path> over the
-# copy), module run against the copy, then the edited version restored:
+# P13 — summary never carries payload content (both teammate surfaces).
+# ---------------------------------------------------------------------------
+
+# The 200-char truncation is the message channel's ONLY measured
+# truncation (the body is non-truncating through 32KB). The rule keeps
+# payload content off the summary, where it would be cut at 200 chars
+# with no error on either channel — and the disk write still succeeds,
+# so the deferred audit would not flag the loss either. Unpinned before
+# this case: deleting the sentence from either surface flipped nothing
+# suite-wide. Per-surface casing is deliberate (see module docstring):
+# the agent-teams blockquote carries the sentence-initial capital, the
+# teachback blockquote the mid-sentence lowercase after "space-joined;".
+SUMMARY_RULE_PINS = [
+    (
+        AGENT_TEAMS_SKILL,
+        "The summary never carries payload content (it truncates at 200 "
+        "chars)",
+    ),
+    (
+        TEACHBACK_SKILL,
+        "the summary never carries payload content (it truncates at 200 "
+        "chars)",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path, phrase",
+    SUMMARY_RULE_PINS,
+    ids=[f"{p.name}::summary-rule" for p, _ in SUMMARY_RULE_PINS],
+)
+def test_summary_never_carries_payload(doc_path: Path, phrase: str):
+    """The notify template's summary slot must stay payload-free — the
+    summary truncates at 200 chars, the only truncating element of the
+    message channel. Payload content moved into the summary is silently
+    lost past 200 chars on the message side while the disk copy stays
+    complete, so no channel of the pair surfaces the loss."""
+    assert _phrase(phrase) in _normalized(doc_path), (
+        f"{doc_path.name}: summary-payload rule {phrase!r} not found. The "
+        f"summary truncates at 200 chars — payload content belongs in the "
+        f"message body; if reworded intentionally, update this pin in "
+        f"lockstep (per-surface casing)."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P14 — payload END delimiter tokens (both teammate notify surfaces).
+# ---------------------------------------------------------------------------
+
+# P1/P2 pin only the BEGIN tokens; the END delimiters were unpinned
+# before these cases: deleting either END token flipped nothing. The
+# lead's message-side parsing keys on the BEGIN/END frame — a template
+# that drops its END ships an unframed payload.
+PAYLOAD_END_DELIMITER_PINS = [
+    (AGENT_TEAMS_SKILL, "HANDOFF-PAYLOAD-END"),
+    (TEACHBACK_SKILL, "TEACHBACK-PAYLOAD-END"),
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path, token",
+    PAYLOAD_END_DELIMITER_PINS,
+    ids=[f"{p.name}::{t}" for p, t in PAYLOAD_END_DELIMITER_PINS],
+)
+def test_payload_end_delimiter_present(doc_path: Path, token: str):
+    """The notify template must close its payload frame with the matching
+    END delimiter — the BEGIN token alone does not bound the payload the
+    lead parses. Delimiters are plain text (no backtick or wrap
+    variance), so normalized matching is equivalent to raw here; the
+    normalized form is used for uniformity with P1/P2."""
+    assert _phrase(token) in _normalized(doc_path), (
+        f"{doc_path.name}: payload END delimiter {token!r} not found. The "
+        f"notify template must close the payload frame it opens; if the "
+        f"encoding was changed intentionally, update this pin in lockstep "
+        f"with P1/P2."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P15 — wrong-payload delimiter absent per surface (delimiter confusion).
+# ---------------------------------------------------------------------------
+
+# Each notify template must use ONLY its own payload type's delimiters.
+# A copy-paste of the wrong template (or a stray foreign BEGIN pasted
+# into prose) leaves both delimiter families on one surface; the
+# presence pins (P1/P2/P14) stay green because the right tokens are
+# still there — measured before this case: a stray
+# HANDOFF-PAYLOAD-BEGIN added to the teachback skill flipped nothing
+# suite-wide. Like P6/P7, these absence pins flip under the
+# re-introduction mutation, not under file revert (the foreign token
+# never existed pre-change).
+WRONG_DELIMITER_PINS = [
+    (TEACHBACK_SKILL, "HANDOFF-PAYLOAD-BEGIN"),
+    (AGENT_TEAMS_SKILL, "TEACHBACK-PAYLOAD-BEGIN"),
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path, token",
+    WRONG_DELIMITER_PINS,
+    ids=[f"{p.name}::not-{t}" for p, t in WRONG_DELIMITER_PINS],
+)
+def test_wrong_payload_delimiter_absent(doc_path: Path, token: str):
+    """The surface must not carry the OTHER payload type's delimiter. A
+    stray foreign delimiter on a teammate surface teaches an ambiguous
+    frame the lead could mis-key on; if a future edit genuinely needs to
+    reference the other channel's delimiter in prose, update this guard
+    deliberately (same convention as the P6/P7 absence pins)."""
+    assert _phrase(token) not in _normalized(doc_path), (
+        f"{doc_path.name}: foreign payload delimiter {token!r} present. "
+        f"Each notify template uses only its own payload type's "
+        f"BEGIN/END delimiters; a stray foreign delimiter makes the "
+        f"payload frame ambiguous."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P16 — deferred audit applies to the HANDOFF path (extract + SSOT).
+# ---------------------------------------------------------------------------
+
+# Without this sentence the deferred audit reads teachback-path-only:
+# the Read-Trigger Precondition's context is teachback-arrival-keyed,
+# and nothing else in point 4 names the HANDOFF path. Unpinned before
+# this case: deleting the sentence from both mirrored surfaces flipped
+# nothing, byte-parity gate included.
+HANDOFF_EXT_PHRASE = (
+    "The deferred audit of point 4 applies identically to the HANDOFF "
+    "path"
+)
+
+HANDOFF_EXT_SURFACES = [COMPLETION_AUTHORITY, PROTOCOLS_SSOT]
+
+
+@pytest.mark.parametrize(
+    "doc_path",
+    HANDOFF_EXT_SURFACES,
+    ids=lambda p: p.name,
+)
+def test_deferred_audit_covers_handoff_path(doc_path: Path):
+    """The deferred disk-vs-message audit must explicitly cover the
+    HANDOFF path, not only teachback arrivals. Both mirrored surfaces
+    carry their own witness (same lockstep-revert rationale as
+    T2/P4/P5/P11: a lockstep revert of the pair keeps the byte-mirror
+    gate green)."""
+    assert _phrase(HANDOFF_EXT_PHRASE) in _normalized(doc_path), (
+        f"{doc_path.name}: HANDOFF-path deferred-audit extension "
+        f"{HANDOFF_EXT_PHRASE!r} not found. The deferred audit is not "
+        f"teachback-only; if reworded intentionally, update this pin in "
+        f"lockstep on both mirrored surfaces."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P17 — non-goal: hook-based content comparison is dead-by-construction.
+# ---------------------------------------------------------------------------
+
+# The layer ruling: the delivered message drains from disk on recipient
+# consumption and survives only in the recipient's conversation context,
+# so no hook running at a later turn boundary can read the message
+# bytes. The non-goal exists so the dead-by-construction comparison is
+# not re-attempted. Unpinned before this case: deleting the sentence
+# from both mirrored surfaces flipped nothing.
+NON_GOAL_PHRASE = (
+    "the deferred disk-vs-message audit is instruction-layer by "
+    "necessity; reject future proposals to mechanize it"
+)
+
+NON_GOAL_SURFACES = [COMPLETION_AUTHORITY, PROTOCOLS_SSOT]
+
+
+@pytest.mark.parametrize(
+    "doc_path",
+    NON_GOAL_SURFACES,
+    ids=lambda p: p.name,
+)
+def test_non_goal_mechanization_ban_pinned(doc_path: Path):
+    """The non-goal sentence must keep both halves: the classification
+    (instruction-layer by necessity) and the ban (reject future
+    proposals to mechanize it). Losing the sentence invites a future
+    re-attempt at a hook that cannot work on the storage model."""
+    assert _phrase(NON_GOAL_PHRASE) in _normalized(doc_path), (
+        f"{doc_path.name}: deferred-audit non-goal span "
+        f"{NON_GOAL_PHRASE!r} not found. Hook-based content comparison "
+        f"is dead-by-construction and must stay recorded as rejected; if "
+        f"reworded intentionally, update this pin in lockstep on both "
+        f"mirrored surfaces."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P18 — metadata-write-failure fallback (agent-teams HANDOFF Step 1).
+# ---------------------------------------------------------------------------
+
+# The dual-channel design's failure path: a failed metadata write must
+# not suppress the submission. The teammate still sends the
+# payload-carrying notify and states the write failure in it; the lead
+# treats the missing disk copy as an integrity finding. Unpinned before
+# this case: reverting to the retired fallback wording ("include the
+# full HANDOFF in your SendMessage content as a fallback") flipped
+# nothing.
+WRITE_FAILURE_FALLBACK_PINS = [
+    (
+        AGENT_TEAMS_SKILL,
+        "still send the payload-carrying notify and state the write "
+        "failure in it; the lead treats the missing disk copy as an "
+        "integrity finding, never as a reason to skip your submission",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path, phrase",
+    WRITE_FAILURE_FALLBACK_PINS,
+    ids=[f"{p.name}::write-failure-fallback" for p, _ in WRITE_FAILURE_FALLBACK_PINS],
+)
+def test_write_failure_fallback_pinned(doc_path: Path, phrase: str):
+    """A failed metadata write must not suppress the submission — the
+    notify still carries the payload and names the failure, and the
+    missing disk copy is classified lead-side as an integrity finding.
+    The anchored span covers both the action (still send) and the
+    classification (never a skipped submission); a shorter pin would
+    stay green under a reword that kept the sending but restored the
+    retired fallback framing."""
+    assert _phrase(phrase) in _normalized(doc_path), (
+        f"{doc_path.name}: write-failure fallback {phrase!r} not found. "
+        f"A failed metadata write must not suppress the submission; if "
+        f"reworded intentionally, update this pin in lockstep."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P19 — deferred-audit repair clause (extract + SSOT mirror).
+# ---------------------------------------------------------------------------
+
+# When the deferred audit finds the disk copy absent, the lead repairs
+# it by re-writing the payload to metadata FROM the message copy while
+# it is still in context — the timing qualifier is load-bearing (the
+# message copy has no durable on-disk home; after context loss the
+# repair is impossible). The integrity_finding key NAME is deliberately
+# NOT pinned here: no reader exists in hooks or tests today, so the
+# name is advisory-only until a consumer lands. Unpinned before this
+# case: deleting the clause from both mirrored surfaces flipped
+# nothing.
+REPAIR_CLAUSE_PHRASE = (
+    "repair it by re-writing the payload to metadata from the message "
+    "copy while it is still in your context"
+)
+
+REPAIR_CLAUSE_SURFACES = [COMPLETION_AUTHORITY, PROTOCOLS_SSOT]
+
+
+@pytest.mark.parametrize(
+    "doc_path",
+    REPAIR_CLAUSE_SURFACES,
+    ids=lambda p: p.name,
+)
+def test_repair_clause_pinned(doc_path: Path):
+    """The deferred audit's repair action must keep its full form —
+    re-write the payload to metadata from the message copy, while it is
+    still in your context. Dropping the timing qualifier leaves an
+    instruction that cannot be executed after context loss."""
+    assert _phrase(REPAIR_CLAUSE_PHRASE) in _normalized(doc_path), (
+        f"{doc_path.name}: deferred-audit repair clause "
+        f"{REPAIR_CLAUSE_PHRASE!r} not found. The repair re-writes the "
+        f"payload from the message copy while it is still in context; if "
+        f"reworded intentionally, update this pin in lockstep on both "
+        f"mirrored surfaces."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Counter-test flip-set record (measured in TEMP COPIES of the plugin
+# tree; see module docstring). Each edited file restored individually to
+# its pre-change state (git show e2afa3e5:<path> over the copy), module
+# run against the copy, then the edited version restored.
 #
-#   skills/pact-agent-teams/SKILL.md   -> 3 failed (P1, P5, P7-absence)
-#   skills/pact-teachback/SKILL.md     -> 3 failed (P2, P5, P6-absence)
+# POST-REMEDIATION (current record, 35 cases) — re-measured after the
+# review-remediation pins (P13-P19) were added:
+#
+#   skills/pact-agent-teams/SKILL.md   -> 7 failed (P1, P5, P7-absence,
+#                                          P12, P13, P14, P18)
+#   skills/pact-teachback/SKILL.md     -> 6 failed (P2, P5, P6-absence,
+#                                          P12, P13, P14)
 #   protocols/pact-completion-authority.md
-#                                      -> 4 failed (P3 x2, P4, P5)
-#   protocols/pact-protocols.md        -> 5 failed (P3 x2, P4, P5, P11)
+#                                      -> 7 failed (P3 x2, P4, P5, P16,
+#                                          P17, P19)
+#   protocols/pact-protocols.md        -> 8 failed (P3 x2, P4, P5, P11,
+#                                          P16, P17, P19)
 #   protocols/pact-ct-teachback.md     -> 1 failed  (P11)
 #   agents/pact-orchestrator.md        -> 1 failed  (P5)
 #   commands/orchestrate.md            -> 2 failed (P8 x2)
 #
-# Measured: 19 of the module's 20 cases flip under exactly one file's
-# revert; the all-edited state is 20/20 green. Absence pins flip RED on
-# revert because the retired renderings are present pre-change, by design.
-# P10 is the one case file-revert does NOT flip: the On Completion
-# write-order triple pre-dates this arc (the arc appended clauses to the
-# blockquote), so the pre-change file already carries the pinned wording —
-# P10 flips under the in-place deletion below instead.
+# Measured: 32 of the module's 35 cases flip under exactly one file's
+# revert; the all-edited state is 35/35 green. The three revert-immune
+# cases flip under their targeted in-place mutations instead: P10 (the
+# On Completion write-order triple pre-dates this arc, so the pre-change
+# file already carries the pinned wording — deleting the triple in place
+# flips it) and P15 x2 (absence pins; the foreign delimiter never
+# existed pre-change — planting a stray wrong-type BEGIN flips exactly
+# that surface's case). Absence pins P6/P7 flip RED on revert because
+# the retired renderings are present pre-change, by design.
 #
-# P12 (added after the compactness envelope landed): the envelope sentence
-# post-dates e2afa3e5, so a file revert to e2afa3e5 also flips it — per-file
-# revert counts become agent-teams 4 (P1, P5, P7-absence, P12) and teachback
-# 4 (P2, P5, P6-absence, P12), total 22 cases. Verified by targeted
-# mutation: deleting the envelope sentence from either surface flips
-# exactly that surface's P12 case (1 failed per single-surface deletion,
-# 2 failed under both-surface deletion).
+# Earlier milestones of the same record (superseded above, kept for the
+# arc's audit trail): pre-P12 19 of 20 cases flipped under file revert
+# (at 3, tb 3, ca 4, ssot 5, ct 1, orchestrator 1, orchestrate 2);
+# post-P12, pre-remediation 21 of 22 flipped (at 4, tb 4, ca 4, ssot 5,
+# ct 1, orchestrator 1, orchestrate 2), P10 the sole revert-immune case,
+# flipping only under in-place deletion.
 #
-# Targeted in-place mutations (file otherwise at HEAD), measured in the same
-# temp copy — predicted cardinalities all confirmed:
+# Targeted in-place mutations (file otherwise at HEAD), measured in the
+# same temp copies — predicted cardinalities all confirmed, each flip
+# list containing exactly the intended case:
 #   point-4 "BEFORE" reworded            -> 1 failed (P4)
 #   T2 sentence reverted in place        -> 2 failed (P3 phrase-2, P5);
 #     P3 phrase-1 stays green — point 4 carries "data-integrity finding"
@@ -489,4 +789,25 @@ def test_payload_compactness_envelope_pinned(doc_path: Path, phrase: str):
 #   ct-teachback Flow edit reverted BOTH sides (extract + SSOT, mirror
 #     gate green)                          -> 2 failed (P11; was 0 before
 #     the pin — the gap this case closes)
+#   200-char summary sentence deleted (either surface)
+#                                        -> 1 failed (P13, that surface;
+#     was 0 before the pin)
+#   payload END token deleted (either surface)
+#                                        -> 1 failed (P14, that surface;
+#     was 0 before the pin)
+#   stray wrong-type BEGIN planted (either surface)
+#                                        -> 1 failed (P15, that surface;
+#     was 0 before the pin)
+#   HANDOFF-path extension deleted (extract + SSOT)
+#                                        -> 2 failed (P16; was 0 before
+#     the pin)
+#   non-goal sentence deleted (extract + SSOT)
+#                                        -> 2 failed (P17; was 0 before
+#     the pin)
+#   write-failure fallback reverted to the retired wording
+#                                        -> 1 failed (P18; was 0 before
+#     the pin)
+#   repair clause deleted (extract + SSOT)
+#                                        -> 2 failed (P19; was 0 before
+#     the pin)
 # ---------------------------------------------------------------------------
