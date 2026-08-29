@@ -202,7 +202,7 @@ If ANY precondition is unmet, KEEP WORKING. Do not write `metadata.handoff` to "
    ```
 
    > The payload block carries every field you wrote to `metadata.handoff`, verbatim, single-line; omit fields you did not write. The `summary` never carries payload content (it truncates at 200 chars).
-   > Keep the payload under 5KB — the metadata write silently truncates oversize payloads.
+   > After writing the payload, read the task JSON back and confirm every field is present, non-empty, and ends on its intended final content — a sender-side output cut lands mid-JSON and surfaces as a write error, not as silence. This check holds at any size.
 
 3. **SET `intentional_wait` and idle**:
    ```
@@ -260,6 +260,8 @@ If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `Sen
 
 End every response with a structured HANDOFF. This is mandatory.
 This HANDOFF must ALSO be stored in task metadata (see On Completion Step 1 above). The prose version in your response ensures validate_handoff hook compatibility; the metadata version enables chain-read by downstream agents.
+
+These are PROSE labels. When you store this same HANDOFF in task metadata, use the canonical `metadata.handoff` keys, in this order: `produced`, `decisions`, `reasoning_chain`, `uncertainty`, `integration`, `open_questions`. Never convert a display label into a key — `Key decisions` is the label, `decisions` is the key.
 
 ```
 HANDOFF:

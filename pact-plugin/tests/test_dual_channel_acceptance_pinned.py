@@ -33,10 +33,11 @@ read is demoted to the lead's DEFERRED audit (disk channel):
     - P11: the ct-teachback Flow step-3 payload-carrying-notify reference
       (extract + SSOT mirror) — its lockstep revert kept both this module
       and the byte-mirror gate green before this case.
-    - P12: the payload compactness envelope (<5KB + silent-truncation
+    - P12: the payload read-back check (verify + mid-JSON write-error
       mechanism) on both teammate notify surfaces — unpinned before this
-      case; the dual-channel design carries the payload on the measured
-      message channel AND the silently-truncating metadata channel.
+      case; the dual-channel design carries the payload on the message
+      channel AND the metadata channel, and a sender-side output cut can
+      truncate either one mid-JSON.
   review-remediation pins (same module, coverage-review fix):
     - P13: the summary-never-carries-payload rule (200 chars is the
       channel's ONLY truncating element) on both teammate surfaces,
@@ -501,46 +502,51 @@ def test_ct_teachback_flow_names_payload_carrying_notify(doc_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# P12 — payload compactness envelope (both teammate notify surfaces).
+# P12 — payload read-back check (both teammate notify surfaces).
 # ---------------------------------------------------------------------------
 
-# The <5KB envelope keeps the payload inside the channel's measured
-# territory AND inside the metadata write's non-truncating range (the
-# TaskUpdate silent-truncation sibling failure is live). Measured before
-# this pin: the compactness sentence had no pin on either surface — a
-# revert was caught only by review. The anchored span covers both the
-# instruction and its mechanism; "under 5KB" alone would stay green under
-# a reword that kept the number but dropped the silent-truncation reason.
-COMPACTNESS_PINS = [
+# The read-back check bounds the real hazard at any payload size. The
+# earlier form of this pin required a "<5KB" bound that was never measured
+# and is false: six writes this session ran 7132-14000 bytes and every one
+# was verified intact by reading the stored JSON back. A SIZE claim cannot
+# be pinned without measuring it, so the pin now anchors the VERIFICATION
+# instead. The anchored span covers both the instruction and its mechanism;
+# "read the task JSON back" alone would stay green under a reword that kept
+# the action but dropped the mid-JSON write-error reason.
+READBACK_PINS = [
     (
         AGENT_TEAMS_SKILL,
-        "Keep the payload under 5KB — the metadata write silently "
-        "truncates oversize payloads",
+        "read the task JSON back and confirm every field is present, "
+        "non-empty, and ends on its intended final content — a sender-side "
+        "output cut lands mid-JSON and surfaces as a write error, not as "
+        "silence",
     ),
     (
         TEACHBACK_SKILL,
-        "Keep the payload under 5KB — the metadata write silently "
-        "truncates oversize payloads",
+        "read the task JSON back and confirm every field is present, "
+        "non-empty, and ends on its intended final content — a sender-side "
+        "output cut lands mid-JSON and surfaces as a write error, not as "
+        "silence",
     ),
 ]
 
 
 @pytest.mark.parametrize(
     "doc_path, phrase",
-    COMPACTNESS_PINS,
-    ids=[f"{p.name}::compactness" for p, _ in COMPACTNESS_PINS],
+    READBACK_PINS,
+    ids=[f"{p.name}::readback" for p, _ in READBACK_PINS],
 )
-def test_payload_compactness_envelope_pinned(doc_path: Path, phrase: str):
+def test_payload_readback_check_pinned(doc_path: Path, phrase: str):
     """Both teammate notify templates must keep teaching the payload
-    compactness envelope — the dual-channel design carries the payload on
-    two channels, and only one of them (the message) was measured
-    non-truncating through 32KB; the metadata write silently truncates
-    oversize payloads. Dropping the envelope instruction re-opens the
-    silent-truncation path the <5KB discipline exists to bound."""
+    read-back check — the dual-channel design carries the payload on two
+    channels, and the failure that actually loses a payload is a
+    sender-side output cut landing mid-JSON, which surfaces as a write
+    error rather than as silence. Dropping the read-back instruction
+    leaves that failure undetected at every size."""
     assert _phrase(phrase) in _normalized(doc_path), (
-        f"{doc_path.name}: payload compactness envelope {phrase!r} not "
-        f"found. The notify template must keep the <5KB envelope with its "
-        f"silent-truncation mechanism; if the envelope was reworded "
+        f"{doc_path.name}: payload read-back check {phrase!r} not "
+        f"found. The notify template must keep the read-back instruction "
+        f"with its mid-JSON write-error mechanism; if it was reworded "
         f"intentionally, update this pin in lockstep on both surfaces."
     )
 
