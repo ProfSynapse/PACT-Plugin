@@ -19,8 +19,8 @@ silent, and the one gate that looks like coverage was checking a different
 property. This pin asserts CONTAINMENT AT EACH NAMED SURFACE, never agreement
 between files.
 
-TWO MARKERS, PINNED AS LITERALS, AND THAT IS DELIBERATE. Both are restated
-here rather than imported. Building the expected value from
+THREE MARKERS, PINNED AS LITERALS, AND THAT IS DELIBERATE. All three are
+restated here rather than imported. Building the expected value from
 HANDOFF_CANONICAL_FIELDS would make this pin green whenever the docs and the
 code drift TOGETHER, which is the failure a doc pin exists to catch. The one
 arm that DOES import is test_doc_key_sequence_matches_shipped_canonical_fields
@@ -63,9 +63,10 @@ from shared.handoff_schema import HANDOFF_CANONICAL_FIELDS  # noqa: E402
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
-# Identifies the ANNOTATION itself. Present in both wordings the surfaces use
-# ("These are PROSE labels." / "Those are PROSE labels;"), and nowhere else in
-# the tree. Verbatim literal -- do not build this from a constant.
+# Identifies the ANNOTATION itself. All four surfaces now carry ONE wording,
+# "These are PROSE labels." -- the earlier second wording ("Those are PROSE
+# labels;") no longer occurs anywhere in the tree. Verbatim literal -- do not
+# build this from a constant.
 ANNOTATION_MARKER = "PROSE labels"
 
 # The six canonical keys in canonical order, as the annotation names them.
@@ -76,6 +77,23 @@ CANONICAL_KEY_SEQUENCE = (
     "produced, decisions, reasoning_chain, uncertainty, integration, open_questions"
 )
 
+# The label-to-key RULE -- the half the two markers above cannot see. MEASURED:
+# with only those two, replacing the annotation with one teaching the INVERSE
+# ("copy each display label verbatim as its key ... Always convert a display
+# label into a key") kept every marker structurally intact, left all 22 cases
+# green, and left the full suite byte-identical to baseline on all four
+# surfaces at once. Backtick-stripped, like the sequence above. Verbatim
+# literal -- do not build this.
+#
+# ONE LITERAL, NOT TWO ADJACENT ONES, AND THE LONG LINE IS THE POINT. Split
+# across adjacent literals the sentence as RENDERED stops being a contiguous
+# substring of this file, so a search for it finds the four .md surfaces and
+# NOT the pin guarding them -- a false absence manufactured inside the artifact
+# whose whole job is to prevent a silent loss.
+LABEL_RULE_MARKER = (
+    "Never convert a display label into a key — Key decisions is the label, decisions is the key."
+)
+
 DOC_SURFACES = [
     PLUGIN_ROOT / "protocols" / "pact-phase-transitions.md",
     PLUGIN_ROOT / "protocols" / "pact-protocols.md",
@@ -83,10 +101,11 @@ DOC_SURFACES = [
     PLUGIN_ROOT / "skills" / "pact-agent-teams" / "SKILL.md",
 ]
 
-# Per-surface expected occurrence count, for BOTH markers. One annotation per
-# surface, each naming the key sequence once. Update in lockstep with any
-# intentional change -- the brittleness IS the point. If the two markers ever
-# need different counts on some surface, split this into one map per marker.
+# Per-surface expected occurrence count, for ALL THREE markers. One annotation
+# per surface, each naming the key sequence once and stating the rule once.
+# Update in lockstep with any intentional change -- the brittleness IS the
+# point. If the markers ever need different counts on some surface, split this
+# into one map per marker.
 EXPECTED_COUNTS = {
     PLUGIN_ROOT / "protocols" / "pact-phase-transitions.md": 1,
     PLUGIN_ROOT / "protocols" / "pact-protocols.md": 1,
@@ -94,7 +113,7 @@ EXPECTED_COUNTS = {
     PLUGIN_ROOT / "skills" / "pact-agent-teams" / "SKILL.md": 1,
 }
 
-MARKERS = [ANNOTATION_MARKER, CANONICAL_KEY_SEQUENCE]
+MARKERS = [ANNOTATION_MARKER, CANONICAL_KEY_SEQUENCE, LABEL_RULE_MARKER]
 
 
 def _marker_text(path: Path) -> str:
@@ -125,15 +144,20 @@ def _fence_state(lines: list[str]) -> list[bool]:
     return state
 
 
-@pytest.mark.parametrize("marker", MARKERS, ids=["annotation", "key_sequence"])
+@pytest.mark.parametrize("marker", MARKERS,
+                         ids=["annotation", "key_sequence", "label_rule"])
 @pytest.mark.parametrize("doc_path", DOC_SURFACES, ids=lambda p: p.name)
 def test_marker_present_in_doc_surface(doc_path: Path, marker: str):
     """Each annotated surface carries the annotation, naming all six keys.
 
-    Two distinct failure modes, one arm each. The annotation marker catches
+    Three distinct failure modes, one arm each. The annotation marker catches
     the paragraph being deleted outright. The key sequence catches the
     paragraph surviving while a key is dropped, renamed, or reordered inside
-    it -- which leaves the annotation marker green.
+    it -- which leaves the annotation marker green. The label rule catches the
+    paragraph and the key list BOTH surviving while the instruction joining
+    them is deleted or reversed -- which leaves the other two green, and is
+    the only one of the three that fires on a doc teaching the label-as-key
+    error this annotation exists to prevent.
     """
     assert doc_path.exists(), (
         f"Doc surface missing on disk: {doc_path}. The HANDOFF key annotation "
@@ -171,7 +195,8 @@ def test_annotation_consistent_across_all_surfaces():
     )
 
 
-@pytest.mark.parametrize("marker", MARKERS, ids=["annotation", "key_sequence"])
+@pytest.mark.parametrize("marker", MARKERS,
+                         ids=["annotation", "key_sequence", "label_rule"])
 @pytest.mark.parametrize("doc_path", DOC_SURFACES, ids=lambda p: p.name)
 def test_marker_count_per_surface(doc_path: Path, marker: str):
     """Pin the EXACT per-surface occurrence count.
