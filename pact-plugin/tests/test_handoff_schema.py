@@ -84,7 +84,22 @@ class TestConstants:
     def test_every_alias_target_is_a_canonical_field(self):
         assert set(HANDOFF_LEGACY_ALIASES.values()) <= set(HANDOFF_CANONICAL_FIELDS)
 
-    def test_schema_echo_derives_its_names_and_counts(self):
+    def test_schema_echo_names_every_field_and_states_the_counts(self):
+        """The echo enumerates all six names and states the 5/1 split.
+
+        NAMED FOR WHAT IT PINS, WHICH IS NARROWER THAN "derives". A substring
+        check cannot separate a DERIVED echo from a HARD-CODED one carrying
+        the same text, and the strengthening that would is not available here:
+        building the expected counts from len() of the tuples is the CIRCULAR
+        form a pin exists to avoid, and detecting the hard-coding itself means
+        reading this module's own source, which pins an implementation's
+        spelling rather than its behaviour.
+
+        THE LITERAL IS DELIBERATE AND MUST STAY A LITERAL. It restates the
+        split independently, so it reds when the echo and the tuples diverge
+        in either direction -- which is the drift that matters and the only
+        thing any form of this arm could catch.
+        """
         for field in HANDOFF_CANONICAL_FIELDS:
             assert field in HANDOFF_SCHEMA_ECHO
         assert "5 required, 1 recommended" in HANDOFF_SCHEMA_ECHO
@@ -161,6 +176,26 @@ class TestResolveHandoffField:
     def test_all_three_aliases_resolve(self):
         for alias, canonical in HANDOFF_LEGACY_ALIASES.items():
             assert resolve_handoff_field({alias: ["v"]}, canonical) == ["v"]
+
+    def test_fallback_keys_on_truthiness_not_on_renderability(self):
+        """The shadowing edge, pinned in BOTH directions.
+
+        The docstring specifies fallback "when the canonical key is absent or
+        falsy", so TRUTHINESS is the key -- not whether the value renders as
+        anything. The two rows are the same rule either side of that line, and
+        the second is the one no other arm reaches: test_canonical_wins_over_
+        alias uses a truthy AND renderable canonical, so it cannot show which
+        of the two properties the fallback actually tests.
+        """
+        # Falsy canonical -> falls through to the legacy spelling.
+        assert resolve_handoff_field(
+            {"decisions": [], "key_decisions": ["legacy"]}, "decisions"
+        ) == ["legacy"]
+        # Truthy canonical wins even though it renders as nothing, shadowing a
+        # legacy value that would have rendered. Documented, not a defect.
+        assert resolve_handoff_field(
+            {"decisions": [""], "key_decisions": ["legacy"]}, "decisions"
+        ) == [""]
 
     def test_empty_canonical_still_reads_empty_without_an_alias(self):
         """The falsy fallback must not turn a legitimately empty field into a
