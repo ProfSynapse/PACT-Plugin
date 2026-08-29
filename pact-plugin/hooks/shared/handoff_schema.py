@@ -1,8 +1,8 @@
 """
 Location: pact-plugin/hooks/shared/handoff_schema.py
 Summary: Canonical metadata.handoff schema constants and validators. SSOT for
-         the 6-field canonical order, the 5-required / 1-recommended split,
-         and the legacy-spelling alias map used on the READ side.
+         the canonical field order, the required/recommended split, and the
+         legacy-spelling alias map used on the READ side.
 Used by: hooks/task_lifecycle_gate.py (write-time + completion-time advisories),
          hooks/shared/session_resume.py (resume-brief decision summary),
          tests/test_handoff_schema.py (constants + both validators).
@@ -17,12 +17,12 @@ Contract: pure module; no I/O, no global state, no platform dependencies.
 Functions never raise.
 
 Public surface:
-- HANDOFF_CANONICAL_FIELDS — the 6 field names, in the order the templates
-  teach them.
+- HANDOFF_CANONICAL_FIELDS — every canonical field name, in the order the
+  templates teach them.
 - HANDOFF_RECOMMENDED_FIELDS — the recommended-not-required subset. SSOT for
   the required/recommended partition: both HANDOFF_REQUIRED_FIELDS and the
   schema echo derive their carve-out from this one tuple.
-- HANDOFF_REQUIRED_FIELDS — derived: canonical minus recommended. FIVE fields.
+- HANDOFF_REQUIRED_FIELDS — derived: canonical minus recommended.
 - HANDOFF_LEGACY_ALIASES — legacy spelling -> canonical key, read-side only.
 - HANDOFF_SCHEMA_ECHO — reusable human-readable echo of the canonical schema.
   The enumerated names, the recommended marking and both counts are derived
@@ -49,9 +49,10 @@ HANDOFF_CANONICAL_FIELDS: tuple[str, ...] = (
 # reasoning_chain is RECOMMENDED, not required. The template surfaces state it
 # directly: "Items 1-2 and 4-6 are required. Item 3 (reasoning chain) is
 # recommended." THIS SPLIT IS LOAD-BEARING, NOT COSMETIC. A validator requiring
-# all six fires on handoffs the docs themselves call correct — including this
-# repo's own VALID_HANDOFF fixture (tests/fixtures/emitter.py), which carries
-# the five and not the sixth. Never fold reasoning_chain into the required set.
+# the WHOLE canonical set fires on handoffs the docs themselves call correct —
+# including this repo's own VALID_HANDOFF fixture (tests/fixtures/emitter.py),
+# which carries the required fields and not the recommended one. Never fold
+# reasoning_chain into the required set.
 HANDOFF_RECOMMENDED_FIELDS: tuple[str, ...] = ("reasoning_chain",)
 
 # Derived, never duplicated — the carve-out pattern of TEACHBACK_OBJECT_FIELDS
@@ -98,7 +99,7 @@ def validate_handoff_schema(handoff: object) -> str | None:
     """Return None if handoff is well-formed, or a short reason string
     describing the schema problem (suitable for advisory text).
 
-    PRESENCE-ONLY on the five required fields, and the two silences are
+    PRESENCE-ONLY on HANDOFF_REQUIRED_FIELDS, and the two silences are
     deliberate:
       - An empty value is never a defect. The templates sanction it
         explicitly ("No areas of uncertainty flagged"), and empty
