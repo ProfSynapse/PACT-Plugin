@@ -122,7 +122,14 @@ def test_utf16_units_are_not_code_points(tmp_path):
 
 
 def test_the_emitted_anchor_is_a_byte_exact_slice_of_the_raw_index(tmp_path):
-    """The matching haystack is normalised; an anchor taken from it never matches."""
+    """The matching haystack is normalised; an anchor taken from it never matches.
+
+    NARROWED once the anchor became a slice of `raw`: NO INPUT can make a
+    byte-exact anchor fail this, so it no longer asserts "the guard catches a bad
+    anchor from a real file". It asserts "an anchor built from the wrong SOURCE
+    is caught" -- reachable only by mutating the construction, not the fixture.
+    The first reading is the one everyone assumes; this is the second.
+    """
     root = _tree(tmp_path / "agent")
     block = mr.emit_edit(mr.scan(root))
     raw = (root / "MEMORY.md").read_text(encoding="utf-8")
@@ -429,27 +436,35 @@ def _crlf_tree(root, duplicated):
     return root
 
 
-def test_a_crlf_index_emits_a_single_line_anchor_and_refuses_a_joined_one(tmp_path):
-    """On CRLF the outcome splits by anchor SHAPE, not by the file's encoding.
+def test_a_crlf_index_emits_appliable_anchors_and_keeps_its_terminator(tmp_path):
+    """Both anchor shapes must emit an edit that APPLIES to the bytes on disk.
 
-    A `\\r` never appears INSIDE a single-line anchor -- splitlines() consumes it
-    as the terminator -- so that shape round-trips and must still emit. It is
-    only the JOIN that differs: "\\n".join() puts a bare newline where the file
-    has a pair, so an expanded anchor is not a raw slice and must refuse.
+    A `\r` never appears inside a single-line anchor -- splitlines() consumes it
+    as the terminator -- so that shape always round-tripped. The multi-line shape
+    is the one that moved: it used to rejoin with a bare newline, was not a raw
+    slice, and refused; it is now sliced from `raw` by offsets and emits.
 
-    Both halves are needed. Asserting only that CRLF refuses would be false for
-    the common shape, and would pass for the wrong reason.
+    The terminator half is the reason this arm is worth more than the anchor
+    check alone: an emitted pointer joined with a hardcoded newline would give a
+    CRLF index one LF-only line, which is a terminator bug shipped by the fix for
+    a terminator bug. Asserting the applied file has no bare newline catches it,
+    and asserting the block APPLIES catches an anchor that merely looks right.
     """
-    emitted = mr.emit_edit(mr.scan(_crlf_tree(tmp_path / "unique", False)), "## Rules")
-    anchor, _ = _emitted(emitted)
-    assert anchor.encode("utf-8") in (tmp_path / "unique" / "MEMORY.md").read_bytes(), (
-        "a single-line anchor must match the bytes an agent will edit")
+    for duplicated in (False, True):
+        root = _crlf_tree(tmp_path / ("dup" if duplicated else "unique"), duplicated)
+        index = root / "MEMORY.md"
+        raw = index.read_bytes()
+        anchor, replacement = _emitted(mr.emit_edit(mr.scan(root), "## Rules"))
 
-    joined = mr.emit_edit(mr.scan(_crlf_tree(tmp_path / "dup", True)), "## Rules")
-    # Refusing is the decision, not a stopgap. Slicing raw by offsets would make
-    # the anchor byte-exact for every separator and retire this branch; that is
-    # tracked separately, and if it lands this arm is expected to change.
-    assert joined.startswith("REFUSED"), "an expanded anchor is not a raw slice; fail closed"
+        assert anchor.encode("utf-8") in raw, "anchor must match the bytes an agent will edit"
+        assert raw.count(anchor.encode("utf-8")) == 1, "and match exactly once"
+
+        applied = raw.replace(anchor.encode("utf-8"), replacement.encode("utf-8"), 1)
+        assert b"\n" not in applied.replace(b"\r\n", b""), (
+            "the emitted pointer introduced an LF-only line into a CRLF index")
+
+        index.write_bytes(applied)
+        assert mr.scan(root).unreachable == (), "applying the block must close the finding"
 
 
 def test_a_conforming_satellite_named_without_its_extension_is_still_a_root(tmp_path):

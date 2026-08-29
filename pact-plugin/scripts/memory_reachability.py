@@ -307,6 +307,10 @@ def emit_edit(result: Scan, heading: Optional[str] = None) -> Optional[str]:
     index = result.directory / INDEX_NAME
     raw = _read(index)
     lines = raw.splitlines()
+    kept = raw.splitlines(keepends=True)
+    starts = [0]
+    for piece in kept:
+        starts.append(starts[-1] + len(piece))
     # Inside the loaded prefix only: a pointer past the cut is written and never
     # read, which is the second failure this tool exists to report.
     loaded = len(truncate_as_loaded(raw).splitlines())
@@ -340,34 +344,39 @@ def emit_edit(result: Scan, heading: Optional[str] = None) -> Optional[str]:
             if _ENTRY_LINE.match(lines[i]):
                 end = i
 
+    # SLICED FROM `raw` BY OFFSET, never rejoined from splitlines(): a rejoin
+    # writes a bare newline where a CRLF file holds a pair, so the anchor was not
+    # a byte-exact slice and the guard below refused a correct expansion.
+    stop = starts[end] + len(lines[end])
     start = end
-    while raw.count("\n".join(lines[start:end + 1])) > 1:
+    while raw.count(raw[starts[start]:stop]) > 1:
         if start == 0:
             return "REFUSED: could not make the anchor unique in {0}.".format(index)
         start -= 1
-    anchor = "\n".join(lines[start:end + 1])
+    anchor = raw[starts[start]:stop]
     # The matching predicate lowercases and maps hyphens; text taken from that
     # normalised haystack would never match the real file, and would pass any
     # fixture that is already lowercase ASCII. Nothing else in this module
-    # catches that, so the check stays whether or not an arm currently reaches it.
-    # It also fires on a CRLF file, because `lines` came from splitlines(), which
-    # drops the terminator, and the rejoin above writes a bare newline where the
-    # file holds a pair -- so even a correctly expanded anchor is not a raw slice.
-    # That refusal is CORRECT and is not a bug to fix by broadening the match.
+    # catches that. No INPUT can trip it now that the anchor is a slice of `raw`
+    # -- it is a tripwire on the line above, and it stays for that reason: change
+    # the slice source and this is what stops a corrupt anchor reaching a user's
+    # index.
     if anchor not in raw:
         return "REFUSED: anchor is not a byte-exact slice of {0}.".format(index)
 
-    pointers = "\n".join(
+    # The file's own terminator, so a CRLF index does not gain an LF-only line.
+    eol = kept[end][len(lines[end]):] or "\n"
+    pointers = eol.join(
         "- [{0}]({1}) — RESTORED, describe and re-file".format(leaf.stem, leaf.name)
         for leaf in result.unreachable
     )
     return (
         "Apply with your editing tool against {0}, exactly once:\n\n"
         "old_string:\n{1}\n\n"
-        "new_string:\n{1}\n{2}\n\n"
+        "new_string:\n{1}{3}{2}\n\n"
         "The file may have changed since this was computed. The edit fails on "
         "no-match rather than landing wrongly; if it fails, STOP and re-run this "
-        "tool rather than broadening the match.".format(index, anchor, pointers)
+        "tool rather than broadening the match.".format(index, anchor, pointers, eol)
     )
 
 
