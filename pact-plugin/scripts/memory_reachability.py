@@ -191,7 +191,8 @@ def _read(path: Path) -> str:
     emits an old_string that cannot match the file an agent will edit.
     """
     try:
-        return path.read_text(encoding="utf-8", errors="replace", newline="")
+        with path.open(encoding="utf-8", errors="replace", newline="") as handle:
+            return handle.read()
     except OSError:
         return ""
 
