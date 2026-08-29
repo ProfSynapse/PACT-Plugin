@@ -8,11 +8,11 @@ that falls past the cut is on disk and out of context. An index rewrite that
 drops a pointer leaves the leaf fully written and unfindable. Nothing detected
 either. This tool reads one agent-memory directory and reports both.
 
-READ-ONLY BY CONSTRUCTION. There is no write path: no open-for-write, no
-tempfile, no replace, no lock. With --emit-edit it PRINTS an edit block for an
-agent to apply with its own editing tool, which is the mechanism the index
-upkeep rule already mandates. Rebuilding that inside a script was the earlier
-design and it was the problem, not the solution.
+READ-ONLY ON THE DIRECTORY IT SCANS. Nothing in that tree is opened for write,
+and --report refuses any target inside it. With --emit-edit it PRINTS an edit
+block for an agent to apply with its own editing tool, which is the mechanism
+the index upkeep rule already mandates. Rebuilding that inside a script was the
+earlier design and it was the problem, not the solution.
 
 WHY THE MATCH RULE IS A BARE TOKEN AND NOT A LINK PARSER. A pointer with no
 syntax at all appears in real indexes -- a comma-separated word in a satellite
@@ -36,8 +36,9 @@ Exit codes:
   0 -- the scan finished. FINDINGS DO NOT CHANGE IT: this tool annotates and
        the caller decides. A directory holding no index is not_applicable,
        which is neither an error nor a fully-orphaned directory.
-  2 -- a precondition failed and nothing was scanned.
-  There is no third code, because there is no write to fail.
+  2 -- nothing was reported. Either a precondition failed before the scan, or
+       the scan ran and the report could not be written. The caller is left
+       without a report either way, and that outcome is all the code carries.
 """
 from __future__ import annotations
 
@@ -183,8 +184,14 @@ def mentions(haystack: str, key: str) -> bool:
 
 
 def _read(path: Path) -> str:
+    """Byte-faithful text. `newline=""` DISABLES universal-newline translation.
+
+    Without it a CRLF file arrives already converted, so emit_edit's byte-exact
+    anchor check compares translated text against translated text, passes, and
+    emits an old_string that cannot match the file an agent will edit.
+    """
     try:
-        return path.read_text(encoding="utf-8", errors="replace")
+        return path.read_text(encoding="utf-8", errors="replace", newline="")
     except OSError:
         return ""
 
@@ -269,10 +276,12 @@ def emit_edit(result: Scan, heading: Optional[str] = None) -> Optional[str]:
     """An edit block placing a pointer for each unreachable leaf.
 
     ANCHORED ON THE INSERTION NEIGHBOUR -- the last entry line inside the loaded
-    prefix -- never on a section heading. A heading is already unique, so
+    prefix -- in preference to a section heading. A heading is already unique, so
     uniqueness expansion never fires for it, and the pointer then lands directly
     after the heading when it belonged at the section's end. Naming a line that
     is already there makes placement exact by construction instead of inferred.
+    The exception is a named section holding no entries, which anchors on its own
+    heading; see the comment at that branch for why the two positions coincide.
 
     The anchor is verified unique against the RAW file text and expanded with
     preceding lines until it is, so the editing tool's not-unique failure is
@@ -326,8 +335,12 @@ def emit_edit(result: Scan, heading: Optional[str] = None) -> Optional[str]:
     anchor = "\n".join(lines[start:end + 1])
     # The matching predicate lowercases and maps hyphens; text taken from that
     # normalised haystack would never match the real file, and would pass any
-    # fixture that is already lowercase ASCII. This is the only check that
-    # catches that vacuous green.
+    # fixture that is already lowercase ASCII. Nothing else in this module
+    # catches that, so the check stays whether or not an arm currently reaches it.
+    # It also fires on a CRLF file, because `lines` came from splitlines(), which
+    # drops the terminator, and the rejoin above writes a bare newline where the
+    # file holds a pair -- so even a correctly expanded anchor is not a raw slice.
+    # That refusal is CORRECT and is not a bug to fix by broadening the match.
     if anchor not in raw:
         return "REFUSED: anchor is not a byte-exact slice of {0}.".format(index)
 
@@ -355,13 +368,14 @@ def render(result: Scan) -> str:
         "  roots (followed, never globbed): {0}".format(len(result.roots)),
         "  live-reachable  {0}".format(len(result.live_reachable)),
         "  archive-only    {0}   (a real pointer through a named archive)".format(len(result.archive_only)),
-        "  unreachable     {0}".format(len(result.unreachable)),
+        "  unnamed here    {0}   (no index in THIS directory names these; a referrer "
+        "outside it is not visible to a one-directory sweep)".format(len(result.unreachable)),
         "  past-the-cut    {0}   (pointed at, but past the loaded prefix)".format(len(result.past_the_cut)),
         "  diagnostic: verdict carried by a bare token only: {0}".format(result.bare_token_only),
         "  diagnostic: index-shaped files no root names: {0}".format(len(result.unreached_index_files)),
         "  keys: filename | stem | whole-line frontmatter name: | stem minus one type prefix",
         "  match: bounded bare token, case-insensitive, hyphen and underscore equivalent",
-    ] + ["    unreachable: {0}".format(leaf.name) for leaf in result.unreachable])
+    ] + ["    unnamed here: {0}".format(leaf.name) for leaf in result.unreachable])
 
 
 def as_dict(result: Scan) -> dict:
@@ -406,11 +420,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
     if args.report:
         out = Path(args.report).expanduser().resolve()
-        if out.parent == result.directory.resolve():
-            print("memory_reachability REFUSED to write the report into the scanned "
+        scanned = result.directory.resolve()
+        # samefile, not ==: it compares device and inode, so it holds for a
+        # case variant on a case-insensitive filesystem and for a symlink. Every
+        # ancestor is checked, so a SUBDIRECTORY of the scanned tree is caught too.
+        if any(p.exists() and p.samefile(scanned) for p in out.parents):
+            print("memory_reachability REFUSED to write the report inside the scanned "
                   "directory: {0}".format(out), file=sys.stderr)
             return 2
-        out.write_text(json.dumps(as_dict(result), indent=2, sort_keys=True), encoding="utf-8")
+        try:
+            out.write_text(json.dumps(as_dict(result), indent=2, sort_keys=True), encoding="utf-8")
+        except OSError as exc:
+            print("memory_reachability REFUSED: cannot write the report to {0}: {1}".format(
+                out, exc), file=sys.stderr)
+            return 2
     if not args.quiet:
         print(render(result))
     if args.emit_edit is not None:
