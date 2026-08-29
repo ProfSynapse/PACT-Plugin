@@ -1860,6 +1860,17 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         # only. Do not "restore symmetry" by widening this guard — the
         # completion-side half of that coverage was dropped deliberately.
         #
+        # AND WRITE-TIME MEANS WRITE-TIME. That rule is guarded on
+        # `status != "completed"`, so a SINGLE TaskUpdate carrying BOTH
+        # status=completed and a non-dict handoff reaches NEITHER site and
+        # draws nothing at all. Measured against a same-shape positive
+        # control: the same one-call write carrying a DICT that misses a
+        # required field DOES fire here, so the silence is this guard and not
+        # a dead branch. The gap is real and its population is empty —
+        # not-a-dict measures 0 of 640 submitted handoffs
+        # (scripts/handoff_census.py) — which is why it is recorded here
+        # rather than closed by widening the guard.
+        #
         # A completion carrying NO handoff likewise draws nothing here —
         # signal completions, session briefings and other exempt work
         # legitimately store none.
