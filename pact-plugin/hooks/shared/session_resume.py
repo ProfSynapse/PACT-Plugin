@@ -40,6 +40,7 @@ from shared.claude_md_manager import (
     resolve_project_claude_md_path,
 )
 from shared.failure_cause import failure_cause
+from shared.handoff_schema import resolve_handoff_field
 from shared.session_journal import (
     _parse_ts,
     _ts_supersedes,
@@ -593,7 +594,14 @@ def _build_journal_resume_inner(session_dir: str) -> str | None:
             handoff_data = h.get("handoff")
             if not isinstance(handoff_data, dict):
                 handoff_data = {}
-            summary = _coerce_decision_summary(handoff_data.get("decisions"))
+            # resolve_handoff_field reads the canonical key first and falls
+            # back to a legacy spelling only when it is absent or falsy. The
+            # journal is append-only, so handoffs written under a spelling
+            # this repo once taught are on disk permanently; reading them
+            # correctly does not teach anyone to write one.
+            summary = _coerce_decision_summary(
+                resolve_handoff_field(handoff_data, "decisions")
+            )
             if summary:
                 lines.append(f"- {agent}: {subject} -> {summary}")
             else:

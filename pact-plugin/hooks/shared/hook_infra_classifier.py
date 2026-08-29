@@ -146,7 +146,7 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
          # (agent_handoff_marker, session_journal) were already here.
     "session_init": frozenset({
         "claude_md_manager", "constants", "dispatch_helpers", "failure_cause",
-        "failure_log",
+        "failure_log", "handoff_schema",
         "merge_guard_common", "pact_config", "pact_context", "paths",
         "peer_context", "pin_caps", "plugin_manifest",
         "session_journal", "session_registry", "session_resume",
@@ -203,10 +203,14 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
          # staleness -> pin_caps) and are now gone from this closure.
          # bootstrap_marker_writer's OWN closure (below) is unchanged.
     "bootstrap_marker_writer": frozenset({
-        "claude_md_manager", "constants", "failure_cause", "marker_schema",
+        "claude_md_manager", "constants", "failure_cause", "handoff_schema",
+        "marker_schema",
         "pact_context", "paths", "pin_caps", "session_journal",
         "session_registry", "session_resume", "session_state", "staleness",
-    }),  # failure_cause reached through claude_md_manager / session_resume /
+    }),  # handoff_schema reached TRANSITIVELY, via session_resume's
+         # resolve_handoff_field on the resume-brief decision summary — this
+         # hook does not import it directly. It is a pure stdlib-free leaf, so
+         # it adds no further transitive edges.  # failure_cause reached through claude_md_manager / session_resume /
          # staleness / symlinks: it renders a caught exception as a
          # closed-vocabulary cause token for every routed status producer.  # claude_md_manager / session_resume / staleness / pin_caps reached
          # here because #989's write-back self-heal added

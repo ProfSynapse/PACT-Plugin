@@ -2420,6 +2420,53 @@ class TestBuildJournalResumeDefensive:
         # Subject appears even though the decision summary is empty.
         assert "CODE: none decision" in result
 
+    def test_legacy_key_decisions_renders_its_summary(self, session_dir, journal_file):
+        """A handoff written under the legacy `key_decisions` spelling renders
+        its decision summary instead of falling to the bare-subject branch.
+
+        The journal is append-only, so these events are on disk permanently;
+        resolve_handoff_field reads them without any LLM-loaded surface
+        gaining the spelling.
+        """
+        from shared.session_resume import _build_journal_resume
+
+        self._write_raw_events(journal_file, [
+            {
+                "v": 1, "type": "agent_handoff",
+                "agent": "security", "task_id": "1",
+                "task_subject": "CODE: legacy spelling",
+                "handoff": {"key_decisions": ["Used JWT with 15min expiry"]},
+                "ts": "2026-01-01T00:00:00Z",
+            },
+        ])
+
+        result = _build_journal_resume(session_dir)
+        assert result is not None
+        assert "Used JWT with 15min expiry" in result
+
+    def test_canonical_decisions_win_over_legacy(self, session_dir, journal_file):
+        """Paired control: with BOTH spellings present the canonical key is
+        rendered, so the fallback cannot shadow a correct handoff."""
+        from shared.session_resume import _build_journal_resume
+
+        self._write_raw_events(journal_file, [
+            {
+                "v": 1, "type": "agent_handoff",
+                "agent": "coder", "task_id": "1",
+                "task_subject": "CODE: both spellings",
+                "handoff": {
+                    "decisions": ["canonical wins"],
+                    "key_decisions": ["legacy loses"],
+                },
+                "ts": "2026-01-01T00:00:00Z",
+            },
+        ])
+
+        result = _build_journal_resume(session_dir)
+        assert result is not None
+        assert "canonical wins" in result
+        assert "legacy loses" not in result
+
     def test_decisions_not_a_list(self, session_dir, journal_file):
         """decisions field being a non-list value does not crash."""
         from shared.session_resume import _build_journal_resume
