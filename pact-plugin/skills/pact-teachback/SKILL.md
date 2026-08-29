@@ -145,7 +145,7 @@ SendMessage(
 ```
 
 > One line, space-joined; the `summary` never carries payload content (it truncates at 200 chars).
-> Keep the payload under 5KB — the metadata write silently truncates oversize payloads.
+> After writing the payload, read the task JSON back and confirm every field is present, non-empty, and ends on its intended final content — a sender-side output cut lands mid-JSON and surfaces as a write error, not as silence. This check holds at any size.
 
 > # ANTI-PATTERN: Step 1 and Step 3 are SEPARATE `TaskUpdate` calls writing
 > SEPARATE top-level metadata keys. Nesting `intentional_wait` INSIDE

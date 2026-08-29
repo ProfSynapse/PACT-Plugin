@@ -202,7 +202,7 @@ If ANY precondition is unmet, KEEP WORKING. Do not write `metadata.handoff` to "
    ```
 
    > The payload block carries every field you wrote to `metadata.handoff`, verbatim, single-line; omit fields you did not write. The `summary` never carries payload content (it truncates at 200 chars).
-   > Keep the payload under 5KB — the metadata write silently truncates oversize payloads.
+   > After writing the payload, read the task JSON back and confirm every field is present, non-empty, and ends on its intended final content — a sender-side output cut lands mid-JSON and surfaces as a write error, not as silence. This check holds at any size.
 
 3. **SET `intentional_wait` and idle**:
    ```

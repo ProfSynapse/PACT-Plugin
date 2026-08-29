@@ -574,12 +574,13 @@ class TestTeachbackMicroSkillExtraction:
     # instruction under the fence. Measured size after the edit:
     # 17498 chars. Budget ceiling provides 2-char headroom.
     #
-    # Bumped to 18000 to accommodate the payload-compactness instruction
-    # under the Step 2 template (one operative sentence: keep the
-    # payload under 5KB — the metadata write silently truncates oversize
-    # payloads, and the envelope keeps the message copy inside measured
-    # territory). Measured size after the edit: 17653 chars. Budget
-    # ceiling provides ~347-char headroom.
+    # Bumped to 18000 to accommodate the payload read-back instruction
+    # under the Step 2 template (one operative sentence: after writing,
+    # read the task JSON back and confirm every field is present,
+    # non-empty, and ends on its intended final content — a sender-side
+    # output cut lands mid-JSON and surfaces as a write error). Measured
+    # size after that instruction replaced the unmeasured "<5KB" bound:
+    # 17834 chars. Budget ceiling provides ~166-char headroom.
     #
     # Tighten-back trigger: if a future PR removes optional content
     # (e.g., if a future PR removes the transitional permissiveness

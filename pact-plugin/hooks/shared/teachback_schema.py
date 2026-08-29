@@ -21,7 +21,10 @@ Functions never raise.
 
 Public surface:
 - TEACHBACK_REQUIRED_FIELDS — canonical 5-tuple per D10 (4 string fields +
-  variety_acknowledgment dict).
+  variety_acknowledgment dict). This is the WHOLE canonical set; nothing is
+  recommended-not-required here. The sibling handoff_schema module's
+  HANDOFF_REQUIRED_FIELDS carries the same suffix but is a STRICT SUBSET of
+  its canonical tuple — check which module you are importing from.
 - TEACHBACK_OBJECT_FIELDS — the object-valued subset of
   TEACHBACK_REQUIRED_FIELDS (currently variety_acknowledgment). SSOT for the
   string/object partition: both the schema echo and the lifecycle gate's

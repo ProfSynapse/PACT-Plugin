@@ -27,7 +27,12 @@ Public surface:
 - HANDOFF_RECOMMENDED_FIELDS — the recommended-not-required subset. SSOT for
   the required/recommended partition: both HANDOFF_REQUIRED_FIELDS and the
   schema echo derive their carve-out from this one tuple.
-- HANDOFF_REQUIRED_FIELDS — derived: canonical minus recommended.
+- HANDOFF_REQUIRED_FIELDS — derived: canonical minus recommended. NOTE the
+  asymmetry with the sibling module: this is a STRICT SUBSET of its
+  canonical tuple, whereas teachback_schema.TEACHBACK_REQUIRED_FIELDS is the
+  WHOLE canonical teachback set (nothing there is recommended-not-required).
+  Same suffix, different relationship to its canonical tuple — check which
+  module you are importing from before reusing the name.
 - HANDOFF_LEGACY_ALIASES — legacy spelling -> canonical key, read-side only.
 - HANDOFF_SCHEMA_ECHO — reusable human-readable echo of the canonical schema.
   The enumerated names, the recommended marking and both counts are derived
