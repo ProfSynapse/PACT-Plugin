@@ -200,6 +200,12 @@ def find_roots(directory: Path) -> Tuple[Path, ...]:
     """The index, plus index-shaped files named in any root, to a FIXED POINT.
 
     Not one level: a satellite naming another satellite is live in real trees.
+
+    NAMED means filename or stem -- deliberately NOT the four keys `keys_for`
+    gives a leaf. Do not widen this to match, however asymmetric it looks: over-
+    promoting a root is SILENT, because the promoted file's whole mention-set
+    then reads as reachable and hides the orphans this tool exists to find.
+    Under-matching a leaf is loud -- it invents an orphan and someone looks.
     """
     index = directory / INDEX_NAME
     roots = {index}
@@ -208,7 +214,8 @@ def find_roots(directory: Path) -> Tuple[Path, ...]:
         found = {
             path
             for path in directory.glob("*.md")
-            if is_index_shaped(path) and mentions(blob, normalise(path.name))
+            if is_index_shaped(path)
+            and any(mentions(blob, normalise(key)) for key in (path.name, path.stem))
         }
         if found <= roots:
             return tuple(sorted(roots))
@@ -373,7 +380,8 @@ def render(result: Scan) -> str:
         "  past-the-cut    {0}   (pointed at, but past the loaded prefix)".format(len(result.past_the_cut)),
         "  diagnostic: verdict carried by a bare token only: {0}".format(result.bare_token_only),
         "  diagnostic: index-shaped files no root names: {0}".format(len(result.unreached_index_files)),
-        "  keys: filename | stem | whole-line frontmatter name: | stem minus one type prefix",
+        "  keys (leaf): filename | stem | whole-line frontmatter name: | stem minus one type prefix",
+        "  keys (root): filename | stem",
         "  match: bounded bare token, case-insensitive, hyphen and underscore equivalent",
     ] + ["    unnamed here: {0}".format(leaf.name) for leaf in result.unreachable])
 

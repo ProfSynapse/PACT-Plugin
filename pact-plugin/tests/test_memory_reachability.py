@@ -186,7 +186,7 @@ def test_the_report_refuses_to_write_into_the_scanned_directory(tmp_path):
 #
 # Every arm above drives scan() end to end, so a predicate detail no fixture
 # happens to exercise is invisible to all of them. These four call the predicate
-# directly. Measured against the 31 arms in this file: deleting re.escape,
+# directly. Measured against the 32 arms in this file: deleting re.escape,
 # deleting re.IGNORECASE, widening the boundary classes to \b, dropping the
 # frontmatter key, and dropping the prefix strip are EACH killed, every one by
 # the arm written for it.
@@ -449,3 +449,23 @@ def test_a_crlf_index_emits_a_single_line_anchor_and_refuses_a_joined_one(tmp_pa
     # the anchor byte-exact for every separator and retire this branch; that is
     # tracked separately, and if it lands this arm is expected to change.
     assert joined.startswith("REFUSED"), "an expanded anchor is not a raw slice; fail closed"
+
+
+def test_a_conforming_satellite_named_without_its_extension_is_still_a_root(tmp_path):
+    """keys_for offers four keys for a leaf; find_roots matched satellites on one.
+
+    A FULLY CONFORMING satellite referenced stem-only was never promoted, so its
+    exclusive leaves came back as false orphans -- the direction --emit-edit acts
+    on. The `.md` spelling is the control: it passed before the fix and must keep
+    passing, so this arm catches an over-correction as well as the gap.
+    """
+    for i, reference in enumerate(("MEMORY-topics", "[[MEMORY-topics]]", "MEMORY-topics.md")):
+        root = tmp_path / "agent{0}".format(i)
+        root.mkdir(parents=True)
+        (root / "MEMORY.md").write_text("# I\n- see {0}\n".format(reference), encoding="utf-8")
+        (root / "MEMORY-topics.md").write_text("- [a](feedback_a.md)\n", encoding="utf-8")
+        (root / "feedback_a.md").write_text("x", encoding="utf-8")
+
+        result = mr.scan(root)
+        assert "MEMORY-topics.md" in [p.name for p in result.roots], reference
+        assert result.unreachable == (), reference
