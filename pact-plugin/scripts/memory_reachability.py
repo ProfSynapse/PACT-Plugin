@@ -390,11 +390,12 @@ def render(result: Scan) -> str:
         "  keys (root): filename | stem",
         "  match: bounded bare token, case-insensitive, hyphen and underscore equivalent",
     ] + ([
-        "  READ THIS BEFORE ACTING ON THE LIST BELOW: only the index was followed, because",
-        "  no satellite is named by the convention. If this directory keeps satellites under",
-        "  other names they were SKIPPED, and everything they alone point at is listed below",
-        "  as unnamed when it is not. Rename them MEMORY-*.md / INDEX_*.md / ARCHIVE*.md and",
-        "  re-run first.",
+        "  READ THIS BEFORE ACTING ON THE LIST BELOW: only the index was followed, so any",
+        "  satellite it did not follow was skipped, and whatever that satellite alone points",
+        "  at is listed below as unnamed when it is not. A satellite is followed when a root",
+        "  NAMES it and it is called MEMORY-*.md or INDEX_*.md -- never ARCHIVE*, which means",
+        "  RETIRED and would reclassify its leaves as deliberately archived. The two",
+        "  diagnostics above say which half is missing: fix that and re-run first.",
     ] if len(result.roots) == 1 and result.unreachable else []
     ) + ["    unnamed here: {0}".format(leaf.name) for leaf in result.unreachable])
 

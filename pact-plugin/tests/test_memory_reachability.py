@@ -187,7 +187,7 @@ def test_the_report_refuses_to_write_into_the_scanned_directory(tmp_path):
 #
 # Every arm above drives scan() end to end, so a predicate detail no fixture
 # happens to exercise is invisible to all of them. These four call the predicate
-# directly. Measured against the 34 arms in this file: deleting re.escape,
+# directly. Measured against the 35 arms in this file: deleting re.escape,
 # deleting re.IGNORECASE, widening the boundary classes to \b, dropping the
 # frontmatter key, and dropping the prefix strip are EACH killed, every one by
 # the arm written for it.
@@ -560,3 +560,36 @@ def test_the_one_root_warning_fires_only_when_nothing_was_followed(tmp_path):
     (solo / "MEMORY.md").write_text("# I\n- [a](feedback_a.md)\n", encoding="utf-8")
     (solo / "feedback_a.md").write_text("x", encoding="utf-8")
     assert marker not in mr.render(mr.scan(solo))
+
+
+def test_following_the_warnings_own_advice_does_not_lose_leaves(tmp_path):
+    """The remedy the warning prints must restore the leaf, not retire it.
+
+    `is_archive` treats any stem containing `archive` as RETIRED, so renaming a
+    skipped satellite to ARCHIVE* moves its exclusive leaves to archive_only,
+    where emit_edit no longer offers to restore them -- a live memory rendered
+    indistinguishable from one deliberately retired. That is why ARCHIVE* is
+    excluded from the advice, and this arm is the enforcement: the exclusion
+    looks like an omission next to INDEX_SHAPED, which lists all three.
+
+    Pins the round-trip, never the wording, so the prose can be rewritten.
+    """
+    def renamed(to):
+        root = tmp_path / to.replace("*", "x").replace(".", "_")
+        root.mkdir(parents=True)
+        (root / "MEMORY.md").write_text("# I\n- see {0}\n".format(to), encoding="utf-8")
+        (root / to).write_text("- [g](feedback_g.md)\n", encoding="utf-8")
+        (root / "feedback_g.md").write_text("x", encoding="utf-8")
+        return mr.scan(root)
+
+    for target in ("MEMORY-t.md", "INDEX_t.md"):
+        result = renamed(target)
+        assert [p.name for p in result.unreachable] == [], target
+        assert [p.name for p in result.archive_only] == [], target
+        assert mr.emit_edit(result) is None, target
+
+    # CONTROL -- the loss this exclusion exists to prevent. Renaming to ARCHIVE*
+    # silently reclassifies a live leaf as retired and emit_edit goes quiet.
+    lost = renamed("ARCHIVE_t.md")
+    assert [p.name for p in lost.archive_only] == ["feedback_g.md"]
+    assert mr.emit_edit(lost) is None, "and nothing is offered to restore it"
