@@ -1848,11 +1848,21 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         # nested branch of it: a schema verdict is not a journal write, so it
         # is not frame-scoped.
         #
-        # Gated on handoff PRESENCE alone, which is why it needs no
-        # owner/teachback/signal re-check: a handoff that IS present is worth
-        # validating whoever wrote it. A completion carrying NO handoff draws
-        # nothing here, deliberately — signal completions, session briefings
-        # and other exempt work legitimately store none.
+        # Gated on THREE conditions — present, a dict, and non-empty — which
+        # together are why it needs no owner/teachback/signal re-check: a
+        # populated handoff is worth validating whoever wrote it.
+        #
+        # THE NON-DICT ARM IS REJECTED AT THE GATE, NOT AT THE VALIDATOR, AND
+        # THAT DIVERGES FROM THE WRITE-TIME SITE ON PURPOSE. The write-time
+        # rule gates on `is not None`, so a non-dict handoff reaches
+        # validate_handoff_schema there and draws the "must be object, got
+        # <type>" advisory. Here it does not: malformed coverage is write-time
+        # only. Do not "restore symmetry" by widening this guard — the
+        # completion-side half of that coverage was dropped deliberately.
+        #
+        # A completion carrying NO handoff likewise draws nothing here —
+        # signal completions, session briefings and other exempt work
+        # legitimately store none.
         completed_handoff = metadata.get("handoff")
         if isinstance(completed_handoff, dict) and completed_handoff:
             handoff_problem = validate_handoff_schema(completed_handoff)
