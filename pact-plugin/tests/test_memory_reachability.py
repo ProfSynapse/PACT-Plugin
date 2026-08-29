@@ -187,7 +187,7 @@ def test_the_report_refuses_to_write_into_the_scanned_directory(tmp_path):
 #
 # Every arm above drives scan() end to end, so a predicate detail no fixture
 # happens to exercise is invisible to all of them. These four call the predicate
-# directly. Measured against the 33 arms in this file: deleting re.escape,
+# directly. Measured against the 34 arms in this file: deleting re.escape,
 # deleting re.IGNORECASE, widening the boundary classes to \b, dropping the
 # frontmatter key, and dropping the prefix strip are EACH killed, every one by
 # the arm written for it.
@@ -519,3 +519,44 @@ def test_the_checker_imports_and_scans_under_an_older_interpreter(tmp_path):
     ).format(scripts, str(root))
     done = subprocess.run([interpreter, "-c", probe], capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, "under {0} {1}:\n{2}".format(interpreter, found, done.stderr)
+
+
+def test_the_one_root_warning_fires_only_when_nothing_was_followed(tmp_path):
+    """The tool cannot tell a skipped hub from a leaf that links to an orphan.
+
+    So the warning is conditional on having followed NOTHING, not on detecting a
+    hub -- a predicate for hub-ness was measured and over-reports. Pins the two
+    firing cases and the silence; NOT completeness. It deliberately does not fire
+    when a hub is skipped alongside followed satellites, which is a known gap
+    chosen over a rule that cries wolf on a healthy tree.
+    """
+    marker = "READ THIS BEFORE ACTING"
+
+    # Skipped hub: named by the index, not index-shaped, sole pointer to its leaf.
+    hub = tmp_path / "hub"
+    hub.mkdir()
+    (hub / "MEMORY.md").write_text("# I\n- see hub_topics.md\n", encoding="utf-8")
+    (hub / "hub_topics.md").write_text("- [a](feedback_a.md)\n", encoding="utf-8")
+    (hub / "feedback_a.md").write_text("x", encoding="utf-8")
+    assert marker in mr.render(mr.scan(hub))
+
+    # No satellite at all, one genuine orphan: same condition, still a warning.
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    (bare / "MEMORY.md").write_text("# I\n- nothing here\n", encoding="utf-8")
+    (bare / "feedback_orphan.md").write_text("x", encoding="utf-8")
+    assert marker in mr.render(mr.scan(bare))
+
+    # CONTROL -- the over-report direction. A conforming tree must stay silent,
+    # and every leaf in it IS named by a root, which is how a too-broad
+    # predicate passes unnoticed.
+    assert marker not in mr.render(mr.scan(_tree(tmp_path / "agent")))
+
+    # CONTROL -- one root is NOT enough on its own. A plain single-index
+    # directory with nothing orphaned is the common healthy shape, and warning
+    # there tells the user to rename satellites that do not exist.
+    solo = tmp_path / "solo"
+    solo.mkdir()
+    (solo / "MEMORY.md").write_text("# I\n- [a](feedback_a.md)\n", encoding="utf-8")
+    (solo / "feedback_a.md").write_text("x", encoding="utf-8")
+    assert marker not in mr.render(mr.scan(solo))

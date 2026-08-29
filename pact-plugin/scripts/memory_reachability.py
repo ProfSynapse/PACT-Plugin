@@ -207,6 +207,11 @@ def find_roots(directory: Path) -> Tuple[Path, ...]:
     promoting a root is SILENT, because the promoted file's whole mention-set
     then reads as reachable and hides the orphans this tool exists to find.
     Under-matching a leaf is loud -- it invents an orphan and someone looks.
+
+    Nor remove the `name` key as dead code. It is redundant only while the two
+    boundary classes in `mentions` differ: the leading one contains `.` and the
+    trailing one does not, on the same line. Make them symmetric and the stem
+    stops matching the `.md` spelling, which is how satellites are written.
     """
     index = directory / INDEX_NAME
     roots = {index}
@@ -384,7 +389,14 @@ def render(result: Scan) -> str:
         "  keys (leaf): filename | stem | whole-line frontmatter name: | stem minus one type prefix",
         "  keys (root): filename | stem",
         "  match: bounded bare token, case-insensitive, hyphen and underscore equivalent",
-    ] + ["    unnamed here: {0}".format(leaf.name) for leaf in result.unreachable])
+    ] + ([
+        "  READ THIS BEFORE ACTING ON THE LIST BELOW: only the index was followed, because",
+        "  no satellite is named by the convention. If this directory keeps satellites under",
+        "  other names they were SKIPPED, and everything they alone point at is listed below",
+        "  as unnamed when it is not. Rename them MEMORY-*.md / INDEX_*.md / ARCHIVE*.md and",
+        "  re-run first.",
+    ] if len(result.roots) == 1 and result.unreachable else []
+    ) + ["    unnamed here: {0}".format(leaf.name) for leaf in result.unreachable])
 
 
 def as_dict(result: Scan) -> dict:
