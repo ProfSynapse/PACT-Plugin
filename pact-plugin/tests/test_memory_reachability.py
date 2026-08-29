@@ -1,7 +1,7 @@
 """Verification arms for the agent-memory reachability checker.
 
-Not the comprehensive suite. Each arm here fails if one load-bearing clause of
-the reachability rule is dropped, and every fixture is synthetic — the repo
+Not the comprehensive suite. Each arm here is tied to one load-bearing clause of
+the reachability rule, and every fixture is synthetic — the repo
 holds no agent-memory-shaped material and a test against a real tree would
 assert a number that moves between sessions.
 """
@@ -135,8 +135,7 @@ def test_the_emitted_anchor_is_a_byte_exact_slice_of_the_raw_index(tmp_path):
 def test_a_named_section_anchors_inside_that_section(tmp_path):
     """The agent names the topic; the tool computes the anchor."""
     root = _tree(tmp_path / "agent")
-    block = mr.emit_edit(mr.scan(root), "## Rules")
-    anchor = block.split("old_string:\n", 1)[1].split("\n\nnew_string:", 1)[0]
+    anchor, _ = _emitted(mr.emit_edit(mr.scan(root), "## Rules"))
     assert anchor.strip() == "- [[by_wikilink_stem]]"
 
 
@@ -145,8 +144,7 @@ def test_an_empty_named_section_anchors_on_its_heading(tmp_path):
     root = _tree(tmp_path / "agent")
     index = root / "MEMORY.md"
     index.write_text(index.read_text(encoding="utf-8") + "\n## Fresh\n", encoding="utf-8")
-    block = mr.emit_edit(mr.scan(root), "## Fresh")
-    anchor = block.split("old_string:\n", 1)[1].split("\n\nnew_string:", 1)[0]
+    anchor, _ = _emitted(mr.emit_edit(mr.scan(root), "## Fresh"))
     assert anchor.strip() == "## Fresh"
 
 
@@ -186,11 +184,21 @@ def test_the_report_refuses_to_write_into_the_scanned_directory(tmp_path):
 # ---------------------------------------------------------------------------
 # Predicate-level arms.
 #
-# Every arm above drives scan() end to end. Measured with six on-disk mutations:
-# deleting re.escape, deleting re.IGNORECASE, widening the boundary classes to
-# \b, and dropping the frontmatter key each leave ALL of them green. Only the
-# prefix-strip mutation reddens anything, which is the live control proving the
-# mutations reach the suite at all. These four call the predicate directly.
+# Every arm above drives scan() end to end, so a predicate detail no fixture
+# happens to exercise is invisible to all of them. These four call the predicate
+# directly. Measured against the 31 arms in this file: deleting re.escape,
+# deleting re.IGNORECASE, widening the boundary classes to \b, dropping the
+# frontmatter key, and dropping the prefix strip are EACH killed, every one by
+# the arm written for it.
+#
+# State the arm count beside any such result. An earlier version of this block
+# reported a 16-arm measurement as current fact, and it was still being read as
+# current after the suite had grown past it.
+#
+# Mutating this module: disable bytecode caching (PYTHONDONTWRITEBYTECODE=1). A
+# mutation that preserves the file's byte length, written in a fast loop, lands
+# in the same mtime second and is served stale from __pycache__ -- reporting
+# SURVIVED with the mutation sitting on disk. Kills are safe; survivors lie.
 
 
 def test_the_key_is_escaped_rather_than_compiled():
@@ -310,3 +318,134 @@ def test_a_duplicated_section_entry_expands_the_anchor(tmp_path):
     raw = (root / "MEMORY.md").read_text(encoding="utf-8")
     assert "\n" in anchor, "a duplicated last entry must force expansion"
     assert raw.count(anchor) == 1
+
+
+def test_the_size_cut_returns_a_line_aligned_prefix_within_the_cap():
+    """The size branch: an index under the line cap but over the size cap.
+
+    Kills two mutants no other arm sees -- dropping the size cut entirely, and
+    dropping the newline snap-back. Both left every other arm green, because the
+    filler fixtures above sit near 3.3k units against a 25000 ceiling, so the
+    early return fires and this whole branch never executes.
+
+    The snap-back is NOT diagnostic-only. emit_edit bounds anchor placement by
+    len(truncate_as_loaded(raw).splitlines()), so a prefix ending mid-line makes
+    that bound one too many and the emitted pointer lands past the cut -- the
+    condition this tool exists to report.
+    """
+    raw = "# Index\n" + "".join(
+        "- [entry {0}](feedback_e{0}.md) - {1}\n".format(i, "x" * 200) for i in range(120))
+    assert len(raw.splitlines()) < mr.MAX_LINES, "must trip the SIZE cap, not the line cap"
+    assert mr.utf16_units(raw) > mr.MAX_UNITS
+
+    loaded = mr.truncate_as_loaded(raw)
+    assert mr.utf16_units(loaded) <= mr.MAX_UNITS, "the size cut must actually cut"
+    assert loaded.endswith("\n") and raw.startswith(loaded), "a line-aligned prefix of the raw text"
+
+
+def test_the_emitted_anchor_stays_inside_the_loaded_prefix_under_a_size_cut(tmp_path):
+    """The consequence the arm above protects: placement, not just truncation."""
+    root = tmp_path / "agent"
+    root.mkdir(parents=True)
+    (root / "MEMORY.md").write_text("# Index\n" + "".join(
+        "- [entry {0}](feedback_e{0}.md) - {1}\n".format(i, "x" * 200) for i in range(120)),
+        encoding="utf-8")
+    for i in range(120):
+        (root / "feedback_e{0}.md".format(i)).write_text("x", encoding="utf-8")
+    (root / "feedback_orphan.md").write_text("x", encoding="utf-8")
+
+    raw = (root / "MEMORY.md").read_text(encoding="utf-8")
+    anchor, _ = _emitted(mr.emit_edit(mr.scan(root)))
+    through = raw[: raw.index(anchor) + len(anchor)] + "\n"
+    assert mr.utf16_units(through) <= mr.MAX_UNITS, "a pointer placed here is written and never read"
+
+
+def test_the_bare_token_diagnostic_counts_the_leaves_carried_by_prose(tmp_path):
+    """Computed, rendered and serialised; asserted nowhere until now.
+
+    feedback_stripped_prefix is carried by the bare token `stripped_prefix`, and
+    feedback_frontmatter by its frontmatter name in a satellite's prose. Neither
+    is reached through link syntax, which is what this diagnostic counts.
+    """
+    result = mr.scan(_tree(tmp_path / "agent"))
+    assert result.bare_token_only == 2
+
+
+def test_an_unnamed_satellite_is_listed_in_the_glob_versus_follow_diagnostic(tmp_path):
+    """Zero is the expected reading, which is why a non-zero one needs an arm."""
+    root = _tree(tmp_path / "agent")
+    assert mr.scan(root).unreached_index_files == ()
+    (root / "MEMORY-unnamed.md").write_text("- [Y](feedback_only_here.md)\n", encoding="utf-8")
+    assert [p.name for p in mr.scan(root).unreached_index_files] == ["MEMORY-unnamed.md"]
+
+
+def test_the_index_shaped_and_archive_vocabularies_are_closed():
+    """Same argument as TYPE_PREFIXES: nothing here derives these, so pin them.
+
+    The fixture exercises one member of each, so dropping any other member is
+    invisible to every behavioural arm.
+    """
+    assert mr.INDEX_SHAPED == ("MEMORY-", "INDEX_", "ARCHIVE")
+    assert mr.ARCHIVE_MARKERS == ("archive", "pre-compact", "precompact")
+
+
+def test_the_size_cut_accounts_for_the_line_endings_actually_on_disk(tmp_path):
+    """A CRLF index costs one more unit per line, so fewer lines fit under the cap.
+
+    Only reachable now that _read is byte-faithful. While universal-newline
+    translation ran, the cut was computed on text one character per line shorter
+    than the file, so the anchor could sit past the very cap it respects --
+    measured here at 25083 against a 25000 ceiling, versus 24897 byte-faithful.
+
+    This is the only arm that exercises the size branch against line endings
+    rather than against length alone.
+    """
+    root = tmp_path / "agent"
+    root.mkdir(parents=True)
+    body = "".join(
+        "- [entry {0}](feedback_e{0}.md) - {1}\r\n".format(i, "x" * 150) for i in range(190))
+    (root / "MEMORY.md").write_bytes(("# Index\r\n" + body).encode("utf-8"))
+    for i in range(190):
+        (root / "feedback_e{0}.md".format(i)).write_text("x", encoding="utf-8")
+    (root / "feedback_orphan.md").write_text("x", encoding="utf-8")
+
+    raw = (root / "MEMORY.md").read_text(encoding="utf-8", newline="")
+    assert len(raw.splitlines()) < mr.MAX_LINES, "must trip the SIZE cap, not the line cap"
+    anchor, _ = _emitted(mr.emit_edit(mr.scan(root)))
+    through = raw[: raw.index(anchor) + len(anchor)]
+    assert mr.utf16_units(through) <= mr.MAX_UNITS
+
+
+def _crlf_tree(root, duplicated):
+    """A CRLF index whose last section entry is unique, or duplicated downstream."""
+    root.mkdir(parents=True, exist_ok=True)
+    tail = "## Other\r\n- [dup](feedback_dup.md)\r\n" if duplicated else ""
+    (root / "MEMORY.md").write_bytes(
+        ("# I\r\n## Rules\r\n- [a](feedback_a.md)\r\n- [dup](feedback_dup.md)\r\n"
+         + tail).encode("utf-8"))
+    for name in ("feedback_a.md", "feedback_dup.md", "feedback_orphan.md"):
+        (root / name).write_text("x", encoding="utf-8")
+    return root
+
+
+def test_a_crlf_index_emits_a_single_line_anchor_and_refuses_a_joined_one(tmp_path):
+    """On CRLF the outcome splits by anchor SHAPE, not by the file's encoding.
+
+    A `\\r` never appears INSIDE a single-line anchor -- splitlines() consumes it
+    as the terminator -- so that shape round-trips and must still emit. It is
+    only the JOIN that differs: "\\n".join() puts a bare newline where the file
+    has a pair, so an expanded anchor is not a raw slice and must refuse.
+
+    Both halves are needed. Asserting only that CRLF refuses would be false for
+    the common shape, and would pass for the wrong reason.
+    """
+    emitted = mr.emit_edit(mr.scan(_crlf_tree(tmp_path / "unique", False)), "## Rules")
+    anchor, _ = _emitted(emitted)
+    assert anchor.encode("utf-8") in (tmp_path / "unique" / "MEMORY.md").read_bytes(), (
+        "a single-line anchor must match the bytes an agent will edit")
+
+    joined = mr.emit_edit(mr.scan(_crlf_tree(tmp_path / "dup", True)), "## Rules")
+    # Refusing is the decision, not a stopgap. Slicing raw by offsets would make
+    # the anchor byte-exact for every separator and retire this branch; that is
+    # tracked separately, and if it lands this arm is expected to change.
+    assert joined.startswith("REFUSED"), "an expanded anchor is not a raw slice; fail closed"
