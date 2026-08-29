@@ -299,6 +299,10 @@ try:
         variety_stamp_as_of_write,
         trustworthy_actor_name,
     )
+    from shared.handoff_schema import (
+        HANDOFF_SCHEMA_ECHO,
+        validate_handoff_schema,
+    )
     from shared.intentional_wait import is_self_complete_exempt, is_teachback_exempt
     from shared.session_journal import (
         append_event,
@@ -348,15 +352,12 @@ except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catc
 # Teachback-exempt dispatch carve-out resolution is delegated entirely to
 # is_teachback_exempt(owner, team_name) in shared.intentional_wait.
 
-# Required handoff schema fields (advisory if present-but-malformed).
-_HANDOFF_REQUIRED_FIELDS = (
-    "produced",
-    "decisions",
-    "reasoning_chain",
-    "uncertainty",
-    "integration",
-    "open_questions",
-)
+# Handoff schema constants (HANDOFF_SCHEMA_ECHO) and validate_handoff_schema
+# are imported from shared.handoff_schema (SSOT). A local 6-tuple of required
+# handoff fields used to live here; it was WRONG, not merely duplicated —
+# reasoning_chain is RECOMMENDED per the template surfaces, so a six-field
+# requirement fires on handoffs the docs call correct, including this repo's
+# own VALID_HANDOFF fixture. The SSOT derives the required set as FIVE.
 
 # Teachback schema constants (TEACHBACK_REQUIRED_FIELDS,
 # TEACHBACK_VARIETY_ACK_VALID_VALUES, TEACHBACK_REASONING_RECONSTRUCTION_REQUIRED_MIN)
@@ -1143,18 +1144,6 @@ def _created_task_id(tool_response: object, tool_input: dict) -> str:
 # ─── core evaluation ─────────────────────────────────────────────────────────
 
 
-def _validate_handoff_schema(handoff: object) -> str | None:
-    """Return None if handoff is well-formed, or a short reason string
-    describing the schema problem (suitable for advisory text).
-    """
-    if not isinstance(handoff, dict):
-        return f"metadata.handoff must be object, got {type(handoff).__name__}"
-    missing = [f for f in _HANDOFF_REQUIRED_FIELDS if f not in handoff]
-    if missing:
-        return f"metadata.handoff missing required fields: {', '.join(missing)}"
-    return None
-
-
 def _validate_variety_acknowledgment(ack: object) -> str | None:
     """Return None if variety_acknowledgment is well-formed per D10, or a
     short reason string. Pure function; never raises.
@@ -1184,7 +1173,7 @@ def _validate_variety_acknowledgment(ack: object) -> str | None:
 
 def _validate_teachback_submit_schema(teachback: object) -> str | None:
     """Return None if teachback_submit is well-formed, or a short reason
-    string. Mirrors _validate_handoff_schema.
+    string. Mirrors handoff_schema.validate_handoff_schema.
 
     Validates the 5 canonical fields per pact-teachback skill (4 string
     fields + variety_acknowledgment dict per D10). reasoning_reconstruction
@@ -1728,9 +1717,15 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
         # re-point at bare owners: the lead-side emitter below already covers
         # HANDOFF presence at acceptance-commit (its own handoff-present
         # eligibility), so re-activating would duplicate coverage, not fill a
-        # gap. _validate_handoff_schema is retained for its co-location pattern
-        # and as the structural sibling of _validate_teachback_submit_schema
-        # (which mirrors it).
+        # gap. THAT REASONING HOLDS FOR THE PRESENCE ARM AND NOT FOR THE
+        # SCHEMA ARM: the emitter keys on presence and dict-ness and has never
+        # looked at a field name. The schema arm now lives below as
+        # handoff_schema_invalid_at_completion, co-located with its teachback
+        # sibling. The PRESENCE arm remains uncovered by design: the emitter's
+        # eligibility answers "should this emit?", which is a different
+        # question from "may this owner complete without a HANDOFF?", and
+        # reusing the first to answer the second mis-fires on the signal,
+        # briefing and exempt completions that legitimately carry none.
 
         # Fix A (#869): lead-side agent_handoff emission at acceptance-commit.
         # Self-contained, with no owner-name prefix gate (none is needed — bare
@@ -1846,6 +1841,27 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
                         "artifact_paths event for this phase before the worktree "
                         "is torn down. Advisory only — not blocking.",
                     ))
+
+        # Work-task HANDOFF schema advisory — the lead-side, completion-time
+        # structural sibling of the teachback_submit_schema_invalid gate
+        # below, and a SIBLING of the frame-gated emit block above, not a
+        # nested branch of it: a schema verdict is not a journal write, so it
+        # is not frame-scoped.
+        #
+        # Gated on handoff PRESENCE alone, which is why it needs no
+        # owner/teachback/signal re-check: a handoff that IS present is worth
+        # validating whoever wrote it. A completion carrying NO handoff draws
+        # nothing here, deliberately — signal completions, session briefings
+        # and other exempt work legitimately store none.
+        completed_handoff = metadata.get("handoff")
+        if isinstance(completed_handoff, dict) and completed_handoff:
+            handoff_problem = validate_handoff_schema(completed_handoff)
+            if handoff_problem:
+                advisories.append((
+                    "handoff_schema_invalid_at_completion",
+                    f"PACT task_lifecycle_gate: Task {task_id} "
+                    f"{handoff_problem}. {HANDOFF_SCHEMA_ECHO}",
+                ))
 
         # Teachback-subject completion-time checks: teachback_submit presence
         # + schema. R1/R2 are disjoint on the missing-vs-malformed split:
@@ -2013,6 +2029,30 @@ def evaluate_lifecycle(input_data: dict) -> list[tuple[str, str]]:
                 "reasoning_reconstruction (the receiver-side teachback "
                 "field). See pact-teachback skill Common mistakes row 2.",
             ))
+
+        # Write-time HANDOFF schema advisory, reaching the AUTHOR at their own
+        # write and before the lead reads anything — so the correction is made
+        # by the only party who knows what they meant, with one more
+        # TaskUpdate. Reads the SAME incoming_handoff as the cross-slot rule
+        # above: no new extraction, no new disk read.
+        #
+        # A handoff key that is absent must stay SILENT. A teammate writing
+        # only intentional_wait, or a lead writing owner, is not writing a
+        # HANDOFF and must not be nagged; and `None` is also the platform's
+        # DELETE op. Container-absence is a different question from schema
+        # validity and is not answered here.
+        if incoming_handoff is not None:
+            handoff_problem = validate_handoff_schema(incoming_handoff)
+            if handoff_problem:
+                task_id = tool_input.get("taskId", "") or ""
+                advisories.append((
+                    "handoff_schema_invalid_at_write_time",
+                    f"PACT task_lifecycle_gate: Task {task_id} "
+                    f"{handoff_problem}. {HANDOFF_SCHEMA_ECHO} Correct it with "
+                    "one more TaskUpdate before the lead accepts — the write "
+                    "has already landed, so nothing is lost and nothing is "
+                    "blocked. Advisory only — not blocking.",
+                ))
 
         # Shared task_a disk read — lifted to sibling of the cross-slot
         # handoff check above so the wiring-boundary

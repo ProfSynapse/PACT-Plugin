@@ -177,13 +177,16 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
          # its own transitive pact_context edge was already in this closure.
     "task_lifecycle_gate": frozenset({
         "agent_handoff_marker", "canonical_json", "constants",
-        "dispatch_helpers",
+        "dispatch_helpers", "handoff_schema",
         "intentional_wait", "pact_context", "paths", "session_journal",
         "session_registry", "session_state", "task_metadata_snapshot",
         "task_utils", "teachback_schema", "tool_response", "variety_scorer",
     }),  # task_metadata_snapshot reached via the lead-completion +
          # post-completion-backstop snapshot seams; its transitive edges
          # were already in this closure.
+         # handoff_schema reached via the HANDOFF schema advisories (write-time
+         # + completion-time); it is a pure stdlib-free leaf, so it adds no
+         # further transitive edges.
     "bootstrap_gate": frozenset({
         "constants", "marker_schema", "pact_context",
         "paths", "session_journal", "session_registry",
