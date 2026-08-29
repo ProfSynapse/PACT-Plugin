@@ -167,3 +167,96 @@ def test_the_report_refuses_to_write_into_the_scanned_directory(tmp_path):
     root = _tree(tmp_path / "agent")
     assert mr.main([str(root), "--quiet", "--report", str(root / "out.json")]) == 2
     assert not (root / "out.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Predicate-level arms.
+#
+# Every arm above drives scan() end to end. Measured with six on-disk mutations:
+# deleting re.escape, deleting re.IGNORECASE, widening the boundary classes to
+# \b, and dropping the frontmatter key each leave ALL of them green. Only the
+# prefix-strip mutation reddens anything, which is the live control proving the
+# mutations reach the suite at all. These four call the predicate directly.
+
+
+def test_the_key_is_escaped_rather_than_compiled():
+    """Real frontmatter names carry '+'; unescaped it is a quantifier."""
+    assert not mr.mentions("ab", "a+b")
+
+
+def test_matching_ignores_case():
+    """Roughly a fifth of real names are prose titles with capitals."""
+    assert mr.mentions("SESSION_HOOK_PATTERNS", "session_hook_patterns")
+
+
+def test_a_leading_dot_is_not_a_boundary():
+    """\\b would accept it, and a key would match inside a longer dotted token."""
+    assert not mr.mentions("other.key", "key")
+
+
+def test_the_frontmatter_name_is_a_key(tmp_path):
+    """The key that carries pointers written as bare prose."""
+    leaf = tmp_path / "feedback_x.md"
+    leaf.write_text("---\nname: A Prose Title\n---\nx", encoding="utf-8")
+    assert mr.normalise("A Prose Title") in mr.keys_for(leaf)
+
+
+def test_type_prefixes_are_the_four_memory_types():
+    """The tuple's CLOSEDNESS is the whole argument for four keys over six.
+
+    Nothing in this repo defines the memory-type vocabulary -- it comes from the
+    platform -- so there is nothing to derive this from and this pins the
+    literals instead. Weaker than a derivation, and it makes a fifth type a
+    deliberate edit rather than silent drift.
+    """
+    assert mr.TYPE_PREFIXES == ("feedback_", "project_", "reference_", "user_")
+
+
+def _emitted(block):
+    anchor = block.split("old_string:\n", 1)[1].split("\n\nnew_string:\n", 1)[0]
+    new = block.split("\n\nnew_string:\n", 1)[1].split("\n\nThe file may", 1)[0]
+    return anchor, new
+
+
+def test_applying_the_edit_closes_the_orphan_and_then_emits_nothing(tmp_path):
+    """The only arm that exercises the emit path end to end rather than its string.
+
+    Round trip and idempotence in one: everything else here asserts what the
+    block SAYS, and a block can be well-formed and still not close the finding.
+    """
+    root = _tree(tmp_path / "agent")
+    index = root / "MEMORY.md"
+    raw = index.read_text(encoding="utf-8")
+    anchor, new = _emitted(mr.emit_edit(mr.scan(root)))
+    assert raw.count(anchor) == 1
+    index.write_text(raw.replace(anchor, new), encoding="utf-8")
+
+    assert mr.scan(root).unreachable == ()
+    assert mr.emit_edit(mr.scan(root)) is None
+
+
+def test_the_anchor_fixture_still_discriminates_a_normalised_anchor(tmp_path):
+    """Pins the fixture property the raw-bytes guard's kill depends on.
+
+    normalise() maps '-' to '_' and lowercases. If the anchor region ever loses
+    every character normalise() changes -- switching the '-' bullets to '*' is
+    enough -- then normalised text and raw text are identical there, a
+    normalised anchor still matches, and the guard above silently stops being
+    tested while staying green. Measured, not hypothetical.
+    """
+    root = _tree(tmp_path / "agent")
+    anchor, _ = _emitted(mr.emit_edit(mr.scan(root)))
+    assert mr.normalise(anchor) != anchor
+
+
+def test_the_unnamed_anchor_is_the_LAST_entry_of_the_loaded_prefix(tmp_path):
+    """Separates the heading-absent path from the heading-given one.
+
+    Measured: mutating `entries[-1]` to `entries[0]` reddened nothing, while
+    blanking the heading lookup reddened only the three heading arms. The two
+    paths were separable in the code and not in the suite, which is the shape
+    where a shared kill proves nothing. This is the missing half.
+    """
+    root = _tree(tmp_path / "agent")
+    anchor, _ = _emitted(mr.emit_edit(mr.scan(root)))
+    assert anchor.endswith("[[by_wikilink_stem]]")
