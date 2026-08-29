@@ -18,8 +18,15 @@ import memory_reachability as mr  # noqa: E402
 def _tree(root):
     """One index, one named satellite that names a second, one named archive.
 
-    Six leaves, each reachable by a DIFFERENT key or not at all, so an arm that
-    drops one key reddens rather than passing on a sibling's evidence.
+    Seven leaves, each reachable by a DIFFERENT key or not at all, so an arm
+    that drops one key reddens rather than passing on a sibling's evidence.
+
+    THE POINTER TEXT MUST NOT CONTAIN ANY OTHER KEY OF THE LEAF IT NAMES. An
+    earlier version pointed at the frontmatter leaf with prose containing the
+    bare word `frontmatter`, which is that same leaf's prefix-stripped key -- so
+    the frontmatter key had no coverage through `scan()` at all, and the
+    prefix-strip arm was passing on the sibling's evidence this docstring warns
+    about. Both now have their own leaf and their own non-overlapping pointer.
     """
     root.mkdir(parents=True, exist_ok=True)
     (root / "MEMORY.md").write_text(
@@ -31,18 +38,25 @@ def _tree(root):
         "- [[by_wikilink_stem]]\n",
         encoding="utf-8",
     )
+    # The new pointer goes in a SATELLITE, not the index: anchor arms depend on
+    # the index's last entry line, so adding one there moves their evidence.
     (root / "MEMORY-topics.md").write_text(
-        "see also `MEMORY-second-hop.md`\n- [[by-hyphen-spelling]]\n", encoding="utf-8")
+        "see also `MEMORY-second-hop.md`\nalso stripped_prefix\n"
+        "- [[by-hyphen-spelling]]\n", encoding="utf-8")
     (root / "MEMORY-second-hop.md").write_text(
-        "reached only at the second hop: by frontmatter name\n", encoding="utf-8")
+        "reached only at the second hop: a leaf named in its own header\n", encoding="utf-8")
     (root / "MEMORY-archive-old.md").write_text(
         "- [Retired](feedback_archived_only.md)\n", encoding="utf-8")
 
     (root / "feedback_by_filename.md").write_text("x", encoding="utf-8")
     (root / "feedback_by_wikilink_stem.md").write_text("x", encoding="utf-8")
     (root / "feedback_by_hyphen_spelling.md").write_text("x", encoding="utf-8")
+    # Reached ONLY by its frontmatter name: neither its filename, its stem, nor
+    # its prefix-stripped stem appears in any root.
     (root / "feedback_frontmatter.md").write_text(
-        "---\nname: by frontmatter name\n---\nx", encoding="utf-8")
+        "---\nname: a leaf named in its own header\n---\nx", encoding="utf-8")
+    # Reached ONLY by its prefix-stripped stem.
+    (root / "feedback_stripped_prefix.md").write_text("x", encoding="utf-8")
     (root / "feedback_archived_only.md").write_text("x", encoding="utf-8")
     (root / "feedback_planted_orphan.md").write_text(
         "---\nname: nobody_points_here\n---\nx", encoding="utf-8")
@@ -213,6 +227,14 @@ def test_type_prefixes_are_the_four_memory_types():
 
 
 def _emitted(block):
+    # Assert the shape before splitting on it. A REFUSED block, or None, would
+    # otherwise raise IndexError here -- which reddens the arm without telling
+    # you whether the SUBJECT failed or this helper did. Measured: the
+    # normalised-anchor mutant killed the round-trip arm by IndexError, and a
+    # kill by the wrong mechanism is indistinguishable from a real one in a
+    # pass/fail summary.
+    assert block is not None and not block.startswith("REFUSED"), block
+    assert "old_string:\n" in block and "\n\nnew_string:\n" in block, block
     anchor = block.split("old_string:\n", 1)[1].split("\n\nnew_string:\n", 1)[0]
     new = block.split("\n\nnew_string:\n", 1)[1].split("\n\nThe file may", 1)[0]
     return anchor, new
@@ -260,3 +282,31 @@ def test_the_unnamed_anchor_is_the_LAST_entry_of_the_loaded_prefix(tmp_path):
     root = _tree(tmp_path / "agent")
     anchor, _ = _emitted(mr.emit_edit(mr.scan(root)))
     assert anchor.endswith("[[by_wikilink_stem]]")
+
+
+def test_a_duplicated_section_entry_expands_the_anchor(tmp_path):
+    """Uniqueness expansion on the heading-GIVEN path.
+
+    The expansion loop is shared with the heading-absent path, but only a named
+    section can put a duplicated last entry in front of it -- the absent path
+    anchors on the tail of the whole prefix, where a duplicate downstream cannot
+    occur. So this exercises the interaction, not new code.
+    """
+    root = tmp_path / "agent"
+    root.mkdir()
+    (root / "MEMORY.md").write_text(
+        "# I\n"
+        "## Rules\n"
+        "- [a](feedback_a.md)\n"
+        "- [dup](feedback_dup.md)\n"
+        "## Other\n"
+        "- [dup](feedback_dup.md)\n",
+        encoding="utf-8",
+    )
+    for name in ("feedback_a.md", "feedback_dup.md", "feedback_orphan.md"):
+        (root / name).write_text("x", encoding="utf-8")
+
+    anchor, _ = _emitted(mr.emit_edit(mr.scan(root), "## Rules"))
+    raw = (root / "MEMORY.md").read_text(encoding="utf-8")
+    assert "\n" in anchor, "a duplicated last entry must force expansion"
+    assert raw.count(anchor) == 1
