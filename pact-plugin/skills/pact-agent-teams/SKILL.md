@@ -261,6 +261,8 @@ If the team-lead rejects your teachback or HANDOFF, you wake on the inbound `Sen
 End every response with a structured HANDOFF. This is mandatory.
 This HANDOFF must ALSO be stored in task metadata (see On Completion Step 1 above). The prose version in your response ensures validate_handoff hook compatibility; the metadata version enables chain-read by downstream agents.
 
+These are PROSE labels. When you store this same HANDOFF in task metadata, use the canonical `metadata.handoff` keys, in this order: `produced`, `decisions`, `reasoning_chain`, `uncertainty`, `integration`, `open_questions`. Never convert a display label into a key — `Key decisions` is the label, `decisions` is the key.
+
 ```
 HANDOFF:
 1. Produced: Files created/modified

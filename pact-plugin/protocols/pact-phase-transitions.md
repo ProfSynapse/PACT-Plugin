@@ -27,6 +27,9 @@ Keep it brief. No templates required.
 Coders provide handoff summaries to the orchestrator, who passes them to the test engineer.
 
 **Handoff Format**:
+
+These are PROSE labels. When you store this same HANDOFF in task metadata, use the canonical `metadata.handoff` keys, in this order: `produced`, `decisions`, `reasoning_chain`, `uncertainty`, `integration`, `open_questions`. Never convert a display label into a key — `Key decisions` is the label, `decisions` is the key.
+
 ```
 1. Produced: Files created/modified
 2. Key decisions: Decisions with rationale, assumptions that could be wrong

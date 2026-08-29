@@ -439,7 +439,7 @@ When nested cycle completes:
 3. **Report** any decisions that affect the parent task
 4. **Continue** with parent orchestration (parent task now unblocked)
 
-**Handoff format**: Use the standard handoff structure (Produced, Key decisions, Reasoning chain [recommended], Areas of uncertainty, Integration points, Open questions — 5 required fields, 1 recommended).
+**Handoff format**: Use the standard handoff structure (Produced, Key decisions, Reasoning chain [recommended], Areas of uncertainty, Integration points, Open questions — 5 required fields, 1 recommended). Those are PROSE labels; the corresponding `metadata.handoff` keys are `produced`, `decisions`, `reasoning_chain`, `uncertainty`, `integration`, `open_questions`.
 
 **Contract-aware HANDOFF** (when scope contract was provided): Append a Contract Fulfillment section after the standard HANDOFF:
 
