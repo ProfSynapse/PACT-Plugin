@@ -16,9 +16,10 @@ Test surface architecture:
   - Defensive: team_name is "" → unresolvable.
 
 Schema-validator pure-function tests (the D10 + D11 validators) live in
-test_task_lifecycle_gate.py alongside the integration tests, mirroring
-the existing _validate_handoff_schema co-location pattern. This file is
-the traversal-helper surface only.
+test_task_lifecycle_gate.py alongside the integration tests, because those
+validators are gate-local; a validator that lives in a shared module is
+tested beside it instead (handoff schema → tests/test_handoff_schema.py).
+This file is the traversal-helper surface only.
 
 Divergence-computation helper + its tests live in the second half of
 this file (class TestVarietyDivergence). The helper's canonical home is
