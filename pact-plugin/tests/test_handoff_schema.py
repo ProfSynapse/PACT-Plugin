@@ -54,8 +54,21 @@ class TestConstants:
         assert len(HANDOFF_REQUIRED_FIELDS) == 5
         assert "reasoning_chain" not in HANDOFF_REQUIRED_FIELDS
 
-    def test_required_is_derived_not_duplicated(self):
-        """Moving a field across the split must edit ONE tuple."""
+    def test_required_agrees_with_the_canonical_minus_recommended_derivation(self):
+        """REQUIRED equals canonical-minus-recommended AS EVALUATED NOW.
+
+        NAMED FOR WHAT IT PINS, WHICH IS NARROWER THAN "is derived". Measured:
+        replacing the derivation with a hard-coded tuple of the SAME five names
+        leaves this arm green — a literal that happens to agree is
+        indistinguishable from a derivation here. What it does catch is the
+        DRIFT that duplication eventually produces: hard-code the tuple AND
+        move a field across the split, and this reds.
+
+        Detecting the duplication itself would mean reading this module's own
+        source, which pins the spelling of an implementation rather than its
+        behaviour. A correctly-named weaker arm is worth more than a
+        strongly-named one that cannot support its name.
+        """
         assert HANDOFF_REQUIRED_FIELDS == tuple(
             f for f in HANDOFF_CANONICAL_FIELDS
             if f not in HANDOFF_RECOMMENDED_FIELDS
@@ -105,7 +118,20 @@ class TestValidatorStaysSilent:
         assert validate_handoff_schema(VALID_HANDOFF) is None
 
     def test_silent_when_reasoning_chain_absent(self):
-        assert validate_handoff_schema(dict(VALID_HANDOFF)) is None
+        """CONSTRUCTS the absence, rather than naming a fixture that already
+        has it. Start from the full canonical set — pinned silent by
+        test_silent_on_a_fully_canonical_handoff below — and remove exactly
+        reasoning_chain, so this arm reds only for a required set that has
+        grown back to six.
+
+        The earlier form passed dict(VALID_HANDOFF), a plain copy of a fixture
+        already missing reasoning_chain, which made it an exact duplicate of
+        test_silent_on_the_repos_own_valid_fixture: measured across 29
+        mutations, no mutant separated the two.
+        """
+        handoff = {f: ["x"] for f in HANDOFF_CANONICAL_FIELDS}
+        del handoff["reasoning_chain"]
+        assert validate_handoff_schema(handoff) is None
 
     def test_silent_on_extra_keys(self):
         handoff = dict(VALID_HANDOFF, memory_saved=["m1"], findings=["f1"])

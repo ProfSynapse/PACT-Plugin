@@ -92,11 +92,22 @@ class TestCompletionTimeSchema:
                        pact_context)
         assert "handoff_schema_invalid_at_completion" in rules
 
-    def test_legacy_handoff_still_emits(self, tmp_path, monkeypatch, pact_context,
-                                        emit_events):
-        """One advisory, ZERO LOSS, zero blockage. A legacy-spelled handoff is
-        a dict like any other, so the journal event still lands."""
-        _rules(_completed(handoff=LEGACY_HANDOFF), tmp_path, monkeypatch, pact_context)
+    @pytest.mark.parametrize("handoff", [LEGACY_HANDOFF, VALID_HANDOFF],
+                             ids=["legacy", "valid"])
+    def test_populated_handoff_still_emits(self, handoff, tmp_path, monkeypatch,
+                                           pact_context, emit_events):
+        """One advisory, ZERO LOSS, zero blockage — and the same where no
+        advisory is drawn at all.
+
+        BOTH ROWS ARE LOAD-BEARING AND THEY COVER DIFFERENT THINGS. The legacy
+        row shows an advisory does not cost the journal event. The valid row is
+        the ONLY arm driving a non-empty dict past the completion gate while
+        watching emits: every other emit-watching arm feeds a shape the gate
+        rejects first and asserts ZERO, so without this row the positive
+        direction of the emit path rests on the legacy case alone, and an emit
+        eligibility narrowed to the advisory-drawing shapes would go unseen.
+        """
+        _rules(_completed(handoff=handoff), tmp_path, monkeypatch, pact_context)
         assert len(emit_events) == 1
 
     def test_silent_on_the_repos_valid_fixture(self, tmp_path, monkeypatch,
