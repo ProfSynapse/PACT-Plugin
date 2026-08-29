@@ -53,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
 from shared.handoff_schema import (  # noqa: E402
     HANDOFF_CANONICAL_FIELDS,
     HANDOFF_LEGACY_ALIASES,
+    HANDOFF_REQUIRED_FIELDS,
     validate_handoff_schema,
 )
 
@@ -150,8 +151,10 @@ def report(name: str, unit: str, per_root: dict[str, dict]) -> dict:
     print(f"  {'COMBINED':<28} n={combined['n']}")
     print(f"\n  {'measure':<44}{'count':>8}   rate")
     rows = [
-        ("fires: missing >=1 of the 5 REQUIRED (shipped validator)", "fires"),
-        ("missing >=1 of the 6 canonical (shape, not the validator)", "missing_canonical"),
+        (f"fires: missing >=1 of the {len(HANDOFF_REQUIRED_FIELDS)} REQUIRED "
+         f"(shipped validator)", "fires"),
+        (f"missing >=1 of the {len(HANDOFF_CANONICAL_FIELDS)} canonical "
+         f"(shape, not the validator)", "missing_canonical"),
         ("reasoning_chain absent (recommended -- never fires)", "no_reasoning_chain"),
         ("present but NOT A DICT", "not_a_dict"),
         ("carries >=1 legacy spelling", "legacy_any"),

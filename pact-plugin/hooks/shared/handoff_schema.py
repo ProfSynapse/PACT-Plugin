@@ -5,7 +5,12 @@ Summary: Canonical metadata.handoff schema constants and validators. SSOT for
          legacy-spelling alias map used on the READ side.
 Used by: hooks/task_lifecycle_gate.py (write-time + completion-time advisories),
          hooks/shared/session_resume.py (resume-brief decision summary),
-         tests/test_handoff_schema.py (constants + both validators).
+         scripts/handoff_census.py (re-runnable journal census),
+         tests/test_handoff_schema.py (constants + both validators),
+         tests/test_handoff_key_annotation_pinned.py (canonical field names).
+         This list is a HAND-MAINTAINED restatement of the import graph and
+         nothing checks it, so it goes stale silently — derive the real set
+         with a grep for this module's name before trusting it.
 
 When the canonical field set or the required/recommended split changes, this is
 the only Python edit site. The four LLM-loaded template surfaces
