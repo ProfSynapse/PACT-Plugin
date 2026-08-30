@@ -278,7 +278,7 @@ class TestOrchestratorPersonaInvariants:
     def test_persona_pin_memory_mid_session_directive_present(
         self, persona_text
     ):
-        """F2 (Commit 10): mid-session pin-memory directive must direct
+        """Mid-session pin-memory directive must direct
         the orchestrator to invoke /PACT:pin-memory immediately when an
         insight surfaces that meets pin-worthy triggers, NOT defer to
         wrap-up. Pinning at the moment of insight is load-bearing for

@@ -26,7 +26,8 @@ Rule coverage:
   Anti-sprawl — single evaluate_lifecycle composition.
 
 Disciplines applied:
-  - PR #660 R2: never pop shared.* from sys.modules in this test process.
+  - Subprocess isolation by discipline: never pop shared.* from sys.modules
+    in this test process.
   - Rule names describe behavior, not provenance — per
     `feedback_no_planning_artifact_test_names`.
 """
