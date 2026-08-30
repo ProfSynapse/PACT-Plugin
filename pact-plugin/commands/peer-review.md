@@ -242,11 +242,22 @@ JSON
 **HANDOFF review** (dispatched parallel with reviewers — PRIMARY memory trigger):
 ```
 TaskCreate(subject="secretary: harvest pending HANDOFFs (primary trigger, pre-merge)",
-  description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
+  description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Pass --no-sync on every save. Report summary when done.")
 TaskUpdate(taskId, owner="secretary")
 ```
 
 This is the **primary memory trigger** — fires unconditionally at reviewer dispatch (runs parallel with reviewers).
+
+`--no-sync` is required here and is not optional: a save without it projects this arc's decisions and lessons into the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context — including the reviewers dispatched moments earlier, who have no way to decline it. The memories are still written to the store, which is pull-only.
+
+**Working Memory projection** (after every reviewer has reported — unconditional):
+```
+TaskCreate(subject="secretary: project harvest to Working Memory",
+  description="Run Incremental Harvest for team {team_name}. Follow the Incremental Harvest workflow in your pact-handoff-harvest skill. Save normally; do NOT pass --no-sync. Report delta summary when done.")
+TaskUpdate(taskId, owner="secretary")
+```
+
+This pass restores the projection the primary trigger suppressed. It is unconditional — skipping it leaves the Working Memory block without this arc, because only a save writes that block and no later pass re-sweeps a task already recorded as processed.
 
 ### Reviewer Teachback
 

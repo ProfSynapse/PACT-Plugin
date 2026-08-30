@@ -399,10 +399,19 @@ JSON
 - [ ] **Process specialist HANDOFFs** (non-blocking):
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",
-    description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
+    description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Pass --no-sync on every save. Report summary when done.")
   TaskUpdate(taskId, owner="secretary")
   ```
 - [ ] **Verify agent task completion**: On receiving each HANDOFF summary via `SendMessage`, check the agent's task status via `TaskList`. If still "in_progress", mark it completed: `TaskUpdate(taskId, status="completed")`.
+- [ ] **Working Memory projection** (after the auditor has reported — unconditional):
+  ```
+  TaskCreate(subject="secretary: project harvest to Working Memory",
+    description="Run Incremental Harvest for team {team_name}. Follow the Incremental Harvest workflow in your pact-handoff-harvest skill. Save normally; do NOT pass --no-sync. Report delta summary when done.")
+  TaskUpdate(taskId, owner="secretary")
+  ```
+  Restores the projection the harvest above suppressed. Unconditional — skipping it leaves the
+  Working Memory block without this phase, because only a save writes that block and no later pass
+  re-sweeps a task already recorded as processed.
 - [ ] **Journal event**: Write `phase_transition` to mark comPACT completion:
   ```bash
   set -e

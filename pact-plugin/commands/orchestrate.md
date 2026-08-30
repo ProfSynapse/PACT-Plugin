@@ -801,12 +801,24 @@ JSON
 - [ ] **Process coder HANDOFFs** (non-blocking):
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",
-    description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
+    description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Pass --no-sync on every save. Report summary when done.")
   TaskUpdate(taskId, owner="secretary")
   ```
   Do not block on completion — TEST phase proceeds in parallel.
+  `--no-sync` is required: without it the save projects this phase's decisions and lessons into the
+  `CLAUDE.md` Working Memory block, and the platform pushes that block into the concurrent auditor's
+  context. The memories still reach the store, which is pull-only.
 - [ ] **Primary HANDOFF-presence check**: on receiving each Task-complete `SendMessage`, verify via `TaskGet` — confirm status=completed AND metadata.handoff populated/non-empty. If missing, `SendMessage` the agent to complete HANDOFF before downstream dispatch proceeds.
 - [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — `metadata.audit_summary` is present (verify via `TaskGet`), OR an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, before TEST dispatch proceeds.
+- [ ] **Working Memory projection** (after the auditor has reported — unconditional):
+  ```
+  TaskCreate(subject="secretary: project harvest to Working Memory",
+    description="Run Incremental Harvest for team {team_name}. Follow the Incremental Harvest workflow in your pact-handoff-harvest skill. Save normally; do NOT pass --no-sync. Report delta summary when done.")
+  TaskUpdate(taskId, owner="secretary")
+  ```
+  Restores the projection the harvest above suppressed. Unconditional — skipping it leaves the
+  Working Memory block without this phase, because only a save writes that block and no later pass
+  re-sweeps a task already recorded as processed.
 - [ ] **S4 Checkpoint**: Environment stable? Model aligned? Plan viable?
 
 #### Handling Complex Sub-Tasks During CODE
