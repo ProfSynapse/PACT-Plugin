@@ -102,6 +102,21 @@ class TestRegisterPathArithmetic:
         # It is the same module the rest of the suite imports.
         assert arith == Path(session_registry.__file__).resolve()
 
+    def test_protocols_dotdot_scripts_resolves_to_real_script(self):
+        """Same hop, the scripts/ leg: an agent reaches the checker by the same
+        arithmetic. Catches a wrong hop or a typo'd filename before merge."""
+        arith = (_PLUGIN_ROOT / "protocols" / ".." / "scripts"
+                 / "memory_reachability.py").resolve()
+        real = (_PLUGIN_ROOT / "scripts" / "memory_reachability.py").resolve()
+        assert arith == real, f"path arithmetic resolved to {arith}, expected {real}"
+        assert arith.exists(), "the resolved checker path does not exist"
+
+    def test_missing_dotdot_does_not_resolve_for_scripts(self):
+        """Negative control for the arm above: without the ``..`` hop the path
+        must NOT exist, so the positive arm discriminates the arithmetic rather
+        than being trivially true of any path."""
+        assert not (_PLUGIN_ROOT / "protocols" / "scripts" / "memory_reachability.py").exists()
+
     def test_missing_dotdot_does_not_resolve(self):
         """Negative control (non-vacuity): WITHOUT the ``..`` hop, the path
         (protocols/hooks/shared/...) must NOT resolve to an existing file — so the
