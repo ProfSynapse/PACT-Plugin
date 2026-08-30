@@ -238,9 +238,13 @@ correct `hookEventName`.
    ```
    cd pact-plugin && python3 -m pytest tests/test_dispatch_gate_smoke.py::test_fail_closed_module_load -v
    ```
-2. Expect: test passes. The fixture sabotages
-   `shared/dispatch_helpers.py` via `shutil.copytree` + overwrite under
-   `PYTHONSAFEPATH=1`, asserts exit code 2 + `hookEventName="PreToolUse"`
+2. Expect: test passes. The fixture copies the whole `hooks/` tree with
+   `shutil.copytree`, overwrites `shared/dispatch_helpers.py` in the COPY,
+   and runs the copied gate as a subprocess — the script's own directory
+   lands on `sys.path[0]`, so the sabotaged `shared` package is the one that
+   resolves. `PYTHONSAFEPATH` is CLEARED from the child environment, because
+   an ambient `PYTHONSAFEPATH=1` would suppress that `sys.path[0]` insert.
+   Asserts exit code 2 + `hookEventName="PreToolUse"`
    + `permissionDecision="deny"`.
 3. For an in-session smoke (optional, advisory only): a sabotaged
    import in a fresh session would require pre-corrupting the installed

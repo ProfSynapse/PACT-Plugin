@@ -20,11 +20,15 @@ Summary: Static AST guard keeping the plugin's bare-python3 surfaces
             scanned roots — their absence is what makes universal
             annotation stringification safe on 3.9.
          Pure static analysis: nothing scanned is imported or executed.
-         Because R0 pins feature_version statically, the suite needs no
-         Python 3.9 CI interpreter — any modern interpreter enforces
-         the same floor. (Under an actual 3.9 interpreter, py310+
-         syntax would surface as parse ERRORS in R1-R3 instead of clean
-         R0 violations — the gate goes red either way.)
+         R0 pins feature_version statically, so these four rules run the
+         same on any modern interpreter. That does NOT make a 3.9 CI
+         interpreter unnecessary: CI runs a 3.9 cell, and it is the run
+         that backs the declared floor. This gate NARROWS rather than
+         replaces live verification — feature_version was measured
+         false-passing PEP 701 f-strings a 3.9 interpreter rejects, and no
+         static scan sees a post-3.9 API call at all. (Under an actual 3.9
+         interpreter, py310+ syntax would surface as parse ERRORS in R1-R3
+         instead of clean R0 violations — the gate goes red either way.)
 Used by: pact-plugin test suite (standing merge gate).
 """
 from __future__ import annotations

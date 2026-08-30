@@ -14,9 +14,9 @@
 #   risk and may reference concrete project specifics freely.
 #
 # WHY THIS MATRIX, AND WHAT THE DECLARED FLOOR RESTS ON
-#   The dev runtime is 3.14.x. The matrix runs 3.13 and 3.14: both are GA on
-#   ubuntu-latest, and 3.14 matches the dev runtime so a local green and a CI
-#   green are the same green.
+#   The dev runtime is 3.14.x. The matrix runs 3.9, 3.13 and 3.14: all three
+#   are GA on ubuntu-latest, 3.14 matches the dev runtime so a local green and
+#   a CI green are the same green, and 3.9 is the declared floor.
 #   The declared `requires-python = ">=3.9"` floor IS test-verified: the 3.9
 #   cell below runs the whole suite at the floor. That cell was added only
 #   after the suite was shown to pass there by execution, never on faith —
@@ -27,8 +27,10 @@
 #   and the `--target-version py39` lint below. That gate's own R0 note records
 #   that `feature_version` NARROWS rather than replaces live 3.9 verification,
 #   and it was measured false-passing PEP 701 f-strings that a 3.9 interpreter
-#   rejects — so the run is what backs the floor and the scan is what catches
-#   the file a run never executes.
+#   rejects — so the run is what backs the floor and the scan is what covers
+#   the three bare-python3 roots whether or not a test executes them. The scan
+#   checks syntax and annotation form only: a post-3.9 API call is invisible to
+#   it, which is the ceiling the next paragraph states.
 #   READ THE CELL WITH ITS BOUND: a green 3.9 cell certifies the suite's
 #   EXECUTED paths under the COLLECTED set, not the tree. A post-3.9 API on a
 #   path no test executes stays green forever. That ceiling is structural and
@@ -46,11 +48,20 @@
 #   cells: every 9.x release declares Requires-Python >=3.10, so 3.9 gets the
 #   newest 8.x the resolver offers. That divergence is FORCED, not chosen. It
 #   is why the cells are not interchangeable arms of one experiment. The plugin
-#   versions follow the runner down too (pytest-asyncio resolves 1.2.0 there
-#   against 1.4.0 on the newer cells), so a red on the 3.9 cell alone differs
-#   from the others in THREE variables — interpreter, runner major, plugin
-#   version — and each licenses a different remedy. Classify which one before
-#   attributing it.
+#   whole resolved set follows the runner down, so a red on the 3.9 cell alone
+#   differs from the others in FIVE measured variables, not three: interpreter;
+#   runner major (pytest 8.4.2 against 9.1.1); plugin version (pytest-asyncio
+#   1.2.0 against 1.4.0); and TWO LIBRARIES UNDER TEST — model2vec 0.7.0
+#   against 0.9.0, numpy 2.0.2 against 2.5.2. The last two are the libraries
+#   this file names as backing the archive-pin and vector tests, so they are
+#   the likeliest source of a 3.9-only red rather than an afterthought.
+#   A SIXTH CAUSE IS NOT A VERSION AT ALL AND IS NOT DETERMINISTIC: 3.9 is
+#   absent from the runner tool cache, so setup-python DOWNLOADS the
+#   interpreter before the job does any work, while 3.13 and 3.14 resolve
+#   from cache. The floor cell therefore carries a network dependency the
+#   other two do not, and a transient red there is network weather rather
+#   than anything about the floor. Each cause licenses a different remedy.
+#   Classify which one before attributing it.
 #   The earlier `>=3.7` declaration was REFUTED, not merely unmeasured: an
 #   assignment expression in hooks/shared/session_resume.py needs 3.8.
 #
@@ -76,8 +87,9 @@
 #                          and in telegram test modules → without it,
 #                          `python -m pytest` ERRORS at COLLECTION.
 #     - pytest-asyncio   : the suite has a large `@pytest.mark.asyncio` cohort.
-#                          On pytest >= 9, an unhandled async test FAILS.
-#                          Without this plugin that whole cohort is RED.
+#                          An unhandled async test FAILS on both runner majors
+#                          the matrix installs. Without this plugin that whole
+#                          cohort is RED.
 #     - hypothesis       : property tests guard it with try/except + skipif, so
 #                          it is technically optional, but it is installed so the
 #                          property tests actually RUN rather than silently skip.
@@ -119,7 +131,9 @@
 #   the evidence supports.
 #
 #   CURRENT WARRANT — the set was verified AS A WHOLE against the WIDENED
-#   collection, that is, the invocation this file actually runs. Two clean venvs
+#   collection, on ONE interpreter. The matrix now runs three, and they do not
+#   resolve the same distributions (see the cell note above), so this warrant
+#   covers the collection shape rather than every cell's resolved set. Two clean venvs
 #   differing ONLY in the pact-memory packages: with the full set the suite is
 #   green; with those packages removed the consequences are exactly these —
 #     - pyyaml removed            -> collection is INTERRUPTED, ZERO tests run.
@@ -179,23 +193,26 @@ jobs:
     # DIFFERENT QUESTIONS THAT LIVE IN DIFFERENT FILES.
     #   THE TESTED SET is this matrix: which interpreters CI runs.
     #   THE SUPPORTED FLOOR is `requires-python` in pyproject.toml at the
-    #   repository root. It stays UNMEASURED. A green here on 3.13 and 3.14
-    #   says nothing about it. To settle the floor takes a run of this suite
-    #   on the lowest target, which is separate work with its own evidence.
+    #   repository root. The lowest cell here now runs the suite AT that floor,
+    #   so the two questions coincide at the bottom of the matrix — but they
+    #   remain different questions: lowering the declared floor again would
+    #   take its own run on the new target, not an inference from this one.
     #
     # WHY 3.14 JOINED 3.13. Local runs in the release arc before this change
     # used 3.14 while CI pinned 3.13, so a local green and a CI green were
-    # not the same green. This matrix closes that gap rather than widening
-    # coverage. NO VERSION LITERAL SITS IN THIS COMMENT ON PURPOSE: the
+    # not the same green; 3.14 closed that gap. The 3.9 cell was added later
+    # and for the other reason — it widens coverage down to the declared
+    # floor. NO VERSION LITERAL SITS IN THIS COMMENT ON PURPOSE: the
     # plugin version lives in four pinned files, and one more copy here is
     # one more thing a later bump can miss.
     #
-    # `fail-fast: false` so a cell that reddens does not cancel the other one
-    # and hide its result.
+    # `fail-fast: false` so a cell that reddens does not cancel the others
+    # and hide their results.
     #
     # CHECK NAMES, BECAUSE A MATRIX RENAMES THEM. A single job reports a
-    # check called `pytest`. This matrix reports `pytest (3.13)` and
-    # `pytest (3.14)`, so the name `pytest` stops reporting. Measured on
+    # check called `pytest`. This matrix reports `pytest (3.9)`,
+    # `pytest (3.13)` and `pytest (3.14)`, so the name `pytest` stops
+    # reporting. Measured on
     # 2026-08-10 against this repository: NO required status check is
     # configured, on classic branch protection or in the one active ruleset,
     # so the rename blocks no pull request. IF SOMEBODY LATER REQUIRES A
