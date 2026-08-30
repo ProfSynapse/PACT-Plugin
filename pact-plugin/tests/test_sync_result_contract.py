@@ -246,6 +246,16 @@ class TestTheReasonSurvivesTheProcessBoundary:
         )
         env = dict(os.environ)
         env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        # The same decision as the fault-path contract in
+        # test_embedding_status_contract.py, and here it protects a stronger
+        # property. huggingface_hub relays server-sent warning headers through
+        # logger.warning(), which lastResort puts on stderr. The differential
+        # below cancels pre-existing emitters BECAUSE they fire identically in
+        # both arms -- but this one is triggered per REQUEST by rate limiting,
+        # so it can land on one arm and not the other and break exactly that
+        # precondition. Silencing the library's own logger at source restores
+        # it. The text is the Hub's, not ours, so it could never be matched on.
+        env["HF_HUB_VERBOSITY"] = "error"
         # SCOPED TO A SCRATCH PROJECT. --db-path scopes the DATABASE only; the
         # sync still resolves a CLAUDE.md ambiently. Without this the arms below
         # would write into the operator's live file.
