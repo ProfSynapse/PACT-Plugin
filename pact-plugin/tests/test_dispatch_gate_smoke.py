@@ -1,9 +1,9 @@
 """
-Smoke tests for dispatch_gate.py — #662 PreToolUse matcher='Agent' hook.
+Smoke tests for dispatch_gate.py — the PreToolUse matcher='Agent' hook.
 
-NOT comprehensive coverage — that lives in the TEST phase / Commit-4
-follow-up. These cases are the minimum-viable surface that proves the
-gate's structural contract:
+NOT comprehensive coverage — that lives in the TEST phase. These cases
+are the minimum-viable surface that proves the gate's structural
+contract:
 
   1. Happy-path ALLOW (registered specialist, valid name, matching team,
      task assigned, short prompt with TaskList reference)
@@ -15,8 +15,8 @@ gate's structural contract:
      COPIED hooks tree whose shared.dispatch_helpers raises ImportError
      → DENY output includes hookEventName + exit 2
 
-The fail-closed counter-test runs in a subprocess per PR #660 R2
-discipline: NEVER pop shared.* from sys.modules in the test process.
+The fail-closed counter-test runs in a subprocess by discipline:
+NEVER pop shared.* from sys.modules in the test process.
 Sabotage runs in a subprocess so the test process's import state stays
 clean.
 """
@@ -210,7 +210,7 @@ def test_fail_closed_module_load(tmp_path):
     as a subprocess.
     Expect: exit 2, stdout JSON with hookEventName + permissionDecision='deny'.
 
-    Subprocess isolation per PR #660 R2 discipline — NEVER pop shared.*
+    Subprocess isolation by discipline — NEVER pop shared.*
     from sys.modules in the test process.
 
     RUNNING THE COPIED SCRIPT IS THE MECHANISM. Python puts the script's own
