@@ -57,15 +57,17 @@ if [ "$1" = "--files" ]; then
     done
 
     if [ ${#PY_FILES[@]} -eq 0 ] && [ "$UNRESOLVED" -gt 0 ]; then
-        # .py paths WERE given and every one of them failed to resolve. The
-        # commonest cause is a caller passing one quoted, space-joined string
-        # ("a.py b.py c.py"): it ends in .py so the filter above matches it,
-        # but no file has that name. Saying "no Python files given" here would
-        # be factually false AND pass-shaped, so this case gets its own
-        # verdict naming the likely cause. Still exit 0 — a caller-argument
-        # mistake is a graceful degradation, not a hygiene finding, and the
-        # documented contract puts every SKIPPED at 0.
-        echo "IMPORT-HYGIENE: SKIPPED (.py paths given but none exist; check for an unsplit quoted file list)"
+        # .py paths WERE given and every one of them failed to resolve. Two
+        # causes are known and the verdict names both, because naming only one
+        # misdirects the reader chasing the other: a caller passing one quoted,
+        # space-joined string ("a.py b.py c.py"), which ends in .py so the
+        # filter above matches it but no file has that name; and a caller
+        # passing paths relative to a different directory than its cwd. Saying
+        # "no Python files given" here would be factually false AND
+        # pass-shaped, so this case gets its own verdict. Still exit 0 — a
+        # caller-argument mistake is a graceful degradation, not a hygiene
+        # finding, and the documented contract puts every SKIPPED at 0.
+        echo "IMPORT-HYGIENE: SKIPPED (.py paths given but none exist; check for an unsplit quoted file list, or paths relative to another directory)"
         exit 0
     fi
 

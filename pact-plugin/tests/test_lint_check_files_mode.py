@@ -56,7 +56,7 @@ def _last_stdout_line(proc):
     return lines[-1]
 
 
-_UNRESOLVED = "IMPORT-HYGIENE: SKIPPED (.py paths given but none exist; check for an unsplit quoted file list)"
+_UNRESOLVED = "IMPORT-HYGIENE: SKIPPED (.py paths given but none exist; check for an unsplit quoted file list, or paths relative to another directory)"
 _NO_FILES = "IMPORT-HYGIENE: SKIPPED (no Python files given)"
 
 
