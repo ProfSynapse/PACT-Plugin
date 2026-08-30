@@ -878,7 +878,7 @@ class TestPerLoopDispatchSites:
         ("orchestrate.md", 462, "PREPARE"),
         ("orchestrate.md", 570, "ARCHITECT"),
         ("orchestrate.md", 706, "CODE"),
-        ("orchestrate.md", 870, "TEST"),
+        ("orchestrate.md", 861, "TEST"),
         ("comPACT.md", 234, "MultipleSpecialists"),
         ("comPACT.md", 295, "SingleSpecialist"),
         ("peer-review.md", 193, "Reviewers"),

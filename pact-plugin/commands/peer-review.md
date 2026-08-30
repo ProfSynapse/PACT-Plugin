@@ -239,25 +239,14 @@ JSON
 
 > ⚠️ **Heredoc-stdin contract**: All journal-event writes use `--stdin <<'JSON' ... JSON` (quoted delimiter). This disables bash variable expansion so apostrophes, quotes, and backticks in template-substituted values (e.g. `{first_line}`, `{finding}`, `{branch}`) pass through verbatim — fixing the silent journal-drop bug where commit messages with `don't` would close the bash quote and abort the write under `set -e`. The orchestrator must still produce JSON-valid string content (escape `\"` and `\\` and control chars when constructing the body).
 
-**HANDOFF review** (dispatched parallel with reviewers — PRIMARY memory trigger):
+**HANDOFF review** (after every reviewer has reported — PRIMARY memory trigger):
 ```
 TaskCreate(subject="secretary: harvest pending HANDOFFs (primary trigger, pre-merge)",
-  description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Pass --no-sync on every save. Report summary when done.")
+  description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
 TaskUpdate(taskId, owner="secretary")
 ```
 
-This is the **primary memory trigger** — fires unconditionally at reviewer dispatch (runs parallel with reviewers).
-
-`--no-sync` is required here and is not optional: a save without it projects this arc's decisions and lessons into the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context — including the reviewers dispatched moments earlier, who have no way to decline it. The memories are still written to the store, which is pull-only.
-
-**Working Memory projection** (after every reviewer has reported — unconditional):
-```
-TaskCreate(subject="secretary: project harvest to Working Memory",
-  description="Run Incremental Harvest for team {team_name}. Follow the Incremental Harvest workflow in your pact-handoff-harvest skill. Save normally; do NOT pass --no-sync. Report delta summary when done.")
-TaskUpdate(taskId, owner="secretary")
-```
-
-This pass restores the projection the primary trigger suppressed. It is unconditional — skipping it leaves the Working Memory block without this arc, because only a save writes that block and no later pass re-sweeps a task already recorded as processed.
+This is the **primary memory trigger** — fires unconditionally, after the reviewers report. Do NOT move it back to reviewer dispatch: the harvest writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context, so running it alongside reviewers puts this arc's conclusions into the context of the agents whose value is reaching conclusions independently of them.
 
 ### Reviewer Teachback
 
