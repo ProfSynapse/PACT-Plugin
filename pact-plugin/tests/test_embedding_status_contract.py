@@ -313,6 +313,14 @@ class TestCliStderrStaysCleanOnTheFaultPath:
         # than a substring match that a future emission could slip past.
         env = dict(os.environ)
         env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        # Same reason, second channel. huggingface_hub relays server-sent
+        # `Warning:` response headers through logger.warning() -- e.g. the
+        # unauthenticated-request notice -- which lastResort puts on stderr
+        # exactly like the fault this test measures. The text is chosen by the
+        # Hub, not by us, so it cannot be matched on; silencing the library's
+        # own logger at source is what keeps the assertion below an exact
+        # equality instead of a carve-out that would also hide our output.
+        env["HF_HUB_VERBOSITY"] = "error"
         return subprocess.run(
             [sys.executable, "-c", child], capture_output=True, text=True,
             timeout=120, env=env,
