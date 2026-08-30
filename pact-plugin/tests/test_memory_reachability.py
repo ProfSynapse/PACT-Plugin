@@ -417,7 +417,11 @@ def test_the_size_cut_accounts_for_the_line_endings_actually_on_disk(tmp_path):
         (root / "feedback_e{0}.md".format(i)).write_text("x", encoding="utf-8")
     (root / "feedback_orphan.md").write_text("x", encoding="utf-8")
 
-    raw = (root / "MEMORY.md").read_text(encoding="utf-8", newline="")
+    # `Path.read_text(newline=...)` is 3.13+; `Path.open(newline=...)` is not.
+    # Reading here rather than through mr._read keeps the assertion independent
+    # of the reader under test.
+    with (root / "MEMORY.md").open(encoding="utf-8", newline="") as handle:
+        raw = handle.read()
     assert len(raw.splitlines()) < mr.MAX_LINES, "must trip the SIZE cap, not the line cap"
     anchor, _ = _emitted(mr.emit_edit(mr.scan(root)))
     through = raw[: raw.index(anchor) + len(anchor)]
