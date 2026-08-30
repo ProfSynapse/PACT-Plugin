@@ -17,21 +17,42 @@
 #   The dev runtime is 3.14.x. The matrix runs 3.13 and 3.14: both are GA on
 #   ubuntu-latest, and 3.14 matches the dev runtime so a local green and a CI
 #   green are the same green.
-#   The declared `requires-python = ">=3.9"` floor is NOT test-verified: the
-#   suite has been run on NO interpreter below 3.13. What the floor DOES rest
-#   on is (a) an external constraint — GUI-launched macOS sessions run the
-#   bare-python3 surfaces on /usr/bin/python3, which is 3.9.x — and (b) the
-#   static 3.9 gate in tests/test_py39_annotation_compat.py plus the
-#   `--target-version py39` lint below. Both are STATIC. That gate's own R0
-#   note records that `feature_version` NARROWS rather than replaces live 3.9
-#   verification, and it was measured false-passing PEP 701 f-strings that a
-#   3.9 interpreter rejects. So `>=3.9` is the floor the repository targets and
-#   statically enforces, NOT a floor a run has confirmed.
+#   The declared `requires-python = ">=3.9"` floor IS test-verified: the 3.9
+#   cell below runs the whole suite at the floor. That cell was added only
+#   after the suite was shown to pass there by execution, never on faith —
+#   the sequence was repair the test harness, demonstrate the pass, then add
+#   the cell, and it is the sequence any future downward extension takes.
+#   Two STATIC checks remain and still earn their place, because a run and a
+#   scan fail differently: the 3.9 gate in tests/test_py39_annotation_compat.py
+#   and the `--target-version py39` lint below. That gate's own R0 note records
+#   that `feature_version` NARROWS rather than replaces live 3.9 verification,
+#   and it was measured false-passing PEP 701 f-strings that a 3.9 interpreter
+#   rejects — so the run is what backs the floor and the scan is what catches
+#   the file a run never executes.
+#   READ THE CELL WITH ITS BOUND: a green 3.9 cell certifies the suite's
+#   EXECUTED paths under the COLLECTED set, not the tree. A post-3.9 API on a
+#   path no test executes stays green forever. That ceiling is structural and
+#   no matrix cell can lift it.
+#   ONE GUARD INVERTS THAT BOUND, and it is the one written for the defect
+#   class this matrix cell exists to catch. tests/test_memory_reachability.py
+#   runs its scanner under an interpreter OLDER than the running one, because
+#   a syntax parse cannot see a keyword that only exists in a newer runtime.
+#   On the 3.9 cell nothing is older, so it SKIPS there by construction: the
+#   differential guard aimed at `read_text(newline=)` is inert on the very
+#   cell added to catch `read_text(newline=)`. Its coverage lives on the
+#   HIGHER cells, and only where an older interpreter is on PATH. Do not read
+#   a green 3.9 cell as covering that class.
+#   The 3.9 cell necessarily resolves a different pytest major from the other
+#   cells: every 9.x release declares Requires-Python >=3.10, so 3.9 gets the
+#   newest 8.x the resolver offers. That divergence is FORCED, not chosen. It
+#   is why the cells are not interchangeable arms of one experiment. The plugin
+#   versions follow the runner down too (pytest-asyncio resolves 1.2.0 there
+#   against 1.4.0 on the newer cells), so a red on the 3.9 cell alone differs
+#   from the others in THREE variables — interpreter, runner major, plugin
+#   version — and each licenses a different remedy. Classify which one before
+#   attributing it.
 #   The earlier `>=3.7` declaration was REFUTED, not merely unmeasured: an
 #   assignment expression in hooks/shared/session_resume.py needs 3.8.
-#   A matrix reaching below 3.13 is documented as a commented fallback below,
-#   to be adopted ONLY AFTER a separate task verifies the suite actually passes
-#   there — never on faith.
 #
 # WHY `working-directory: pact-plugin`
 #   `tests/conftest.py` inserts sys.path entries relative to its own location and
@@ -55,8 +76,8 @@
 #                          and in telegram test modules → without it,
 #                          `python -m pytest` ERRORS at COLLECTION.
 #     - pytest-asyncio   : the suite has a large `@pytest.mark.asyncio` cohort.
-#                          On pytest >= 9, an unhandled async test FAILS (not
-#                          skips). Without this plugin that whole cohort is RED.
+#                          On pytest >= 9, an unhandled async test FAILS.
+#                          Without this plugin that whole cohort is RED.
 #     - hypothesis       : property tests guard it with try/except + skipif, so
 #                          it is technically optional, but it is installed so the
 #                          property tests actually RUN rather than silently skip.
@@ -183,7 +204,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.13", "3.14"]
+        python-version: ["3.9", "3.13", "3.14"]
     steps:
       # Third-party actions are pinned to a full commit SHA (supply-chain
       # hardening: a moving tag like @v5 can be repointed to malicious code).
@@ -208,13 +229,11 @@ jobs:
       - name: Install test dependencies
         # See the "DEPENDENCY SET" header note for why each lib is required.
         # pytest-asyncio is REQUIRED, not optional: the suite has a large
-        # @pytest.mark.asyncio cohort. Without this plugin they FAIL on
-        # pytest >= 9 (unknown-mark, one failure per async test) or — worse — SILENTLY
-        # SKIP on pytest 8.x (green-looking, but the tests never run). Do NOT
-        # drop it to "shorten" the line: that silently re-opens the exact
-        # inert-test gap (green suite, tests not actually running) that this
-        # workflow exists to catch, together with the seam-dependent-hook
-        # presence/anti-mock checks it runs.
+        # @pytest.mark.asyncio cohort, and without this plugin that whole
+        # cohort is RED. Measured on pytest 8.4.2: one failure per async test,
+        # `Failed: async def functions are not natively supported`. Do NOT drop
+        # it to "shorten" the line — the async cohort simply stops passing, and
+        # it is a large fraction of the suite.
         run: python -m pip install --upgrade pip pytest hypothesis httpx pytest-asyncio pyyaml pysqlite3 sqlite-vec model2vec ruff
 
       # Import-hygiene lint, two legs. Leg 1: unused imports (F401) + undefined
@@ -270,17 +289,19 @@ jobs:
         run: python -m pytest
 
   # ---------------------------------------------------------------------------
-  # OPTIONAL FALLBACKS (do NOT enable without the stated verification first)
+  # EXTENDING THE MATRIX DOWNWARD
   #
-  # (1) Cross-version matrix: ADOPTED, and it is live on the job above with
-  #     3.13 and 3.14. This entry stays to record what it did NOT settle.
-  #
-  #     THE FLOOR REMAINS OPEN AND THIS MATRIX DID NOT ANSWER IT.
-  #     `requires-python = ">=3.9"` in pyproject.toml is NOT MEASURED BY A RUN.
-  #     It is the floor the repository targets and statically enforces, and no
-  #     run below 3.13 backs it. The matrix records which interpreters CI runs,
-  #     and that is a different question. Do not read the tested set as the
-  #     supported floor, and do not read the declared floor as a tested one.
-  #     To extend the matrix DOWNWARD takes a run on the lower target first,
-  #     which is separate work with its own evidence.
+  # The floor is now a matrix cell, so this block records the SEQUENCE rather
+  # than a pending question. Any future extension below the current lowest cell
+  # takes the same three steps in the same order:
+  #   (1) run the gate form on the target interpreter and classify every
+  #       failure as shipped-code, test-side, or dependency — those three
+  #       license different remedies and only the first says anything about
+  #       the declared floor;
+  #   (2) repair whatever is test-side and demonstrate the pass, with
+  #       collection parity against the highest cell and dependency-equalised
+  #       environments, because an unequal collection is not a comparison;
+  #   (3) only then add the cell.
+  # A cell added before step (2) is adoption on faith, which is the thing this
+  # block has always forbidden.
   # ---------------------------------------------------------------------------
