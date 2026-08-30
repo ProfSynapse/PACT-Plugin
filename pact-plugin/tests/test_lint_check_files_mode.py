@@ -56,6 +56,10 @@ def _last_stdout_line(proc):
     return lines[-1]
 
 
+_UNRESOLVED = "IMPORT-HYGIENE: SKIPPED (.py paths given but none exist; check for an unsplit quoted file list)"
+_NO_FILES = "IMPORT-HYGIENE: SKIPPED (no Python files given)"
+
+
 def _write_executable(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -91,6 +95,57 @@ class TestVerdictContract:
             _last_stdout_line(proc)
             == "IMPORT-HYGIENE: SKIPPED (no Python files given)"
         )
+
+
+class TestUnresolvedPathsVerdict:
+    """Three states all end in a SKIPPED verdict and must stay DISTINCT.
+
+    Collapsing any two is how a malformed invocation came to read as a clean
+    check: a caller whose shell did not word-split a quoted file list passes
+    ONE argument, "a.py b.py c.py". It ends in .py so the *.py filter matches,
+    then fails the existence test, leaving nothing to check — and the verdict
+    said "no Python files given", which was false and pass-shaped.
+
+    Each case below reaches its verdict for a DIFFERENT reason, named beside
+    it, so a mutation merging two branches reddens exactly one:
+      (a) no arguments at all             -> test_zero_arguments_*
+      (b) arguments that exist, none .py  -> test_no_python_files_skipped_exit_zero
+                                             (in TestVerdictContract above)
+      (c) .py-shaped arguments, none exist -> the two cases here
+    """
+
+    def test_zero_arguments_keeps_legacy_skipped(self):
+        # Reason: nothing was passed, so the *.py filter never runs and
+        # nothing is dropped. The legacy verdict is CORRECT here.
+        proc = _run()
+        assert proc.returncode == 0
+        assert _last_stdout_line(proc) == _NO_FILES
+
+    def test_unsplit_file_list_reports_unresolved_not_no_files(self, tmp_path):
+        # Reason: ONE .py-suffixed argument that does not exist — the exact
+        # shape a caller produces by passing "$FILES" unsplit. Both real
+        # files exist, so this is not a missing-file case: it is the JOINED
+        # string failing to resolve.
+        a = tmp_path / "a.py"
+        b = tmp_path / "b.py"
+        a.write_text("import os\nprint(os.sep)\n", encoding="utf-8")
+        b.write_text("import os\nprint(os.sep)\n", encoding="utf-8")
+
+        proc = _run(f"{a} {b}")  # one argv entry, space-joined
+
+        assert a.exists() and b.exists()
+        assert proc.returncode == 0
+        assert _last_stdout_line(proc) == _UNRESOLVED
+
+    def test_lone_ghost_path_reports_unresolved(self, tmp_path):
+        # Reason: a .py path that genuinely does not exist, as the ONLY
+        # argument. Same branch as the case above but with no space in it,
+        # so a fix that keyed on "argument contains a space" would pass that
+        # one and fail this. Distinct from TestMissingPathPrefilter, where a
+        # real file survives alongside the ghost.
+        proc = _run(str(tmp_path / "ghost.py"))
+        assert proc.returncode == 0
+        assert _last_stdout_line(proc) == _UNRESOLVED
 
 
 class TestCrashHonestyGuard:

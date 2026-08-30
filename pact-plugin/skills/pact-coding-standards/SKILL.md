@@ -504,7 +504,7 @@ Single-quote each filename — a filename is untrusted shell input.
 |---------|---------|-----------|
 | `IMPORT-HYGIENE: PASS` | No findings in the checked files | 0 |
 | `IMPORT-HYGIENE: FINDINGS (n)` | n findings printed above the verdict | 1 |
-| `IMPORT-HYGIENE: SKIPPED (<reason>)` | Check could not run (no Python files given, or no usable checker) | 0 |
+| `IMPORT-HYGIENE: SKIPPED (<reason>)` | Check could not run (no Python files given, named .py paths that do not exist, or no usable checker) | 0 |
 
 Record the verdict line verbatim in your HANDOFF `produced` field — every
 run ends in a verdict, and a SKIPPED must be visible, never silent.

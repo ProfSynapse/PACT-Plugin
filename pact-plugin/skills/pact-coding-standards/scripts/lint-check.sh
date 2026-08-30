@@ -42,17 +42,32 @@ if [ "$1" = "--files" ]; then
     # This pre-filter is the consumer tier's choice only — the checker itself
     # keeps its unreadable-fails-loud contract for the strict tier.
     PY_FILES=()
+    UNRESOLVED=0
     for f in "$@"; do
         case "$f" in
             *.py)
                 if [ -e "$f" ]; then
                     PY_FILES+=("$f")
                 else
+                    UNRESOLVED=$((UNRESOLVED + 1))
                     echo "import-hygiene: skipping missing path (deleted/renamed?): $f" >&2
                 fi
                 ;;
         esac
     done
+
+    if [ ${#PY_FILES[@]} -eq 0 ] && [ "$UNRESOLVED" -gt 0 ]; then
+        # .py paths WERE given and every one of them failed to resolve. The
+        # commonest cause is a caller passing one quoted, space-joined string
+        # ("a.py b.py c.py"): it ends in .py so the filter above matches it,
+        # but no file has that name. Saying "no Python files given" here would
+        # be factually false AND pass-shaped, so this case gets its own
+        # verdict naming the likely cause. Still exit 0 — a caller-argument
+        # mistake is a graceful degradation, not a hygiene finding, and the
+        # documented contract puts every SKIPPED at 0.
+        echo "IMPORT-HYGIENE: SKIPPED (.py paths given but none exist; check for an unsplit quoted file list)"
+        exit 0
+    fi
 
     if [ ${#PY_FILES[@]} -eq 0 ]; then
         # No Python files to check is a graceful degradation, not an error —
