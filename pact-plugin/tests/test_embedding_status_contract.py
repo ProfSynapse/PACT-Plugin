@@ -314,7 +314,7 @@ class TestCliStderrStaysCleanOnTheFaultPath:
         env = dict(os.environ)
         env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
         # Same reason, second channel. huggingface_hub relays server-sent
-        # `Warning:` response headers through logger.warning() -- e.g. the
+        # `X-HF-Warning` response headers through logger.warning() -- e.g. the
         # unauthenticated-request notice -- which lastResort puts on stderr
         # exactly like the fault this test measures. The text is chosen by the
         # Hub, not by us, so it cannot be matched on; silencing the library's
