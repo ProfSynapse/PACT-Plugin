@@ -230,7 +230,9 @@ def test_fail_closed_module_load(tmp_path):
 
     PYTHONSAFEPATH is cleared from the child's environment for the same
     reason it used to be set: an ambient PYTHONSAFEPATH=1 would suppress the
-    sys.path[0] insert this mechanism depends on.
+    sys.path[0] insert this mechanism depends on. Removing that line does NOT
+    redden this arm, it GREENS it -- `shared` then fails to resolve at all,
+    which reaches the same fail-closed deny the sabotage does. Keep the line.
     """
     import shutil
 
@@ -272,8 +274,16 @@ def test_fail_closed_module_load(tmp_path):
     hso = out["hookSpecificOutput"]
     assert hso["hookEventName"] == "PreToolUse"
     assert hso["permissionDecision"] == "deny"
-    assert "load failure" in hso["permissionDecisionReason"].lower() \
-        or "module imports" in hso["permissionDecisionReason"].lower()
+    reason = hso["permissionDecisionReason"].lower()
+    assert "module imports" in reason, reason
+    # The sabotage's own text, injected by this test above. Asserting a string
+    # this test authored is the point here: exit 2 is the gate's generic DENY
+    # code and EVERY route into the fail-closed branch emits the same shape, so
+    # only the injected fault's signature witnesses that THIS fault reached it.
+    # Without it a missing module, or a module present with the name missing,
+    # passes this arm with no sabotage at all. Keep it, and move it if the
+    # sabotage message moves.
+    assert "sabotage" in reason, reason
 
 
 def test_redaction_in_journal(tmp_path, monkeypatch, capsys):
