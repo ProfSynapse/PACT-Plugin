@@ -384,20 +384,30 @@ class TestDiscoveryFloor:
         # Floor rather than exact count so adding files never breaks it; bump
         # the floor as the scanned roots grow, never lower it without a
         # deliberate scope decision. History: lowered 63 -> 55 when the dormant
-        # hooks/refresh/ package (8 modules) was removed, dropping the scanned
-        # count 66 -> 58; raised 55 -> 71 when skills/pact-memory/scripts and
-        # scripts were added, taking the count 59 -> 74 (hooks/ had gained one
-        # file since the 58 above, so measure the count -- do not carry a
-        # figure forward from this history). Both moves keep the same slack of
-        # 3, and that tightness is the point: at the old floor of
-        # 55 the entire skills/pact-memory/scripts root could vanish (74 -> 60)
-        # and this assertion would still pass, so the widened scan would have
-        # been guarded in name only.
+        # hooks/refresh/ package (8 modules) was removed; raised 55 -> 71 when
+        # skills/pact-memory/scripts and scripts were added.
+        #
+        # COUNTING RULE, so the next reader RE-DERIVES instead of inheriting a
+        # number: _SCANNED_FILES is every *.py that Path.rglob finds under each
+        # entry of SCANNED_ROOTS. Measure it; never carry a figure forward from
+        # this comment. Any count written here is true only on the day it was
+        # written -- 84 when this paragraph was, which was already 10 above the
+        # 74 the previous version of this comment reasoned from.
+        #
+        # So SLACK IS NOT A PROPERTY THIS COMMENT CAN PIN: it is today's count
+        # minus 71, and it WIDENS on its own as files are added. Tightness was
+        # the original argument for raising the floor -- at 55 the whole
+        # skills/pact-memory/scripts root could have vanished and this
+        # assertion would still have passed, guarding the widened scan in name
+        # only -- and that tightness DECAYS SILENTLY. The wider the slack, the
+        # more of a root can disappear unnoticed. Re-measure and raise the
+        # floor when it has drifted.
         #
         # LIMIT, stated rather than implied: a count floor cannot protect a
-        # single-file root. Losing scripts/ takes the count to 73, which no
-        # workable floor distinguishes from normal churn. This test guards
-        # against a LARGE root collapsing, not against every root.
+        # SMALL root. Losing one whose file count is under the current slack
+        # leaves the total above the floor, indistinguishable from normal
+        # churn. This test guards against a LARGE root collapsing, not against
+        # every root.
         assert len(_SCANNED_FILES) >= 71
 
 
