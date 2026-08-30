@@ -42,8 +42,9 @@
 #   On the 3.9 cell nothing is older, so it SKIPS there by construction: the
 #   differential guard aimed at `read_text(newline=)` is inert on the very
 #   cell added to catch `read_text(newline=)`. Its coverage lives on the
-#   HIGHER cells, and only where an older interpreter is on PATH. Do not read
-#   a green 3.9 cell as covering that class.
+#   HIGHER cells, where an older interpreter is on PATH; on the 3.9 cell the
+#   runtime IS the floor, so that class is covered by the run itself, under
+#   the bound stated above, rather than by the guard.
 #   The 3.9 cell necessarily resolves a different pytest major from the other
 #   cells: every 9.x release declares Requires-Python >=3.10, so 3.9 gets the
 #   newest 8.x the resolver offers. That divergence is FORCED, not chosen. It
