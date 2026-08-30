@@ -11,11 +11,11 @@ gate's structural contract:
   3. team_name_required DENY: empty team_name=
   4. name_reserved_token DENY: reserved name (`team-lead`)
   5. SOLO_EXEMPT carve-out: subagent_type='general-purpose' → ALLOW
-  6. Module-load fail-closed counter-test: subprocess invocation with
-     PYTHONPATH manipulated so shared.dispatch_helpers raises
-     ImportError → DENY output includes hookEventName + exit 2
+  6. Module-load fail-closed counter-test: subprocess invocation of a
+     COPIED hooks tree whose shared.dispatch_helpers raises ImportError
+     → DENY output includes hookEventName + exit 2
 
-The fail-closed counter-test uses subprocess+PYTHONPATH per PR #660 R2
+The fail-closed counter-test runs in a subprocess per PR #660 R2
 discipline: NEVER pop shared.* from sys.modules in the test process.
 Sabotage runs in a subprocess so the test process's import state stays
 clean.
@@ -205,45 +205,54 @@ def test_solo_exempt_carve_out(tmp_path, monkeypatch, capsys):
 
 
 def test_fail_closed_module_load(tmp_path):
-    """Module-load fail-closed counter-test: sabotage shared.dispatch_helpers via PYTHONPATH
-    so its import raises, then invoke dispatch_gate.py as a subprocess.
+    """Module-load fail-closed counter-test: sabotage shared.dispatch_helpers
+    inside a COPY of the hooks tree, then invoke the COPIED dispatch_gate.py
+    as a subprocess.
     Expect: exit 2, stdout JSON with hookEventName + permissionDecision='deny'.
 
     Subprocess isolation per PR #660 R2 discipline — NEVER pop shared.*
-    from sys.modules in the test process. The sabotaged shared/ tree
-    lives entirely in tmp_path: copy the real shared/ package, replace
-    dispatch_helpers.py with a raise, and point PYTHONPATH at the copy.
+    from sys.modules in the test process.
+
+    RUNNING THE COPIED SCRIPT IS THE MECHANISM. Python puts the script's own
+    directory at sys.path[0], so invoking the copied gate makes the copied —
+    and therefore sabotaged — `shared` package the one that resolves, on
+    every interpreter. The whole hooks/ tree is copied rather than just
+    shared/, so any __file__-relative resolution inside the gate stays
+    structurally honest.
+
+    THE EARLIER SHAPE WAS INERT BELOW 3.11. It ran the REAL gate and relied
+    on PYTHONSAFEPATH=1 to suppress the sys.path[0] auto-insert so that a
+    PYTHONPATH pointing at the sabotage would win. PYTHONSAFEPATH arrived in
+    3.11: on 3.9 it is ignored, the real hooks/shared/ wins, the fail-closed
+    branch is never reached, and this arm fails at the exit-code assertion.
+    Do NOT repair that by relaxing the assertion — the gate is not failing
+    open, it was never being exercised.
+
+    PYTHONSAFEPATH is cleared from the child's environment for the same
+    reason it used to be set: an ambient PYTHONSAFEPATH=1 would suppress the
+    sys.path[0] insert this mechanism depends on.
     """
     import shutil
 
     repo_hooks = Path(__file__).parent.parent / "hooks"
-    real_shared = repo_hooks / "shared"
-    sabotage_root = tmp_path / "sabotage"
-    sabotage_shared = sabotage_root / "shared"
-    # Copy the real shared/ tree so every OTHER submodule (pact_context,
-    # session_journal, ...) imports normally.
-    shutil.copytree(real_shared, sabotage_shared)
+    hooks_copy = tmp_path / "hooks"
+    # Copy the whole tree so every OTHER submodule (pact_context,
+    # session_journal, ...) imports normally from the copy.
+    shutil.copytree(
+        repo_hooks, hooks_copy, ignore=shutil.ignore_patterns("__pycache__")
+    )
     # Overwrite ONLY dispatch_helpers.py with a forced-raise stub so the
     # `from shared.dispatch_helpers import ...` line in dispatch_gate.py
     # fires the wrapped except BaseException → _emit_load_failure_deny.
-    (sabotage_shared / "dispatch_helpers.py").write_text(
+    (hooks_copy / "shared" / "dispatch_helpers.py").write_text(
         "raise ImportError('sabotage: forced module-load failure')\n"
     )
 
     env = os.environ.copy()
-    # Sabotage dir first → its `shared` package wins over the real one.
-    env["PYTHONPATH"] = os.pathsep.join([
-        str(sabotage_root),
-        str(repo_hooks),
-    ])
-    # Python (per PEP 432 / 3.11+) auto-prepends the script's parent dir
-    # to sys.path[0], which would let `shared` resolve to the REAL
-    # hooks/shared/ before our sabotage. PYTHONSAFEPATH=1 disables that
-    # auto-insert so PYTHONPATH ordering is authoritative.
-    env["PYTHONSAFEPATH"] = "1"
+    env.pop("PYTHONSAFEPATH", None)
 
     proc = subprocess.run(
-        [sys.executable, str(repo_hooks / "dispatch_gate.py")],
+        [sys.executable, str(hooks_copy / "dispatch_gate.py")],
         input=json.dumps({
             "hook_event_name": "PreToolUse",
             "session_id": "test",
