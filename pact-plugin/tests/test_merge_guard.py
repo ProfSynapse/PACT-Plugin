@@ -21,6 +21,8 @@ Tests cover:
 17. Integration: full main() flows, multiple tokens, token consumption
 """
 
+from __future__ import annotations
+
 import io
 import json
 import os

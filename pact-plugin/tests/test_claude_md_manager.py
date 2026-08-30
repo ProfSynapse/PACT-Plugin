@@ -23,6 +23,8 @@ project CLAUDE.md migration to the PACT_MANAGED boundary structure:
 14. Symlink guard: refuses to operate on symlinks
 """
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 

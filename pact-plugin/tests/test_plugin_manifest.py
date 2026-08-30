@@ -13,6 +13,8 @@ Comprehensive row coverage (name/version schema shapes, OSError,
 UnicodeDecodeError, newline sanitization, etc.) is TEST phase work.
 """
 
+from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path

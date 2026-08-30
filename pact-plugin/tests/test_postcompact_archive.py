@@ -17,6 +17,8 @@ Tests cover:
 4. Outer exception handler (hook_error_json output)
 5. Module constants
 """
+
+from __future__ import annotations
 import json
 import os
 import stat

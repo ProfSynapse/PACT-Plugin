@@ -15,6 +15,8 @@ Tests cover:
 Note: Disk state gathering (task analysis, team scanning) is tested in
 test_session_state.py since those functions now live in shared/session_state.py.
 """
+
+from __future__ import annotations
 import json
 import os
 import subprocess

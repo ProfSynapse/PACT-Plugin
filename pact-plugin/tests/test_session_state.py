@@ -18,6 +18,8 @@ constraint of using real fixtures rather than mocks.
 Risk tier: HIGH (regression guards directly encode the #411 / #412 bug
 invariants; they are load-bearing).
 """
+
+from __future__ import annotations
 import json
 import sys
 from pathlib import Path

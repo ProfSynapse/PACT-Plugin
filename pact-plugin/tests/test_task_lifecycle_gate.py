@@ -31,6 +31,8 @@ Disciplines applied:
     `feedback_no_planning_artifact_test_names`.
 """
 
+from __future__ import annotations
+
 import io
 import json
 import sys

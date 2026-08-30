@@ -20,6 +20,8 @@ the load-bearing decisions in place so a future regression surfaces fast:
       with hookEventName + exit 0
 """
 
+from __future__ import annotations
+
 import io
 import json
 import sys

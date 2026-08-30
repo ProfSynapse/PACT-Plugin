@@ -10,6 +10,8 @@ Usage:
     from helpers import create_peer_review_transcript, create_terminated_workflow_transcript
 """
 
+from __future__ import annotations
+
 import json
 from datetime import datetime, timezone
 from typing import Any
