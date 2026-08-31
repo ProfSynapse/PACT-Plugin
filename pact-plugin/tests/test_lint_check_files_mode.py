@@ -91,10 +91,7 @@ class TestVerdictContract:
         f.write_text("not python\n", encoding="utf-8")
         proc = _run(str(f))
         assert proc.returncode == 0
-        assert (
-            _last_stdout_line(proc)
-            == "IMPORT-HYGIENE: SKIPPED (no Python files given)"
-        )
+        assert _last_stdout_line(proc) == _NO_FILES
 
 
 class TestUnresolvedPathsVerdict:
