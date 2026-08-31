@@ -11,13 +11,15 @@ pin whose mutation cannot be named is not a pin; it is coverage-shaped
 decoration, and this file exists because that failure has already shipped
 twice in this area.
 
-WHAT IS DELIBERATELY NOT PINNED — the auditor's `metadata.type` state. The
+NOT PINNED FOR THE DENOMINATOR — the auditor's `metadata.type` state. The
 denominator keys on `is_teachback_exempt`, which has no metadata surface, so
-that fact is irrelevant here and pinning it would ossify a hazard that no
-longer exists.
+that fact is irrelevant to it. It IS pinned lower down for a different
+consumer: the harvest predicate's state set depends on auditors staying
+non-exempt, which depends on that dispatch carrying no `type`.
 """
 import ast
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -29,6 +31,7 @@ from shared import intentional_wait  # noqa: E402
 from shared.intentional_wait import (  # noqa: E402
     SELF_COMPLETE_EXEMPT_AGENT_TYPES,
     TEACHBACK_EXEMPT_AGENT_TYPES,
+    is_self_complete_exempt,
     is_teachback_exempt,
 )
 
@@ -247,3 +250,64 @@ class TestProtocolProseNamesTheSameConstant:
             "on that constant being a pre-existing declaration, so a doc that "
             "stops naming it loses the independent ground the ruling needs"
         )
+
+
+# Grep target for anyone editing the claim gate: task_claim_gate._atomic_claim
+# writes the second of these states. If it learns a third, this set is what the
+# harvest predicate in agents/pact-orchestrator.md must grow to cover.
+ATOMIC_CLAIM_LIVE_STATES = frozenset({"pending", "in_progress"})
+
+ORCHESTRATOR_PERSONA = Path(__file__).parent.parent / "agents" / "pact-orchestrator.md"
+AUDITOR_DISPATCH_SITES = (
+    Path(__file__).parent.parent / "commands" / "orchestrate.md",
+    Path(__file__).parent.parent / "commands" / "comPACT.md",
+)
+
+
+class TestAuditorLivenessPredicateCoversTheClaimGate:
+    """The harvest predicate names task states; its state set is correct only
+    because of facts in two files it never references. These arms carry that
+    coupling.
+
+    NOT COVERED, stated rather than implied: a rewording that keeps both state
+    tokens and inverts their sense ("`pending`, never `in_progress`") passes the
+    token-set arm. Pinning sentence structure instead would redden on every
+    legitimate rewrite, which is the trade taken here deliberately.
+    """
+
+    def test_harvest_predicate_names_every_state_the_claim_gate_can_produce(self):
+        """Reddens on BOTH states this predicate shipped in one PR:
+        `in_progress`-only and `pending`-only. Asserts the anchor exists first,
+        so deleting the line fails loudly instead of passing vacuously."""
+        lines = [
+            ln for ln in ORCHESTRATOR_PERSONA.read_text().splitlines()
+            if "no auditor task is" in ln
+        ]
+        assert len(lines) == 2, "harvest predicate anchor missing or moved: %r" % (lines,)
+        for ln in lines:
+            # states are named in the CONDITION; the trailing `(workflow)` is not one
+            condition = ln.split("\u2192")[0]
+            assert set(re.findall(r"`(\w+)`", condition)) == ATOMIC_CLAIM_LIVE_STATES, ln
+
+    def test_auditor_shaped_task_is_not_self_complete_exempt(self):
+        """The fact the predicate rests on. Reddens if either exemption surface
+        starts admitting auditors — the dependency editor's tripwire."""
+        assert "pact-auditor" not in SELF_COMPLETE_EXEMPT_AGENT_TYPES
+        assert is_self_complete_exempt(
+            {"owner": "auditor", "metadata": {"completion_type": "signal"}}, ""
+        ) is False
+
+    def test_no_auditor_dispatch_site_sets_metadata_type(self):
+        """Reddens if a dispatch gains `metadata.type`, which would make
+        auditors exempt, keep them out of `in_progress`, and silently un-couple
+        the predicate. The prose already forbids this; this is its enforcement."""
+        found = 0
+        for path in AUDITOR_DISPATCH_SITES:
+            for m in re.finditer(
+                r'metadata(?:=|: )(\{[^}]*"completion_type"[^}]*\})', path.read_text()
+            ):
+                found += 1
+                assert set(json.loads(m.group(1))) == {"completion_type"}, (
+                    path.name, m.group(1)
+                )
+        assert found >= 2, "auditor dispatch metadata literals not found: %d" % found
