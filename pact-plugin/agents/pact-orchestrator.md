@@ -637,13 +637,15 @@ The secretary returns relevant memory entries with IDs — historical context, n
 
 At these workflow boundaries, create a task for the secretary referencing the `pact-handoff-harvest` skill:
 
-- After CODE phase completes → Standard Harvest
-- At peer-review dispatch (parallel with reviewers) → Standard Harvest (**PRIMARY trigger**, fires unconditionally)
+- After CODE phase completes, once the auditor has reported → Standard Harvest
+- After every reviewer has reported → Standard Harvest (**PRIMARY trigger**, fires unconditionally)
 - After remediation completes → Incremental Harvest (delta only, only if remediation occurred)
-- After comPACT specialist completes → Standard Harvest
+- After comPACT specialists complete, once the auditor has reported → Standard Harvest
 - During wrap-up → Consolidation Harvest (Pass 2) with safety net for unprocessed HANDOFFs
 
 These triggers are idempotent — safe to fire even if HANDOFFs were already processed.
+
+Never fire a harvest while agents whose value is independent judgement are live — reviewers, or a concurrent auditor. The harvest writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context.
 
 NOTE: For ad-hoc work outside defined PACT workflows → `SendMessage(to="secretary", message="[team-lead→secretary] Save: {what and why}", summary="Save request: {topic}")`
 
