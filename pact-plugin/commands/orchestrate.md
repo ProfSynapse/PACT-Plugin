@@ -799,8 +799,8 @@ JSON
 JSON
   ```
 - [ ] **Primary HANDOFF-presence check**: on receiving each Task-complete `SendMessage`, verify via `TaskGet` — confirm status=completed AND metadata.handoff populated/non-empty. If missing, `SendMessage` the agent to complete HANDOFF before downstream dispatch proceeds.
-- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm `metadata.audit_summary` is present (verify via `TaskGet`). A dispatched-but-unreported audit does NOT satisfy this. If it is absent, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, and wait for it to report before TEST dispatch proceeds.
-- [ ] **Process coder HANDOFFs** (after the auditor has reported — non-blocking):
+- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — `metadata.audit_summary` is present (verify via `TaskGet`), OR an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
+- [ ] **Process coder HANDOFFs** (non-blocking — do not hold this for the auditor's verdict):
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",
     description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
