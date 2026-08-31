@@ -414,6 +414,13 @@ class TestDiscoveryFloor:
         # every root.
         assert len(_SCANNED_FILES) >= 71
 
+    def test_every_scanned_root_resolves_non_empty(self):
+        # The count floor above cannot see a root vanish when that root is
+        # smaller than its slack; this can, for every root and at any slack.
+        # Reuses iter_python_files so the guard and the scan cannot drift.
+        for root in SCANNED_ROOTS:
+            assert any(iter_python_files((root,))), root
+
 
 class TestPy39SyntaxFloor:
     """R0 over every scanned file, one test per file."""
