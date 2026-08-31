@@ -3,17 +3,19 @@ Location: pact-plugin/tests/test_merge_guard_why_oracle.py
 Summary: Covers the merged-history loaders' failure diagnostic. Each cert module
          below loads a baked baseline with `git show` and records WHY a load
          failed into a module-level `_WHY` map; that text is the entire content
-         of the skip reason its differential rows then emit. WHERE IT ACTUALLY
-         FIRES, measured at this HEAD rather than reasoned about: on a developer
-         machine 1 of the 7 modules populates `_WHY` (1178_f2, whose base is
-         absent everywhere) and the other 6 find every baked object and stay
-         empty; on the 3.9 CI cell 5 of 7 populate, because the pre-fix and
-         head-side objects that survive locally as unreferenced objects are
-         absent there. TWO MODULES POPULATE IT IN NEITHER PLACE -- 1136 and
-         1178_cert reach every object they need in both environments -- and
-         this oracle parametrizes over them regardless. So for those two the
-         arm below is not observing a live diagnostic; it drives the failure
-         directly, which is the only reason it can cover them at all. A skip
+         of the skip reason its differential rows then emit. WHERE IT FIRES ON
+         THE PRODUCTION PATH -- the module-level loads, not the arm below, which
+         populates `_WHY` deliberately: a module populates it only in an
+         environment missing one of the objects it loads. CI clones origin and
+         misses every squash-merged feature-branch commit, so the modules baking
+         one skip there; a developer's clone may still reach those through
+         another remote, so which modules fire locally is a property of the
+         CLONE, not of the module. Some modules bake only commits on main and so
+         populate `_WHY` NOWHERE, and this oracle parametrizes over them anyway
+         -- for those the arm is not observing a live diagnostic, it drives the
+         failure directly, which is the only reason it can cover them at all.
+         The current per-environment split is in the CI log's skip reasons,
+         which the workflow's `-ra` surfaces; do not restate it here. A skip
          reason is read only when something has already gone wrong, which is
          exactly when a degraded one costs the most. Routing the loader's stderr
          (`stderr=subprocess.PIPE` back to `subprocess.DEVNULL`) leaves every

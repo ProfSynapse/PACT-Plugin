@@ -3,11 +3,21 @@ Location: pact-plugin/tests/merge_guard_baseline_loader.py
 Summary: Loud-fail loaders for the COMMITTED vendored merge-guard baseline fixtures.
          TWO independent pre-fix baselines, each vendored as committed bytes (never a
          `git show` of a SHA no ref reaches. THE SPLIT IS BY ROLE, not across baseline
-         SHAs as a class: measured against origin/main, 6 of the 7 BASE SHAs are
-         ancestors and 1 is not, while 0 of the 10 PRE-FIX and HEAD-SIDE SHAs are.
-         The CI-invisible objects are therefore the pre-fix/head-side ones plus that
-         single base -- confirmed on the 3.9 cell, where 5 of 7 cert files skip a
-         differential. That is the lesson these loaders exist to close):
+         SHAs as a class, and the mechanism rather than the tally is what stays true:
+         a BASE SHA is USUALLY a commit on main, and those any clone of origin has.
+         The exception is a base taken from a branch's own history rather than from
+         main -- the parent of a pre-merge fix commit, say -- which the squash leaves
+         off main like the commit it preceded; when the branch goes, so does it. A
+         base that does not resolve is in that state, and the differential self-skips
+         naming the object, so the choice is to re-derive the base from the merged
+         history or to accept the skip. A PRE-FIX or
+         HEAD-SIDE SHA is a point on a feature branch that was squash-merged, so the
+         commit itself never lands on main and survives only where some other ref
+         still reaches it -- a developer's fork remote, say. CI clones origin alone
+         and sees none of them. Check any one with `git merge-base --is-ancestor <sha>
+         origin/main`, and which SHAs hold which role with the variable names in the
+         cert modules; the live per-module outcome is in the CI log's skip reasons.
+         That is the lesson these loaders exist to close):
 
            load_baseline()          -> fixtures/merge_guard_baseline/merge_guard_common_b4041ccf.py
                                        (pre OBS-A→I; the over-block-cluster certs' base)
