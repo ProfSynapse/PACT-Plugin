@@ -1,4 +1,16 @@
-"""The harvest dispatch sites and the prose describing them must desync together.
+"""Harvest dispatch sites are the oracle for the prose enumerations of them.
+
+COVERED, and this list is the scope — an enumeration not on it is not gated:
+the orchestrator persona's trigger rows, the harvest skill's variant bullets,
+the persona's Consolidation exemption paragraph, and the skill's Consolidation
+trigger sentence. Each is compared against the dispatch sites, never against
+another prose surface: completing one of these lists is what shortens the
+others, so chaining them would route that pressure into the oracle.
+
+Before adding an arm here, check whether the enumeration you are gating is
+coupled to one that is not. A partial gate over coupled lists manufactures the
+desync it cannot see, and reports green in the same run.
+
 
 The dispatch sites in ``commands/`` are the ground truth: each one tells the
 secretary to follow a named harvest workflow, so the pair (command, variant) is
@@ -56,6 +68,14 @@ SKILL = PLUGIN / "skills" / "pact-handoff-harvest" / "SKILL.md"
 _DISPATCH = re.compile(r"Follow the (\w+) Harvest workflow")
 _PERSONA_ROW = re.compile(r"→\s*(\w+) Harvest.*?`([\w-]+)`")
 _SKILL_BULLET = re.compile(r"\*\*(\w+) Harvest\*\*[^\n]*?\(([^)]*)\)")
+
+# Paragraphs claiming WHICH boundaries run a Consolidation Harvest, located by a
+# phrase each one owns. A rewrite that drops the phrase empties the extraction
+# and trips the non-empty guard rather than passing.
+_CONSOLIDATION_CLAIMS = {
+    "persona exemption paragraph": (PERSONA, "EXEMPT and must run"),
+    "skill consolidation trigger": (SKILL, "This is the deep-clean pass"),
+}
 
 
 def _dispatched():
@@ -131,4 +151,80 @@ class TestHarvestTriggersAgreeAcrossSurfaces:
             f"A dispatch tells the secretary to run a named workflow, so every "
             f"dispatched pair belongs in this surface and every pair it names "
             f"must have a dispatch. Update whichever side you did not just edit."
+        )
+
+
+def _command_stems():
+    return {path.stem for path in COMMANDS.glob("*.md")}
+
+
+def _consolidation_dispatchers():
+    """Commands with a Consolidation Harvest dispatch site."""
+    return {
+        path.stem
+        for path in sorted(COMMANDS.glob("*.md"))
+        if "Consolidation" in _DISPATCH.findall(path.read_text(encoding="utf-8"))
+    }
+
+
+def _claimed_boundaries(source, marker):
+    """Command names named by the paragraph of `source` containing `marker`."""
+    paragraphs = [
+        para
+        for para in source.read_text(encoding="utf-8").split("\n\n")
+        if marker in para
+    ]
+    stems = _command_stems()
+    return {
+        name
+        for para in paragraphs
+        for name in re.findall(r"[\w-]+", para)
+        if name in stems
+    }
+
+
+class TestConsolidationExemptionMatchesTheDispatchSites:
+    """Every Consolidation boundary must appear wherever the set is enumerated.
+
+    The unit here is the BOUNDARY-NAME SET, not the (command, variant) multiset
+    the trigger arm uses. Both differences are load-bearing. The variant is
+    constant — every member is a Consolidation Harvest — so pairing would
+    compare a padded set. And multiplicity is wrong: a command with two trigger
+    rows, one Standard and one Consolidation, is named ONCE here, correctly,
+    because these paragraphs claim a property of a boundary rather than a count
+    of dispatch sites.
+
+    Completing one of these lists is what shortens the others, so they are
+    asserted against the dispatch sites rather than against each other.
+
+    WHAT THIS DOES NOT CATCH: the per-boundary REASON. A reason that goes stale
+    while its command name stays present is invisible here.
+    """
+
+    @pytest.mark.parametrize("name,source,marker", [
+        (label, source, marker)
+        for label, (source, marker) in sorted(_CONSOLIDATION_CLAIMS.items())
+    ])
+    def test_every_consolidation_dispatcher_is_named(self, name, source, marker):
+        dispatchers = _consolidation_dispatchers()
+        assert dispatchers, (
+            f"no Consolidation Harvest dispatch site found under {COMMANDS}. "
+            f"The oracle is empty, so the comparison below would hold "
+            f"vacuously. Report this as an extraction failure, not agreement."
+        )
+        claimed = _claimed_boundaries(source, marker)
+        assert claimed, (
+            f"the {name} in {source.name} named no command. Either the "
+            f"paragraph stopped enumerating them or its locating phrase "
+            f"{marker!r} was rewritten. Report this as an extraction failure, "
+            f"not agreement."
+        )
+        assert claimed == dispatchers, (
+            f"THE {name.upper()} AND THE CONSOLIDATION DISPATCH SITES DISAGREE.\n"
+            f"  dispatches Consolidation but not named: "
+            f"{sorted(dispatchers - claimed)}\n"
+            f"  named but dispatches no Consolidation: "
+            f"{sorted(claimed - dispatchers)}\n"
+            f"Every boundary that runs a Consolidation Harvest belongs in this "
+            f"paragraph. Update whichever side you did not just edit."
         )

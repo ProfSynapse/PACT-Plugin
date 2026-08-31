@@ -420,7 +420,7 @@ Triggered after remediation completes — processes only the delta since the las
 
 ## Consolidation Harvest Workflow
 
-Triggered during `/PACT:wrap-up` or `/PACT:pause`. This is the deep-clean pass — it extends the standard workflow with memory consolidation and pruning.
+Triggered during `/PACT:wrap-up`, `/PACT:pause`, `/PACT:refresh`, or `/PACT:orchestrate` once a second or subsequent feature completes in one session. This is the deep-clean pass — it extends the standard workflow with memory consolidation and pruning.
 
 ### Step 1: Safety Net (Unprocessed HANDOFFs)
 
