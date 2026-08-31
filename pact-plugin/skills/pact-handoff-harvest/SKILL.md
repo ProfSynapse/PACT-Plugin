@@ -12,9 +12,9 @@ description: |
 This skill provides the complete workflow for discovering, reviewing, and saving agent HANDOFFs as institutional knowledge. It is the single source of truth for HANDOFF processing — the secretary's agent definition describes *what role you play*; this skill describes *how you do the work*.
 
 Three workflow variants:
-- **Standard Harvest** — discover, review, save, record the processed ids. Triggered by workflow commands (orchestrate, comPACT, peer-review) after phases complete.
-- **Incremental Harvest** — delta-only pass after remediation. Processes only new completions since last harvest.
-- **Consolidation Harvest** — safety-net + deep-clean pass. Triggered by wrap-up/pause at session end.
+- **Standard Harvest** (orchestrate, comPACT, peer-review, plan-mode) — discover, review, save, record the processed ids. Triggered after phases complete.
+- **Incremental Harvest** (peer-review) — delta-only pass after remediation. Processes only new completions since last harvest.
+- **Consolidation Harvest** (wrap-up, pause, refresh) — safety-net + deep-clean pass. Triggered at session end or at a mid-session context refresh.
 
 Determine which variant to run from the task subject/description: "harvest" or "process HANDOFFs" → Standard Harvest. "incremental" or "remediation" → Incremental Harvest. "consolidation" → Consolidation Harvest.
 

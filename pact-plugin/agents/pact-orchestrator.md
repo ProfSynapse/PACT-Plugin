@@ -637,11 +637,14 @@ The secretary returns relevant memory entries with IDs — historical context, n
 
 At these workflow boundaries, create a task for the secretary referencing the `pact-handoff-harvest` skill:
 
-- After CODE phase completes, once the auditor has reported → Standard Harvest
-- After every reviewer has reported → Standard Harvest (**PRIMARY trigger**, fires unconditionally)
-- After remediation completes → Incremental Harvest (delta only, only if remediation occurred)
-- After comPACT specialists complete, once the auditor has reported → Standard Harvest
-- During wrap-up → Consolidation Harvest (Pass 2) with safety net for unprocessed HANDOFFs
+- After CODE phase completes, once the auditor has reported → Standard Harvest (`orchestrate`)
+- After every reviewer has reported → Standard Harvest (`peer-review`) (**PRIMARY trigger**, fires unconditionally)
+- After remediation completes → Incremental Harvest (`peer-review`) (delta only, only if remediation occurred)
+- After comPACT specialists complete, once the auditor has reported → Standard Harvest (`comPACT`)
+- After a planning consultation completes → Standard Harvest (`plan-mode`)
+- During wrap-up → Consolidation Harvest (`wrap-up`) (Pass 2) with safety net for unprocessed HANDOFFs
+- At session pause → Consolidation Harvest (`pause`)
+- At a mid-session context refresh → Consolidation Harvest (`refresh`)
 
 These triggers are idempotent — safe to fire even if HANDOFFs were already processed.
 
