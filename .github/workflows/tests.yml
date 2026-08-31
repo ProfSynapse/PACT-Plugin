@@ -169,9 +169,11 @@
 #   and a stale figure under a heading claiming "empirically verified" is worse
 #   than none, because the heading vouches for it.
 #   Remaining skips include intentional carve-outs (live-tmux-only probes,
-#   orchestrator carve-out, pin-caps test-design, fuzz-strategy edges) and
-#   version-conditional cases — green-with-skips is the accepted CI outcome;
-#   skipped is not failed.
+#   orchestrator carve-out, pin-caps test-design, fuzz-strategy edges),
+#   version-conditional cases, and the baked-base differentials: guards whose
+#   base commits became unreachable when their branches were squash-merged skip
+#   here, and run locally only where those objects survive uncollected.
+#   Green-with-skips is the accepted CI outcome; skipped is not failed.
 
 name: tests
 
@@ -233,9 +235,15 @@ jobs:
         with:
           # Full history so the baked-base cert files can `git show <base-sha>`
           # (their base-vs-HEAD non-vacuity differentials). The default shallow
-          # clone (fetch-depth: 1) lacks the base commits -> `git show` fails ->
-          # those files abort collection (0 tests run). Full history makes every
-          # differential RUN in CI; the in-file self-skip guards are the fallback.
+          # clone (fetch-depth: 1) lacks those commits -> `git show` fails ->
+          # those files abort collection (0 tests run).
+          # This does NOT make every differential run. `fetch-depth` sets DEPTH,
+          # not REFSPEC, and cannot fetch a commit no ref reaches: the baked
+          # bases are squash-merged branch tips, reachable from nothing, so they
+          # are absent here and the in-file guards skip. That is correct
+          # behaviour, not a fallback. They survive on a developer's machine
+          # only as unreferenced objects not yet garbage-collected, which is the
+          # whole local-versus-CI difference.
           fetch-depth: 0
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
