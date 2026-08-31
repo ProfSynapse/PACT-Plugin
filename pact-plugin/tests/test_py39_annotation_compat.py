@@ -693,3 +693,59 @@ class TestDetectorNonVacuity:
         assert len(violations) == 1
         assert violations[0].rule == "missing_future_import"
         assert "sole line" in violations[0].detail
+
+
+# ---------------------------------------------------------------------------
+# R4: outside the scanned roots, a union in an annotation still needs the import
+# ---------------------------------------------------------------------------
+#
+# R1 above demands the future import in EVERY file, but only under
+# SCANNED_ROOTS -- the bare-python3 surface. Elsewhere in the plugin the import
+# is not required in general, yet a file with `X | Y` in an annotation still
+# needs it: that is valid 3.9 SYNTAX, so R0 cannot see it, and the 3.9 CI cell
+# catches it only where something EVALUATES the annotation. This rule closes
+# that gap conditionally, so it does not demand the import from the ~400 files
+# that have no union at all.
+#
+# ROOT IS PLUGIN_ROOT, NOT SCANNED_ROOTS -- do not "tidy" these together.
+# SCANNED_ROOTS excludes tests/, where every current holder of the future
+# import lives, so this rule rooted there would be green over a population
+# containing no instance of what it guards.
+_UNION_SCAN_ROOT = (PLUGIN_ROOT,)
+
+
+def test_annotation_unions_require_the_future_import():
+    """A PEP 604 union in an annotation needs the future import, tree-wide.
+
+    Reuses `_annotation_union_lines` and `check_future_import` rather than
+    re-deriving either: one detector, so this rule and R1 cannot drift apart.
+
+    ONE test rather than one per file -- every failure has the same cause and
+    the same remedy, so the message lists the offenders instead of the
+    collection carrying 400+ ids for a single invariant.
+
+    WHAT THIS CANNOT SEE: a union built dynamically or written as a string
+    annotation; any annotation position `_annotation_nodes` does not yield; a
+    file outside PLUGIN_ROOT (the repo root and .github/ are not scanned). A
+    file that will not parse is REPORTED, not skipped -- an unparseable file
+    and a clean one are otherwise indistinguishable.
+    """
+    offenders, unparsed = [], []
+    for path in iter_python_files(_UNION_SCAN_ROOT):
+        source = path.read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            unparsed.append("{}: {}".format(_relpath(path), exc.msg))
+            continue
+        lines = _annotation_union_lines(tree)
+        if lines and check_future_import(source, _relpath(path)):
+            offenders.append("{}:{}".format(_relpath(path), lines[0]))
+
+    assert not unparsed, "files that would not parse:\n  " + "\n  ".join(unparsed)
+    assert not offenders, (
+        "PEP 604 union in an annotation without `from __future__ import "
+        "annotations` in the leading block. Valid 3.9 syntax, but a TypeError "
+        "at 3.9 runtime as soon as anything evaluates the annotation:\n  "
+        + "\n  ".join(offenders)
+    )
