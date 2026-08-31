@@ -119,7 +119,7 @@ _BASE = _load_classifier(_BASE_SHA)
 _PREFIX = _load_classifier(_PREFIX_SHA)
 # None-safe: guarding _load_classifier alone is NOT enough — a bare
 # `_BASE.is_dangerous_command` would AttributeError at import when the base/pre-fix
-# source is unavailable (shallow clone), re-aborting collection. D_BASE/D_PREFIX are
+# source is unavailable (unreachable base commit), re-aborting collection. D_BASE/D_PREFIX are
 # only ever called by the @requires_history-guarded differential rows.
 D_BASE = _BASE.is_dangerous_command if _BASE is not None else None
 D_PREFIX = _PREFIX.is_dangerous_command if _PREFIX is not None else None
@@ -127,12 +127,12 @@ D = mgc.is_dangerous_command
 STRIP = mgc._strip_non_executable_content
 
 # Skip the base-vs-HEAD / pre-fix-vs-fixed differential (non-vacuity) rows when the
-# baked history is unavailable (shallow clone); the HEAD-side + absolute rows still
+# baked history is unavailable (unreachable base commit); the HEAD-side + absolute rows still
 # run. With fetch-depth:0 in CI both commits are present, so every differential runs.
 requires_history = pytest.mark.skipif(
     _BASE is None or _PREFIX is None,
     reason="base-vs-HEAD / pre-fix differential did not run: %s"
-           % _WHY.get(_BASE_SHA, "no failure recorded"),
+           % ("; ".join("%s: %s" % kv for kv in _WHY.items()) or "no failure recorded"),
 )
 
 # Destructive verbs assembled at runtime — this file carries no raw literal.

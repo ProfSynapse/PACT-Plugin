@@ -89,13 +89,13 @@ CJ = mgc._canonical_join
 MT = mgc._extract_mass_delete_target          # HEAD (netstring)
 # None-safe: guarding _load_classifier alone is NOT enough — a bare
 # `_BASE._extract_mass_delete_target` would AttributeError at import when _BASE is None
-# (shallow clone), re-aborting collection. MT_BASE is only ever read by the
+# (unreachable base commit), re-aborting collection. MT_BASE is only ever read by the
 # @requires_history-guarded differential rows, which skip when _BASE is None.
 MT_BASE = _BASE._extract_mass_delete_target if _BASE is not None else None  # base (comma/@/#)
 D = mgc.is_dangerous_command
 
 # Skip the base-vs-HEAD differential (non-vacuity) rows when the base source is
-# unavailable (shallow clone / missing history); the HEAD-side + absolute rows still
+# unavailable (unreachable base commit); the HEAD-side + absolute rows still
 # run. With fetch-depth:0 in CI the base IS present, so every differential runs there.
 requires_history = pytest.mark.skipif(
     _BASE is None,
@@ -210,7 +210,7 @@ class TestUnderBlockClosure:
 
     def test_comma_identity_head_distinct(self):
         # HEAD-side closure REFUSE — ALWAYS RUNS (unguarded) so CI catches a fix-revert
-        # even on a shallow clone where the base differential below skips.
+        # even where the base commit is unreachable and the base differential below skips.
         assert MT(_COMMA_2) != MT(_COMMA_3)  # HEAD REFUSES
 
     @requires_history
@@ -309,13 +309,13 @@ class TestDoubledSurfaceBaseVsHead:
     def test_mass_target_collision_flips_base_to_head(self):
         # mass_target: base(comma) COLLIDES -> HEAD(netstring) REFUSES (the #1136 flip).
         # Base-differential (skipped w/o history); the HEAD `!=` half runs unguarded in
-        # test_comma_identity_head_distinct, so a fix-revert is still caught on a shallow clone.
+        # test_comma_identity_head_distinct, so a fix-revert is still caught where the base commit is unreachable.
         assert MT_BASE(_COMMA_2) == MT_BASE(_COMMA_3)
         assert MT(_COMMA_2) != MT(_COMMA_3)
 
     def test_branch_set_head_collision_safe(self):
         # HEAD-side: a comma-named branch set and a 3-branch set are DISTINCT at HEAD
-        # (netstring). ALWAYS RUNS (unguarded) so CI catches a fix-revert on a shallow clone.
+        # (netstring). ALWAYS RUNS (unguarded) so CI catches a fix-revert where the base commit is unreachable.
         _D = "-" + "D"
         two = "git branch " + _D + ' "aa,bb" cc'
         three = "git branch " + _D + " aa bb cc"

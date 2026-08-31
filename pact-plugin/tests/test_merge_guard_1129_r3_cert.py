@@ -134,7 +134,7 @@ _BASE = _load_classifier(_BASE_SHA)
 _R3 = _load_classifier(_R3_SHA)
 _FIX1 = _load_classifier(_FIX1_SHA)
 # None-safe: a bare `_BASE.is_dangerous_command` would AttributeError at import when the
-# baked source is unavailable (shallow clone), re-aborting collection. D_BASE/D_R3/D_FIX1
+# baked source is unavailable (unreachable base commit), re-aborting collection. D_BASE/D_R3/D_FIX1
 # are only ever called by the @requires_history-guarded columns.
 D_BASE = _BASE.is_dangerous_command if _BASE is not None else None
 D_R3 = _R3.is_dangerous_command if _R3 is not None else None

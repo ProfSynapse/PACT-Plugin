@@ -21,7 +21,7 @@ Summary: Bidirectional base-vs-HEAD-vs-PATCH re-cert matrix for the #1118 QUOTE-
          PATCH = 6d71a816 (quote-safe re-model)  — the live/shipped module (current HEAD)
 
          The base/HEAD modules load via the __package__='shared' git-show harness (they are
-         permanent merged commits). When history is unavailable (shallow clone), the DIFFERENTIAL
+         permanent merged commits). When the base commit is unreachable, the DIFFERENTIAL
          rows self-SKIP; the absolute PATCH assertions (held battery, cmd-sub, over-match anchor,
          leg-count, structural guards, graphql residual) always run.
 Used by: pytest (merge-guard suite).
@@ -62,7 +62,7 @@ def _load_module_at(sha):
     import (`from .paths import get_claude_config_dir`) resolves against the LIVE, unchanged
     shared.paths (only merge_guard_common.py changed across these revisions). NON-DISRUPTIVE:
     reads via `git show`, never checks out — HEAD is untouched. Returns None on any failure
-    (git missing, shallow clone lacking the commit) so the differential rows self-skip.
+    (git missing, or the commit unreachable) so the differential rows self-skip.
     """
     try:
         src = subprocess.check_output(

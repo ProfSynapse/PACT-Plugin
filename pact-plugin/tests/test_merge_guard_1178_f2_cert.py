@@ -54,7 +54,7 @@ _WHY = {}  # sha -> what actually failed, for the skip reason
 
 
 def _load_classifier(sha):
-    """Load merge_guard_common as it existed at `sha`, or None if unavailable (shallow clone)."""
+    """Load merge_guard_common as it existed at `sha`, or None if unavailable (unreachable base commit)."""
     wt = Path(__file__).resolve().parents[2]
     try:
         src = subprocess.check_output(

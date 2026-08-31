@@ -116,7 +116,7 @@ def _load_classifier(sha):
 
 _BASE = _load_classifier(_BASE_SHA)
 # None-safe: a bare `_BASE.is_dangerous_command` would AttributeError at import when the
-# parent source is unavailable (shallow clone), re-aborting collection. D_BASE is only ever
+# parent source is unavailable (unreachable base commit), re-aborting collection. D_BASE is only ever
 # called by the @requires_history-guarded differential rows.
 D_BASE = _BASE.is_dangerous_command if _BASE is not None else None
 
@@ -152,12 +152,12 @@ D_FIRSTFIX = _FIRSTFIX.is_dangerous_command if _FIRSTFIX is not None else None
 D_FIXR = _FIXR.is_dangerous_command if _FIXR is not None else None
 
 # All three baked baselines come from the same merged history, so one skipif covers them:
-# a shallow clone lacking any of them self-SKIPS every differential row (the HEAD-only rows
+# a checkout lacking any of them self-SKIPS every differential row (the HEAD-only rows
 # — faithful controls, the gobbling mutant, both drift-detectors, ReDoS — still run).
 requires_history = pytest.mark.skipif(
     _BASE is None or _FIRSTFIX is None or _FIXR is None,
     reason="base-vs-firstfix-vs-fixR differentials did not run: %s"
-           % _WHY.get(_BASE_SHA, "no failure recorded"),
+           % ("; ".join("%s: %s" % kv for kv in _WHY.items()) or "no failure recorded"),
 )
 
 # --- FOLD-ALL-4 baseline (#1176 remediation cycle 2). A FRESH independent adversarial re-review of

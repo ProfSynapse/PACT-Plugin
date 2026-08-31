@@ -99,7 +99,7 @@ def _load_classifier(sha):
 
 _BASE = _load_classifier(_BASE_SHA)
 # None-safe: a bare `_BASE.is_dangerous_command` would AttributeError at import when the
-# parent source is unavailable (shallow clone). D_BASE is only ever called by the
+# parent source is unavailable (unreachable base commit). D_BASE is only ever called by the
 # @requires_history-guarded differential rows.
 D_BASE = _BASE.is_dangerous_command if _BASE is not None else None
 
