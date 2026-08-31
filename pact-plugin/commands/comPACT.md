@@ -397,7 +397,7 @@ JSON
   ```
 - [ ] **Calibration** — The secretary gathers calibration metrics during HANDOFF processing. When asked, provide a brief difficulty assessment: was actual difficulty higher, lower, or about the same as predicted? Which dimensions surprised you?
 - [ ] **Verify agent task completion**: On receiving each HANDOFF summary via `SendMessage`, check the agent's task status via `TaskList`. If still "in_progress", mark it completed: `TaskUpdate(taskId, status="completed")`.
-- [ ] **Process specialist HANDOFFs** (after the auditor has reported — non-blocking):
+- [ ] **Process specialist HANDOFFs** (dispatch once no auditor task is `in_progress` — a contamination ordering, NOT a verdict wait):
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",
     description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
