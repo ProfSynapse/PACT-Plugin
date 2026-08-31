@@ -80,6 +80,9 @@ _BASE_SHA = "023ee2c3"    # pre-R2
 _PREFIX_SHA = "6f404f2e"  # R2 pre-F1-fix (whole-command 7d — the HALT #64 regression)
 
 
+_WHY = {}  # sha -> what actually failed, for the skip reason
+
+
 def _load_classifier(sha):
     """Load merge_guard_common as it existed at `sha`, or None if unavailable.
 
@@ -93,16 +96,21 @@ def _load_classifier(sha):
         src = subprocess.check_output(
             ["git", "-C", str(wt), "show",
              sha + ":pact-plugin/hooks/shared/merge_guard_common.py"],
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         ).decode()
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    except subprocess.CalledProcessError as exc:
+        _WHY[sha] = "git show failed: " + (exc.stderr or b"").decode().strip()
+        return None
+    except (FileNotFoundError, OSError) as exc:
+        _WHY[sha] = "git not runnable: %r" % (exc,)
         return None
     mod = types.ModuleType("merge_guard_common_1129r2_" + sha)
     mod.__file__ = str(wt / "pact-plugin/hooks/shared/merge_guard_common.py")
     mod.__package__ = "shared"  # so its `from shared.x import ...` resolve on sys.path
     try:
         exec(compile(src, mod.__file__, "exec"), mod.__dict__)
-    except Exception:
+    except Exception as exc:
+        _WHY[sha] = "source loaded (%d bytes) but exec failed: %r" % (len(src), exc)
         return None
     return mod
 
@@ -123,7 +131,8 @@ STRIP = mgc._strip_non_executable_content
 # run. With fetch-depth:0 in CI both commits are present, so every differential runs.
 requires_history = pytest.mark.skipif(
     _BASE is None or _PREFIX is None,
-    reason="base-vs-HEAD / pre-fix differential requires merged history (shallow clone / missing history)",
+    reason="base-vs-HEAD / pre-fix differential did not run: %s"
+           % _WHY.get(_BASE_SHA, "no failure recorded"),
 )
 
 # Destructive verbs assembled at runtime — this file carries no raw literal.

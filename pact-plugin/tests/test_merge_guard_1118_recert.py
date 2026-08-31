@@ -52,6 +52,9 @@ _BASE_SHA = "c5e9b324"   # pre-carrier-9 baseline (permanent merged commit)
 _HEAD_SHA = "38f76965"   # buggy space-only original carrier 9 (permanent merged commit)
 
 
+_WHY = {}  # sha -> what actually failed, for the skip reason
+
+
 def _load_module_at(sha):
     """Load the merge_guard_common module as it existed at `sha`, or None if unavailable.
 
@@ -64,16 +67,21 @@ def _load_module_at(sha):
     try:
         src = subprocess.check_output(
             ["git", "show", f"{sha}:{_MGC_PATH}"],
-            cwd=str(_REPO_ROOT), text=True, stderr=subprocess.DEVNULL,
+            cwd=str(_REPO_ROOT), text=True, stderr=subprocess.PIPE,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    except subprocess.CalledProcessError as exc:
+        _WHY[sha] = "git show failed: " + (exc.stderr or "").strip()
+        return None
+    except (FileNotFoundError, OSError) as exc:
+        _WHY[sha] = "git not runnable: %r" % (exc,)
         return None
     spec = importlib.util.spec_from_loader(f"shared._mgc_{sha}", loader=None)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]  # spec is never None here
     mod.__package__ = "shared"
     try:
         exec(compile(src, f"<{_MGC_PATH}@{sha}>", "exec"), mod.__dict__)
-    except Exception:
+    except Exception as exc:
+        _WHY[sha] = "source loaded (%d bytes) but exec failed: %r" % (len(src), exc)
         return None
     return mod
 
@@ -92,9 +100,10 @@ _HISTORY_OK = _BASE is not None and _HEAD is not None
 requires_history = pytest.mark.skipif(
     not _HISTORY_OK,
     reason=f"NON-VACUITY DIFFERENTIAL SKIPPED — base ({_BASE_SHA}) / HEAD ({_HEAD_SHA}) source "
-           "unavailable (shallow clone / missing history). Every regression SHAPE is still "
-           "guarded by an always-run absolute PATCH assertion; only the base->PATCH "
-           "behavior-change PROOF did not run this session.",
+           "did not load: "
+           + ("; ".join("%s: %s" % kv for kv in _WHY.items()) or "no failure recorded")
+           + ". Every regression SHAPE is still guarded by an always-run absolute PATCH "
+           "assertion; only the base->PATCH behavior-change PROOF did not run this session.",
 )
 
 

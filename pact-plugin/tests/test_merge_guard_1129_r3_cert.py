@@ -98,6 +98,9 @@ _R3_SHA = "72bacaf8"     # R3 shipped (arm-B regression present)
 _FIX1_SHA = "b313ecaa"   # R3-fix1: space-only anchor restore (fix2-reverted state)
 
 
+_WHY = {}  # sha -> what actually failed, for the skip reason
+
+
 def _load_classifier(sha):
     """Load merge_guard_common as it existed at `sha`, or None if unavailable
     (git missing, or a SHALLOW clone lacking the commit) so collection SUCCEEDS and the
@@ -108,16 +111,21 @@ def _load_classifier(sha):
         src = subprocess.check_output(
             ["git", "-C", str(wt), "show",
              sha + ":pact-plugin/hooks/shared/merge_guard_common.py"],
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         ).decode()
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    except subprocess.CalledProcessError as exc:
+        _WHY[sha] = "git show failed: " + (exc.stderr or b"").decode().strip()
+        return None
+    except (FileNotFoundError, OSError) as exc:
+        _WHY[sha] = "git not runnable: %r" % (exc,)
         return None
     mod = types.ModuleType("merge_guard_common_1129r3_" + sha)
     mod.__file__ = str(wt / "pact-plugin/hooks/shared/merge_guard_common.py")
     mod.__package__ = "shared"  # so its `from shared.x import ...` resolve on sys.path
     try:
         exec(compile(src, mod.__file__, "exec"), mod.__dict__)
-    except Exception:
+    except Exception as exc:
+        _WHY[sha] = "source loaded (%d bytes) but exec failed: %r" % (len(src), exc)
         return None
     return mod
 
@@ -135,7 +143,8 @@ D = mgc.is_dangerous_command
 
 requires_history = pytest.mark.skipif(
     _BASE is None or _R3 is None or _FIX1 is None,
-    reason="base/R3HEAD/FIX1 non-vacuity requires merged history (shallow clone / missing history)",
+    reason="base/R3HEAD/FIX1 non-vacuity differential did not run: %s"
+           % ("; ".join("%s: %s" % kv for kv in _WHY.items()) or "no failure recorded"),
 )
 
 # Destructive literals assembled at runtime — this file carries no raw literal.

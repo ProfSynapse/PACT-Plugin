@@ -79,6 +79,9 @@ STRIP = mgc._strip_non_executable_content
 _BASE_SHA = "f6e3639a"  # 2d7fcd07^ — pre-carrier-5-fix (v4.6.4)
 
 
+_WHY = {}  # sha -> what actually failed, for the skip reason
+
+
 def _load_classifier(sha):
     """Load merge_guard_common as it existed at `sha`, or None if unavailable.
 
@@ -92,16 +95,21 @@ def _load_classifier(sha):
         src = subprocess.check_output(
             ["git", "-C", str(wt), "show",
              sha + ":pact-plugin/hooks/shared/merge_guard_common.py"],
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         ).decode()
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    except subprocess.CalledProcessError as exc:
+        _WHY[sha] = "git show failed: " + (exc.stderr or b"").decode().strip()
+        return None
+    except (FileNotFoundError, OSError) as exc:
+        _WHY[sha] = "git not runnable: %r" % (exc,)
         return None
     mod = types.ModuleType("merge_guard_common_1140_" + sha)
     mod.__file__ = str(wt / "pact-plugin/hooks/shared/merge_guard_common.py")
     mod.__package__ = "shared"  # so its `from shared.x import ...` resolve on sys.path
     try:
         exec(compile(src, mod.__file__, "exec"), mod.__dict__)
-    except Exception:
+    except Exception as exc:
+        _WHY[sha] = "source loaded (%d bytes) but exec failed: %r" % (len(src), exc)
         return None
     return mod
 
@@ -148,7 +156,8 @@ D_FIXR = _FIXR.is_dangerous_command if _FIXR is not None else None
 # — faithful controls, the gobbling mutant, both drift-detectors, ReDoS — still run).
 requires_history = pytest.mark.skipif(
     _BASE is None or _FIRSTFIX is None or _FIXR is None,
-    reason="base-vs-firstfix-vs-fixR differentials require merged history (shallow clone / missing history)",
+    reason="base-vs-firstfix-vs-fixR differentials did not run: %s"
+           % _WHY.get(_BASE_SHA, "no failure recorded"),
 )
 
 # --- FOLD-ALL-4 baseline (#1176 remediation cycle 2). A FRESH independent adversarial re-review of
@@ -178,7 +187,8 @@ _PREFOLD = _load_classifier(_PREFOLD_SHA)
 D_PREFOLD = _PREFOLD.is_dangerous_command if _PREFOLD is not None else None
 requires_prefold = pytest.mark.skipif(
     _PREFOLD is None,
-    reason="fold-all-4 pre-fold differential requires merged history (shallow clone / missing 3972bb5f)",
+    reason="fold-all-4 pre-fold differential did not run: %s"
+           % _WHY.get(_PREFOLD_SHA, "no failure recorded"),
 )
 
 # --- CARRIER-4 EQUALS-FORM baseline (#1176 remediation cycle 3). The final adversarial re-review's
@@ -202,7 +212,8 @@ _PREFIX_C4 = _load_classifier(_PREFIX_C4_SHA)
 D_PREFIX_C4 = _PREFIX_C4.is_dangerous_command if _PREFIX_C4 is not None else None
 requires_prefix_c4 = pytest.mark.skipif(
     _PREFIX_C4 is None,
-    reason="carrier-4 equals-form pre-fix differential requires merged history (shallow clone / missing bf7c8786)",
+    reason="carrier-4 equals-form pre-fix differential did not run: %s"
+           % _WHY.get(_PREFIX_C4_SHA, "no failure recorded"),
 )
 
 # --- F-C1 4-CARRIER baseline (#1176 remediation cycle 4 — the FINAL coarse-substitution-preserve cure).
@@ -228,7 +239,8 @@ _PREFIX_FC1 = _load_classifier(_PREFIX_FC1_SHA)
 D_PREFIX_FC1 = _PREFIX_FC1.is_dangerous_command if _PREFIX_FC1 is not None else None
 requires_prefix_fc1 = pytest.mark.skipif(
     _PREFIX_FC1 is None,
-    reason="F-C1 4-carrier pre-fix differential requires merged history (shallow clone / missing a62703f1)",
+    reason="F-C1 4-carrier pre-fix differential did not run: %s"
+           % _WHY.get(_PREFIX_FC1_SHA, "no failure recorded"),
 )
 
 # --- ECHO/PRINTF CARVE-OUT baseline (#1176 remediation cycle 5b — the bounded echo/printf multi-arg fold).
@@ -250,7 +262,8 @@ _PREFIX_ECHO = _load_classifier(_PREFIX_ECHO_SHA)
 D_PREFIX_ECHO = _PREFIX_ECHO.is_dangerous_command if _PREFIX_ECHO is not None else None
 requires_prefix_echo = pytest.mark.skipif(
     _PREFIX_ECHO is None,
-    reason="echo/printf carve-out pre-fix differential requires merged history (shallow clone / missing a542e21b)",
+    reason="echo/printf carve-out pre-fix differential did not run: %s"
+           % _WHY.get(_PREFIX_ECHO_SHA, "no failure recorded"),
 )
 
 

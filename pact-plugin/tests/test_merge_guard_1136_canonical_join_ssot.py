@@ -50,6 +50,9 @@ from merge_guard_pre import main as pre_main  # noqa: E402
 _BASE_SHA = "9256c93c"  # main HEAD — #1136 pre-dates this refactor (comma/@/# joins COLLIDE)
 
 
+_WHY = {}  # sha -> what actually failed, for the skip reason
+
+
 def _load_classifier(sha):
     """Load merge_guard_common as it existed at `sha`, or None if unavailable.
 
@@ -62,16 +65,21 @@ def _load_classifier(sha):
     try:
         src = subprocess.check_output(
             ["git", "-C", str(wt), "show", sha + ":pact-plugin/hooks/shared/merge_guard_common.py"],
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         ).decode()
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    except subprocess.CalledProcessError as exc:
+        _WHY[sha] = "git show failed: " + (exc.stderr or b"").decode().strip()
+        return None
+    except (FileNotFoundError, OSError) as exc:
+        _WHY[sha] = "git not runnable: %r" % (exc,)
         return None
     mod = types.ModuleType("merge_guard_common_1136_" + sha)
     mod.__file__ = str(wt / "pact-plugin/hooks/shared/merge_guard_common.py")
     mod.__package__ = "shared"
     try:
         exec(compile(src, mod.__file__, "exec"), mod.__dict__)
-    except Exception:
+    except Exception as exc:
+        _WHY[sha] = "source loaded (%d bytes) but exec failed: %r" % (len(src), exc)
         return None
     return mod
 
@@ -91,7 +99,8 @@ D = mgc.is_dangerous_command
 # run. With fetch-depth:0 in CI the base IS present, so every differential runs there.
 requires_history = pytest.mark.skipif(
     _BASE is None,
-    reason="base-vs-HEAD differential requires merged history (shallow clone / missing history)",
+    reason="base-vs-HEAD differential did not run: %s"
+           % _WHY.get(_BASE_SHA, "no failure recorded"),
 )
 ALLOW, DENY = 0, 2
 
