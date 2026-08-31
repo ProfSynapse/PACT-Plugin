@@ -16,22 +16,50 @@ Used by: pytest suite.
 """
 
 import importlib
+from pathlib import Path
 
 import pytest
 
-# (module, loader) for every module carrying a `_WHY` diagnostic. Derived by
-# predicate -- the modules defining `_WHY`, not a remembered count. The 1118
-# module names its loader differently, which is why the pair is carried here
-# rather than assumed.
-_LOADERS = [
-    ("test_merge_guard_1118_recert", "_load_module_at"),
-    ("test_merge_guard_1129_r2_cert", "_load_classifier"),
-    ("test_merge_guard_1129_r3_cert", "_load_classifier"),
-    ("test_merge_guard_1136_canonical_join_ssot", "_load_classifier"),
-    ("test_merge_guard_1140_carrier5_cert", "_load_classifier"),
-    ("test_merge_guard_1178_cert", "_load_classifier"),
-    ("test_merge_guard_1178_f2_cert", "_load_classifier"),
-]
+# Loader names seen so far. A module defining `_WHY` whose loader is not one of
+# these fails loudly below rather than being skipped -- a silent skip is the
+# defect this whole module exists to remove, so it must not reappear here.
+_KNOWN_LOADERS = ("_load_classifier", "_load_module_at")
+
+
+def _loader_modules():
+    """(module, loader) for each module matching the glob that defines `_WHY`.
+
+    THE BOUND IS PART OF THE CLAIM: this ranges over `test_merge_guard_*.py` in
+    this directory, not over the tree. A module defining `_WHY` under any other
+    name is outside it and would go uncovered -- so the glob is widened, or this
+    sentence is corrected, if that ever happens.
+
+    Import errors are deliberately NOT caught. An unimportable module and one
+    without `_WHY` are indistinguishable at `hasattr`, so swallowing them would
+    under-count silently -- the same blindness as the handwritten list this
+    replaces, arriving through the instrument instead of the code.
+    """
+    for path in sorted(Path(__file__).parent.glob("test_merge_guard_*.py")):
+        module = importlib.import_module(path.stem)
+        if not hasattr(module, "_WHY"):
+            continue
+        names = [name for name in _KNOWN_LOADERS if hasattr(module, name)]
+        assert len(names) == 1, (
+            f"{path.stem} defines `_WHY` but exposes "
+            f"{names or 'no'} known loader. Add its loader to _KNOWN_LOADERS: "
+            f"a module whose loader cannot be found here would otherwise be "
+            f"dropped from the parametrization without a word."
+        )
+        yield path.stem, names[0]
+
+
+_LOADERS = list(_loader_modules())
+
+assert _LOADERS, (
+    "no module matching test_merge_guard_*.py defines `_WHY`. The derivation "
+    "found nothing, so the parametrization below is empty and this oracle "
+    "would pass while covering no diagnostic at all."
+)
 
 # Well-formed hex that no repository resolves. `git show` echoes the name back
 # in its own error, which is what makes it a usable witness below.
