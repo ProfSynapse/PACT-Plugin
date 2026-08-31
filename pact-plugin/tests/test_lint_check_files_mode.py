@@ -56,7 +56,7 @@ def _last_stdout_line(proc):
     return lines[-1]
 
 
-_UNRESOLVED = "IMPORT-HYGIENE: SKIPPED (.py paths given but none exist; check for an unsplit quoted file list, or paths relative to another directory)"
+_UNRESOLVED = "IMPORT-HYGIENE: SKIPPED (.py paths given but none of them exist)"
 _NO_FILES = "IMPORT-HYGIENE: SKIPPED (no Python files given)"
 
 
@@ -107,7 +107,9 @@ class TestUnresolvedPathsVerdict:
     said "no Python files given", which was false and pass-shaped.
 
     Each case below reaches its verdict for a DIFFERENT reason, named beside
-    it, so a mutation merging two branches reddens exactly one:
+    it. A mutation merging two branches reddens at least one of them, and no
+    two cases share the set of mutations that redden them -- that separation,
+    not any fixed count, is what keeps the states distinct:
       (a) no arguments at all             -> test_zero_arguments_*
       (b) arguments that exist, none .py  -> test_no_python_files_skipped_exit_zero
                                              (in TestVerdictContract above)
