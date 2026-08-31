@@ -168,7 +168,7 @@
 #   deliberately absent: a name stays checkable, a number goes stale silently,
 #   and a stale figure under a heading claiming "empirically verified" is worse
 #   than none, because the heading vouches for it.
-#   All remaining skips are intentional carve-outs (live-tmux-only probes,
+#   Remaining skips include intentional carve-outs (live-tmux-only probes,
 #   orchestrator carve-out, pin-caps test-design, fuzz-strategy edges) and
 #   version-conditional cases — green-with-skips is the accepted CI outcome;
 #   skipped is not failed.
