@@ -57,7 +57,7 @@ def _last_stdout_line(proc):
 
 
 _UNRESOLVED = "IMPORT-HYGIENE: SKIPPED (arguments given but none is a checkable .py file)"
-_NO_FILES = "IMPORT-HYGIENE: SKIPPED (no Python files given)"
+_NO_ARGS = "IMPORT-HYGIENE: SKIPPED (no arguments given)"
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -102,32 +102,42 @@ class TestVerdictContract:
 
 
 class TestUnresolvedPathsVerdict:
-    """Three states all end in a SKIPPED verdict and must stay DISTINCT.
+    """Every argument-derived SKIPPED state must stay DISTINCT from the others.
 
     Collapsing any two is how a malformed invocation came to read as a clean
     check: a caller whose shell did not word-split a quoted file list passes
     ONE argument, "a.py b.py c.py". It ends in .py so the *.py filter matches,
     then fails the existence test, leaving nothing to check — and the verdict
-    said "no Python files given", which was false and pass-shaped.
+    claimed nothing had been given at all, which was false and pass-shaped.
 
     Each case below reaches its verdict for a DIFFERENT reason, named beside
     it. A mutation merging two branches reddens at least one of them, and no
     two cases share the set of mutations that redden them -- that separation,
-    not any fixed count, is what keeps the states distinct:
-      (a) no arguments at all             -> test_zero_arguments_*
-      (b) arguments that exist, none .py  -> test_no_python_files_skipped_exit_zero
-                                             (in TestVerdictContract above)
-      (c) .py-shaped arguments, none exist -> the two cases here
+    not any fixed count, is what keeps the states distinct. Arms are named by
+    PREFIX rather than in full, so a rename does not strand this list:
+      (a) no arguments at all          -> test_zero_arguments_*
+      (b) an argument that is not .py  -> test_non_py_argument_* (one arm here,
+                                          one in TestVerdictContract above)
+      (c) .py-shaped arguments that do
+          not resolve to a regular file -> the remaining arms in this class
+
+    The fourth SKIPPED state, no usable checker, is not argument-derived and
+    is pinned by TestCrashHonestyGuard instead.
     """
 
-    def test_zero_arguments_keeps_legacy_skipped(self):
-        # Reason: nothing was passed, so the *.py filter never runs and
-        # nothing is dropped. The legacy verdict is CORRECT here.
+    def test_zero_arguments_reports_no_arguments_given(self):
+        # Reason: nothing was passed, so the loop body never runs and no
+        # counter moves. This is the ONLY state that reaches this verdict —
+        # every argument increments exactly one of the three counters, and
+        # the `*)` arm matches even an empty string. The verdict therefore
+        # names the condition (no arguments) rather than the wider property
+        # it used to claim (no Python files), which was true of states that
+        # now take the other branch.
         proc = _run()
         assert proc.returncode == 0
-        assert _last_stdout_line(proc) == _NO_FILES
+        assert _last_stdout_line(proc) == _NO_ARGS
 
-    def test_unsplit_file_list_reports_unresolved_not_no_files(self, tmp_path):
+    def test_unsplit_file_list_reports_unresolved_not_no_arguments(self, tmp_path):
         # Reason: ONE .py-suffixed argument that does not exist — the exact
         # shape a caller produces by passing "$FILES" unsplit. Both real
         # files exist, so this is not a missing-file case: it is the JOINED
