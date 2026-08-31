@@ -14,7 +14,7 @@ This skill provides the complete workflow for discovering, reviewing, and saving
 Three workflow variants:
 - **Standard Harvest** (orchestrate, comPACT, peer-review, plan-mode) — discover, review, save, record the processed ids. Triggered after phases complete.
 - **Incremental Harvest** (peer-review) — delta-only pass after remediation. Processes only new completions since last harvest.
-- **Consolidation Harvest** (wrap-up, pause, refresh) — safety-net + deep-clean pass. Triggered at session end or at a mid-session context refresh.
+- **Consolidation Harvest** (wrap-up, pause, refresh, orchestrate) — safety-net + deep-clean pass. Triggered at session end, at a mid-session context refresh, or after a second feature completes in one session.
 
 Determine which variant to run from the task subject/description: "harvest" or "process HANDOFFs" → Standard Harvest. "incremental" or "remediation" → Incremental Harvest. "consolidation" → Consolidation Harvest.
 

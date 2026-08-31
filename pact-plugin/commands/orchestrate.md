@@ -799,7 +799,7 @@ JSON
 JSON
   ```
 - [ ] **Primary HANDOFF-presence check**: on receiving each Task-complete `SendMessage`, verify via `TaskGet` — confirm status=completed AND metadata.handoff populated/non-empty. If missing, `SendMessage` the agent to complete HANDOFF before downstream dispatch proceeds.
-- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — `metadata.audit_summary` is present (verify via `TaskGet`), OR an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, before TEST dispatch proceeds.
+- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm `metadata.audit_summary` is present (verify via `TaskGet`). A dispatched-but-unreported audit does NOT satisfy this. If it is absent, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, and wait for it to report before TEST dispatch proceeds.
 - [ ] **Process coder HANDOFFs** (after the auditor has reported — non-blocking):
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",
@@ -974,7 +974,7 @@ After you resolve a blocker, message the teammate by name. Spawn fresh if the te
 8. **Mid-session consolidation** (multi-feature sessions only): If this is the second or subsequent feature completed in this session, create a consolidation task to merge cross-feature knowledge:
    ```
    TaskCreate(subject="secretary: mid-session consolidation",
-     description="Multiple features completed this session. Review memories saved so far, consolidate related entries across features, prune superseded memories. Report summary when done.")
+     description="Multiple features completed this session. Follow the Consolidation Harvest workflow in your pact-handoff-harvest skill: review memories saved so far, consolidate related entries across features, prune superseded memories. Report summary when done.")
    TaskUpdate(taskId, owner="secretary")
    ```
    Skip for the first feature in a session — full consolidation happens during `/PACT:wrap-up`.
