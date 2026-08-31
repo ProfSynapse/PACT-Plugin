@@ -2,8 +2,12 @@
 Location: pact-plugin/tests/merge_guard_baseline_loader.py
 Summary: Loud-fail loaders for the COMMITTED vendored merge-guard baseline fixtures.
          TWO independent pre-fix baselines, each vendored as committed bytes (never a
-         `git show` of a SHA no ref reaches — existing baseline SHAs are
-         CI-invisible non-ancestors, the lesson these loaders exist to close):
+         `git show` of a SHA no ref reaches. THE SPLIT IS BY ROLE, not across baseline
+         SHAs as a class: measured against origin/main, 6 of the 7 BASE SHAs are
+         ancestors and 1 is not, while 0 of the 10 PRE-FIX and HEAD-SIDE SHAs are.
+         The CI-invisible objects are therefore the pre-fix/head-side ones plus that
+         single base -- confirmed on the 3.9 cell, where 5 of 7 cert files skip a
+         differential. That is the lesson these loaders exist to close):
 
            load_baseline()          -> fixtures/merge_guard_baseline/merge_guard_common_b4041ccf.py
                                        (pre OBS-A→I; the over-block-cluster certs' base)

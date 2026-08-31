@@ -3,12 +3,19 @@ Location: pact-plugin/tests/test_merge_guard_why_oracle.py
 Summary: Covers the merged-history loaders' failure diagnostic. Each cert module
          below loads a baked baseline with `git show` and records WHY a load
          failed into a module-level `_WHY` map; that text is the entire content
-         of the skip reason its differential rows then emit. THE DIAGNOSTIC IS
-         INERT ON A DEVELOPER MACHINE, where the baked bases are still reachable
-         as unreferenced objects, so every row runs and nothing ever populates
-         `_WHY`. CI is its only exercise, and a skip reason is read only when
-         something has already gone wrong -- which is exactly when a degraded
-         one costs the most. Routing the loader's stderr away from the caller
+         of the skip reason its differential rows then emit. WHERE IT ACTUALLY
+         FIRES, measured at this HEAD rather than reasoned about: on a developer
+         machine 1 of the 7 modules populates `_WHY` (1178_f2, whose base is
+         absent everywhere) and the other 6 find every baked object and stay
+         empty; on the 3.9 CI cell 5 of 7 populate, because the pre-fix and
+         head-side objects that survive locally as unreferenced objects are
+         absent there. TWO MODULES POPULATE IT IN NEITHER PLACE -- 1136 and
+         1178_cert reach every object they need in both environments -- and
+         this oracle parametrizes over them regardless. So for those two the
+         arm below is not observing a live diagnostic; it drives the failure
+         directly, which is the only reason it can cover them at all. A skip
+         reason is read only when something has already gone wrong, which is
+         exactly when a degraded one costs the most. Routing the loader's stderr
          (`stderr=subprocess.PIPE` back to `subprocess.DEVNULL`) leaves every
          reason a bare label with no cause, and without this arm nothing reddens.
          This module drives the failure directly instead of waiting for it.
@@ -23,6 +30,11 @@ import pytest
 # Loader names seen so far. A module defining `_WHY` whose loader is not one of
 # these fails loudly below rather than being skipped -- a silent skip is the
 # defect this whole module exists to remove, so it must not reappear here.
+# The assert is at module scope, so it surfaces as a collection ERROR rather
+# than a failure. That is the right blast radius -- an unknown population
+# invalidates every param, not one -- but note the irony before trusting a
+# green: a filtered summary that drops the errors count reports this loudest
+# signal as silence. Read the summary line, not a token scan.
 _KNOWN_LOADERS = ("_load_classifier", "_load_module_at")
 
 

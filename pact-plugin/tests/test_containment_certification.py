@@ -1390,8 +1390,14 @@ class TestVersionFloorLoopHandling:
     def test_loops_refuse_identically_on_a_real_39_interpreter(self):
         """Loop handling on BOTH available interpreters.
 
-        CI runs one interpreter, so this opportunistically discovers a real 3.9
-        and SKIPS when absent, following the established pattern.
+        CI runs three interpreters (3.9, 3.13, 3.14). This discovers a real 3.9
+        and SKIPS when absent, which is what happens on the cells above the floor.
+
+        ON THE 3.9 CELL IT DOES NOT SKIP, AND THAT IS THE CASE TO WATCH.
+        Discovery returns a 3.9 and the running interpreter is also 3.9, so the
+        two ENDPOINTS below become one endpoint measured twice. Nothing here
+        asserts they differ, so the arm still passes while covering half of what
+        it reads as covering. Measured on 3.9.6, not inferred.
 
         WHAT THIS DOES AND DOES NOT ESTABLISH. It measures the two ENDPOINTS,
         3.9 and the running interpreter. 3.10-3.13 are unmeasured, and the

@@ -95,7 +95,10 @@ D = mgc.is_dangerous_command
 
 # Skip the base-vs-HEAD differential (non-vacuity) rows when the base source is
 # unavailable (unreachable base commit); the HEAD-side + absolute rows still
-# run. With fetch-depth:0 in CI the base IS present, so every differential runs there.
+# run. With fetch-depth:0 in CI THIS FILE's base (9256c93c) is present, so its
+# differentials run there. That is a fact about this file, not about CI: measured on
+# the 3.9 cell at this HEAD, 5 of the 7 cert files carrying baked SHAs skip their
+# differentials and 2 run, this being one of the 2.
 requires_history = pytest.mark.skipif(
     _BASE is None,
     reason="base-vs-HEAD differential did not run: %s"
