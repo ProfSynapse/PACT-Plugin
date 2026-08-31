@@ -43,24 +43,37 @@ if [ "$1" = "--files" ]; then
     # keeps its unreadable-fails-loud contract for the strict tier.
     PY_FILES=()
     UNRESOLVED=0
+    IGNORED=0
     for f in "$@"; do
         case "$f" in
             *.py)
                 if [ -f "$f" ]; then
                     PY_FILES+=("$f")
+                elif [ -e "$f" ]; then
+                    UNRESOLVED=$((UNRESOLVED + 1))
+                    echo "import-hygiene: exists but is not a regular file: $f" >&2
                 else
                     UNRESOLVED=$((UNRESOLVED + 1))
                     echo "import-hygiene: skipping missing path (deleted/renamed?): $f" >&2
                 fi
                 ;;
+            *)
+                # NO SILENT DROP. Without this arm a non-.py argument vanished:
+                # not counted, not reported, and the run fell through to
+                # "no Python files given" -- which cannot tell a caller who
+                # passed nothing from one whose arguments were all discarded.
+                IGNORED=$((IGNORED + 1))
+                echo "import-hygiene: not a .py path, ignored: $f" >&2
+                ;;
         esac
     done
 
-    if [ ${#PY_FILES[@]} -eq 0 ] && [ "$UNRESOLVED" -gt 0 ]; then
-        # .py paths WERE given and every one of them failed to resolve. The
+    if [ ${#PY_FILES[@]} -eq 0 ] && [ $((UNRESOLVED + IGNORED)) -gt 0 ]; then
+        # Arguments WERE given and none survived to be checked. The
         # verdict names the CONDITION, not the causes. The causes are
         # unbounded -- an unsplit quoted string ("a.py b.py c.py"), paths
-        # relative to another directory, a deleted or renamed file, a typo, an
+        # relative to another directory, a deleted or renamed file, a directory
+        # rather than a file, an argument that is not .py at all, a typo, an
         # unexpanded glob, a pasted placeholder ending in .py -- so any list
         # here is a floor that sends the reader chasing an item that does not
         # apply. The stderr line above names each unresolved path, which is the
@@ -70,7 +83,7 @@ if [ "$1" = "--files" ]; then
         # pass-shaped, so this case gets its own verdict. Still exit 0 — a
         # caller-argument mistake is a graceful degradation, not a hygiene
         # finding, and the documented contract puts every SKIPPED at 0.
-        echo "IMPORT-HYGIENE: SKIPPED (.py paths given but none of them exist)"
+        echo "IMPORT-HYGIENE: SKIPPED (arguments given but none is a checkable .py file)"
         exit 0
     fi
 

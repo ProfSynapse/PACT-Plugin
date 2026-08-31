@@ -35,7 +35,8 @@
 #   EXECUTED paths under the COLLECTED set, not the tree. A post-3.9 API on a
 #   path no test executes stays green forever. That ceiling is structural and
 #   no matrix cell can lift it.
-#   ONE GUARD INVERTS THAT BOUND, and it is the one written for the defect
+#   ONE GUARD INVERTS THAT BOUND FOR THE SKIP MECHANISM, and it is the one
+#   written for the defect
 #   class this matrix cell exists to catch. tests/test_memory_reachability.py
 #   runs its scanner under an interpreter OLDER than the running one, because
 #   a syntax parse cannot see a keyword that only exists in a newer runtime.
@@ -50,7 +51,7 @@
 #   newest 8.x the resolver offers. That divergence is FORCED, not chosen. It
 #   is why the cells are not interchangeable arms of one experiment. The plugin
 #   whole resolved set follows the runner down, so a red on the 3.9 cell alone
-#   differs from the others in FIVE measured variables, not three: interpreter;
+#   differs from the others in FIVE measured variables: interpreter;
 #   runner major (pytest 8.4.2 against 9.1.1); plugin version (pytest-asyncio
 #   1.2.0 against 1.4.0); and TWO LIBRARIES UNDER TEST — model2vec 0.7.0
 #   against 0.9.0, numpy 2.0.2 against 2.5.2. The last two are the libraries

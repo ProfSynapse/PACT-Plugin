@@ -56,7 +56,7 @@ def _last_stdout_line(proc):
     return lines[-1]
 
 
-_UNRESOLVED = "IMPORT-HYGIENE: SKIPPED (.py paths given but none of them exist)"
+_UNRESOLVED = "IMPORT-HYGIENE: SKIPPED (arguments given but none is a checkable .py file)"
 _NO_FILES = "IMPORT-HYGIENE: SKIPPED (no Python files given)"
 
 
@@ -86,12 +86,19 @@ class TestVerdictContract:
         # path:line format every rung of the ladder emits.
         assert f"{f}:1" in proc.stdout
 
-    def test_no_python_files_skipped_exit_zero(self, tmp_path):
+    def test_non_py_argument_degrades_gracefully_at_exit_zero(self, tmp_path):
+        """A non-.py argument is a caller-argument mistake, not a finding.
+
+        This arm previously asserted the no-files verdict for this input,
+        which pinned the silent-drop defect as expected behaviour. The input
+        is unchanged; only the expected verdict moved, because a discarded
+        argument is not the same state as no argument.
+        """
         f = tmp_path / "notes.txt"
         f.write_text("not python\n", encoding="utf-8")
         proc = _run(str(f))
         assert proc.returncode == 0
-        assert _last_stdout_line(proc) == _NO_FILES
+        assert _last_stdout_line(proc) == _UNRESOLVED
 
 
 class TestUnresolvedPathsVerdict:
@@ -135,6 +142,51 @@ class TestUnresolvedPathsVerdict:
         assert a.exists() and b.exists()
         assert proc.returncode == 0
         assert _last_stdout_line(proc) == _UNRESOLVED
+
+    def test_non_py_argument_is_not_reported_as_nothing_given(self, tmp_path):
+        """A discarded argument must not read as "you passed nothing".
+
+        Without the case statement's else arm a non-.py argument was dropped
+        silently -- uncounted, unreported -- and the run fell through to the
+        no-files verdict. That collapses two states a reader must tell apart:
+        the caller who passed nothing, and the caller whose arguments were all
+        thrown away. The stderr assertion is the load-bearing half; a verdict
+        check alone would also pass against the silent version.
+        """
+        proc = _run(str(tmp_path / "notes.txt"))
+
+        assert _last_stdout_line(proc) == _UNRESOLVED, (
+            f"a non-.py argument reached {_last_stdout_line(proc)!r}. If that "
+            f"is the no-files verdict, the argument was discarded silently and "
+            f"the caller cannot tell it from passing nothing at all."
+        )
+        assert "not a .py path" in proc.stderr, (
+            f"nothing on stderr named the discarded argument: {proc.stderr!r}"
+        )
+
+    def test_existing_directory_is_not_reported_as_absent(self, tmp_path):
+        """An existing directory and an absent path are different states.
+
+        Both fail `-f` and share one verdict, so the discrimination lives on
+        stderr. If these two produce the same line, a caller who passed a real
+        directory is told their path does not exist.
+        """
+        package = tmp_path / "pkg.py"
+        package.mkdir()
+
+        present = _run(str(package))
+        absent = _run(str(tmp_path / "ghost.py"))
+
+        assert "not a regular file" in present.stderr, (
+            f"an existing directory was not distinguished: {present.stderr!r}"
+        )
+        assert "skipping missing path" in absent.stderr, (
+            f"an absent path was not distinguished: {absent.stderr!r}"
+        )
+        assert present.stderr != absent.stderr, (
+            "an existing directory and an absent path emitted identical "
+            "stderr, so the two states are indistinguishable to a caller."
+        )
 
     def test_lone_ghost_path_reports_unresolved(self, tmp_path):
         # Reason: a .py path that genuinely does not exist, as the ONLY
