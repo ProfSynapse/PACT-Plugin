@@ -302,9 +302,20 @@ jobs:
       #   later), and do not add a `testpaths` entry to config — with no path
       #   arguments it would now TAKE EFFECT and re-introduce the same gap
       #   through a different door.
+      #   `-ra` is a REPORTING flag, not a collection-scope change: it adds a
+      #   short-summary section listing every non-passing outcome, and selects
+      #   nothing. It is here so skip REASONS are readable from this log —
+      #   which is what settles both the older-interpreter question above and
+      #   any census of what the remaining skips actually are.
+      #   NEVER `-rs`. `-r` REPLACES the short-summary selection rather than
+      #   adding to it, so `-rs` deletes the FAILED lines: measured here on a
+      #   run carrying one real failure, where a `^FAILED` scan returned 0 AND
+      #   the anchored `^[0-9]+ passed` scan also returned 0, because a failing
+      #   summary leads with its failures. Two misleading zeros on one red run.
+      #   `-ra` is everything except passes, so failures and errors stay.
       - name: Run test suite
         working-directory: pact-plugin
-        run: python -m pytest
+        run: python -m pytest -ra
 
   # ---------------------------------------------------------------------------
   # EXTENDING THE MATRIX DOWNWARD
