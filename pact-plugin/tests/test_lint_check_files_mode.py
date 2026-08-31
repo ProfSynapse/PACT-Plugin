@@ -147,6 +147,36 @@ class TestUnresolvedPathsVerdict:
         assert _last_stdout_line(proc) == _UNRESOLVED
 
 
+class TestOnlyNamedFilesAreChecked:
+    """A directory named `*.py` must not smuggle its contents into the check.
+
+    The header contract is that only the files named on the command line are
+    checked. A directory passes the `*.py` suffix filter, and an existence test
+    that accepts any directory entry lets the checker recurse into it, so a
+    finding surfaces from a file the caller never named -- with a path the
+    caller cannot account for. A regular-file test is what keeps the contract
+    and the behaviour the same thing.
+    """
+
+    def test_a_directory_named_like_a_module_yields_no_findings(self, tmp_path):
+        package = tmp_path / "notamodule.py"
+        package.mkdir()
+        # An unused import: every rung of the ladder reports this one.
+        (package / "inner.py").write_text("import os\n", encoding="utf-8")
+
+        proc = _run(str(package))
+
+        assert proc.returncode == 0, (
+            f"a directory named like a module produced exit {proc.returncode}. "
+            f"Exit 1 means the checker recursed into it and reported findings "
+            f"from a file that was never named. stdout={proc.stdout!r}"
+        )
+        assert "FINDINGS" not in proc.stdout, (
+            f"findings surfaced from inside a directory that was merely named "
+            f"on the command line: {proc.stdout!r}"
+        )
+
+
 class TestCrashHonestyGuard:
     """An unhandled checker exception also exits 1 — exit code alone must
     never be read as findings. A rung that exits 1 WITHOUT a single

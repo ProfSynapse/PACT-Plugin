@@ -46,7 +46,7 @@ if [ "$1" = "--files" ]; then
     for f in "$@"; do
         case "$f" in
             *.py)
-                if [ -e "$f" ]; then
+                if [ -f "$f" ]; then
                     PY_FILES+=("$f")
                 else
                     UNRESOLVED=$((UNRESOLVED + 1))

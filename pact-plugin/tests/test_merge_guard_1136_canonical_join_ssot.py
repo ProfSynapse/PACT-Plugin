@@ -56,8 +56,7 @@ _WHY = {}  # sha -> what actually failed, for the skip reason
 def _load_classifier(sha):
     """Load merge_guard_common as it existed at `sha`, or None if unavailable.
 
-    Returns None on any git/exec failure — git missing, or a SHALLOW clone lacking
-    the base commit (CI's default fetch-depth) — so collection SUCCEEDS and the
+    Returns None on any git/exec failure — git missing, or the commit not present in this checkout — so collection SUCCEEDS and the
     base-vs-HEAD differential rows self-SKIP (@requires_history) instead of aborting
     the whole file. Mirrors test_merge_guard_1118_recert._load_module_at.
     """

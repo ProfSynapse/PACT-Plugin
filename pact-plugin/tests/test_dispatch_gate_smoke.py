@@ -230,9 +230,12 @@ def test_fail_closed_module_load(tmp_path):
 
     PYTHONSAFEPATH is cleared from the child's environment for the same
     reason it used to be set: an ambient PYTHONSAFEPATH=1 would suppress the
-    sys.path[0] insert this mechanism depends on. Removing that line does NOT
-    redden this arm, it GREENS it -- `shared` then fails to resolve at all,
-    which reaches the same fail-closed deny the sabotage does. Keep the line.
+    sys.path[0] insert this mechanism depends on. Removing that line REDDENS
+    this arm under an ambient PYTHONSAFEPATH=1 -- `shared` stops resolving at
+    all, so the deny reason becomes a bare ModuleNotFoundError and no longer
+    carries the sabotage signature the assertion below requires. That is the
+    signature assertion doing its job, not the gate failing open. Keep the
+    line.
     """
     import shutil
 

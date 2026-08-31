@@ -648,7 +648,9 @@ At these workflow boundaries, create a task for the secretary referencing the `p
 
 These triggers are idempotent — safe to fire even if HANDOFFs were already processed.
 
-Never fire a harvest while agents whose value is independent judgement are live — reviewers, or a concurrent auditor. The harvest writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context.
+Never fire a phase-boundary harvest (Standard, Incremental) while an agent whose value is independent judgement still has that judgement in flight — a reviewer or auditor that has not yet reported. The harvest writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context.
+
+The Consolidation Harvests are EXEMPT and must run even while teammates are alive, because at those boundaries no judgement is in flight: `wrap-up` is end-of-session cleanup, so every reviewer has already reported, and `pause` and `refresh` both make consolidation CRITICAL before the shutdown that immediately follows — deferring it there would strand the HANDOFFs the harvest exists to save. The exemption goes stale the moment a Consolidation Harvest is dispatched where a reviewer or auditor has not yet reported: the test is whether judgement is in flight, never the variant's name.
 
 NOTE: For ad-hoc work outside defined PACT workflows → `SendMessage(to="secretary", message="[team-lead→secretary] Save: {what and why}", summary="Save request: {topic}")`
 

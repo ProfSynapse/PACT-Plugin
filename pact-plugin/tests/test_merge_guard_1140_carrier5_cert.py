@@ -82,11 +82,20 @@ _BASE_SHA = "f6e3639a"  # 2d7fcd07^ — pre-carrier-5-fix (v4.6.4)
 _WHY = {}  # sha -> what actually failed, for the skip reason
 
 
+def _why_for(*shas):
+    """Recorded failures for exactly `shas`, in the order given.
+
+    Reads only the shas its caller's skipif gates on, so a later load recording
+    into `_WHY` cannot appear in an earlier guard's reason. The whole-dict form
+    this replaces was correct only while every later load sat below the guard.
+    """
+    return "; ".join("%s: %s" % (sha, _WHY[sha]) for sha in shas if sha in _WHY)
+
+
 def _load_classifier(sha):
     """Load merge_guard_common as it existed at `sha`, or None if unavailable.
 
-    Returns None on any git/exec failure — git missing, or a SHALLOW clone lacking the
-    parent commit (CI default fetch-depth) — so collection SUCCEEDS and the base-vs-HEAD
+    Returns None on any git/exec failure — git missing, or the commit not present in this checkout — so collection SUCCEEDS and the base-vs-HEAD
     differential rows self-SKIP (@requires_history) instead of aborting the file. Mirrors
     test_merge_guard_1129_r2_cert._load_classifier.
     """
@@ -157,7 +166,7 @@ D_FIXR = _FIXR.is_dangerous_command if _FIXR is not None else None
 requires_history = pytest.mark.skipif(
     _BASE is None or _FIRSTFIX is None or _FIXR is None,
     reason="base-vs-firstfix-vs-fixR differentials did not run: %s"
-           % ("; ".join("%s: %s" % kv for kv in _WHY.items()) or "no failure recorded"),
+           % (_why_for(_BASE_SHA, _FIRSTFIX_SHA, _FIXR_SHA) or "no failure recorded"),
 )
 
 # --- FOLD-ALL-4 baseline (#1176 remediation cycle 2). A FRESH independent adversarial re-review of

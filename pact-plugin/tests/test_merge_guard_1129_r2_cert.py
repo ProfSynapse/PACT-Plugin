@@ -83,11 +83,20 @@ _PREFIX_SHA = "6f404f2e"  # R2 pre-F1-fix (whole-command 7d — the HALT #64 reg
 _WHY = {}  # sha -> what actually failed, for the skip reason
 
 
+def _why_for(*shas):
+    """Recorded failures for exactly `shas`, in the order given.
+
+    Reads only the shas its caller's skipif gates on, so a later load recording
+    into `_WHY` cannot appear in an earlier guard's reason. The whole-dict form
+    this replaces was correct only while every later load sat below the guard.
+    """
+    return "; ".join("%s: %s" % (sha, _WHY[sha]) for sha in shas if sha in _WHY)
+
+
 def _load_classifier(sha):
     """Load merge_guard_common as it existed at `sha`, or None if unavailable.
 
-    Returns None on any git/exec failure — git missing, or a SHALLOW clone lacking
-    the base/pre-fix commit (CI's default fetch-depth) — so collection SUCCEEDS and the
+    Returns None on any git/exec failure — git missing, or the commit not present in this checkout — so collection SUCCEEDS and the
     base-vs-HEAD / pre-fix-vs-fixed differential rows self-SKIP (@requires_history)
     instead of aborting the whole file. Mirrors test_merge_guard_1118_recert._load_module_at.
     """
@@ -127,12 +136,15 @@ D = mgc.is_dangerous_command
 STRIP = mgc._strip_non_executable_content
 
 # Skip the base-vs-HEAD / pre-fix-vs-fixed differential (non-vacuity) rows when the
-# baked history is unavailable (unreachable base commit); the HEAD-side + absolute rows still
-# run. With fetch-depth:0 in CI both commits are present, so every differential runs.
+# baked history is unavailable; the HEAD-side + absolute rows still run. fetch-depth
+# sets DEPTH, not REFSPEC, and cannot fetch a commit no ref reaches: _BASE_SHA is an
+# ancestor of main and is always present, but _PREFIX_SHA is a squash-merged branch tip
+# reachable from nothing, so it is absent in CI and these differentials SKIP there. They
+# run locally only while that object survives uncollected.
 requires_history = pytest.mark.skipif(
     _BASE is None or _PREFIX is None,
     reason="base-vs-HEAD / pre-fix differential did not run: %s"
-           % ("; ".join("%s: %s" % kv for kv in _WHY.items()) or "no failure recorded"),
+           % (_why_for(_BASE_SHA, _PREFIX_SHA) or "no failure recorded"),
 )
 
 # Destructive verbs assembled at runtime — this file carries no raw literal.

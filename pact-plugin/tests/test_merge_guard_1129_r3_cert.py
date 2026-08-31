@@ -101,9 +101,19 @@ _FIX1_SHA = "b313ecaa"   # R3-fix1: space-only anchor restore (fix2-reverted sta
 _WHY = {}  # sha -> what actually failed, for the skip reason
 
 
+def _why_for(*shas):
+    """Recorded failures for exactly `shas`, in the order given.
+
+    Reads only the shas its caller's skipif gates on, so a later load recording
+    into `_WHY` cannot appear in an earlier guard's reason. The whole-dict form
+    this replaces was correct only while every later load sat below the guard.
+    """
+    return "; ".join("%s: %s" % (sha, _WHY[sha]) for sha in shas if sha in _WHY)
+
+
 def _load_classifier(sha):
     """Load merge_guard_common as it existed at `sha`, or None if unavailable
-    (git missing, or a SHALLOW clone lacking the commit) so collection SUCCEEDS and the
+    (git missing, or the commit not present in this checkout) so collection SUCCEEDS and the
     base/R3HEAD non-vacuity rows self-SKIP (@requires_history) instead of aborting the
     file. Mirrors test_merge_guard_1129_r2_cert._load_classifier."""
     wt = Path(__file__).resolve().parents[2]  # worktree root (tests/../../)
@@ -144,7 +154,7 @@ D = mgc.is_dangerous_command
 requires_history = pytest.mark.skipif(
     _BASE is None or _R3 is None or _FIX1 is None,
     reason="base/R3HEAD/FIX1 non-vacuity differential did not run: %s"
-           % ("; ".join("%s: %s" % kv for kv in _WHY.items()) or "no failure recorded"),
+           % (_why_for(_BASE_SHA, _R3_SHA, _FIX1_SHA) or "no failure recorded"),
 )
 
 # Destructive literals assembled at runtime — this file carries no raw literal.

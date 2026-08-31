@@ -170,9 +170,9 @@
 #   than none, because the heading vouches for it.
 #   Remaining skips include intentional carve-outs (live-tmux-only probes,
 #   orchestrator carve-out, pin-caps test-design, fuzz-strategy edges),
-#   version-conditional cases, and the baked-base differentials: guards whose
-#   base commits became unreachable when their branches were squash-merged skip
-#   here, and run locally only where those objects survive uncollected.
+#   version-conditional cases, and the baked-SHA differentials: a file skips
+#   when any SHA in its required set is unreachable here, and runs locally only
+#   where those objects survive uncollected.
 #   Green-with-skips is the accepted CI outcome; skipped is not failed.
 
 name: tests
@@ -238,12 +238,13 @@ jobs:
           # clone (fetch-depth: 1) lacks those commits -> `git show` fails ->
           # those files abort collection (0 tests run).
           # This does NOT make every differential run. `fetch-depth` sets DEPTH,
-          # not REFSPEC, and cannot fetch a commit no ref reaches: the baked
-          # bases are squash-merged branch tips, reachable from nothing, so they
-          # are absent here and the in-file guards skip. That is correct
-          # behaviour, not a fallback. They survive on a developer's machine
-          # only as unreferenced objects not yet garbage-collected, which is the
-          # whole local-versus-CI difference.
+          # not REFSPEC, and cannot fetch a commit no ref reaches. A file skips
+          # when ANY SHA in its required set is unreachable — for most files a
+          # pre-fix or HEAD-side SHA reached only by a local fix/* or fork/*
+          # branch, and in one file the base itself. The guards then skip, which
+          # is correct behaviour, not a fallback. Those commits survive on a
+          # developer's machine only as unreferenced objects not yet
+          # garbage-collected, which is the whole local-versus-CI difference.
           fetch-depth: 0
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
