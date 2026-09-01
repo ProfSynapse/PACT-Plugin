@@ -25,7 +25,10 @@ Suppression contract:
     An intentional unused import (re-export facade, monkeypatch seam,
     availability probe) carries `# noqa: F401  # <category>: <reason>` on
     the import statement's FIRST physical line. The sweep honors exactly
-    that convention; an unmarked unused import fails the suite.
+    that convention; an unmarked unused import fails the suite — with ONE
+    exception, which this file's own liveness filter introduced: a
+    CONCURRENT run's planted probe is removed from the tests/ surface
+    before the gate ever sees it. See `_is_foreign_live_probe`.
 
 Strictness contract (why the fixtures below exist):
     The predicate's try-scope parameter is REQUIRED-EXPLICIT — no default
@@ -75,9 +78,12 @@ cui = _load_predicate_module()
 
 # ─── the gate's single entry point ───────────────────────────────────────────
 # The suite tier's strictness is declared HERE and nowhere else. Every check
-# in this file — the shipped-tree sweep AND the non-vacuity fixtures — goes
-# through this function, so the fixtures exercise the same declaration the
-# sweep runs under.
+# OF THAT TIER goes through this function — the shipped-tree sweep and the
+# non-vacuity fixtures alike — so the fixtures exercise the same declaration
+# the sweep runs under. Two checks bypass it DELIBERATELY, to exercise other
+# tiers: the advisory flip-direction assertion, and the invalid-tier
+# rejection. Neither can route through a function that hardcodes the tier —
+# that is the point of them, not a gap.
 
 L1_TRY_SCOPE = "strict"
 
@@ -124,8 +130,10 @@ def _is_foreign_live_probe(path):
     the sweep still reports it. Never skip on an unknown: a filter that skips
     when it cannot tell is the silent-skip surface this module exists to catch.
 
-    KNOWN CEILING, and it is a regression rather than parity: today a leaked
-    probe is caught unconditionally. Here, a leak whose pid has since been
+    KNOWN CEILING, and it is a regression rather than parity: BEFORE this
+    filter existed, a leaked probe was caught unconditionally — it was just a
+    file with an unused import, and the sweep reported every one of those.
+    Now, a leak whose pid has since been
     reassigned to a LIVE process is read as live and skipped, so detection is
     intermittent rather than certain on any single run. It is self-correcting
     across runs — the file persists, and the next run whose reading differs
@@ -153,6 +161,16 @@ TARGET_DIR_SETS = {
     "scripts": lambda: sorted((PLUGIN_ROOT / "scripts").rglob("*.py")),
     "telegram": lambda: sorted((PLUGIN_ROOT / "telegram").rglob("*.py")),
     "skills-scripts": _skills_script_files,
+    # SOLE FILTER — do not add a second one without reading this.
+    # No arm plants a dead-owner probe on disk: such a file is unfiltered BY
+    # CONSTRUCTION and would poison every concurrent run, which is the defect
+    # this module exists to stop. Leak coverage is therefore COMPOSED —
+    # `TestProbeNameMatchingIsAnchored` proves the predicate declines to drop
+    # a dead owner, and the planting arms prove a file the predicate declines
+    # IS swept and reported. That composition holds only while this predicate
+    # is the ONLY filter applied here. A second filter treating dead-owner
+    # probes differently from lookalikes breaks the composed property with
+    # NOTHING going red — both halves still pass on their own.
     "tests": lambda: sorted(
         p
         for p in (PLUGIN_ROOT / "tests").rglob("*.py")
@@ -186,10 +204,21 @@ class TestSweptTreeIsClean:
 
 class TestTestsSurfaceEnforcement:
     """Counter-tests proving the tests/ surface is genuinely enforced —
-    each drives the REAL sweep mechanism (the live TARGET_DIR_SETS glob
-    plus `_gate_check`), not a synthetic path list, so a reverted,
-    retargeted, or recursion-narrowed glob turns these red, not silently
-    vacuous. Probes are planted in the live tests/ tree one directory
+    each asserts POSITIVE membership in the live TARGET_DIR_SETS surface —
+    our probe, this module — so a reverted, retargeted, or
+    recursion-narrowed glob makes the asserted member absent and turns these
+    red rather than silently vacuous. Positive membership is the property,
+    not `_gate_check`: the reachability pin calls no gate and still delivers
+    it. A NEGATIVE assertion cannot, which is why the foreign-probe arm
+    carries its own depth-derived control.
+
+    ONE EXCEPTION, named rather than left silent:
+    `test_kept_ensure_loaded_seam_survives_widened_gate` passes a hand-built
+    one-element list. It localises a noqa-recognition divergence in the
+    PREDICATE, not surface enforcement, so a retargeted glob should NOT
+    redden it. It is outside this paragraph's scope by design.
+
+    Probes are planted in the live tests/ tree one directory
     level DOWN (tests/fixtures/) — the sweep only sees them through
     recursive descent, so an rglob→glob mis-narrowing fails here instead
     of silently dropping subdirectory files. Each probe is removed in
@@ -292,55 +321,17 @@ class TestTestsSurfaceEnforcement:
         foreign.write_text("import os\n", encoding="utf-8")
         try:
             files = TARGET_DIR_SETS["tests"]()
-            assert files, "empty surface — the exclusion below would pass vacuously"
+            # The assertion below is NEGATIVE, so it passes vacuously on any
+            # surface that never reached the probe. Non-empty is not enough:
+            # under an rglob->glob narrowing this module is still swept while
+            # tests/fixtures/ is not. Derived from `foreign` so it cannot drift
+            # to the wrong depth the way a named file would.
+            assert any(p.parent == foreign.parent for p in files), (
+                "the swept surface never reached the probe's own directory"
+            )
             assert foreign not in files, "foreign live probe reached the swept surface"
         finally:
             foreign.unlink()
-
-    def test_a_name_merely_containing_the_probe_stem_is_still_swept(self):
-        """The exclusion is ANCHORED: only a filename that IS a probe may be
-        dropped. A name that merely contains a probe-shaped tail is an ordinary
-        file, and dropping it would be a silent skip — the failure mode this
-        module exists to catch, arriving through the predicate every consumer
-        routes through.
-
-        Reddens on an unanchored `.search()`, which is what shipped.
-        """
-        owner = os.getppid()
-        os.kill(owner, 0)
-        lookalike = self.PROBE.parent / f"zz{_PROBE_STEM}{owner}_{uuid.uuid4().hex}.py"
-        lookalike.write_text("import os\n", encoding="utf-8")
-        try:
-            files = TARGET_DIR_SETS["tests"]()
-            assert lookalike in files, "a merely probe-SHAPED name left the sweep"
-            assert f"{lookalike}:1: unused import os" in _gate_check(files)
-        finally:
-            lookalike.unlink()
-
-    def test_leaked_probe_of_a_dead_owner_is_still_caught(self):
-        """LEAK DETECTION survives the filter above — the property a name-only
-        exclusion would have cost, since a leak and a live run's probe are
-        identical as strings.
-
-        Same self-witnessing shape: if the reaped pid were somehow live, this
-        would exercise the concurrent-run branch and pass for the wrong reason.
-        """
-        done = subprocess.Popen([sys.executable, "-c", ""])
-        done.wait()
-        # DIAGNOSTIC, not anti-vacuity — do not weaken this to a skip. If the
-        # reaped pid were somehow live, the `leaked in files` assertion below
-        # ALREADY fails, so the arm cannot go vacuous either way. This only
-        # makes the red name the real cause instead of blaming the filter.
-        with pytest.raises(ProcessLookupError):
-            os.kill(done.pid, 0)
-        leaked = self.PROBE.parent / f"{_PROBE_STEM}{done.pid}_{uuid.uuid4().hex}.py"
-        leaked.write_text("import os\n", encoding="utf-8")
-        try:
-            files = TARGET_DIR_SETS["tests"]()
-            assert leaked in files, "a leaked probe was filtered out of the sweep"
-            assert f"{leaked}:1: unused import os" in _gate_check(files)
-        finally:
-            leaked.unlink()
 
     def test_kept_ensure_loaded_seam_survives_widened_gate(self):
         """The one reasoned keep in tests/ (an ensure-loaded monkeypatch
@@ -351,6 +342,71 @@ class TestTestsSurfaceEnforcement:
         kept = PLUGIN_ROOT / "tests" / "test_emitter_idempotency.py"
         assert kept.exists()
         assert _gate_check([kept]) == []
+
+
+class TestProbeNameMatchingIsAnchored:
+    """`_PROBE_RE` must match a probe name WHOLE, never as a substring — an
+    over-matching pattern drops an ordinary file from the sweep, which is a
+    silent skip.
+
+    PURE-FUNCTION ARMS, DELIBERATELY, and the reason is the subject of this
+    whole file. Proving it end-to-end would mean planting a lookalike in the
+    live tests/ tree — and a lookalike is BY CONSTRUCTION not matched by the
+    filter, so it is precisely the unprotected foreign file whose
+    sweep-poisoning this module exists to prevent. A concurrent run would go
+    red on a test that never mentions it, and the `finally` would delete the
+    evidence. The arm proving foreign probes are handled would itself be an
+    unhandleable one.
+
+    The end-to-end half needs no second planted file: the leak arm above
+    already shows that a file the filter declines to drop IS swept. This
+    supplies the other half — that a lookalike is declined — and composition
+    covers the rest.
+
+    Both arms pass paths that DO NOT EXIST, which also pins that the
+    predicate reads only `path.name` and never touches disk.
+
+    MUTATION THAT REDDENS: `.fullmatch` -> `.search` in the predicate.
+    """
+
+    def _name(self, prefix, pid):
+        return PLUGIN_ROOT / "tests" / "fixtures" / (
+            f"{prefix}{_PROBE_STEM}{pid}_{uuid.uuid4().hex}.py"
+        )
+
+    def test_a_name_merely_containing_the_stem_is_not_a_probe(self):
+        assert not _is_foreign_live_probe(self._name("zz", os.getppid()))
+
+    def test_a_whole_probe_name_of_a_live_owner_still_matches(self):
+        """The control. Without it a predicate that always returned False
+        would satisfy the arm above and drop the anchoring property."""
+        owner = os.getppid()
+        os.kill(owner, 0)
+        assert _is_foreign_live_probe(self._name("", owner))
+
+    def test_a_probe_of_a_DEAD_owner_is_not_dropped(self):
+        """LEAK DETECTION, the property a name-only exclusion would have cost
+        — a leak and a live run's probe are identical as strings.
+
+        PURE for the same reason as the arms above, and this one is the more
+        dangerous of the two to plant: the filter deliberately does NOT drop a
+        dead-owner probe, so a file on disk here is visible to every
+        concurrent run by construction. Planting it to prove leak detection
+        would poison the sweeps that leak detection exists to protect.
+
+        The end-to-end half is carried by the planting arms, which show that a
+        file the predicate declines to drop IS swept and IS reported by name.
+        Both cases take the same branch — predicate False, file kept — so what
+        remains to prove here is only that a dead owner reaches it.
+
+        The precondition is DIAGNOSTIC, not anti-vacuity: a live pid would
+        fail the assertion below anyway. Do not weaken it to a skip.
+        """
+        done = subprocess.Popen([sys.executable, "-c", ""])
+        done.wait()
+        with pytest.raises(ProcessLookupError):
+            os.kill(done.pid, 0)
+        assert not _is_foreign_live_probe(self._name("", done.pid))
 
 
 class TestGateNonVacuity:
