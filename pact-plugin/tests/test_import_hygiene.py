@@ -41,6 +41,7 @@ Strictness contract (why the fixtures below exist):
 
 import importlib.util
 import inspect
+import uuid
 from pathlib import Path
 
 import pytest
@@ -135,10 +136,28 @@ class TestTestsSurfaceEnforcement:
     level DOWN (tests/fixtures/) — the sweep only sees them through
     recursive descent, so an rglob→glob mis-narrowing fails here instead
     of silently dropping subdirectory files. Each probe is removed in
-    the same test (the suite runs single-process, so no parallel sweep
-    can observe it)."""
+    the same test.
 
-    PROBE = PLUGIN_ROOT / "tests" / "fixtures" / "_f401_planted_probe_delete_me.py"
+    ISOLATION — the guarantee that actually holds, rather than an
+    assumption about how the suite is invoked. The probe filename carries
+    a per-run-unique suffix, so two overlapping runs plant at DIFFERENT
+    paths and neither can observe or delete the other's file. The previous
+    wording claimed the suite runs single-process; nothing enforces that,
+    and two concurrent runs collided deterministically on the shared path.
+    The collision reddened tests that never mention PROBE — the tests/
+    sweep sees a foreign file and reports it — so the poisonable set was
+    every test that sweeps tests/, not the two that plant here.
+
+    A probe leaked by a hard crash is NOT silently tolerated: it stays in
+    tests/fixtures/ and test_no_unused_imports[tests] fails on it by name.
+    Uniqueness removes the collision, not the need to clean up."""
+
+    PROBE = (
+        PLUGIN_ROOT
+        / "tests"
+        / "fixtures"
+        / f"_f401_planted_probe_delete_me_{uuid.uuid4().hex[:8]}.py"
+    )
 
     def test_tests_surface_includes_this_gate_file(self):
         """Reachability pin: the tests glob must resolve the LIVE tests/
@@ -153,8 +172,11 @@ class TestTestsSurfaceEnforcement:
         be picked up by the surface glob AND flagged by the gate — the
         end-to-end proof that new tests/ files are enforced."""
         assert not self.PROBE.exists(), (
-            "leftover probe from a crashed run — delete it; it poisons "
-            "the tests/ sweep"
+            "THIS RUN's probe already exists — the sibling planting test "
+            "leaked it, meaning its `finally` did not run. A crashed "
+            "EARLIER run cannot reach this assertion: its probe carries a "
+            "different suffix, and surfaces instead as a tests/ sweep "
+            "finding naming the file."
         )
         self.PROBE.write_text("import os\n", encoding="utf-8")
         try:
