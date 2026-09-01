@@ -79,7 +79,7 @@ A_id = TaskCreate(
                 "after teachback acceptance, then send a wake-signal SendMessage confirming Task B is claimable. "
                 "If TEACHBACK is rejected, team-lead writes metadata.teachback_rejection and sends a "
                 "wake-signal SendMessage carrying the rejection payload verbatim; revise on this same task.\n\n"
-                "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\n"
+                "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead. Task B stays blocked until the lead accepts this teachback: that is the gate, not a desync.\n\n"
                 "Mission for Task B: the primary-work task assigned to you in your TaskList (the work task, NOT this TEACHBACK gate task), identified by its subject (the '{role}: {mission}' pattern). Claim it after this teachback is accepted."
 )
 TaskUpdate(A_id, owner="{teammate-name}")
@@ -714,7 +714,7 @@ JSON
      - GUIDELINES:
        - If ARCHITECT was skipped: pass the plan's Architecture Phase section instead.
        - If PREPARE/ARCHITECT were skipped, include: "PREPARE and/or ARCHITECT were skipped based on existing context. Minor decisions (naming, local structure) are yours to make. For moderate decisions (interface shape, error patterns), decide and implement but flag the decision with your rationale in the HANDOFF so it can be validated. Major decisions affecting other components are blockers—don't implement, escalate."
-       - "Smoke Testing: Run the test suite before completing. If your changes break existing tests, fix them. Import hygiene: if you modified any .py files, run `bash {plugin_root}/skills/pact-coding-standards/scripts/lint-check.sh --files <the .py files you modified>` (single-quote each filename — a filename is untrusted shell input) before the suite; record its final IMPORT-HYGIENE verdict line verbatim in your HANDOFF produced field; fix findings in files you modified (a deliberate side-effect import or re-export keeps a reasoned `# noqa: F401`); if the script is missing or errors, say so in your HANDOFF — never skip silently. Your tests are verification tests—enough to confirm your implementation works. Comprehensive coverage (edge cases, integration, E2E, adversarial) is TEST phase work."
+       - "Smoke Testing: Run the test suite before completing. If your changes break existing tests, fix them. Import hygiene: if you modified any .py files, run `bash {plugin_root}/skills/pact-coding-standards/scripts/lint-check.sh --files '<absolute-path-to-a-file-you-modified>.py' '<absolute-path-to-another>.py'` (one separately quoted absolute path per file, never one quoted list — a filename is untrusted shell input) before the suite; record its final IMPORT-HYGIENE verdict line verbatim in your HANDOFF produced field; fix findings in files you modified (a deliberate side-effect import or re-export keeps a reasoned `# noqa: F401`); if the script is missing or errors, say so in your HANDOFF — never skip silently. Your tests are verification tests—enough to confirm your implementation works. Comprehensive coverage (edge cases, integration, E2E, adversarial) is TEST phase work."
 3. `TaskUpdate(A_id, owner="{coder-name}", addBlocks=[B_id])`
 4. `TaskUpdate(B_id, owner="{coder-name}", addBlockedBy=[A_id])`
 5. **Journal event**: Write `agent_dispatch` before spawning each coder:
@@ -798,15 +798,18 @@ JSON
   {"workflow": "code-auditor", "feature": "{feature}", "paths": ["{absolute_decision_log_path}"]}
 JSON
   ```
-- [ ] **Process coder HANDOFFs** (non-blocking):
+- [ ] **Primary HANDOFF-presence check**: on receiving each Task-complete `SendMessage`, verify via `TaskGet` — confirm status=completed AND metadata.handoff populated/non-empty. If missing, `SendMessage` the agent to complete HANDOFF before downstream dispatch proceeds.
+- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — `metadata.audit_summary` is present (verify via `TaskGet`), OR an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
+- [ ] **Process coder HANDOFFs** (dispatch once no auditor task is `pending` or `in_progress` — a contamination ordering, NOT a verdict wait):
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",
     description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
   TaskUpdate(taskId, owner="secretary")
   ```
-  Do not block on completion — TEST phase proceeds in parallel.
-- [ ] **Primary HANDOFF-presence check**: on receiving each Task-complete `SendMessage`, verify via `TaskGet` — confirm status=completed AND metadata.handoff populated/non-empty. If missing, `SendMessage` the agent to complete HANDOFF before downstream dispatch proceeds.
-- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — `metadata.audit_summary` is present (verify via `TaskGet`), OR an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, before TEST dispatch proceeds.
+  Do not block on completion — TEST phase proceeds in parallel. Do NOT move this earlier: the harvest
+  writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live
+  agent's context, so running it alongside the auditor puts this phase's conclusions into the context
+  of the agent whose value is observing independently of them.
 - [ ] **S4 Checkpoint**: Environment stable? Model aligned? Plan viable?
 
 #### Handling Complex Sub-Tasks During CODE
@@ -971,7 +974,7 @@ After you resolve a blocker, message the teammate by name. Spawn fresh if the te
 8. **Mid-session consolidation** (multi-feature sessions only): If this is the second or subsequent feature completed in this session, create a consolidation task to merge cross-feature knowledge:
    ```
    TaskCreate(subject="secretary: mid-session consolidation",
-     description="Multiple features completed this session. Review memories saved so far, consolidate related entries across features, prune superseded memories. Report summary when done.")
+     description="Multiple features completed this session. Follow the Consolidation Harvest workflow in your pact-handoff-harvest skill: review memories saved so far, consolidate related entries across features, prune superseded memories. Report summary when done.")
    TaskUpdate(taskId, owner="secretary")
    ```
    Skip for the first feature in a session — full consolidation happens during `/PACT:wrap-up`.

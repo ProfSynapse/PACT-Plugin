@@ -45,6 +45,8 @@ _build_journal_resume() -- truncation boundary:
        81 (truncated to 77+"..."), 120 (well over, truncated)
 """
 
+from __future__ import annotations
+
 import datetime as _dt
 import errno
 import os

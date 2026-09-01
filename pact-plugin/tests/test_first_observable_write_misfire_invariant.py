@@ -35,6 +35,8 @@ FIRST-OBSERVABLE-WRITE instance lived. Generalization to other hooks is
 deliberately deferred to a future architectural-class consolidation pass.
 """
 
+from __future__ import annotations
+
 import ast
 from pathlib import Path
 

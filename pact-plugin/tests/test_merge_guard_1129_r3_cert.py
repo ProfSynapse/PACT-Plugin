@@ -98,9 +98,22 @@ _R3_SHA = "72bacaf8"     # R3 shipped (arm-B regression present)
 _FIX1_SHA = "b313ecaa"   # R3-fix1: space-only anchor restore (fix2-reverted state)
 
 
+_WHY = {}  # sha -> what actually failed, for the skip reason
+
+
+def _why_for(*shas):
+    """Recorded failures for exactly `shas`, in the order given.
+
+    Reads only the shas its caller's skipif gates on, so a later load recording
+    into `_WHY` cannot appear in an earlier guard's reason. The whole-dict form
+    this replaces was correct only while every later load sat below the guard.
+    """
+    return "; ".join("%s: %s" % (sha, _WHY[sha]) for sha in shas if sha in _WHY)
+
+
 def _load_classifier(sha):
     """Load merge_guard_common as it existed at `sha`, or None if unavailable
-    (git missing, or a SHALLOW clone lacking the commit) so collection SUCCEEDS and the
+    (git missing, or the commit not present in this checkout) so collection SUCCEEDS and the
     base/R3HEAD non-vacuity rows self-SKIP (@requires_history) instead of aborting the
     file. Mirrors test_merge_guard_1129_r2_cert._load_classifier."""
     wt = Path(__file__).resolve().parents[2]  # worktree root (tests/../../)
@@ -108,16 +121,21 @@ def _load_classifier(sha):
         src = subprocess.check_output(
             ["git", "-C", str(wt), "show",
              sha + ":pact-plugin/hooks/shared/merge_guard_common.py"],
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         ).decode()
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    except subprocess.CalledProcessError as exc:
+        _WHY[sha] = "git show failed: " + (exc.stderr or b"").decode().strip()
+        return None
+    except (FileNotFoundError, OSError) as exc:
+        _WHY[sha] = "git not runnable: %r" % (exc,)
         return None
     mod = types.ModuleType("merge_guard_common_1129r3_" + sha)
     mod.__file__ = str(wt / "pact-plugin/hooks/shared/merge_guard_common.py")
     mod.__package__ = "shared"  # so its `from shared.x import ...` resolve on sys.path
     try:
         exec(compile(src, mod.__file__, "exec"), mod.__dict__)
-    except Exception:
+    except Exception as exc:
+        _WHY[sha] = "source loaded (%d bytes) but exec failed: %r" % (len(src), exc)
         return None
     return mod
 
@@ -126,7 +144,7 @@ _BASE = _load_classifier(_BASE_SHA)
 _R3 = _load_classifier(_R3_SHA)
 _FIX1 = _load_classifier(_FIX1_SHA)
 # None-safe: a bare `_BASE.is_dangerous_command` would AttributeError at import when the
-# baked source is unavailable (shallow clone), re-aborting collection. D_BASE/D_R3/D_FIX1
+# baked source is unavailable (unreachable base commit), re-aborting collection. D_BASE/D_R3/D_FIX1
 # are only ever called by the @requires_history-guarded columns.
 D_BASE = _BASE.is_dangerous_command if _BASE is not None else None
 D_R3 = _R3.is_dangerous_command if _R3 is not None else None
@@ -135,7 +153,8 @@ D = mgc.is_dangerous_command
 
 requires_history = pytest.mark.skipif(
     _BASE is None or _R3 is None or _FIX1 is None,
-    reason="base/R3HEAD/FIX1 non-vacuity requires merged history (shallow clone / missing history)",
+    reason="base/R3HEAD/FIX1 non-vacuity differential did not run: %s"
+           % (_why_for(_BASE_SHA, _R3_SHA, _FIX1_SHA) or "no failure recorded"),
 )
 
 # Destructive literals assembled at runtime — this file carries no raw literal.

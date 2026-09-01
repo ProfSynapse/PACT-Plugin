@@ -31,9 +31,10 @@ Rule coverage:
   - Anti-sprawl — single evaluate_dispatch composition
 
 Disciplines applied:
-  - PR #660 R2: never pop shared.* from sys.modules in this test process.
-    Subprocess sabotage for runtime fail-closed lives in the smoke file
-    using PYTHONSAFEPATH.
+  - Subprocess isolation by discipline: never pop shared.* from sys.modules
+    in this test process.
+    Subprocess sabotage for runtime fail-closed lives in the smoke file,
+    which runs a COPIED hooks tree and CLEARS PYTHONSAFEPATH.
   - #638 cardinality: each rule's deny is asserted by behavioral rule
     identifier (e.g. ``"name_required"``, ``"long_inline_mission"``), not
     deny string equality, so wording iterations don't cause test churn.

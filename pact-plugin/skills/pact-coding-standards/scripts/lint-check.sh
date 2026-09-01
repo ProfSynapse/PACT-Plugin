@@ -42,23 +42,61 @@ if [ "$1" = "--files" ]; then
     # This pre-filter is the consumer tier's choice only — the checker itself
     # keeps its unreadable-fails-loud contract for the strict tier.
     PY_FILES=()
+    UNRESOLVED=0
+    IGNORED=0
     for f in "$@"; do
         case "$f" in
             *.py)
-                if [ -e "$f" ]; then
+                if [ -f "$f" ]; then
                     PY_FILES+=("$f")
+                elif [ -e "$f" ]; then
+                    UNRESOLVED=$((UNRESOLVED + 1))
+                    echo "import-hygiene: exists but is not a regular file: $f" >&2
                 else
+                    UNRESOLVED=$((UNRESOLVED + 1))
                     echo "import-hygiene: skipping missing path (deleted/renamed?): $f" >&2
                 fi
+                ;;
+            *)
+                # NO SILENT DROP. Without this arm a non-.py argument vanished:
+                # not counted, not reported, and the run fell through to the
+                # no-arguments verdict below -- which cannot tell a caller who
+                # passed nothing from one whose arguments were all discarded.
+                IGNORED=$((IGNORED + 1))
+                echo "import-hygiene: not a .py path, ignored: $f" >&2
                 ;;
         esac
     done
 
+    if [ ${#PY_FILES[@]} -eq 0 ] && [ $((UNRESOLVED + IGNORED)) -gt 0 ]; then
+        # Arguments WERE given and none survived to be checked. The
+        # verdict names the CONDITION, not the causes. The causes are
+        # unbounded -- an unsplit quoted string ("a.py b.py c.py"), paths
+        # relative to another directory, a deleted or renamed file, a directory
+        # rather than a file, an argument that is not .py at all, a typo, an
+        # unexpanded glob, a pasted placeholder ending in .py -- so any list
+        # here is a floor that sends the reader chasing an item that does not
+        # apply. The stderr line above names each unresolved path, which is the
+        # specific diagnostic; the verdict is recorded verbatim elsewhere and
+        # must stay true detached from it. Do NOT re-add a cause list. Saying
+        # "no arguments given" here would be factually false AND
+        # pass-shaped, so this case gets its own verdict. Still exit 0 — a
+        # caller-argument mistake is a graceful degradation, not a hygiene
+        # finding, and the documented contract puts every SKIPPED at 0.
+        echo "IMPORT-HYGIENE: SKIPPED (arguments given but none is a checkable .py file)"
+        exit 0
+    fi
+
     if [ ${#PY_FILES[@]} -eq 0 ]; then
-        # No Python files to check is a graceful degradation, not an error —
+        # ZERO ARGUMENTS is the only state that reaches here, so the verdict
+        # names that and not the wider "no Python files" it used to claim:
+        # every argument increments exactly one of the three counters above
+        # (the `*)` arm matches even an empty string), so an empty PY_FILES
+        # with both other counters at zero means the loop body never ran.
+        # A caller who passed nothing is a graceful degradation, not an error —
         # but it is VISIBLE: the verdict says so, and the coder records it.
         # Deliberately NOT a fallback to whole-tree checking.
-        echo "IMPORT-HYGIENE: SKIPPED (no Python files given)"
+        echo "IMPORT-HYGIENE: SKIPPED (no arguments given)"
         exit 0
     fi
 

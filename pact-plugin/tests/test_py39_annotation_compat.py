@@ -20,11 +20,15 @@ Summary: Static AST guard keeping the plugin's bare-python3 surfaces
             scanned roots — their absence is what makes universal
             annotation stringification safe on 3.9.
          Pure static analysis: nothing scanned is imported or executed.
-         Because R0 pins feature_version statically, the suite needs no
-         Python 3.9 CI interpreter — any modern interpreter enforces
-         the same floor. (Under an actual 3.9 interpreter, py310+
-         syntax would surface as parse ERRORS in R1-R3 instead of clean
-         R0 violations — the gate goes red either way.)
+         R0 pins feature_version statically, so these four rules run the
+         same on any modern interpreter. That does NOT make a 3.9 CI
+         interpreter unnecessary: CI runs a 3.9 cell, and it is the run
+         that backs the declared floor. This gate NARROWS rather than
+         replaces live verification — feature_version was measured
+         false-passing PEP 701 f-strings a 3.9 interpreter rejects, and no
+         static scan sees a post-3.9 API call at all. (Under an actual 3.9
+         interpreter, py310+ syntax would surface as parse ERRORS in R1-R3
+         instead of clean R0 violations — the gate goes red either way.)
 Used by: pact-plugin test suite (standing merge gate).
 """
 from __future__ import annotations
@@ -384,21 +388,38 @@ class TestDiscoveryFloor:
         # Floor rather than exact count so adding files never breaks it; bump
         # the floor as the scanned roots grow, never lower it without a
         # deliberate scope decision. History: lowered 63 -> 55 when the dormant
-        # hooks/refresh/ package (8 modules) was removed, dropping the scanned
-        # count 66 -> 58; raised 55 -> 71 when skills/pact-memory/scripts and
-        # scripts were added, taking the count 59 -> 74 (hooks/ had gained one
-        # file since the 58 above, so measure the count -- do not carry a
-        # figure forward from this history). Both moves keep the same slack of
-        # 3, and that tightness is the point: at the old floor of
-        # 55 the entire skills/pact-memory/scripts root could vanish (74 -> 60)
-        # and this assertion would still pass, so the widened scan would have
-        # been guarded in name only.
+        # hooks/refresh/ package (8 modules) was removed; raised 55 -> 71 when
+        # skills/pact-memory/scripts and scripts were added.
+        #
+        # COUNTING RULE, so the next reader RE-DERIVES instead of inheriting a
+        # number: _SCANNED_FILES is every *.py that Path.rglob finds under each
+        # entry of SCANNED_ROOTS. Measure it; never carry a figure forward from
+        # this comment. Any count written here is true only on the day it was
+        # written -- 84 when this paragraph was, which was already 10 above the
+        # 74 the previous version of this comment reasoned from.
+        #
+        # So SLACK IS NOT A PROPERTY THIS COMMENT CAN PIN: it is today's count
+        # minus 71, and it WIDENS on its own as files are added. Tightness was
+        # the original argument for raising the floor -- at 55 the whole
+        # skills/pact-memory/scripts root could have vanished and this
+        # assertion would still have passed, guarding the widened scan in name
+        # only -- and that tightness DECAYS SILENTLY. The wider the slack, the
+        # more of a root can disappear unnoticed. Re-measure and raise the
+        # floor when it has drifted.
         #
         # LIMIT, stated rather than implied: a count floor cannot protect a
-        # single-file root. Losing scripts/ takes the count to 73, which no
-        # workable floor distinguishes from normal churn. This test guards
-        # against a LARGE root collapsing, not against every root.
+        # SMALL root. Losing one whose file count is under the current slack
+        # leaves the total above the floor, indistinguishable from normal
+        # churn. This test guards against a LARGE root collapsing, not against
+        # every root.
         assert len(_SCANNED_FILES) >= 71
+
+    def test_every_scanned_root_resolves_non_empty(self):
+        # The count floor above cannot see a root vanish when that root is
+        # smaller than its slack; this can, for every root and at any slack.
+        # Reuses iter_python_files so the guard and the scan cannot drift.
+        for root in SCANNED_ROOTS:
+            assert any(iter_python_files((root,))), root
 
 
 class TestPy39SyntaxFloor:
@@ -672,3 +693,59 @@ class TestDetectorNonVacuity:
         assert len(violations) == 1
         assert violations[0].rule == "missing_future_import"
         assert "sole line" in violations[0].detail
+
+
+# ---------------------------------------------------------------------------
+# R4: outside the scanned roots, a union in an annotation still needs the import
+# ---------------------------------------------------------------------------
+#
+# R1 above demands the future import in EVERY file, but only under
+# SCANNED_ROOTS -- the bare-python3 surface. Elsewhere in the plugin the import
+# is not required in general, yet a file with `X | Y` in an annotation still
+# needs it: that is valid 3.9 SYNTAX, so R0 cannot see it, and the 3.9 CI cell
+# catches it only where something EVALUATES the annotation. This rule closes
+# that gap conditionally, so it does not demand the import from the ~400 files
+# that have no union at all.
+#
+# ROOT IS PLUGIN_ROOT, NOT SCANNED_ROOTS -- do not "tidy" these together.
+# R1 already demands the import of every file under SCANNED_ROOTS, so there
+# this rule only repeats it. All R4 uniquely adds lies outside -- tests/ above
+# all -- where the import is not required but a union in an annotation needs it.
+_UNION_SCAN_ROOT = (PLUGIN_ROOT,)
+
+
+def test_annotation_unions_require_the_future_import():
+    """A PEP 604 union in an annotation needs the future import, tree-wide.
+
+    Reuses `_annotation_union_lines` and `check_future_import` rather than
+    re-deriving either: one detector, so this rule and R1 cannot drift apart.
+
+    ONE test rather than one per file -- every failure has the same cause and
+    the same remedy, so the message lists the offenders instead of the
+    collection carrying 400+ ids for a single invariant.
+
+    WHAT THIS CANNOT SEE: a union built dynamically or written as a string
+    annotation; any annotation position `_annotation_nodes` does not yield; a
+    file outside PLUGIN_ROOT (the repo root and .github/ are not scanned). A
+    file that will not parse is REPORTED, not skipped -- an unparseable file
+    and a clean one are otherwise indistinguishable.
+    """
+    offenders, unparsed = [], []
+    for path in iter_python_files(_UNION_SCAN_ROOT):
+        source = path.read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            unparsed.append("{}: {}".format(_relpath(path), exc.msg))
+            continue
+        lines = _annotation_union_lines(tree)
+        if lines and check_future_import(source, _relpath(path)):
+            offenders.append("{}:{}".format(_relpath(path), lines[0]))
+
+    assert not unparsed, "files that would not parse:\n  " + "\n  ".join(unparsed)
+    assert not offenders, (
+        "PEP 604 union in an annotation without `from __future__ import "
+        "annotations` in the leading block. Valid 3.9 syntax, but a TypeError "
+        "at 3.9 runtime as soon as anything evaluates the annotation:\n  "
+        + "\n  ".join(offenders)
+    )

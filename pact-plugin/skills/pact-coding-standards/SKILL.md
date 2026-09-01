@@ -490,10 +490,10 @@ mechanically. Run it over EXACTLY the `.py` files you modified before
 running the test suite:
 
 ```bash
-bash <skill-directory>/scripts/lint-check.sh --files 'path/to/modified_a.py' 'path/to/modified_b.py'
+bash <skill-directory>/scripts/lint-check.sh --files '/abs/path/to/modified_a.py' '/abs/path/to/modified_b.py'
 ```
 
-Single-quote each filename — a filename is untrusted shell input.
+One separately quoted absolute path per file, never one quoted list — a filename is untrusted shell input.
 
 (When your dispatch names a plugin root, the script lives at
 `<plugin-root>/skills/pact-coding-standards/scripts/lint-check.sh`.)
@@ -504,7 +504,7 @@ Single-quote each filename — a filename is untrusted shell input.
 |---------|---------|-----------|
 | `IMPORT-HYGIENE: PASS` | No findings in the checked files | 0 |
 | `IMPORT-HYGIENE: FINDINGS (n)` | n findings printed above the verdict | 1 |
-| `IMPORT-HYGIENE: SKIPPED (<reason>)` | Check could not run (no Python files given, or no usable checker) | 0 |
+| `IMPORT-HYGIENE: SKIPPED (<reason>)` | Check could not run (no arguments given, arguments given but none a checkable .py file, or no usable checker) | 0 |
 
 Record the verdict line verbatim in your HANDOFF `produced` field — every
 run ends in a verdict, and a SKIPPED must be visible, never silent.

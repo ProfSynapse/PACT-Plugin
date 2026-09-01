@@ -63,11 +63,13 @@ STRIP = mgc._strip_non_executable_content
 _BASE_SHA = "c21eae19"  # pre-#1178 main HEAD (P1 be33ab81's parent)
 
 
+_WHY = {}  # sha -> what actually failed, for the skip reason
+
+
 def _load_classifier(sha):
     """Load merge_guard_common as it existed at `sha`, or None if unavailable.
 
-    Returns None on any git/exec failure — git missing, or a SHALLOW clone lacking the
-    parent commit (CI default fetch-depth) — so collection SUCCEEDS and the base-vs-HEAD
+    Returns None on any git/exec failure — git missing, or the commit not present in this checkout — so collection SUCCEEDS and the base-vs-HEAD
     differential rows self-SKIP (@requires_history) instead of aborting the file.
     """
     wt = Path(__file__).resolve().parents[2]  # worktree root (tests/../../)
@@ -75,29 +77,35 @@ def _load_classifier(sha):
         src = subprocess.check_output(
             ["git", "-C", str(wt), "show",
              sha + ":pact-plugin/hooks/shared/merge_guard_common.py"],
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         ).decode()
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    except subprocess.CalledProcessError as exc:
+        _WHY[sha] = "git show failed: " + (exc.stderr or b"").decode().strip()
+        return None
+    except (FileNotFoundError, OSError) as exc:
+        _WHY[sha] = "git not runnable: %r" % (exc,)
         return None
     mod = types.ModuleType("merge_guard_common_1178_" + sha)
     mod.__file__ = str(wt / "pact-plugin/hooks/shared/merge_guard_common.py")
     mod.__package__ = "shared"  # so its `from shared.x import ...` resolve on sys.path
     try:
         exec(compile(src, mod.__file__, "exec"), mod.__dict__)
-    except Exception:
+    except Exception as exc:
+        _WHY[sha] = "source loaded (%d bytes) but exec failed: %r" % (len(src), exc)
         return None
     return mod
 
 
 _BASE = _load_classifier(_BASE_SHA)
 # None-safe: a bare `_BASE.is_dangerous_command` would AttributeError at import when the
-# parent source is unavailable (shallow clone). D_BASE is only ever called by the
+# parent source is unavailable (unreachable base commit). D_BASE is only ever called by the
 # @requires_history-guarded differential rows.
 D_BASE = _BASE.is_dangerous_command if _BASE is not None else None
 
 requires_history = pytest.mark.skipif(
     _BASE is None,
-    reason="base(c21eae19)-vs-HEAD differential requires merged history (shallow clone)",
+    reason="base(c21eae19)-vs-HEAD differential did not run: %s"
+           % _WHY.get(_BASE_SHA, "no failure recorded"),
 )
 
 # --- Destructive verbs assembled at runtime so this file carries no raw literal and stays

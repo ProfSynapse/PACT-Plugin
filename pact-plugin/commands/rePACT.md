@@ -176,7 +176,7 @@ Branch behavior depends on whether rePACT is invoked with a scope contract:
 **With scope contract** (from ATOMIZE phase):
 - **Receives worktree path** from the parent orchestrator (created by parent via `/PACT:worktree-setup`)
 - **Operates in isolated worktree** on a suffix branch (e.g., `feature-X--{scope_id}`)
-- **Pass worktree path to all agent prompts**: Include "You are working in a git worktree at [worktree_path]. Note: `CLAUDE.md` is gitignored and does not exist in worktrees. As a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead." in specialist dispatches, consistent with orchestrate.md
+- **Pass worktree path to all agent prompts**: Include "You are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree. Note: `CLAUDE.md` is gitignored and does not exist in worktrees. As a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead." in specialist dispatches, consistent with orchestrate.md
 - All commits stay on the suffix branch within the worktree
 - Branch merges back to the feature branch during the CONSOLIDATE phase
 
@@ -234,7 +234,7 @@ A_id = TaskCreate(
                 "Then send the notify SendMessage carrying the canonical payload verbatim (pact-teachback Step 2). "
                 "SET intentional_wait{reason=awaiting_lead_completion}. Idle. "
                 "DO NOT mark this task completed — team-lead-only completion.\n\n"
-                "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\n"
+                "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead. Task B stays blocked until the lead accepts this teachback: that is the gate, not a desync.\n\n"
                 "Mission for Task B: the primary-work task assigned to you in your TaskList (the work task, NOT this TEACHBACK gate task), identified by its subject (the '{role}: {mission}' pattern). Claim it after this teachback is accepted."
 )
 TaskUpdate(A_id, owner="{scope-prefixed-name}")

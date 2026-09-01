@@ -12,6 +12,8 @@ build_post_compaction_checkpoint also lives there (renamed from
 build_refresh_from_tasks in #444).
 """
 
+from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path

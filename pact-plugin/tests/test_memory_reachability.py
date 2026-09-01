@@ -417,7 +417,11 @@ def test_the_size_cut_accounts_for_the_line_endings_actually_on_disk(tmp_path):
         (root / "feedback_e{0}.md".format(i)).write_text("x", encoding="utf-8")
     (root / "feedback_orphan.md").write_text("x", encoding="utf-8")
 
-    raw = (root / "MEMORY.md").read_text(encoding="utf-8", newline="")
+    # `Path.read_text(newline=...)` is 3.13+; `Path.open(newline=...)` is not.
+    # Reading here rather than through mr._read keeps the assertion independent
+    # of the reader under test.
+    with (root / "MEMORY.md").open(encoding="utf-8", newline="") as handle:
+        raw = handle.read()
     assert len(raw.splitlines()) < mr.MAX_LINES, "must trip the SIZE cap, not the line cap"
     anchor, _ = _emitted(mr.emit_edit(mr.scan(root)))
     through = raw[: raw.index(anchor) + len(anchor)]
@@ -488,7 +492,12 @@ def test_a_conforming_satellite_named_without_its_extension_is_still_a_root(tmp_
 
 
 def _older_interpreter():
-    """Any interpreter older than the one running the suite, or None."""
+    """The FIRST candidate older than the one running the suite, or None.
+
+    First, not oldest and not the declared floor: the walk returns as soon as a
+    candidate is below the running version, so which interpreter a caller gets
+    depends on what the host has installed.
+    """
     for candidate in ("/usr/bin/python3", "python3.9", "python3.10", "python3.11"):
         try:
             out = subprocess.run(
@@ -511,6 +520,16 @@ def test_the_checker_imports_and_scans_under_an_older_interpreter(tmp_path):
     while every scan would have raised TypeError on the first file it read. This
     arm RUNS the module instead of parsing it, which is the only way to see that
     class of defect.
+
+    WHAT A GREEN HERE COVERS. The probe runs under the first interpreter older
+    than the running one, which is not the oldest available and not the declared
+    floor, so the version actually exercised depends on the host's interpreter
+    inventory. Read it off the failure message, which names the interpreter and
+    the version it found; do not infer it from this arm passing.
+
+    This arm is inert wherever the running interpreter is the oldest available,
+    including a run AT the declared floor, where no candidate can be older. The
+    skip is the correct outcome there.
     """
     interpreter, found = _older_interpreter()
     if interpreter is None:

@@ -138,8 +138,12 @@ def test_ast_walk_finds_minimum_expected_dict_count():
     iterates an empty set (e.g., wrong HOOKS_DIR, glob pattern miss),
     which would make the positive compliance test vacuously pass.
 
-    Live count as of PR #660 (#658 fix): ~18 dicts. Threshold of 11
-    leaves headroom for hooks being removed without forcing test churn.
+    Threshold rather than an exact count, so it leaves headroom for hooks
+    being removed without forcing test churn. Measure the live count with
+    the walk below rather than trusting a figure written here: it grows
+    with hooks/, and any number in this docstring is true only on the day
+    it was written. Raise the threshold only on a deliberate scope
+    decision, never to match a count that has merely drifted upward.
     """
     total = 0
     for hook_file in sorted(HOOKS_DIR.glob("*.py")):

@@ -771,7 +771,7 @@ class TestPinStalenessGate_DecoyBypass:
         be invisible (extract_managed_region returns None → bounded count
         fails → else-branch must cover it).
 
-        Post-symmetric-oracle (Commit 1): fragment counts now use
+        Post-symmetric-oracle: fragment counts now use
         `len(parse_pins(text))` directly. Since parse_pins treats bare
         `### Heading` as a Pin, `### Existing\\nbody\\n` parses as 1
         pin (not 0). The gate still denies net-new adds because the
@@ -878,10 +878,10 @@ class TestPinStalenessGate_CaseInsensitivity:
 
 
 class TestPinStalenessGate_BareHeadingBypass:
-    """Symmetric-oracle defense (backend-coder-5 Commit 1): bare `### Heading`
+    """Symmetric-oracle defense: bare `### Heading`
     adds with no preceding date comment MUST DENY.
 
-    Before Commit 1, `_count_pin_comments` used a regex substring count
+    Before that fix, `_count_pin_comments` used a regex substring count
     of `<!-- pinned:` tokens. This was asymmetric with `parse_pins`,
     which recognizes a bare `### Heading` (no preceding date comment)
     as a Pin. An adversarial ADD of a level-3 heading-only pin landed
@@ -893,7 +893,7 @@ class TestPinStalenessGate_BareHeadingBypass:
     gate and the cap-check share one oracle. ADDing a bare `### Heading`
     raises the parse_pins count by 1 → gate denies.
 
-    Counter-test-by-revert: reverting Commit 1 (restoring the regex
+    Counter-test-by-revert: reverting the symmetric-oracle fix (restoring the regex
     substring count) MUST cause these tests to FAIL. A revert that
     leaves them passing is phantom-green coverage.
     """
@@ -919,7 +919,7 @@ class TestPinStalenessGate_BareHeadingBypass:
             "Bare `### Heading` ADD slipped past the gate — the "
             "pre-symmetric-oracle regex substring count missed bare "
             "headings. If you see this failure after reverting "
-            "backend-coder-5 Commit 1 (restoring the substring count), "
+            "the symmetric-oracle fix (restoring the substring count), "
             "that is counter-test proof the symmetric-oracle defense "
             "is load-bearing."
         )
@@ -950,7 +950,7 @@ class TestPinStalenessGate_BareHeadingBypass:
         })
         assert result is not None, (
             "Write-path bare-heading ADD bypassed the gate. "
-            "Revert-counter-test on backend-coder-5 Commit 1 must fail."
+            "Revert-counter-test on the symmetric-oracle fix must fail."
         )
         assert "stale pins" in result
 
@@ -966,16 +966,16 @@ class TestPinStalenessGate_BareHeadingBypass:
         assert pin_staleness_gate._count_pin_comments(fragment) == 1, (
             "parse_pins treats a bare `### Heading` as a Pin; "
             "_count_pin_comments must agree (symmetric oracle). Under "
-            "the pre-Commit-1 regex substring count, this returned 0."
+            "the pre-symmetric-oracle regex substring count, this returned 0."
         )
 
 
 class TestPinStalenessGate_WhitespaceVariant:
-    """Symmetric-oracle defense (backend-coder-5 Commit 1): whitespace-tolerant
+    """Symmetric-oracle defense: whitespace-tolerant
     pin markers (`<!--  pinned:` with double-space, tabs, leading spaces)
     MUST count toward the gate as parse_pins counts them.
 
-    Before Commit 1, `_count_pin_comments` used a literal substring
+    Before that fix, `_count_pin_comments` used a literal substring
     count of `<!-- pinned:` (case-insensitive via regex flag, but with
     EXACTLY one space before `pinned:`). parse_pins tolerates
     `<!--\\s*pinned:` — two spaces, a tab, any whitespace run. A
@@ -986,7 +986,7 @@ class TestPinStalenessGate_WhitespaceVariant:
     Fix: _count_pin_comments delegates to parse_pins, which uses the
     whitespace-tolerant regex. Gate + cap-check now agree.
 
-    Counter-test-by-revert: reverting Commit 1 MUST cause these tests
+    Counter-test-by-revert: reverting the symmetric-oracle fix MUST cause these tests
     to FAIL. If they pass after a revert, the defense is phantom-green.
     """
 
@@ -1013,7 +1013,7 @@ class TestPinStalenessGate_WhitespaceVariant:
             "Double-space `<!--  pinned:` ADD slipped past the gate — "
             "the pre-symmetric-oracle substring count required exactly "
             "one space. If you see this failure after reverting "
-            "backend-coder-5 Commit 1, the defense is load-bearing."
+            "the symmetric-oracle fix, the defense is load-bearing."
         )
         assert "stale pins" in result
 
@@ -1040,7 +1040,7 @@ class TestPinStalenessGate_WhitespaceVariant:
         })
         assert result is not None, (
             "Double-space `<!--  pinned:` ADD via Write bypassed the "
-            "gate. Revert-counter-test on Commit 1 must fail here."
+            "gate. Revert-counter-test on the symmetric-oracle fix must fail here."
         )
         assert "stale pins" in result
 
@@ -1056,7 +1056,7 @@ class TestPinStalenessGate_WhitespaceVariant:
         double_space = "<!--  pinned: 2026-04-20 -->\n### X\nbody\n"
         assert pin_staleness_gate._count_pin_comments(double_space) == 1, (
             "Double-space `<!--  pinned:` did not count. "
-            "Pre-Commit-1 substring count required exactly one space."
+            "Pre-symmetric-oracle substring count required exactly one space."
         )
         # Tab after `<!--`
         tab_sep = "<!--\tpinned: 2026-04-20 -->\n### Y\nbody\n"

@@ -50,23 +50,31 @@ D = mgc.is_dangerous_command          # PATCH = live worktree HEAD (6730f908, F2
 _BASE_SHA = "89061755"  # pre-F2 (busybox/stdbuf COARSE; hush/lash/msh unrecognized) = 6730f908^
 
 
+_WHY = {}  # sha -> what actually failed, for the skip reason
+
+
 def _load_classifier(sha):
-    """Load merge_guard_common as it existed at `sha`, or None if unavailable (shallow clone)."""
+    """Load merge_guard_common as it existed at `sha`, or None if unavailable (unreachable base commit)."""
     wt = Path(__file__).resolve().parents[2]
     try:
         src = subprocess.check_output(
             ["git", "-C", str(wt), "show",
              sha + ":pact-plugin/hooks/shared/merge_guard_common.py"],
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         ).decode()
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    except subprocess.CalledProcessError as exc:
+        _WHY[sha] = "git show failed: " + (exc.stderr or b"").decode().strip()
+        return None
+    except (FileNotFoundError, OSError) as exc:
+        _WHY[sha] = "git not runnable: %r" % (exc,)
         return None
     mod = types.ModuleType("merge_guard_common_f2_" + sha)
     mod.__file__ = str(wt / "pact-plugin/hooks/shared/merge_guard_common.py")
     mod.__package__ = "shared"
     try:
         exec(compile(src, mod.__file__, "exec"), mod.__dict__)
-    except Exception:
+    except Exception as exc:
+        _WHY[sha] = "source loaded (%d bytes) but exec failed: %r" % (len(src), exc)
         return None
     return mod
 
@@ -76,7 +84,8 @@ D_BASE = _BASE.is_dangerous_command if _BASE is not None else None
 
 requires_history = pytest.mark.skipif(
     _BASE is None,
-    reason="base(89061755)-vs-HEAD differential requires merged history (shallow clone)",
+    reason="base(89061755)-vs-HEAD differential did not run: %s"
+           % _WHY.get(_BASE_SHA, "no failure recorded"),
 )
 
 BD = "git " + "branch " + "-D victim"           # danger inside the quoted arg

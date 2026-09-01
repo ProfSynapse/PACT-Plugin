@@ -160,7 +160,7 @@ A_id = TaskCreate(
                 "Then send the notify SendMessage carrying the canonical payload verbatim (pact-teachback Step 2). "
                 "SET intentional_wait{reason=awaiting_lead_completion}. Idle. "
                 "DO NOT mark this task completed — team-lead-only completion.\n\n"
-                "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\n"
+                "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead. Task B stays blocked until the lead accepts this teachback: that is the gate, not a desync.\n\n"
                 "Mission for Task B: the primary-work task assigned to you in your TaskList (the work task, NOT this TEACHBACK gate task), identified by its subject (the '{role}: {mission}' pattern). Claim it after this teachback is accepted."
 )
 TaskUpdate(A_id, owner="{reviewer-name}")
@@ -239,14 +239,14 @@ JSON
 
 > ⚠️ **Heredoc-stdin contract**: All journal-event writes use `--stdin <<'JSON' ... JSON` (quoted delimiter). This disables bash variable expansion so apostrophes, quotes, and backticks in template-substituted values (e.g. `{first_line}`, `{finding}`, `{branch}`) pass through verbatim — fixing the silent journal-drop bug where commit messages with `don't` would close the bash quote and abort the write under `set -e`. The orchestrator must still produce JSON-valid string content (escape `\"` and `\\` and control chars when constructing the body).
 
-**HANDOFF review** (dispatched parallel with reviewers — PRIMARY memory trigger):
+**HANDOFF review** (after every reviewer has reported — PRIMARY memory trigger):
 ```
 TaskCreate(subject="secretary: harvest pending HANDOFFs (primary trigger, pre-merge)",
   description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
 TaskUpdate(taskId, owner="secretary")
 ```
 
-This is the **primary memory trigger** — fires unconditionally at reviewer dispatch (runs parallel with reviewers).
+This is the **primary memory trigger** — fires unconditionally, after the reviewers report. Do NOT move it back to reviewer dispatch: the harvest writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context, so running it alongside reviewers puts this arc's conclusions into the context of the agents whose value is reaching conclusions independently of them.
 
 ### Reviewer Teachback
 

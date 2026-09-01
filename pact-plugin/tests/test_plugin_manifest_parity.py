@@ -13,6 +13,8 @@ Also pins:
   resolves agents by frontmatter name, not filename)
 """
 
+from __future__ import annotations
+
 import json
 import re
 from pathlib import Path

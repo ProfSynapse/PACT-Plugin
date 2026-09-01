@@ -50,11 +50,13 @@ from merge_guard_pre import main as pre_main  # noqa: E402
 _BASE_SHA = "9256c93c"  # main HEAD — #1136 pre-dates this refactor (comma/@/# joins COLLIDE)
 
 
+_WHY = {}  # sha -> what actually failed, for the skip reason
+
+
 def _load_classifier(sha):
     """Load merge_guard_common as it existed at `sha`, or None if unavailable.
 
-    Returns None on any git/exec failure — git missing, or a SHALLOW clone lacking
-    the base commit (CI's default fetch-depth) — so collection SUCCEEDS and the
+    Returns None on any git/exec failure — git missing, or the commit not present in this checkout — so collection SUCCEEDS and the
     base-vs-HEAD differential rows self-SKIP (@requires_history) instead of aborting
     the whole file. Mirrors test_merge_guard_1118_recert._load_module_at.
     """
@@ -62,16 +64,21 @@ def _load_classifier(sha):
     try:
         src = subprocess.check_output(
             ["git", "-C", str(wt), "show", sha + ":pact-plugin/hooks/shared/merge_guard_common.py"],
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         ).decode()
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    except subprocess.CalledProcessError as exc:
+        _WHY[sha] = "git show failed: " + (exc.stderr or b"").decode().strip()
+        return None
+    except (FileNotFoundError, OSError) as exc:
+        _WHY[sha] = "git not runnable: %r" % (exc,)
         return None
     mod = types.ModuleType("merge_guard_common_1136_" + sha)
     mod.__file__ = str(wt / "pact-plugin/hooks/shared/merge_guard_common.py")
     mod.__package__ = "shared"
     try:
         exec(compile(src, mod.__file__, "exec"), mod.__dict__)
-    except Exception:
+    except Exception as exc:
+        _WHY[sha] = "source loaded (%d bytes) but exec failed: %r" % (len(src), exc)
         return None
     return mod
 
@@ -81,17 +88,20 @@ CJ = mgc._canonical_join
 MT = mgc._extract_mass_delete_target          # HEAD (netstring)
 # None-safe: guarding _load_classifier alone is NOT enough — a bare
 # `_BASE._extract_mass_delete_target` would AttributeError at import when _BASE is None
-# (shallow clone), re-aborting collection. MT_BASE is only ever read by the
+# (unreachable base commit), re-aborting collection. MT_BASE is only ever read by the
 # @requires_history-guarded differential rows, which skip when _BASE is None.
 MT_BASE = _BASE._extract_mass_delete_target if _BASE is not None else None  # base (comma/@/#)
 D = mgc.is_dangerous_command
 
 # Skip the base-vs-HEAD differential (non-vacuity) rows when the base source is
-# unavailable (shallow clone / missing history); the HEAD-side + absolute rows still
-# run. With fetch-depth:0 in CI the base IS present, so every differential runs there.
+# unavailable (unreachable base commit); the HEAD-side + absolute rows still
+# run. With fetch-depth:0 in CI THIS FILE's base (9256c93c) is present, so its
+# differentials run there. That is a fact about this file, not about CI: other cert
+# files bake SHAs that no origin ref reaches, and those skip.
 requires_history = pytest.mark.skipif(
     _BASE is None,
-    reason="base-vs-HEAD differential requires merged history (shallow clone / missing history)",
+    reason="base-vs-HEAD differential did not run: %s"
+           % _WHY.get(_BASE_SHA, "no failure recorded"),
 )
 ALLOW, DENY = 0, 2
 
@@ -201,7 +211,7 @@ class TestUnderBlockClosure:
 
     def test_comma_identity_head_distinct(self):
         # HEAD-side closure REFUSE — ALWAYS RUNS (unguarded) so CI catches a fix-revert
-        # even on a shallow clone where the base differential below skips.
+        # even where the base commit is unreachable and the base differential below skips.
         assert MT(_COMMA_2) != MT(_COMMA_3)  # HEAD REFUSES
 
     @requires_history
@@ -300,13 +310,13 @@ class TestDoubledSurfaceBaseVsHead:
     def test_mass_target_collision_flips_base_to_head(self):
         # mass_target: base(comma) COLLIDES -> HEAD(netstring) REFUSES (the #1136 flip).
         # Base-differential (skipped w/o history); the HEAD `!=` half runs unguarded in
-        # test_comma_identity_head_distinct, so a fix-revert is still caught on a shallow clone.
+        # test_comma_identity_head_distinct, so a fix-revert is still caught where the base commit is unreachable.
         assert MT_BASE(_COMMA_2) == MT_BASE(_COMMA_3)
         assert MT(_COMMA_2) != MT(_COMMA_3)
 
     def test_branch_set_head_collision_safe(self):
         # HEAD-side: a comma-named branch set and a 3-branch set are DISTINCT at HEAD
-        # (netstring). ALWAYS RUNS (unguarded) so CI catches a fix-revert on a shallow clone.
+        # (netstring). ALWAYS RUNS (unguarded) so CI catches a fix-revert where the base commit is unreachable.
         _D = "-" + "D"
         two = "git branch " + _D + ' "aa,bb" cc'
         three = "git branch " + _D + " aa bb cc"

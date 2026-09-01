@@ -64,6 +64,8 @@ is_marker_set() — public helper:
 48. Marker with missing plugin context → False
 """
 
+from __future__ import annotations
+
 import hashlib
 import io
 import json

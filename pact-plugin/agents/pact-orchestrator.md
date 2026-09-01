@@ -374,7 +374,7 @@ For non-exempt teammates (everyone except `pact-secretary`):
 1. `TaskCreate(subject="{name}: TEACHBACK for {topic}", description="<teachback gate brief — instruct the teammate to write metadata.teachback_submit using the CANONICAL field schema (do NOT improvise key names): understanding, most_likely_wrong, least_confident_item, first_action, variety_acknowledgment (an OBJECT); point the teammate at Task B by its subject pattern (the '{name}: {primary work subject}' work task in their TaskList), NOT by a forward task id>")` — create Task A (the teachback gate). **Create Task A FIRST**, before Task B, so the gate gets the LOWER id; creating Task B first — giving the gate the HIGHER id — is WRONG, because it inverts the intuitive "lower id = earlier" reading.
 2. `TaskCreate(subject="{name}: {primary work subject}", description="<full mission: CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13 Recommended Agent Prompting Structure>")` — create Task B (primary work).
 3. `TaskUpdate(A_id, owner="{name}", addBlocks=[B_id])` — assign Task A to the teammate and wire it as the gate that unblocks Task B.
-4. `TaskUpdate(B_id, owner="{name}", addBlockedBy=[A_id])` — assign Task B to the same teammate and explicitly mirror the block edge. Do NOT pre-set `status="in_progress"` on either task — the teammate self-claims on arrival. Ensure the Task A brief reminds the teammate to claim Task B (`status="in_progress"`) before any implementation tool-use once it unblocks (the command dispatch templates carry this line) — the teammate flips it, never you.
+4. `TaskUpdate(B_id, owner="{name}", addBlockedBy=[A_id])` — assign Task B to the same teammate and explicitly mirror the block edge. Do NOT pre-set `status="in_progress"` on either task — the teammate self-claims on arrival. Ensure the Task A brief reminds the teammate to claim Task B (`status="in_progress"`) before any implementation tool-use once it unblocks, and states that Task B stays blocked until you accept Task A (the command dispatch templates carry both lines) — the teammate flips it, never you.
 5. `Agent(name="{name}", team_name="{team_name}", subagent_type="pact-{type}", description="Spawn {name} specialist", prompt="YOUR PACT ROLE: teammate ({name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you.")` — spawn the teammate. Keep the prompt ≤ 800 chars and include the literal `TaskList` reference (or one of: `task list`, `tasks assigned`, `check your tasks`); the teammate reads the mission via `TaskGet(B_id)`, not from the prompt.
 
 #### Which signal governs a tool call
@@ -637,13 +637,22 @@ The secretary returns relevant memory entries with IDs — historical context, n
 
 At these workflow boundaries, create a task for the secretary referencing the `pact-handoff-harvest` skill:
 
-- After CODE phase completes → Standard Harvest
-- At peer-review dispatch (parallel with reviewers) → Standard Harvest (**PRIMARY trigger**, fires unconditionally)
-- After remediation completes → Incremental Harvest (delta only, only if remediation occurred)
-- After comPACT specialist completes → Standard Harvest
-- During wrap-up → Consolidation Harvest (Pass 2) with safety net for unprocessed HANDOFFs
+- After CODE phase completes, once no auditor task is `pending` or `in_progress` → Standard Harvest (`orchestrate`)
+- After all phases complete, once the user has decided on merge → Standard Harvest (`orchestrate`) (idempotent — safe if already processed at the CODE boundary)
+- After every reviewer has reported → Standard Harvest (`peer-review`) (**PRIMARY trigger**, fires unconditionally). Waiting until reviewers report means a session dying mid-review has not yet banked those HANDOFFs; the harvest's orphan-recovery path recovers the completed ones. A reviewer that died before writing its HANDOFF left nothing for any layer to recover, which is why waiting here costs nothing: that HANDOFF is the harvest's own input.
+- After remediation completes → Incremental Harvest (`peer-review`) (delta only, only if remediation occurred)
+- After comPACT specialists complete, once no auditor task is `pending` or `in_progress` → Standard Harvest (`comPACT`)
+- After a planning consultation completes → Standard Harvest (`plan-mode`)
+- During wrap-up → Consolidation Harvest (`wrap-up`) (Pass 2) with safety net for unprocessed HANDOFFs
+- At session pause → Consolidation Harvest (`pause`)
+- At a mid-session context refresh → Consolidation Harvest (`refresh`)
+- After a second or subsequent feature completes in one session → Consolidation Harvest (`orchestrate`)
 
 These triggers are idempotent — safe to fire even if HANDOFFs were already processed.
+
+Never fire a phase-boundary harvest (Standard, Incremental) while an agent whose value is independent judgement still has that judgement in flight — a reviewer whose HANDOFF has not arrived, or an auditor whose task is still `pending` or `in_progress`. The harvest writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context.
+
+The Consolidation Harvests are EXEMPT and must run even while teammates are alive, because at those boundaries no judgement is in flight: `wrap-up` is end-of-session cleanup, so every reviewer has already reported; `orchestrate`'s mid-session consolidation runs only after the merge decision and the retrospective, so nothing is awaiting judgement; and `pause` and `refresh` both make consolidation CRITICAL before the shutdown that immediately follows — deferring it there would strand the HANDOFFs the harvest exists to save. The exemption goes stale the moment a Consolidation Harvest is dispatched where a reviewer or auditor has not yet reported: the test is whether judgement is in flight, never the variant's name.
 
 NOTE: For ad-hoc work outside defined PACT workflows → `SendMessage(to="secretary", message="[team-lead→secretary] Save: {what and why}", summary="Save request: {topic}")`
 

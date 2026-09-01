@@ -1390,8 +1390,19 @@ class TestVersionFloorLoopHandling:
     def test_loops_refuse_identically_on_a_real_39_interpreter(self):
         """Loop handling on BOTH available interpreters.
 
-        CI runs one interpreter, so this opportunistically discovers a real 3.9
-        and SKIPS when absent, following the established pattern.
+        CI runs the interpreters declared by `python-version` in
+        .github/workflows/tests.yml -- read them there rather than from a copy
+        here, because no gate couples this docstring to that list: the workflow's
+        own prose is checked against the matrix, this file is not. This arm
+        discovers a real 3.9 and SKIPS when absent, which is what happens on
+        every cell above the floor.
+
+        ON THE FLOOR CELL IT DOES NOT SKIP, AND THAT IS THE CASE TO WATCH.
+        Discovery returns a 3.9 while the running interpreter is also 3.9, so the
+        two endpoints coincide: the subprocess probe below and the in-process
+        assertions in the symlink-loop tests earlier in this file measure the same
+        interpreter twice. Nothing asserts they differ, so the arm still passes
+        while covering half of what it reads as covering. Measured on 3.9.6.
 
         WHAT THIS DOES AND DOES NOT ESTABLISH. It measures the two ENDPOINTS,
         3.9 and the running interpreter. 3.10-3.13 are unmeasured, and the

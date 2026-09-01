@@ -39,6 +39,8 @@ Note: restore_last_session() and check_resumption_context() are tested
 in test_session_resume.py (canonical location).
 """
 
+from __future__ import annotations
+
 import io
 import json
 import re

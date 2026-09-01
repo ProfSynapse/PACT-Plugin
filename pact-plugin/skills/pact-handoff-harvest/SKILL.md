@@ -12,9 +12,9 @@ description: |
 This skill provides the complete workflow for discovering, reviewing, and saving agent HANDOFFs as institutional knowledge. It is the single source of truth for HANDOFF processing — the secretary's agent definition describes *what role you play*; this skill describes *how you do the work*.
 
 Three workflow variants:
-- **Standard Harvest** — discover, review, save, record the processed ids. Triggered by workflow commands (orchestrate, comPACT, peer-review) after phases complete.
-- **Incremental Harvest** — delta-only pass after remediation. Processes only new completions since last harvest.
-- **Consolidation Harvest** — safety-net + deep-clean pass. Triggered by wrap-up/pause at session end.
+- **Standard Harvest** (orchestrate, comPACT, peer-review, plan-mode) — discover, review, save, record the processed ids. Triggered after phases complete.
+- **Incremental Harvest** (peer-review) — delta-only pass after remediation. Processes only new completions since last harvest.
+- **Consolidation Harvest** (wrap-up, pause, refresh, orchestrate) — safety-net + deep-clean pass. Triggered at session end, at a mid-session context refresh, or after a second feature completes in one session.
 
 Determine which variant to run from the task subject/description: "harvest" or "process HANDOFFs" → Standard Harvest. "incremental" or "remediation" → Incremental Harvest. "consolidation" → Consolidation Harvest.
 
@@ -268,7 +268,7 @@ A HANDOFF may reference sibling metadata keys on its task (verification records,
    As in Step 1, `read` prints a **JSON ARRAY** — parse the whole stdout once, then iterate. Each event carries `task_id`, `metadata` (the size-bounded sibling-key payload), `subject`, `occupant`, and optionally `owner` / `task_type` / `truncated`. **Selection**: filter to events with the matching `task_id`; because the platform reuses task_ids across arcs, when you are resolving siblings FOR an `agent_handoff` event, additionally filter to events whose `occupant` equals `occupant_hash(agent, task_subject)` computed from that handoff event's own fields with the SAME shared function — never a local reimplementation. **The runnable command is in Step 3, under HOW TO CALL THE TWO NAMES THIS STEP USES.** It is stated once, there, and referenced here. Aggregate (whole-arc) reads apply the arc-scoped `--since` bound first, exactly as Step 10 does for `variety_assessed`. Take the **latest-`ts`** event within the match, **last-wins on an equal `ts`** (journal events stamp `ts` at second granularity, so a same-second re-emit ties; the later line in journal order is the authoritative one — the same tie-break the artifact-paths supersede uses) — a task may legally carry multiple snapshots (a changed payload after completion re-emits; the latest is the authoritative end-state). A value of shape `{"_truncated": true, ...}` or a top-level `_dropped_keys` list means the full value lived only in the task file — note the truncation in your synthesis, don't fake the missing content.
 3. **Graceful degrade**: neither source resolves → record the gap (task_id, key, timestamp) exactly as Step 3's report-gap tier does; never invent content.
 
-**SIBLING KEY NAMES CARRY NO ORDER.** A task commonly carries a family of related sibling keys, and their names do not record which one is newest. A key that names itself `final` can be the earlier of two. Do not sort sibling keys by name, and do not read a name as a position. Resolve the order in this priority:
+**SIBLING KEY NAMES CARRY NO ORDER.** A task commonly carries a family of related sibling keys, and their names do not record which one is newest. A key that names itself `final` can be the earlier of two. Do not sort sibling keys by name, and do not read a name as a position. **ONE NAME DOES CARRY A RELATION, and it is not a position: a sibling key that amends, corrects or withdraws HANDOFF content SUPERSEDES what it addresses, whatever its date. Synthesize from the amended state, and never bank a claim an amendment withdrew.** Resolve the order of the rest in this priority:
 
 1. **Use a write-time field the key itself carries**, for example `written_at_utc`. This is the only self-dating source, and it is present only when the agent that wrote the key chose to record it.
 2. **Take no other date in the payload as the write time.** A date in the body commonly dates a different event, for example a read of some other file or a measurement of a document. A wrong timestamp is worse than an absent one, because it is executable and produces a confident wrong order.
@@ -420,7 +420,7 @@ Triggered after remediation completes — processes only the delta since the las
 
 ## Consolidation Harvest Workflow
 
-Triggered during `/PACT:wrap-up` or `/PACT:pause`. This is the deep-clean pass — it extends the standard workflow with memory consolidation and pruning.
+Triggered during `/PACT:wrap-up`, `/PACT:pause`, `/PACT:refresh`, or `/PACT:orchestrate` once a second or subsequent feature completes in one session. This is the deep-clean pass — it extends the standard workflow with memory consolidation and pruning.
 
 ### Step 1: Safety Net (Unprocessed HANDOFFs)
 

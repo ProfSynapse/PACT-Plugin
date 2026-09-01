@@ -11,13 +11,15 @@ pin whose mutation cannot be named is not a pin; it is coverage-shaped
 decoration, and this file exists because that failure has already shipped
 twice in this area.
 
-WHAT IS DELIBERATELY NOT PINNED — the auditor's `metadata.type` state. The
+NOT PINNED FOR THE DENOMINATOR — the auditor's `metadata.type` state. The
 denominator keys on `is_teachback_exempt`, which has no metadata surface, so
-that fact is irrelevant here and pinning it would ossify a hazard that no
-longer exists.
+that fact is irrelevant to it. It IS pinned lower down for a different
+consumer: the harvest predicate's state set depends on auditors staying
+non-exempt, which depends on that dispatch carrying no `type`.
 """
 import ast
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -29,6 +31,7 @@ from shared import intentional_wait  # noqa: E402
 from shared.intentional_wait import (  # noqa: E402
     SELF_COMPLETE_EXEMPT_AGENT_TYPES,
     TEACHBACK_EXEMPT_AGENT_TYPES,
+    is_self_complete_exempt,
     is_teachback_exempt,
 )
 
@@ -247,3 +250,272 @@ class TestProtocolProseNamesTheSameConstant:
             "on that constant being a pre-existing declaration, so a doc that "
             "stops naming it loses the independent ground the ruling needs"
         )
+
+
+CLAIM_GATE_SRC = Path(__file__).parent.parent / "hooks" / "task_claim_gate.py"
+
+
+def _derive_atomic_claim_live_states():
+    """States `task_claim_gate._atomic_claim` can put an owned task into, READ
+    FROM that function rather than restated here.
+
+    Collects the string constants of Compare/Assign statements mentioning the
+    `status` key: the `!= "pending"` no-clobber guard (pre-state) and the
+    `= "in_progress"` flip (post-state). Collecting every constant in the body
+    instead would return '.json', 'utf-8', 'tasks' and more, and filtering those
+    needs a hand-written exclusion list -- which is the hand-written list this
+    derivation exists to delete.
+
+    RAISES rather than returning a short set: a silently-narrow derivation makes
+    every arm below vacuous, which is worse than the literal it replaces.
+    """
+    fn = next(
+        (n for n in ast.walk(ast.parse(CLAIM_GATE_SRC.read_text()))
+         if isinstance(n, ast.FunctionDef) and n.name == "_atomic_claim"),
+        None,
+    )
+    if fn is None:
+        raise AssertionError("_atomic_claim not found in %s" % CLAIM_GATE_SRC)
+    states = set()
+    for node in ast.walk(fn):
+        if not isinstance(node, (ast.Compare, ast.Assign)):
+            continue
+        consts = [c.value for c in ast.walk(node)
+                  if isinstance(c, ast.Constant) and isinstance(c.value, str)]
+        if "status" in consts:
+            states.update(c for c in consts if c != "status")
+    if len(states) < 2:
+        raise AssertionError(
+            "derived %d state(s) %s from _atomic_claim; expected at least a "
+            "pre-state and a post-state. The derivation has stopped seeing the "
+            "status statements, so the harvest-predicate arm below is vacuous."
+            % (len(states), sorted(states))
+        )
+    return frozenset(states)
+
+
+ATOMIC_CLAIM_LIVE_STATES = _derive_atomic_claim_live_states()
+
+ORCHESTRATOR_PERSONA = Path(__file__).parent.parent / "agents" / "pact-orchestrator.md"
+COMMANDS_DIR = Path(__file__).parent.parent / "commands"
+
+
+def _metadata_keys(literal):
+    """KEY NAMES of a metadata literal, read TEXTUALLY rather than parsed.
+
+    The only question asked of these literals is "is a `type` key present", and
+    answering it does not require the literal to be valid JSON. `json.loads`
+    used to answer it, and RAISED on two ordinary spellings: a single-quoted
+    dict, and the `"halt"|"alert"` alternation this repo already uses to
+    document an algedonic dispatch. A crash inside a test that scans OTHER files
+    diagnoses the scanner rather than the file that broke it -- and swallowing
+    that crash would have converted it into a silent blind spot, which is worse
+    than the crash. Reading the text answers the question on all four spellings
+    without needing either.
+
+    Keys are anchored to `{` or `,` so a `type` substring inside a VALUE is not
+    read as a key: `{"note": "see type: below"}` yields `note` alone. Without
+    that anchor this would redden on a correct dispatch, and a guard that fires
+    on correct work is deleted by the first person it annoys.
+
+    Newlines are ordinary whitespace to this pattern, so a literal the caller
+    read across several lines needs no special casing here.
+    """
+    return set(re.findall(r'[{,]\s*["\']?(\w+)["\']?\s*:', literal))
+
+
+_METADATA_START = re.compile(r"metadata\s*(?:=|:)\s*\{")
+
+
+def _metadata_literals(text):
+    """Yield (offset, literal) for every metadata literal in `text`.
+
+    Brace-balanced and newline-tolerant, so a multiline `TaskCreate(...)` is
+    read whole. Scanning the WHOLE FILE rather than pre-cut blocks is what makes
+    that safe: a block boundary can never cut a literal in half, because the
+    literal is found before any block is considered.
+
+    `literal` is None when the braces never close. The caller must FAIL on that
+    rather than skip it -- a literal that cannot be read must not pass as clean.
+    """
+    for m in _METADATA_START.finditer(text):
+        i = text.index("{", m.start())
+        depth = 0
+        for j in range(i, len(text)):
+            depth += (text[j] == "{") - (text[j] == "}")
+            if depth == 0:
+                yield m.start(), text[i:j + 1]
+                break
+        else:
+            yield m.start(), None
+
+
+def _enclosing_block(text, offset):
+    """The blank-line-delimited block containing `offset`.
+
+    This is the ASSOCIATION unit: a metadata literal belongs to the dispatch
+    written around it. Line-scoping was a cruder proxy for the same idea, and it
+    lost every multiline call -- which is the house style for substantial
+    dispatches in the files this scans.
+    """
+    start = 0
+    for m in re.finditer(r"\n[ \t]*\n", text):
+        if m.start() > offset:
+            return text[start:m.start()]
+        start = m.end()
+    return text[start:]
+
+
+class TestAuditorLivenessPredicateCoversTheClaimGate:
+    """The harvest predicate names task states; its state set is correct only
+    because of facts in two files it never references. These arms carry that
+    coupling.
+
+    NOT COVERED, stated rather than implied: a rewording that keeps both state
+    tokens and inverts their sense ("`pending`, never `in_progress`") passes the
+    token-set arm. Pinning sentence structure instead would redden on every
+    legitimate rewrite, which is the trade taken here deliberately.
+    """
+
+    def test_harvest_predicate_names_every_state_the_claim_gate_can_produce(self):
+        """Reddens on BOTH states this predicate shipped in one PR:
+        `in_progress`-only and `pending`-only. Asserts the anchor exists first,
+        so deleting the line fails loudly instead of passing vacuously."""
+        lines = [
+            ln for ln in ORCHESTRATOR_PERSONA.read_text().splitlines()
+            if "no auditor task is" in ln
+        ]
+        assert len(lines) == 2, "harvest predicate anchor missing or moved: %r" % (lines,)
+        for ln in lines:
+            # states are named in the CONDITION; the trailing `(workflow)` is not one
+            condition = ln.split("\u2192")[0]
+            assert set(re.findall(r"`(\w+)`", condition)) == ATOMIC_CLAIM_LIVE_STATES, ln
+
+    def test_auditor_shaped_task_is_not_self_complete_exempt(self):
+        """The fact the predicate rests on. Reddens if either exemption surface
+        starts admitting auditors — the dependency editor's tripwire."""
+        assert "pact-auditor" not in SELF_COMPLETE_EXEMPT_AGENT_TYPES
+        assert is_self_complete_exempt(
+            {"owner": "auditor", "metadata": {"completion_type": "signal"}}, ""
+        ) is False
+
+    def test_no_auditor_dispatch_site_sets_metadata_type(self):
+        """Reddens if an auditor dispatch gains `metadata.type` — whether inside
+        the completion_type literal or as a SEPARATE literal on the same call.
+        Both were reproduced; the second passed before this widening.
+
+        SCOPED TO AUDITOR DISPATCH BLOCKS, not to every metadata literal in
+        the tree. A blocker or algedonic dispatch MUST carry `metadata.type` --
+        `is_self_complete_exempt` requires it -- so a file-wide ban would redden
+        on correct future work. A `type` key on some other dispatch's metadata
+        is out of scope BY DESIGN: it is not this dispatch's metadata.
+
+        THE ASSOCIATION UNIT IS THE BLOCK, NOT THE LINE. A line-scoped scan sees
+        only a literal sharing a line with `auditor`, so a multiline
+        `TaskCreate(...)` -- the house style for substantial dispatch blocks in
+        these very files -- is invisible to it, and the arm stays GREEN on a
+        dispatch that would make `is_self_complete_exempt` treat the auditor as
+        exempt. That was live, not hypothetical: a probe carrying `type` passed
+        green before this change.
+
+        LATENT, and structural rather than absent: a markdown table has no blank
+        lines, so an entire table is one block. A row mentioning an auditor and a
+        different row carrying a legitimate `type` would be associated by this
+        unit and redden correct work. Measured zero in commands/ today, and the
+        shape exists in this repo's markdown elsewhere. Two dispatches sharing
+        one block is the same hazard by another route. If either appears, the
+        unit must tighten to the enclosing call rather than the block.
+
+        Sites are globbed rather than listed, so a third dispatch file is
+        scanned without anyone remembering to add it, and the assertion below is
+        a FLOOR rather than an inventory -- growth is silent. DELIBERATE LOSS,
+        recorded rather than left to be discovered later: this arm can no longer
+        report that the scanned population changed. An "unexpected site" signal
+        would reintroduce the redden-on-correct-work direction in a softer form.
+
+        THE FLOOR ALSO GUARDS THE DIRECTORY, and that is emergent rather than
+        designed, so it is easy to destroy by accident. Repointing COMMANDS_DIR
+        at agents/ makes both named files vanish and the floor fires -- measured,
+        and it is the ONLY thing catching that route, because
+        `q.parent == COMMANDS_DIR` is true by construction for anything
+        `COMMANDS_DIR.glob()` yields and so cannot see a repointing. Do not
+        "simplify" this to a bare non-empty check: the directory protection goes
+        with it, and agents/ and protocols/ carry legitimate `type`-bearing
+        literals that would come into range all at once.
+
+        Keys are read by `_metadata_keys` rather than parsed, which IS
+        prospective -- both literals in the tree today are valid JSON.
+        """
+        sites = sorted(COMMANDS_DIR.glob("*.md"))
+        assert sites and all(
+            q.parent == COMMANDS_DIR and q.suffix == ".md" for q in sites
+        ), (
+            "site derivation must stay markdown directly under commands/. The "
+            ".py fixtures legitimately construct signal tasks carrying "
+            "completion_type AND type, and agents/ and protocols/ carry "
+            "legitimate algedonic and blocker literals. Line-scoping used to be "
+            "a SECOND thing holding those out of range; widening to blocks spent "
+            "it, so this glob is now the only thing that does. Got %s" % sites
+        )
+        found = {}
+        for path in sites:
+            text = path.read_text()
+            for offset, lit in _metadata_literals(text):
+                if "auditor" not in _enclosing_block(text, offset):
+                    continue
+                assert lit is not None, (
+                    "%s: a metadata literal at offset %d never closes its "
+                    "braces, so this arm cannot read it. A literal it cannot "
+                    "read must not pass as clean -- fix the literal, or the "
+                    "scanner if the literal is correct." % (path.name, offset)
+                )
+                found.setdefault(path.name, []).append(lit)
+                assert "type" not in _metadata_keys(lit), (path.name, lit)
+        missing = {"orchestrate.md", "comPACT.md"} - set(found)
+        # EMPTY and INCOMPLETE are different diagnoses and want opposite first
+        # actions. Empty means nothing was scanned at all, so the literals are
+        # probably fine and the scanner is not; incomplete means the scan worked
+        # and a site really lost its literal. One message for both would send a
+        # maintainer whose helper is dead hunting a literal that is intact.
+        assert found, (
+            "NOTHING scanned: no auditor dispatch literal was found in any of "
+            "the %d site(s). Suspect the SCANNER before the files -- a dead "
+            "`_metadata_literals` or `_enclosing_block`, a glob matching "
+            "nothing, or COMMANDS_DIR pointing somewhere else. Sites: %s"
+            % (len(sites), [q.name for q in sites])
+        )
+        assert not missing, (
+            "no auditor dispatch literal found in %s. These are a FLOOR, not an "
+            "inventory: additional dispatch files are welcome and are scanned "
+            "automatically. But when a KNOWN site stops yielding a literal, the "
+            "type checks above ran on nothing for that file and this arm became "
+            "silently weaker. Found literals in %s."
+            % (sorted(missing), sorted(found))
+        )
+
+    def test_the_key_reader_does_not_confuse_completion_type_for_type(self):
+        """The one string whose silent failure would take the whole arm with it.
+
+        If `type` were read out of `completion_type`, the arm above would redden
+        on BOTH correct dispatches in the tree, and the first person it annoyed
+        would delete it. Asserted rather than reasoned about: the word-boundary
+        argument for why that cannot happen is correct, and arguments of exactly
+        that shape have been wrong twice in this file's history.
+
+        The single-quoted and the alternation spellings below are the two that
+        `json.loads` could not read at all. They are here to witness that the
+        reader now ANSWERS THE QUESTION on them -- not merely that it declines
+        to crash, which a bare try/except would also have achieved while going
+        blind.
+
+        The last assertion is the reason keys are anchored to `{` or `,`: a
+        `type` substring inside a VALUE is not a key, and reading it as one
+        would be a false positive on correct work.
+        """
+        assert _metadata_keys('{"completion_type": "signal"}') == {"completion_type"}
+        assert _metadata_keys("{'completion_type': 'signal'}") == {"completion_type"}
+        assert _metadata_keys('{"type": "algedonic", "level": "halt"|"alert"}') == {
+            "type",
+            "level",
+        }
+        assert _metadata_keys('{"note": "see type: below"}') == {"note"}
