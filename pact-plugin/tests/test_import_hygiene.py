@@ -30,7 +30,7 @@ Suppression contract:
     CONCURRENT run's planted probe is removed from the tests/ surface
     before the gate ever sees it. See `_is_foreign_live_probe`.
 
-Strictness contract (why the fixtures below exist):
+Strictness contract (why the non-vacuity fixtures exist):
     The predicate's try-scope parameter is REQUIRED-EXPLICIT — no default
     anywhere in the chain. The suite gate declares "strict" (try/except-
     scoped imports are checked: the fail-closed try wrapper is this repo's
@@ -97,7 +97,7 @@ def _gate_check(paths):
 # hooks/, scripts/, telegram/, skills-scripts ship to consumers; tests/ is
 # the dev-repo-only surface, swept so this gate and the CI ruff leg (which
 # lints all of pact-plugin/) cannot disagree on tests/ scope. CI's tree is
-# a strict superset of these five globs (e.g. skills/*/ top-level test
+# a strict superset of these globs (e.g. skills/*/ top-level test
 # files are CI-linted only) — the safe direction: a divergence there is a
 # loud CI red, never a silent gate pass.
 
@@ -237,7 +237,7 @@ class TestTestsSurfaceEnforcement:
     enforces that, and two concurrent runs collided deterministically.
     The collision reddened tests that never mention PROBE — the tests/
     sweep sees a foreign file and reports it — so the poisonable set was
-    every test that sweeps tests/, not the two that plant here.
+    every test that sweeps tests/, not only the arms that plant here.
 
     A probe leaked by a hard crash stays in tests/fixtures/, and
     test_no_unused_imports[tests] fails on it by name — UNLESS its pid has
@@ -321,7 +321,7 @@ class TestTestsSurfaceEnforcement:
         foreign.write_text("import os\n", encoding="utf-8")
         try:
             files = TARGET_DIR_SETS["tests"]()
-            # The assertion below is NEGATIVE, so it passes vacuously on any
+            # The `foreign not in files` assertion is NEGATIVE: it passes
             # surface that never reached the probe. Non-empty is not enough:
             # under an rglob->glob narrowing this module is still swept while
             # tests/fixtures/ is not. Derived from `foreign` so it cannot drift
@@ -358,13 +358,13 @@ class TestProbeNameMatchingIsAnchored:
     evidence. The arm proving foreign probes are handled would itself be an
     unhandleable one.
 
-    The end-to-end half needs no second planted file: the leak arm above
-    already shows that a file the filter declines to drop IS swept. This
-    supplies the other half — that a lookalike is declined — and composition
-    covers the rest.
+    The end-to-end half needs no second planted file: the planting arms in
+    `TestTestsSurfaceEnforcement` already show that a file the filter
+    declines to drop IS swept. This supplies the other half — that a
+    lookalike is declined — and composition covers the rest.
 
-    Both arms pass paths that DO NOT EXIST, which also pins that the
-    predicate reads only `path.name` and never touches disk.
+    Every arm here passes a path that DOES NOT EXIST, which also pins that
+    the predicate reads only `path.name` and never touches disk.
 
     MUTATION THAT REDDENS: `.fullmatch` -> `.search` in the predicate.
     """
@@ -379,7 +379,7 @@ class TestProbeNameMatchingIsAnchored:
 
     def test_a_whole_probe_name_of_a_live_owner_still_matches(self):
         """The control. Without it a predicate that always returned False
-        would satisfy the arm above and drop the anchoring property."""
+        would satisfy the substring arm and drop the anchoring property."""
         owner = os.getppid()
         os.kill(owner, 0)
         assert _is_foreign_live_probe(self._name("", owner))
@@ -388,8 +388,8 @@ class TestProbeNameMatchingIsAnchored:
         """LEAK DETECTION, the property a name-only exclusion would have cost
         — a leak and a live run's probe are identical as strings.
 
-        PURE for the same reason as the arms above, and this one is the more
-        dangerous of the two to plant: the filter deliberately does NOT drop a
+        PURE for the same reason as its sibling arms, and more dangerous to
+        plant than the lookalike: the filter deliberately does NOT drop a
         dead-owner probe, so a file on disk here is visible to every
         concurrent run by construction. Planting it to prove leak detection
         would poison the sweeps that leak detection exists to protect.
@@ -400,7 +400,7 @@ class TestProbeNameMatchingIsAnchored:
         remains to prove here is only that a dead owner reaches it.
 
         The precondition is DIAGNOSTIC, not anti-vacuity: a live pid would
-        fail the assertion below anyway. Do not weaken it to a skip.
+        fail this arm's own assertion anyway. Do not weaken it to a skip.
         """
         done = subprocess.Popen([sys.executable, "-c", ""])
         done.wait()
@@ -556,7 +556,7 @@ class TestRequiredExplicitContract:
     Removing the default was a deliberate design choice: the fail-safe
     direction genuinely differs per call site, so no call site may inherit
     another's. These pins freeze that contract structurally; the try-scoped
-    fixture above freezes it behaviorally for this gate."""
+    fixture freezes it behaviorally for this gate."""
 
     @pytest.mark.parametrize("func_name", ["find_unused_imports", "check_paths"])
     def test_try_scope_is_keyword_only_with_no_default(self, func_name):
