@@ -42,12 +42,15 @@ Strictness contract (why the non-vacuity fixtures exist):
     would only prove the predicate CAN be strict, not that this gate IS.
 """
 
+import ast
 import importlib.util
 import inspect
+import io
 import os
 import re
 import subprocess
 import sys
+import tokenize
 import uuid
 from pathlib import Path
 
@@ -161,7 +164,7 @@ TARGET_DIR_SETS = {
     "scripts": lambda: sorted((PLUGIN_ROOT / "scripts").rglob("*.py")),
     "telegram": lambda: sorted((PLUGIN_ROOT / "telegram").rglob("*.py")),
     "skills-scripts": _skills_script_files,
-    # SOLE FILTER — do not add a second one without reading this.
+    # SOLE FILTER — do not add another without reading this.
     # No arm plants a dead-owner probe on disk: such a file is unfiltered BY
     # CONSTRUCTION and would poison every concurrent run, which is the defect
     # this module exists to stop. Leak coverage is therefore COMPOSED —
@@ -407,6 +410,100 @@ class TestProbeNameMatchingIsAnchored:
         with pytest.raises(ProcessLookupError):
             os.kill(done.pid, 0)
         assert not _is_foreign_live_probe(self._name("", done.pid))
+
+
+_ARRANGEMENT_RE = re.compile(
+    r"\b(above|below|preceding|the following)\b"
+    r"|\b(?:first|second|third|fourth|fifth|last)\s+"
+    r"(?:arm|method|test|class|paragraph|sentence|one|line)\b",
+    re.I,
+)
+
+
+def _prose_sentences(source):
+    """Yield (label, sentence) for every docstring and comment in `source`.
+
+    DERIVED FROM THE SOURCE, never listed. A hardcoded roster of prose blocks
+    would be this check committing the defect it exists to catch: prose named
+    by where it sits. `ast` supplies every module, class and function
+    docstring; `tokenize` supplies every comment — including trailing ones,
+    which a `startswith("#")` scan misses, and excluding a `#` inside a string
+    literal, which such a scan wrongly matches.
+    """
+    blocks = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef)):
+            doc = ast.get_docstring(node, clean=False)
+            if doc:
+                blocks.append((getattr(node, "name", "<module>"), doc))
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type == tokenize.COMMENT:
+            blocks.append(("<comment>", tok.string))
+    for label, text in blocks:
+        for sentence in re.split(r"(?<=[.!?])\s+", " ".join(text.split())):
+            if sentence.strip():
+                yield label, sentence.strip()
+
+
+class TestProseNamesThingsNotPlaces:
+    """This module's prose must not refer to anything by WHERE it sits.
+
+    A positional reference is falsified by an edit that never touches the
+    sentence carrying it, so it rots silently — the defect class this module
+    exists to catch, arriving in its own documentation. Two shipped here and
+    were caught from outside: a docstring pointing at an arm the same commit
+    deleted, and a count that went stale when an arm was added.
+
+    SCOPE IS THIS FILE. The false-positive profile was measured here and
+    nowhere else, so a wider rule would assert a profile nobody has measured.
+
+    CARDINALITY IS DELIBERATELY NOT CHECKED, and that is a measurement rather
+    than an omission. Every count in this module names its members in the
+    sentence carrying it, which is what makes a count stable; separating those
+    from counts that stand in for their members needs semantics this rule does
+    not have, and a rule with false positives is deleted by the first person
+    it annoys. The HANDOFF carries the numbers.
+    """
+
+    SHIPPED_DEFECTS = (
+        "the leak arm above already shows that a file the filter declines to drop IS swept.",
+        "PURE for the same reason as the arms above, and this one is the more dangerous.",
+    )
+
+    def test_no_prose_refers_to_a_position(self):
+        found = [
+            (label, s)
+            for label, s in _prose_sentences(Path(__file__).read_text(encoding="utf-8"))
+            if _ARRANGEMENT_RE.search(s)
+        ]
+        assert not found, (
+            "prose refers to something by its ARRANGEMENT rather than by what it is; "
+            "an edit elsewhere falsifies it with nothing going red. Name the thing: %s"
+            % found
+        )
+
+    def test_the_scan_reaches_this_module(self):
+        """Non-vacuity. An extractor returning nothing makes the arm that uses
+        it pass on any file, which is the silent-skip outcome this module is
+        about. The label is derived from the class itself, so it cannot drift."""
+        labels = {label for label, _ in _prose_sentences(Path(__file__).read_text(encoding="utf-8"))}
+        assert type(self).__name__ in labels
+        assert "<comment>" in labels
+
+    def test_the_rule_flags_what_this_module_actually_shipped(self):
+        """The red case, and it is real rather than invented — both strings
+        shipped in this file and were reported by external review.
+
+        Held as LITERALS, not read from the commit that carried them: arms in
+        this repo that reach for a commit self-skip once squash-merge makes it
+        unreachable, so a git-sourced fixture would quietly stop testing."""
+        # Pyright reports this always-true: it can see the literal. Kept anyway
+        # — it fires when someone EMPTIES the tuple, which is the edit that
+        # turns this arm permanently green, and a future edit is exactly what a
+        # static check cannot model. Do not delete it to silence the warning.
+        assert self.SHIPPED_DEFECTS, "no red case left: this arm would pass on any rule"
+        for defect in self.SHIPPED_DEFECTS:
+            assert _ARRANGEMENT_RE.search(defect), defect
 
 
 class TestGateNonVacuity:
