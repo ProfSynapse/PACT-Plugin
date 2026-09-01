@@ -100,7 +100,7 @@ def _skills_script_files():
 
 
 _PROBE_STEM = "_f401_planted_probe_delete_me_"
-_PROBE_RE = re.compile(re.escape(_PROBE_STEM) + r"(\d+)_[0-9a-f]{32}\.py\Z")
+_PROBE_RE = re.compile(re.escape(_PROBE_STEM) + r"(\d+)_[0-9a-f]{32}\.py")
 
 
 def _is_foreign_live_probe(path):
@@ -118,9 +118,11 @@ def _is_foreign_live_probe(path):
     they are not, and the OS maintains that distinction without anything having
     to be remembered or cleaned up.
 
-    Anything other than a definite "that process is gone" KEEPS the file, so
-    the sweep reports it. Never skip on an unknown — a filter that skips when
-    it cannot tell is the silent-skip surface this module exists to catch.
+    THE ONLY CASE THAT REMOVES A FILE FROM THE SWEEP is a foreign probe whose
+    owner is definitely ALIVE. Everything else keeps it — not probe-shaped,
+    our own, definitely gone, or an error that leaves liveness unknown — so
+    the sweep still reports it. Never skip on an unknown: a filter that skips
+    when it cannot tell is the silent-skip surface this module exists to catch.
 
     KNOWN CEILING, and it is a regression rather than parity: today a leaked
     probe is caught unconditionally. Here, a leak whose pid has since been
@@ -132,7 +134,7 @@ def _is_foreign_live_probe(path):
     a lock held on a per-run owner file), which is more machinery than the
     residual costs.
     """
-    m = _PROBE_RE.search(path.name)
+    m = _PROBE_RE.fullmatch(path.name)
     if not m or int(m.group(1)) == os.getpid():
         return False  # not a probe, or OURS — P1 needs our own probe swept
     try:
@@ -208,9 +210,13 @@ class TestTestsSurfaceEnforcement:
     sweep sees a foreign file and reports it — so the poisonable set was
     every test that sweeps tests/, not the two that plant here.
 
-    A probe leaked by a hard crash is NOT silently tolerated: it stays in
-    tests/fixtures/ and test_no_unused_imports[tests] fails on it by name.
-    Uniqueness removes the collision, not the need to clean up."""
+    A probe leaked by a hard crash stays in tests/fixtures/, and
+    test_no_unused_imports[tests] fails on it by name — UNLESS its pid has
+    since been reassigned to a live process, which reads as a concurrent run
+    and is skipped. That exception is the known ceiling documented on
+    `_is_foreign_live_probe`; it is named rather than restated here, so the
+    two cannot drift. Uniqueness removes the collision, not the need to
+    clean up."""
 
     PROBE = (
         PLUGIN_ROOT
@@ -236,7 +242,8 @@ class TestTestsSurfaceEnforcement:
             "leaked it, meaning its `finally` did not run. A crashed "
             "EARLIER run does not reach this assertion: its probe carries a "
             "different suffix, and surfaces instead as a tests/ sweep "
-            "finding naming the file."
+            "finding naming the file — unless its pid was reassigned to a "
+            "live process, the ceiling on `_is_foreign_live_probe`."
         )
         self.PROBE.write_text("import os\n", encoding="utf-8")
         try:
@@ -290,6 +297,26 @@ class TestTestsSurfaceEnforcement:
         finally:
             foreign.unlink()
 
+    def test_a_name_merely_containing_the_probe_stem_is_still_swept(self):
+        """The exclusion is ANCHORED: only a filename that IS a probe may be
+        dropped. A name that merely contains a probe-shaped tail is an ordinary
+        file, and dropping it would be a silent skip — the failure mode this
+        module exists to catch, arriving through the predicate every consumer
+        routes through.
+
+        Reddens on an unanchored `.search()`, which is what shipped.
+        """
+        owner = os.getppid()
+        os.kill(owner, 0)
+        lookalike = self.PROBE.parent / f"zz{_PROBE_STEM}{owner}_{uuid.uuid4().hex}.py"
+        lookalike.write_text("import os\n", encoding="utf-8")
+        try:
+            files = TARGET_DIR_SETS["tests"]()
+            assert lookalike in files, "a merely probe-SHAPED name left the sweep"
+            assert f"{lookalike}:1: unused import os" in _gate_check(files)
+        finally:
+            lookalike.unlink()
+
     def test_leaked_probe_of_a_dead_owner_is_still_caught(self):
         """LEAK DETECTION survives the filter above — the property a name-only
         exclusion would have cost, since a leak and a live run's probe are
@@ -300,6 +327,10 @@ class TestTestsSurfaceEnforcement:
         """
         done = subprocess.Popen([sys.executable, "-c", ""])
         done.wait()
+        # DIAGNOSTIC, not anti-vacuity — do not weaken this to a skip. If the
+        # reaped pid were somehow live, the `leaked in files` assertion below
+        # ALREADY fails, so the arm cannot go vacuous either way. This only
+        # makes the red name the real cause instead of blaming the filter.
         with pytest.raises(ProcessLookupError):
             os.kill(done.pid, 0)
         leaked = self.PROBE.parent / f"{_PROBE_STEM}{done.pid}_{uuid.uuid4().hex}.py"
