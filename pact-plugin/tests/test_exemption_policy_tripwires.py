@@ -318,14 +318,52 @@ def _metadata_keys(literal):
     that anchor this would redden on a correct dispatch, and a guard that fires
     on correct work is deleted by the first person it annoys.
 
-    NOT COVERED, stated rather than implied: a literal spread over several
-    lines. The caller scans line by line, so its capturing regex -- which
-    requires a closing brace on the same line -- never matches one at all. That
-    is caught by the caller's coverage-by-name assertion (the file drops out of
-    `found`), not here. A literal NESTED on one line is a different failure with
-    a different catcher: the caller's brace-balance assertion.
+    Newlines are ordinary whitespace to this pattern, so a literal the caller
+    read across several lines needs no special casing here.
     """
     return set(re.findall(r'[{,]\s*["\']?(\w+)["\']?\s*:', literal))
+
+
+_METADATA_START = re.compile(r"metadata\s*(?:=|:)\s*\{")
+
+
+def _metadata_literals(text):
+    """Yield (offset, literal) for every metadata literal in `text`.
+
+    Brace-balanced and newline-tolerant, so a multiline `TaskCreate(...)` is
+    read whole. Scanning the WHOLE FILE rather than pre-cut blocks is what makes
+    that safe: a block boundary can never cut a literal in half, because the
+    literal is found before any block is considered.
+
+    `literal` is None when the braces never close. The caller must FAIL on that
+    rather than skip it -- a literal that cannot be read must not pass as clean.
+    """
+    for m in _METADATA_START.finditer(text):
+        i = text.index("{", m.start())
+        depth = 0
+        for j in range(i, len(text)):
+            depth += (text[j] == "{") - (text[j] == "}")
+            if depth == 0:
+                yield m.start(), text[i:j + 1]
+                break
+        else:
+            yield m.start(), None
+
+
+def _enclosing_block(text, offset):
+    """The blank-line-delimited block containing `offset`.
+
+    This is the ASSOCIATION unit: a metadata literal belongs to the dispatch
+    written around it. Line-scoping was a cruder proxy for the same idea, and it
+    lost every multiline call -- which is the house style for substantial
+    dispatches in the files this scans.
+    """
+    start = 0
+    for m in re.finditer(r"\n[ \t]*\n", text):
+        if m.start() > offset:
+            return text[start:m.start()]
+        start = m.end()
+    return text[start:]
 
 
 class TestAuditorLivenessPredicateCoversTheClaimGate:
@@ -366,51 +404,93 @@ class TestAuditorLivenessPredicateCoversTheClaimGate:
         the completion_type literal or as a SEPARATE literal on the same call.
         Both were reproduced; the second passed before this widening.
 
-        SCOPED TO AUDITOR DISPATCH LINES, not to every metadata literal in the
-        tree. A blocker or algedonic dispatch MUST carry `metadata.type` —
-        `is_self_complete_exempt` requires it — so a file-wide ban would redden
+        SCOPED TO AUDITOR DISPATCH BLOCKS, not to every metadata literal in
+        the tree. A blocker or algedonic dispatch MUST carry `metadata.type` --
+        `is_self_complete_exempt` requires it -- so a file-wide ban would redden
         on correct future work. A `type` key on some other dispatch's metadata
         is out of scope BY DESIGN: it is not this dispatch's metadata.
 
-        Sites are globbed rather than listed, so a third dispatch file is
-        scanned without anyone remembering to add it.
+        THE ASSOCIATION UNIT IS THE BLOCK, NOT THE LINE. A line-scoped scan sees
+        only a literal sharing a line with `auditor`, so a multiline
+        `TaskCreate(...)` -- the house style for substantial dispatch blocks in
+        these very files -- is invisible to it, and the arm stays GREEN on a
+        dispatch that would make `is_self_complete_exempt` treat the auditor as
+        exempt. That was live, not hypothetical: a probe carrying `type` passed
+        green before this change.
 
-        Keys are read by `_metadata_keys` rather than parsed. Both literals in
-        the tree today are valid JSON, so this is PROSPECTIVE hardening against
-        a future spelling, not the repair of a present break -- said plainly
-        because a defensive branch with no failing case is what the next reader
-        deletes.
+        LATENT, and structural rather than absent: a markdown table has no blank
+        lines, so an entire table is one block. A row mentioning an auditor and a
+        different row carrying a legitimate `type` would be associated by this
+        unit and redden correct work. Measured zero in commands/ today, and the
+        shape exists in this repo's markdown elsewhere. Two dispatches sharing
+        one block is the same hazard by another route. If either appears, the
+        unit must tighten to the enclosing call rather than the block.
+
+        Sites are globbed rather than listed, so a third dispatch file is
+        scanned without anyone remembering to add it, and the assertion below is
+        a FLOOR rather than an inventory -- growth is silent. DELIBERATE LOSS,
+        recorded rather than left to be discovered later: this arm can no longer
+        report that the scanned population changed. An "unexpected site" signal
+        would reintroduce the redden-on-correct-work direction in a softer form.
+
+        THE FLOOR ALSO GUARDS THE DIRECTORY, and that is emergent rather than
+        designed, so it is easy to destroy by accident. Repointing COMMANDS_DIR
+        at agents/ makes both named files vanish and the floor fires -- measured,
+        and it is the ONLY thing catching that route, because
+        `q.parent == COMMANDS_DIR` is true by construction for anything
+        `COMMANDS_DIR.glob()` yields and so cannot see a repointing. Do not
+        "simplify" this to a bare non-empty check: the directory protection goes
+        with it, and agents/ and protocols/ carry legitimate `type`-bearing
+        literals that would come into range all at once.
+
+        Keys are read by `_metadata_keys` rather than parsed, which IS
+        prospective -- both literals in the tree today are valid JSON.
         """
         sites = sorted(COMMANDS_DIR.glob("*.md"))
-        assert sites and not any(q.suffix == ".py" for q in sites), (
-            "site derivation must stay markdown-only: .py fixtures legitimately "
-            "construct signal tasks carrying completion_type AND type. Got %s" % sites
+        assert sites and all(
+            q.parent == COMMANDS_DIR and q.suffix == ".md" for q in sites
+        ), (
+            "site derivation must stay markdown directly under commands/. The "
+            ".py fixtures legitimately construct signal tasks carrying "
+            "completion_type AND type, and agents/ and protocols/ carry "
+            "legitimate algedonic and blocker literals. Line-scoping used to be "
+            "a SECOND thing holding those out of range; widening to blocks spent "
+            "it, so this glob is now the only thing that does. Got %s" % sites
         )
         found = {}
         for path in sites:
-            for ln in path.read_text().splitlines():
-                if "auditor" not in ln:
+            text = path.read_text()
+            for offset, lit in _metadata_literals(text):
+                if "auditor" not in _enclosing_block(text, offset):
                     continue
-                for m in re.finditer(r'metadata(?:=|: )(\{[^}]*\})', ln):
-                    lit = m.group(1)
-                    found.setdefault(path.name, []).append(lit)
-                    # `[^}]*` stops at the FIRST `}`, so a nested literal is
-                    # captured cut in half and every key past the cut becomes
-                    # invisible. `json.loads` used to raise on the fragment,
-                    # which was an accidental safety; reading the text does not,
-                    # so the truncation needs saying out loud.
-                    assert lit.count("{") == lit.count("}"), (
-                        "%s: metadata literal captured TRUNCATED -- the capture "
-                        "stops at the first `}`, so this arm is blind to anything "
-                        "after the cut. Widen the capture; do not trust a green "
-                        "from this line. Got %r" % (path.name, lit)
-                    )
-                    assert "type" not in _metadata_keys(lit), (path.name, lit)
-        assert set(found) == {"orchestrate.md", "comPACT.md"}, (
-            "expected auditor dispatch literals in BOTH orchestrate.md (spelled "
-            "`metadata=`) and comPACT.md (spelled `metadata: `); found %s. A "
-            "reworded dispatch line or a reflowed call makes this scan vacuous."
-            % sorted(found)
+                assert lit is not None, (
+                    "%s: a metadata literal at offset %d never closes its "
+                    "braces, so this arm cannot read it. A literal it cannot "
+                    "read must not pass as clean -- fix the literal, or the "
+                    "scanner if the literal is correct." % (path.name, offset)
+                )
+                found.setdefault(path.name, []).append(lit)
+                assert "type" not in _metadata_keys(lit), (path.name, lit)
+        missing = {"orchestrate.md", "comPACT.md"} - set(found)
+        # EMPTY and INCOMPLETE are different diagnoses and want opposite first
+        # actions. Empty means nothing was scanned at all, so the literals are
+        # probably fine and the scanner is not; incomplete means the scan worked
+        # and a site really lost its literal. One message for both would send a
+        # maintainer whose helper is dead hunting a literal that is intact.
+        assert found, (
+            "NOTHING scanned: no auditor dispatch literal was found in any of "
+            "the %d site(s). Suspect the SCANNER before the files -- a dead "
+            "`_metadata_literals` or `_enclosing_block`, a glob matching "
+            "nothing, or COMMANDS_DIR pointing somewhere else. Sites: %s"
+            % (len(sites), [q.name for q in sites])
+        )
+        assert not missing, (
+            "no auditor dispatch literal found in %s. These are a FLOOR, not an "
+            "inventory: additional dispatch files are welcome and are scanned "
+            "automatically. But when a KNOWN site stops yielding a literal, the "
+            "type checks above ran on nothing for that file and this arm became "
+            "silently weaker. Found literals in %s."
+            % (sorted(missing), sorted(found))
         )
 
     def test_the_key_reader_does_not_confuse_completion_type_for_type(self):
