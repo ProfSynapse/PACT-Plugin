@@ -41,6 +41,10 @@ Strictness contract (why the fixtures below exist):
 
 import importlib.util
 import inspect
+import os
+import re
+import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -95,12 +99,63 @@ def _skills_script_files():
     return sorted(PLUGIN_ROOT.glob("skills/*/scripts/**/*.py"))
 
 
+_PROBE_STEM = "_f401_planted_probe_delete_me_"
+_PROBE_RE = re.compile(re.escape(_PROBE_STEM) + r"(\d+)_[0-9a-f]{32}\.py\Z")
+
+
+def _is_foreign_live_probe(path):
+    """True for a probe planted by a DIFFERENT, still-running process.
+
+    CROSS-RUN OBSERVATION, which a unique name does not fix. Uniqueness stops
+    two runs sharing a path, so neither can clobber or delete the other's file
+    — but a foreign probe is still a file with an unused import, so the tests/
+    sweep reports it and reddens a test that never mentions PROBE. That is the
+    ORIGINAL reported failure, and its signature is exactly that: the red lands
+    on a different test than the one at fault.
+
+    LIVENESS, NOT THE NAME, is what separates a concurrent run's probe from one
+    LEAKED by a crash. As strings the two are indistinguishable; as processes
+    they are not, and the OS maintains that distinction without anything having
+    to be remembered or cleaned up.
+
+    Anything other than a definite "that process is gone" KEEPS the file, so
+    the sweep reports it. Never skip on an unknown — a filter that skips when
+    it cannot tell is the silent-skip surface this module exists to catch.
+
+    KNOWN CEILING, and it is a regression rather than parity: today a leaked
+    probe is caught unconditionally. Here, a leak whose pid has since been
+    reassigned to a LIVE process is read as live and skipped, so detection is
+    intermittent rather than certain on any single run. It is self-correcting
+    across runs — the file persists, and the next run whose reading differs
+    reports it — but "usually caught" is weaker than "always caught". Closing
+    it needs an identity a recycled pid cannot forge (a process start time, or
+    a lock held on a per-run owner file), which is more machinery than the
+    residual costs.
+    """
+    m = _PROBE_RE.search(path.name)
+    if not m or int(m.group(1)) == os.getpid():
+        return False  # not a probe, or OURS — P1 needs our own probe swept
+    try:
+        os.kill(int(m.group(1)), 0)
+    except ProcessLookupError:
+        return False  # owner is gone: a LEAK, and the sweep must name it
+    except PermissionError:
+        return True  # alive, owned by another user
+    except OSError:
+        return False  # cannot tell: assume leak and report, never skip silently
+    return True
+
+
 TARGET_DIR_SETS = {
     "hooks": lambda: sorted((PLUGIN_ROOT / "hooks").rglob("*.py")),
     "scripts": lambda: sorted((PLUGIN_ROOT / "scripts").rglob("*.py")),
     "telegram": lambda: sorted((PLUGIN_ROOT / "telegram").rglob("*.py")),
     "skills-scripts": _skills_script_files,
-    "tests": lambda: sorted((PLUGIN_ROOT / "tests").rglob("*.py")),
+    "tests": lambda: sorted(
+        p
+        for p in (PLUGIN_ROOT / "tests").rglob("*.py")
+        if not _is_foreign_live_probe(p)
+    ),
 }
 
 
@@ -140,10 +195,15 @@ class TestTestsSurfaceEnforcement:
 
     ISOLATION — the guarantee that actually holds, rather than an
     assumption about how the suite is invoked. The probe filename carries
-    a full uuid4 hex suffix, so two overlapping runs plant at DIFFERENT
-    paths and neither can observe or delete the other's file. The previous
-    wording claimed the suite runs single-process; nothing enforces that,
-    and two concurrent runs collided deterministically on the shared path.
+    a pid and a full uuid4 hex suffix, and the two do DIFFERENT jobs. The
+    uuid makes the path unique, so no run can clobber or delete another's
+    file. The pid names an OWNER whose liveness `_is_foreign_live_probe`
+    can test, so a concurrent run's probe is dropped from the swept surface
+    and cannot be OBSERVED either. Uniqueness alone closed only the first
+    half: a foreign probe is still a file with an unused import.
+
+    The previous wording claimed the suite runs single-process; nothing
+    enforces that, and two concurrent runs collided deterministically.
     The collision reddened tests that never mention PROBE — the tests/
     sweep sees a foreign file and reports it — so the poisonable set was
     every test that sweeps tests/, not the two that plant here.
@@ -156,7 +216,7 @@ class TestTestsSurfaceEnforcement:
         PLUGIN_ROOT
         / "tests"
         / "fixtures"
-        / f"_f401_planted_probe_delete_me_{uuid.uuid4().hex}.py"
+        / f"{_PROBE_STEM}{os.getpid()}_{uuid.uuid4().hex}.py"
     )
 
     def test_tests_surface_includes_this_gate_file(self):
@@ -207,6 +267,49 @@ class TestTestsSurfaceEnforcement:
             assert cui.check_paths([str(self.PROBE)], try_scope="advisory") == []
         finally:
             self.PROBE.unlink()
+
+    def test_foreign_probe_of_a_live_owner_is_not_observed(self):
+        """A CONCURRENT run's probe must not redden this run's sweep.
+
+        The half a unique name does not fix, and the mechanism behind the
+        original report: the red lands on the whole-surface sweep, which never
+        mentions PROBE, so it reads as unrelated to the test at fault.
+
+        The precondition is asserted, not assumed. If the borrowed pid were
+        dead, this arm would exercise the LEAK branch while still passing —
+        green, and testing the opposite of what it names.
+        """
+        owner = os.getppid()
+        os.kill(owner, 0)
+        foreign = self.PROBE.parent / f"{_PROBE_STEM}{owner}_{uuid.uuid4().hex}.py"
+        foreign.write_text("import os\n", encoding="utf-8")
+        try:
+            files = TARGET_DIR_SETS["tests"]()
+            assert files, "empty surface — the exclusion below would pass vacuously"
+            assert foreign not in files, "foreign live probe reached the swept surface"
+        finally:
+            foreign.unlink()
+
+    def test_leaked_probe_of_a_dead_owner_is_still_caught(self):
+        """LEAK DETECTION survives the filter above — the property a name-only
+        exclusion would have cost, since a leak and a live run's probe are
+        identical as strings.
+
+        Same self-witnessing shape: if the reaped pid were somehow live, this
+        would exercise the concurrent-run branch and pass for the wrong reason.
+        """
+        done = subprocess.Popen([sys.executable, "-c", ""])
+        done.wait()
+        with pytest.raises(ProcessLookupError):
+            os.kill(done.pid, 0)
+        leaked = self.PROBE.parent / f"{_PROBE_STEM}{done.pid}_{uuid.uuid4().hex}.py"
+        leaked.write_text("import os\n", encoding="utf-8")
+        try:
+            files = TARGET_DIR_SETS["tests"]()
+            assert leaked in files, "a leaked probe was filtered out of the sweep"
+            assert f"{leaked}:1: unused import os" in _gate_check(files)
+        finally:
+            leaked.unlink()
 
     def test_kept_ensure_loaded_seam_survives_widened_gate(self):
         """The one reasoned keep in tests/ (an ensure-loaded monkeypatch
