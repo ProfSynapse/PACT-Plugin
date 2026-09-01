@@ -1185,3 +1185,20 @@ def test_T12_3_real_pretooluse_frames_platform_fidelity():
     assert gate.pact_context.is_lead(lead) is True
     assert gate.pact_context.is_lead(tmux) is False
     assert gate.pact_context.is_lead(subagent) is False
+
+
+def test_generic_nudge_states_the_condition_its_predicate_applies():
+    """The attribution-free nudge reaches agents the predicate never evaluated,
+    including one whose own Task B is `pending` but BLOCKED. It must therefore
+    state both conditions `_any_unclaimed_claim_candidate` applies, not just
+    `pending` — otherwise its stated condition matches a reader it does not mean.
+
+    `_claim_nudge_multi` already words this correctly; this pins the generic one
+    to the same standard. Reddens on the shipped `pending`-only wording.
+    """
+    nudge = gate._GENERIC_CLAIM_NUDGE
+    assert "`pending`" in nudge
+    assert "unblocked" in nudge, nudge
+    # `_is_unblocked` is NOT "blockedBy empty" — completed blocker ids are
+    # retained — so the nudge must not leave a reader checking emptiness.
+    assert "`blockedBy`" in nudge and "`completed`" in nudge, nudge

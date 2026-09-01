@@ -139,9 +139,10 @@ _NUDGE_PREFIX = "PACT task_claim_gate: "
 # (F3) but cannot attribute which task is the actor's, so we never name an id.
 _GENERIC_CLAIM_NUDGE = (
     _NUDGE_PREFIX
-    + "If you have a pre-assigned Task B that is still `pending`, claim it first "
-    "— `TaskUpdate(<id>, status=in_progress)` — before implementation work, so "
-    "the lead's work-started signal stays accurate."
+    + "If you have a pre-assigned Task B that is still `pending` AND unblocked "
+    "— every id in its `blockedBy` resolves to a `completed` task — claim it "
+    "first — `TaskUpdate(<id>, status=in_progress)` — before implementation "
+    "work, so the lead's work-started signal stays accurate."
 )
 
 
