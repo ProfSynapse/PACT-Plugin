@@ -140,7 +140,7 @@ class TestTestsSurfaceEnforcement:
 
     ISOLATION — the guarantee that actually holds, rather than an
     assumption about how the suite is invoked. The probe filename carries
-    a per-run-unique suffix, so two overlapping runs plant at DIFFERENT
+    a full uuid4 hex suffix, so two overlapping runs plant at DIFFERENT
     paths and neither can observe or delete the other's file. The previous
     wording claimed the suite runs single-process; nothing enforces that,
     and two concurrent runs collided deterministically on the shared path.
@@ -156,7 +156,7 @@ class TestTestsSurfaceEnforcement:
         PLUGIN_ROOT
         / "tests"
         / "fixtures"
-        / f"_f401_planted_probe_delete_me_{uuid.uuid4().hex[:8]}.py"
+        / f"_f401_planted_probe_delete_me_{uuid.uuid4().hex}.py"
     )
 
     def test_tests_surface_includes_this_gate_file(self):
@@ -174,7 +174,7 @@ class TestTestsSurfaceEnforcement:
         assert not self.PROBE.exists(), (
             "THIS RUN's probe already exists — the sibling planting test "
             "leaked it, meaning its `finally` did not run. A crashed "
-            "EARLIER run cannot reach this assertion: its probe carries a "
+            "EARLIER run does not reach this assertion: its probe carries a "
             "different suffix, and surfaces instead as a tests/ sweep "
             "finding naming the file."
         )
