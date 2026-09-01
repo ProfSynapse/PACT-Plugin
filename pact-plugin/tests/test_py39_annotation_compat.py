@@ -708,9 +708,9 @@ class TestDetectorNonVacuity:
 # that have no union at all.
 #
 # ROOT IS PLUGIN_ROOT, NOT SCANNED_ROOTS -- do not "tidy" these together.
-# SCANNED_ROOTS excludes tests/, where every current holder of the future
-# import lives, so this rule rooted there would be green over a population
-# containing no instance of what it guards.
+# R1 already demands the import of every file under SCANNED_ROOTS, so there
+# this rule only repeats it. All R4 uniquely adds lies outside -- tests/ above
+# all -- where the import is not required but a union in an annotation needs it.
 _UNION_SCAN_ROOT = (PLUGIN_ROOT,)
 
 
