@@ -601,9 +601,14 @@ def _plan_resolves(root: Path, plan: str) -> bool:
 
     validate() already refuses an ABSOLUTE plan, which leaves `../` — and a
     bare exists() on an escaped path answers questions about files outside the
-    project. The containment check runs FIRST, so a traversal never reaches the
-    filesystem, and an escaping path reports as not resolving rather than as a
-    silent pass.
+    project.
+
+    CONTAINMENT GATES THE ANSWER, NOT THE ACCESS. `resolve()` runs first and
+    walks the path, statting components, so a traversal DOES touch the
+    filesystem. What containment prevents is the RESULT ever depending on a
+    file outside the root: it is evaluated before `.exists()`, and `and`
+    short-circuits, so an escaping path reports as not resolving without that
+    file being probed.
     """
     try:
         base = root.resolve()
