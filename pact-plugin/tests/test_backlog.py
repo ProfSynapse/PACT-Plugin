@@ -30,8 +30,17 @@ This record quotes real assertions, so mutating this file by bare substring can
 hit the prose copy instead of the code. Anchor on the `assert ` prefix, or work
 from the AST.
 
+A MUTATION MUST BE FAITHFUL AND ITS KILL MUST BE CHECKED FOR REASON. A
+mutation that breaks the code in a different way than intended still reddens,
+still reads as a kill, and certifies nothing about the property in its row:
+reverting half of a two-part change leaves the halves incompatible and kills by
+TypeError. Two tells — a row owned by one arm that reddens SEVERAL, and a
+failure message carrying an exception type where the row claims a behaviour.
+Two rows here are killed by an exception legitimately, because their stated
+property IS that an exception must not escape.
+
 Each arm was verified by mutating production source and confirming the NAMED
-test reddens: 60 mutations, 60 killed, run against an unmutated green baseline
+test reddens: 67 mutations, 67 killed, run against an unmutated green baseline
 with the tree restored byte-identical after every arm. Naming which test kills
 which mutation is what makes this a coverage claim rather than a survival
 count, since one over-broad assertion can kill many mutants while pinning
@@ -56,6 +65,11 @@ fixtures give items distinct titles for that reason.
 
 The two import-closure tests carry their own counter-test in this file rather
 than a row in this record.
+
+Three arms build real git repositories, so this file needs `git` on the runner
+where every other arm is pure Python. They read the same signals the production
+code reads, so faked git state would keep them green and stop them testing
+anything.
 
 The harness itself is deliberately not committed: an executable nothing runs
 in CI is exactly the check that stops firing while still looking like
@@ -120,6 +134,13 @@ afternoon.
   unreadable returns the refusal code   test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY
   `_is_newer` compares instants         test_a_memory_record_flags_only_on_a_LATER_DAY
   the rung becomes plain containment    test_a_nested_project_with_its_own_git_is_declined
+  writer records only the main root     test_the_writer_records_every_checkout_not_just_the_main_root
+  writer drops the worktree filter      test_the_writer_records_every_checkout_not_just_the_main_root
+  abandoned heuristic never flags       test_the_abandoned_heuristic_reads_real_branches
+  abandoned heuristic always flags      test_the_abandoned_heuristic_reads_real_branches
+  abandoned loses its `-C` anchor       test_the_abandoned_heuristic_reads_real_branches
+  staleness cutoff back to a timestamp  test_staleness_flags_at_the_threshold_not_before
+  staleness never flags                 test_staleness_flags_at_the_threshold_not_before
   the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_the_cause
   the top-level type check removed      test_a_top_level_non_object_reaches_the_named_path_machinery
   the title TYPE check removed          test_a_non_string_title_is_reported_and_the_block_still_renders
@@ -1391,3 +1412,85 @@ def test_a_nested_project_with_its_own_git_is_declined(tmp_path):
 
     # And the recorded root itself, which exact membership answers first.
     assert "An item" in backlog_store.session_block(str(root), backlog_dir=store).context
+
+
+def _repo(path, branch=None):
+    """A real repo with one commit, optionally on a named branch."""
+    path.mkdir(parents=True, exist_ok=True)
+    run = lambda *a: subprocess.run(["git", "-C", str(path), *a], check=True,
+                                    capture_output=True)
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    (path / "f").write_text("x")
+    run("add", "f")
+    run("commit", "-qm", "c")
+    if branch:
+        run("branch", branch)
+    return path
+
+
+def test_the_writer_records_every_checkout_not_just_the_main_root(tmp_path, monkeypatch):
+    """`checkout_roots` records EVERY worktree the porcelain emits.
+
+    The read path matches by exact membership, so a checkout the writer omits
+    costs that session a loud resolution failure. RED WHEN the writer records
+    `[project_root()]` alone — which is also the FALLBACK path, so the mutation
+    makes a git failure indistinguishable from success.
+
+    Real repo and real worktree: the porcelain is the thing under test, so
+    stubbing it would leave nothing being tested.
+    """
+    main = _repo(tmp_path / "main")
+    linked = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(linked), "-b", "wt"],
+                   check=True, capture_output=True)
+    monkeypatch.setattr(backlog, "project_root", lambda: main)
+
+    roots = backlog.checkout_roots()
+
+    assert str(main.resolve()) in roots, "the main root is missing"
+    assert str(linked.resolve()) in roots, "a linked worktree was not recorded"
+    assert len(roots) == 2, f"expected exactly the two checkouts, got {roots}"
+
+
+def test_the_abandoned_heuristic_reads_real_branches(tmp_path, monkeypatch):
+    """An active item flags only when NO branch or worktree carries its ref.
+
+    `_branch_and_worktree_names` is NOT stubbed here — the sibling arm stubs it
+    and therefore tolerates it without exercising it. Both directions, because
+    a heuristic that never flags satisfies the quiet case alone.
+
+    RED WHEN the git call loses its `-C` anchor, or the linkage stops matching.
+    """
+    repo = _repo(tmp_path / "repo", branch="feat/1234-thing")
+    monkeypatch.setattr(backlog, "project_root", lambda: repo)
+
+    carried = backlog._abandoned_flags([_item(status="active", ref="#1234")], str(repo))
+    assert carried == [], f"a ref carried by a branch was flagged: {carried}"
+
+    orphan = backlog._abandoned_flags([_item(status="active", ref="#9999")], str(repo))
+    assert len(orphan) == 1, f"an unreferenced ref did not flag: {orphan}"
+    assert "9999" in orphan[0]
+
+
+def test_staleness_flags_at_the_threshold_not_before(monkeypatch):
+    """Exactly `_STALE_AFTER` days is quiet; a day older flags.
+
+    THE THRESHOLD DAY IS THE ONLY CASE THAT DISCRIMINATES. Comparing a stored
+    DATE against a full-timestamp cutoff made a 14-day-old item flag against a
+    14-day threshold; every other age behaves identically before and after, so
+    an arm at 30 days proves nothing. Both sides are asserted, because a
+    comparison that never flags satisfies the quiet case alone.
+
+    RED WHEN the cutoff returns to a timestamp.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    def _age(days):
+        touched = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+        return backlog._staleness_flags([_item(status="active", touched=touched)])
+
+    assert _age(14) == [], "an item at exactly the threshold flagged"
+    assert len(_age(15)) == 1, "an item past the threshold did not flag"
+    assert _age(13) == []
