@@ -31,7 +31,7 @@ hit the prose copy instead of the code. Anchor on the `assert ` prefix, or work
 from the AST.
 
 Each arm was verified by mutating production source and confirming the NAMED
-test reddens: 58 mutations, 58 killed, run against an unmutated green baseline
+test reddens: 59 mutations, 59 killed, run against an unmutated green baseline
 with the tree restored byte-identical after every arm. Naming which test kills
 which mutation is what makes this a coverage claim rather than a survival
 count, since one over-broad assertion can kill many mutants while pinning
@@ -118,6 +118,7 @@ afternoon.
   duplicates note WITHHOLDS its cause   test_the_duplicates_message_names_the_files_and_the_cause
   exit 3 collapses back to 2            test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY
   unreadable returns the refusal code   test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY
+  `_is_newer` compares instants         test_a_memory_record_flags_only_on_a_LATER_DAY
   the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_the_cause
   the top-level type check removed      test_a_top_level_non_object_reaches_the_named_path_machinery
   the title TYPE check removed          test_a_non_string_title_is_reported_and_the_block_still_renders
@@ -1326,3 +1327,26 @@ def test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY(tmp_path, monkeypatch
     assert unreadable_code != refusal_code, (
         "repair-worthy and refused are indistinguishable to a caller"
     )
+
+
+def test_a_memory_record_flags_only_on_a_LATER_DAY(monkeypatch):
+    """`touched` is a date; `updated_at` is an instant. Comparing them as
+    instants made every same-day edit report "changed after it was linked".
+
+    THE LATER-DAY CASE IS ASSERTED FIRST AND THAT ORDER IS THE POINT: it is the
+    reach control. `_memory_flags` calls `resolve_memory_ids` as a MODULE
+    GLOBAL, so the `store=` seam does not reach it — an arm that stubs only the
+    store gets unverifiable for every id, the comparison never runs, and the
+    absence of a flag reads as a pass. Stub `resolve_memory_ids` itself, and
+    prove a flag CAN appear before concluding from one that does not.
+
+    RED WHEN the comparison returns to instants.
+    """
+    def _at(stamp):
+        monkeypatch.setattr(backlog, "resolve_memory_ids",
+                            lambda ids: {i: {"id": i, "updated_at": stamp} for i in ids})
+        return backlog._memory_flags([_item(memory=["a" * 32], touched="2026-09-01")])
+
+    assert _at("2026-09-02T00:00:00Z"), "a later-day record did not flag — stub unreached"
+    assert not _at("2026-09-01T23:59:59Z"), "a same-day record flagged"
+    assert not _at("2026-08-31T23:59:59Z"), "an earlier-day record flagged"
