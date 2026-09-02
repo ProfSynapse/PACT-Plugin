@@ -1,0 +1,485 @@
+"""
+Location: pact-plugin/hooks/shared/backlog_store.py
+Summary: READ side of the cross-session backlog — schema rules, file load,
+         project resolution by path containment, the session-start block, and
+         the total helper session_block() that converts every failure into a
+         returned value.
+Used by: hooks/session_init.py (session_block only) and hooks/shared/backlog.py
+         (validate/load/find_for/file_local_flags, reused by the write side).
+
+WHY THIS MODULE IS SEPARATE FROM backlog.py: the session-start read path must
+issue no subprocess and no network call, and must not carry pact-memory in its
+import closure. Keeping the two sides in one module and deferring the heavy
+imports inside functions would hold today and rot tomorrow — a later edit
+hoisting an import to module scope breaks the constraint with nothing going
+red. A separate module makes the constraint structural. The dependency arrow is
+one-way: backlog.py imports this module; this module imports backlog.py never.
+
+NOTHING HERE MAY IMPORT pact-memory, subprocess, or any network client.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+
+from .paths import get_backlog_dir
+
+# Schema constants, shared with the write side so a writer cannot emit what a
+# reader rejects.
+SCHEMA_VERSION = 1
+NOTE_MAX_CHARS = 200
+MEMORY_MAX_IDS = 5
+STATUSES = frozenset({"planned", "active", "blocked", "done"})
+RELATIONAL_FIELDS = ("blocked_by", "batch_with", "exclusive_with")
+
+# Item ids are exactly four lowercase hex characters, generated at creation and
+# never reused, so the relational fields can point at something stable when a
+# title is reworded.
+# `\Z` rather than `$`: Python's `$` also matches before a trailing newline, so
+# `$` would accept "ab12\n" from a hand-edited file.
+_ITEM_ID = re.compile(r"^[0-9a-f]{4}\Z")
+
+# How many planned items the session-start block names by title.
+_BLOCK_PLANNED_LIMIT = 3
+
+# Sort key for an item with no usable rank: rank orders planned items and is
+# neither contiguous nor complete, so an unranked item sorts last rather than
+# raising against an int.
+_UNRANKED = float("inf")
+
+
+class BacklogNotice(NamedTuple):
+    """What session_init receives. Two independent fields, never one string
+    plus a classifier.
+
+    context: text for additionalContext; "" means nothing to say.
+    alert:   text for systemMessage;     "" means nothing to say.
+
+    The routing decision is already made by which field carries the value, so
+    a caller has no text to inspect and the substring-matching router the
+    design forbids is unconstructible rather than merely prohibited.
+    """
+
+    context: str
+    alert: str
+
+
+class BacklogFileError(Exception):
+    """A specific backlog file could not be read, parsed, or validated.
+
+    Carries the offending path so every loud message can name the file the
+    reader must repair, whichever layer raised.
+    """
+
+    def __init__(self, path: Path, problem: str) -> None:
+        super().__init__(f"{path}: {problem}")
+        self.path = path
+        self.problem = problem
+
+
+def validate(obj: Any) -> List[str]:
+    """Return a list of human-readable problems. An empty list means valid.
+
+    Never raises, never mutates, never truncates. One validator serves both
+    sides, so a writer cannot emit a file its own reader rejects.
+
+    Dangling ids in the relational fields are deliberately NOT problems. They
+    are reconciliation flags: a backlog carrying one is a backlog to report on,
+    not a corrupt file to refuse.
+    """
+    problems: List[str] = []
+
+    if not isinstance(obj, dict):
+        return [f"top level is {type(obj).__name__}, expected an object"]
+
+    if obj.get("version") != SCHEMA_VERSION:
+        problems.append(
+            f"version is {obj.get('version')!r}, this reader knows {SCHEMA_VERSION}"
+        )
+
+    for key in ("project", "project_path"):
+        value = obj.get(key)
+        if not isinstance(value, str) or not value:
+            problems.append(f"{key} is {value!r}, expected a non-empty string")
+
+    items = obj.get("items")
+    if not isinstance(items, list):
+        return problems + [f"items is {type(items).__name__}, expected a list"]
+
+    seen_ids = set()
+    for index, item in enumerate(items):
+        problems.extend(_validate_item(item, index, seen_ids))
+
+    return problems
+
+
+def _validate_item(item: Any, index: int, seen_ids: set) -> List[str]:
+    """Schema rules for one item. `seen_ids` accumulates across the list so a
+    duplicate id is reported on its second occurrence."""
+    if not isinstance(item, dict):
+        return [f"item {index} is {type(item).__name__}, expected an object"]
+
+    problems: List[str] = []
+    item_id = item.get("id")
+    label = f"item {item_id!r}" if isinstance(item_id, str) else f"item {index}"
+
+    if not isinstance(item_id, str) or not _ITEM_ID.match(item_id):
+        problems.append(f"{label}: id is {item_id!r}, expected four hex characters")
+    elif item_id in seen_ids:
+        problems.append(f"{label}: id is a duplicate")
+    else:
+        seen_ids.add(item_id)
+
+    status = item.get("status")
+    if status not in STATUSES:
+        problems.append(
+            f"{label}: status is {status!r}, expected one of {sorted(STATUSES)}"
+        )
+
+    note = item.get("note")
+    if note is not None:
+        if not isinstance(note, str):
+            problems.append(f"{label}: note is {type(note).__name__}, expected a string")
+        elif len(note) > NOTE_MAX_CHARS:
+            problems.append(
+                f"{label}: note is {len(note)} characters, limit is {NOTE_MAX_CHARS}"
+            )
+
+    memory = item.get("memory")
+    if memory is not None:
+        if not isinstance(memory, list):
+            problems.append(
+                f"{label}: memory is {type(memory).__name__}, expected a list"
+            )
+        elif len(memory) > MEMORY_MAX_IDS:
+            problems.append(
+                f"{label}: memory holds {len(memory)} ids, limit is {MEMORY_MAX_IDS}"
+            )
+
+    plan = item.get("plan")
+    if plan is not None:
+        if not isinstance(plan, str):
+            problems.append(f"{label}: plan is {type(plan).__name__}, expected a string")
+        elif Path(plan).is_absolute():
+            problems.append(
+                f"{label}: plan {plan!r} is absolute, expected a repo-relative path"
+            )
+
+    for field in RELATIONAL_FIELDS:
+        value = item.get(field)
+        if value is not None and not isinstance(value, list):
+            problems.append(
+                f"{label}: {field} is {type(value).__name__}, expected a list"
+            )
+
+    return problems
+
+
+def read_json(path: Path) -> Dict[str, Any]:
+    """Read and parse one backlog file, with no schema check.
+
+    Raises BacklogFileError naming the path on an unreadable or unparseable
+    file. Used by find_for, which needs only the stored project_path and must
+    not reject a file for schema reasons before deciding whether it is even
+    this project's file.
+    """
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BacklogFileError(path, f"unreadable or unparseable ({exc})") from exc
+
+
+def load(path: Path) -> Dict[str, Any]:
+    """Read, parse and validate one backlog file.
+
+    Raises BacklogFileError naming the path. Raising honestly is what lets
+    session_block be the single place that converts a failure into a value,
+    and it keeps this function usable from the write side, where raising is
+    the correct disposition.
+    """
+    data = read_json(path)
+    problems = validate(data)
+    if problems:
+        raise BacklogFileError(path, "; ".join(problems))
+    return data
+
+
+def find_for(project_dir: str, backlog_dir: Path) -> Tuple[Optional[Path], List[Path]]:
+    """The best match (or None) AND the files that could not be read.
+
+    Thin face over _scan for callers that do not need the match count.
+    """
+    match, unreadable, _ = _scan(project_dir, backlog_dir)
+    return match, unreadable
+
+
+def _scan(
+    project_dir: str, backlog_dir: Path
+) -> Tuple[Optional[Path], List[Path], int]:
+    """Locate this project's backlog by CONTAINMENT of the stored project_path.
+
+    Returns the best match (or None), the files that could not be read, and how
+    many entries claimed this project.
+
+    A stored project_path matches when it equals `project_dir` or is one of its
+    parents; among the matches the longest wins. BOTH SIDES ARE RESOLVED before
+    comparing: the writer stores a path that has been through `.resolve()`, so
+    a lexical comparison against an unresolved `project_dir` compares different
+    things the moment either crosses a symlink. On macOS `/var` is a symlink to
+    `/private/var`, which makes that the default under any temporary directory.
+    Resolution is a stat-level call — still no subprocess and no network.
+
+    Equality alone is broken here and its failure is the one this design exists
+    to prevent: CLAUDE_PROJECT_DIR points at the WORKTREE, while the writer
+    resolves through git and stores the MAIN repo root, so equality misses from
+    every worktree session and an empty result would certify an empty backlog
+    for a project that has one.
+
+    A project RENAME puts two files in the directory carrying the same
+    project_path — the old name and the new one — because the name derivation
+    changed while the path did not. That is exactly the case project_path
+    exists to survive, so the newer `updated` wins rather than whichever name
+    sorts first, and the duplication is reported.
+
+    AN UNREADABLE FILE NEVER ABORTS THE SCAN. The store is one flat directory
+    shared by every project, so raising on the first bad file would let one
+    project's corruption suppress another project's healthy block, and the
+    chance of at least one bad file grows with every project the user touches.
+    A file cannot be attributed to a project without parsing it, so ownership
+    is not the rule: unreadable files are collected and returned, and the
+    caller decides whether they are the loud reason or a note beside a block.
+    Matching on the FILENAME would sidestep the parse, and it is shut for a
+    second reason — it would make the read path derive a project name, and
+    deriving no name at all is what removes the hazard of a duplicate
+    derivation entirely.
+
+    A directory-level failure still raises, so this never swallows an error
+    that genuinely aborts the scan.
+    """
+    target = _resolved(Path(project_dir))
+    found = []
+    unreadable: List[Path] = []
+
+    for path in sorted(backlog_dir.glob("*.json")):
+        try:
+            data = read_json(path)
+        except BacklogFileError:
+            unreadable.append(path)
+            continue
+        stored = data.get("project_path")
+        if not isinstance(stored, str) or not stored:
+            continue
+        root = _resolved(Path(stored))
+        if root != target and root not in target.parents:
+            continue
+        found.append((len(root.parts), str(data.get("updated") or ""), path))
+
+    found.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    return (found[0][2] if found else None), unreadable, len(found)
+
+
+def _resolved(path: Path) -> Path:
+    """Absolute, symlink-free form, or the path unchanged when it will not
+    resolve. Never raises, so a comparison is always well defined."""
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):
+        return path
+
+
+def file_local_flags(data: Dict[str, Any]) -> List[str]:
+    """Drift visible in the file alone, with no git, tracker or store lookup.
+
+    Three of the drift classes are decidable from the file's own contents, and
+    those three are the only ones the read path may compute: a relational field
+    naming an unknown id, a blocked_by naming an item already done, and two
+    mutually exclusive items both active right now. Every other class needs an
+    external source and belongs to the reconciliation path.
+
+    Shared with the write side so both surfaces report the same file-local
+    drift rather than growing two answers to one question.
+    """
+    items = [item for item in data.get("items") or [] if isinstance(item, dict)]
+    by_id = {item.get("id"): item for item in items if isinstance(item.get("id"), str)}
+    flags: List[str] = []
+
+    for item in items:
+        label = _label(item)
+        for field in RELATIONAL_FIELDS:
+            for other in item.get(field) or []:
+                if other not in by_id:
+                    flags.append(f"{label}: {field} names unknown id {other!r}")
+                elif field == "blocked_by" and by_id[other].get("status") == "done":
+                    flags.append(
+                        f"{label}: blocked_by names {_label(by_id[other])}, already done"
+                    )
+
+    for item in items:
+        if item.get("status") != "active":
+            continue
+        for other in item.get("exclusive_with") or []:
+            peer = by_id.get(other)
+            if peer is not None and peer.get("status") == "active":
+                if _label(item) < _label(peer):  # report each pair once
+                    flags.append(
+                        f"{_label(item)} and {_label(peer)} are exclusive and both active"
+                    )
+
+    return flags
+
+
+def format_block(data: Dict[str, Any]) -> str:
+    """The session-start block: active work, the next few planned by rank, and
+    a count of file-local drift. Never the whole list — a block that grows with
+    the backlog becomes noise and gets skimmed.
+    """
+    items = [item for item in data.get("items") or [] if isinstance(item, dict)]
+    active = [item for item in items if item.get("status") == "active"]
+    planned = sorted(
+        (item for item in items if item.get("status") == "planned"),
+        key=_rank_key,
+    )[:_BLOCK_PLANNED_LIMIT]
+    flags = file_local_flags(data)
+
+    lines = [f"PACT backlog ({data.get('project')}):"]
+    if active:
+        lines.append("  active: " + "; ".join(_title(item) for item in active))
+    if planned:
+        lines.append("  next: " + "; ".join(_title(item) for item in planned))
+    if not active and not planned:
+        lines.append("  nothing active or planned")
+    if flags:
+        lines.append(f"  {len(flags)} flagged — run /PACT:next for the detail")
+    return "\n".join(lines)
+
+
+def session_block(
+    project_dir: str, backlog_dir: Optional[Path] = None
+) -> BacklogNotice:
+    """THE TOTAL HELPER. Every state is a return value; nothing raises.
+
+    An exception escaping here does not surface a message — it reaches
+    session_init's outer handler, which discards the accumulated context parts
+    and emits a safety net instead, destroying the plugin banner and the
+    pin-slot line along with anything this module wanted to say. So loudness is
+    CONSTRUCTED, as a returned string, and never raised.
+
+    The boundary is the outermost call and cannot be drawn any further in:
+    Path.home(), the directory listing, every read and every parse can raise,
+    so a boundary one call deeper leaves a raising call outside it.
+
+    States:
+      backlog dir absent, or present and empty  -> ("", "")
+      one entry matches and validates           -> (block, "")
+      a match PLUS unreadable files             -> (block + note, note)
+      the matching entry is invalid             -> loud, names the file
+      no match, unreadable files seen           -> loud, names those files
+      no match, all files readable              -> loud, resolution failure
+      project_dir empty or relative             -> loud, names the cause
+      anything unexpected                       -> loud, names the exception
+
+    The match-plus-unreadable row is the only one that is quiet and loud at
+    once, and its channels are ASYMMETRIC: `context` carries the block and the
+    note, `alert` carries the note alone. The block is not news to the user;
+    the corrupt file is, and the user is the only party who can authorise a
+    repair. Putting the note only in `context` would leave the corruption
+    visible to the orchestrator and invisible to the one person able to act.
+
+    This state repeats every session until the file is repaired, and that is
+    correct rather than a defect. A correction must outlive the belief it
+    corrects, so there is deliberately no suppress-after-first-seen rule.
+
+    Residual, stated rather than implied: `except Exception` does not catch
+    BaseException, so KeyboardInterrupt and MemoryError still cross. That
+    matches session_init's own handler, and swallowing an interrupt during a
+    dying session would be the worse trade.
+    """
+    try:
+        if not project_dir or not Path(project_dir).is_absolute():
+            return _loud(
+                f"PACT backlog: cannot resolve a backlog because the project "
+                f"directory is {project_dir!r}, which is not an absolute path. "
+                f"No backlog was read. Nothing is wrong with the store."
+            )
+
+        root = get_backlog_dir() if backlog_dir is None else backlog_dir
+        if not root.is_dir():
+            return BacklogNotice("", "")
+
+        entries = sorted(root.glob("*.json"))
+        if not entries:
+            return BacklogNotice("", "")
+
+        match, unreadable, duplicates = _scan(project_dir, root)
+        unreadable_note = (
+            "PACT backlog: could not read "
+            + ", ".join(str(path) for path in unreadable)
+            + ". Nothing was modified — this path only reads. Repair with "
+            "/PACT:next, which moves a corrupt file aside before rebuilding."
+            if unreadable
+            else ""
+        )
+
+        if match is None:
+            if unreadable:
+                return _loud(unreadable_note)
+            return _loud(
+                f"PACT backlog: {len(entries)} backlog file(s) under {root}, and "
+                f"none records a project_path containing {project_dir}. This is a "
+                f"resolution failure, NOT an empty backlog — do not treat this "
+                f"project as having no backlog."
+            )
+
+        block = format_block(load(match))
+        if duplicates > 1:
+            # A rename left the older file in place. Both are reported rather
+            # than one being silently preferred, because only the user can say
+            # which name is now current.
+            block += (
+                f"\n  {duplicates} stored backlogs claim this project — "
+                f"reading {match.name}. A project rename leaves the older file "
+                f"behind; run /PACT:next to reconcile them."
+            )
+        if unreadable:
+            # Quiet and loud at once: the block goes only to context, the note
+            # goes to both, so the user sees the corruption they alone can fix.
+            return BacklogNotice(f"{block}\n  {unreadable_note}", unreadable_note)
+        return BacklogNotice(block, "")
+
+    except BacklogFileError as exc:
+        return _loud(
+            f"PACT backlog: {exc}. The file was NOT modified — this path only "
+            f"reads. Repair it with /PACT:next, which moves a corrupt file aside "
+            f"before rebuilding."
+        )
+    except Exception as exc:  # total helper: every state is a value, never a raise
+        return _loud(
+            f"PACT backlog: could not be read ({type(exc).__name__}: {exc}). "
+            f"Nothing was modified."
+        )
+
+
+def _loud(message: str) -> BacklogNotice:
+    """Both channels carry the same string. additionalContext is ungated and
+    survives compaction, so the correction outlives the belief it corrects;
+    systemMessage is the only channel the user sees, and the user is the only
+    party who can authorise a repair. The source gate on systemMessage lives at
+    the call site, which already holds `source`.
+    """
+    return BacklogNotice(context=message, alert=message)
+
+
+def _label(item: Dict[str, Any]) -> str:
+    return str(item.get("id") or item.get("title") or "?")
+
+
+def _title(item: Dict[str, Any]) -> str:
+    return str(item.get("title") or item.get("id") or "?")
+
+
+def _rank_key(item: Dict[str, Any]) -> float:
+    rank = item.get("rank")
+    return float(rank) if isinstance(rank, (int, float)) else _UNRANKED
