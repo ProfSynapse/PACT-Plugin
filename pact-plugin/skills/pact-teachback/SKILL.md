@@ -116,7 +116,7 @@ TaskUpdate(taskId, metadata={"teachback_submit": {
 }})
 ```
 
-Before composing your teachback, read Task B's `metadata.variety` (via Task A's `blocks[0]`). `TaskGet` does NOT surface task metadata, so read the task file directly: `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.variety`. Judge each of the four per-dimension rationales against THIS dispatch's complexity and record `yes` / `no` / `concern`; when not `yes`, name the smell in `concern`. Full review workflow: [`protocols/pact-variety.md` §Variety Calibration Record](../../protocols/pact-variety.md#variety-calibration-record).
+Before composing your teachback, read Task B's `metadata.variety` (via Task A's `blocks[0]`) — `TaskGet` is metadata-blind, so read the task file: `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.variety`. Judge each of the four per-dimension rationales against THIS dispatch's complexity and record `yes` / `no` / `concern`; when not `yes`, name the smell in `concern`. Full review workflow: [`protocols/pact-variety.md` §Variety Calibration Record](../../protocols/pact-variety.md#variety-calibration-record).
 
 **Step 2 — notify the team-lead** (carrying the canonical payload verbatim):
 
