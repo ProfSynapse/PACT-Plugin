@@ -39,6 +39,19 @@ failure message carrying an exception type where the row claims a behaviour.
 Two rows here are killed by an exception legitimately, because their stated
 property IS that an exception must not escape.
 
+Three mutations are recorded as strings because re-deriving them is where the
+unfaithful version comes from. These are questions, not a harness: the runner
+is boring and rebuildable, the questions are not.
+
+  staleness  BOTH halves or neither. `cutoff` to a bare timestamp AND
+             `touched.date() < cutoff` to `touched < cutoff`. Reverting the
+             cutoff alone leaves `date < datetime`, which kills by TypeError.
+  _is_newer  Revert the BODY to `a > b` on two datetimes. Renaming the
+             function kills by NameError at the call site instead.
+  read path  Inject the rename into `session_block` and read the NAMED arm
+             alone. In a full run it takes thirteen bystanders down with it
+             and the signal is buried.
+
 Each arm was verified by mutating production source and confirming the NAMED
 test reddens: 67 mutations, 67 killed, run against an unmutated green baseline
 with the tree restored byte-identical after every arm. Naming which test kills
