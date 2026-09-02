@@ -162,6 +162,7 @@ afternoon.
   `add` COERCES instead of refusing     test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED
   `add` refuses but writes anyway       test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED
   the absoluteness clause dropped       test_a_stored_root_must_be_absolute
+  the scan's relative filter dropped    test_a_relative_root_never_matches_but_its_absolute_siblings_still_do
   membership simplified to `.get()`     test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
   membership reverted to `is not None`  test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
   the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_the_cause
@@ -1582,3 +1583,41 @@ def test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses(tmp
     monkeypatch.setattr(backlog, "store_path", lambda backlog_dir=None: explicit_null)
     assert backlog.main(["add", "another"]) == 2, "an explicit null was accepted"
     assert json.loads(explicit_null.read_text())["items"] is None, "a refused add rewrote the file"
+
+
+def test_a_relative_root_never_matches_but_its_absolute_siblings_still_do(tmp_path, monkeypatch):
+    """The scan drops relative roots BEFORE matching, not after.
+
+    `validate()` rejects them too, but it runs after `_scan` has already
+    matched, so the sibling validator arm stays green under both the broken
+    and the fixed behaviour and cannot see this.
+
+    THE CWD IS THE WHOLE FIXTURE. A relative root resolves against the process
+    working directory, so it only claims a session when the process happens to
+    sit where it resolves — which is the defect: one file matching different
+    projects depending on where a hook runs. A fixture that does not arrange
+    that resolution passes under both implementations for the wrong reason.
+
+    Both cases asserted, because an over-broad filter breaks the second: a file
+    carrying one relative root alongside a real one keeps its identity.
+
+    RED WHEN the filter is dropped and every string is recorded again.
+    """
+    base = tmp_path / "base"
+    project = base / "relative" / "path"
+    project.mkdir(parents=True)
+    monkeypatch.chdir(base)
+    store = tmp_path / "store"
+
+    # The discriminating fact: this relative root DOES resolve to the session.
+    assert Path("relative/path").resolve() == project.resolve()
+
+    _write(store, "relative.json", _backlog(project, roots=["relative/path"]))
+    assert backlog_store.find_for(str(project), store)[0] is None, (
+        "a relative root claimed a session"
+    )
+
+    _write(store, "relative.json", _backlog(project, roots=["relative/path", project]))
+    assert backlog_store.find_for(str(project), store)[0] is not None, (
+        "one relative root cost a file its legitimate absolute identity"
+    )
