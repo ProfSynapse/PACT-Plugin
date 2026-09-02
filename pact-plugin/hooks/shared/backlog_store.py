@@ -121,6 +121,16 @@ def validate(obj: Any) -> List[str]:
         problems.append(f"roots is {roots!r}, expected a non-empty list of paths")
     elif not all(isinstance(r, str) and r for r in roots):
         problems.append("roots holds a non-string or empty entry")
+    elif not all(Path(r).is_absolute() for r in roots):
+        # ABSOLUTE, for the same reason `plan` must be RELATIVE: a stored path
+        # whose meaning depends on where the reader stands is not an identity.
+        # `_scan` resolves each root, and resolving a relative one anchors it to
+        # the process working directory — so one file would match different
+        # projects depending on where the hook ran. The writer only ever records
+        # resolved absolute paths, so this can arise from a hand-edited or
+        # corrupted file, which is the population the read path exists to
+        # survive.
+        problems.append(f"roots holds a relative path: {roots!r}")
 
     items = obj.get("items")
     if not isinstance(items, list):

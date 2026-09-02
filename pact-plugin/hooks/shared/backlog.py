@@ -300,7 +300,22 @@ def new_item_id(data: Dict[str, Any]) -> str:
 
 def add_item(data: Dict[str, Any], title: str, **fields: Any) -> Dict[str, Any]:
     """Append a new item. Unset fields keep their empty defaults so every item
-    has the same shape."""
+    has the same shape.
+
+    REFUSES rather than repairs when `items` is present and not a list. The
+    file parses but does not conform, and `_items()` — which every READER here
+    routes through — does not fit: it returns a filtered COPY, and appending to
+    a copy writes nothing. Coercing `data["items"]` to a clean list instead
+    would silently discard whatever was there and then pass validate(), turning
+    a refusal the user can act on into an unannounced overwrite of their file.
+    """
+    items = data.get("items")
+    if items is not None and not isinstance(items, list):
+        raise BacklogWriteError(
+            f"items is {type(items).__name__}, expected a list. The backlog "
+            f"does not conform and nothing was written — run `show` to see "
+            f"every schema problem."
+        )
     today = _now_iso()[:10]
     item: Dict[str, Any] = {
         "id": new_item_id(data),
@@ -318,7 +333,7 @@ def add_item(data: Dict[str, Any], title: str, **fields: Any) -> Dict[str, Any]:
         "touched": today,
     }
     _apply_fields(item, fields)
-    data.setdefault("items", []).append(item)
+    data.setdefault("items", []).append(item)  # items is a list by the guard
     return item
 
 
