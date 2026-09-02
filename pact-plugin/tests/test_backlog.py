@@ -4,9 +4,9 @@ These cases do not occur naturally and are constructed deliberately.
 Each corresponds to a defect found in this feature by running something rather
 than by reading it, and none would be sampled by an ordinary fixture:
 
-  worktree containment   a session inside a worktree records the worktree path
-                         while the writer stores the main root, so equality
-                         misses and only containment matches
+  worktree identity      a session inside a worktree names a path the main
+                         root does not equal, so it resolves only because the
+                         writer recorded that checkout
   symlink normalisation  `/var` resolves to `/private/var` on macOS, making
                          divergence the default under any temporary directory
   corrupt sibling        one flat store shared by every project, so another
@@ -161,7 +161,7 @@ afternoon.
   `add` guard reverted (crash)          test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED
   `add` COERCES instead of refusing     test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED
   `add` refuses but writes anyway       test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED
-  the absoluteness clause dropped       test_a_stored_root_must_be_absolute
+  the absoluteness clause dropped       test_validate_reports_a_relative_stored_root
   the scan's relative filter dropped    test_a_relative_root_never_matches_but_its_absolute_siblings_still_do
   membership simplified to `.get()`     test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
   membership reverted to `is not None`  test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
@@ -249,10 +249,9 @@ def _write(directory, name, payload):
 def test_a_recorded_worktree_finds_its_project_backlog(tmp_path):
     """A session inside a worktree resolves the backlog stored at the main root.
 
-    RED WHEN the match rule is equality rather than containment. The assertion
-    on non-equality is what keeps this honest: without it a fixture whose two
-    paths happened to coincide would pass under either rule and certify
-    nothing.
+    RED WHEN a recorded checkout stops matching. The assertion on non-equality
+    is what keeps this honest: without it a fixture whose two paths happened to
+    coincide would pass however the rule were written and certify nothing.
     """
     main_root = tmp_path / "project"
     worktree = main_root / ".worktrees" / "feat-x"
@@ -271,11 +270,10 @@ def test_a_recorded_worktree_finds_its_project_backlog(tmp_path):
 
 
 def test_a_textual_prefix_sibling_is_not_matched(tmp_path):
-    """Containment must not widen into matching an unrelated project.
+    """The match must not widen into a textual prefix test.
 
-    RED WHEN containment is implemented as a substring or prefix test on the
-    raw string: `/tmp/project-other` starts with `/tmp/project` as text, and
-    only a parts-wise comparison rejects it.
+    RED WHEN the rule compares raw strings: `/tmp/project-other` starts with
+    `/tmp/project` as text, and only a path-aware comparison rejects it.
     """
     store = tmp_path / "store"
     _write(store, "other.json", _backlog(tmp_path / "project"))
@@ -284,7 +282,7 @@ def test_a_textual_prefix_sibling_is_not_matched(tmp_path):
 
     assert str(unrelated).startswith(str(tmp_path / "project"))  # textually a prefix
     match, _ = backlog_store.find_for(str(unrelated), store)
-    assert match is None, "a textual prefix was accepted as containment"
+    assert match is None, "a textual prefix was accepted as a match"
 
 
 # --------------------------------------------------------------------------
@@ -852,8 +850,8 @@ def _drive_session_init(monkeypatch, home, project_dir, source):
     """Run the real `session_init.main()` and return (context, system_message).
 
     Only the heavy collaborators unrelated to this feature are stubbed. The
-    resolution path — home-pinned directory, then containment against the
-    stored main root — runs unstubbed, because that path IS what these tests
+    resolution path — home-pinned directory, then exact membership in the
+    stored roots — runs unstubbed, because that path IS what these tests
     exist to check and replacing it with a stub would leave the one thing that
     can break untested. The frame carries no `agent_type`, making it a NON-LEAD
     frame: the block sits outside the lead-only branch, so a call site scoped
@@ -1543,9 +1541,11 @@ def test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED(tmp_path, mo
     assert path.read_bytes() == before, "the file was rewritten by a refused add"
 
 
-def test_a_stored_root_must_be_absolute(tmp_path):
-    """A relative root resolves against the process working directory, so one
-    file would match different projects depending on where a hook runs.
+def test_validate_reports_a_relative_stored_root(tmp_path):
+    """VALIDATOR SCOPE ONLY. `validate()` runs after `_scan` has matched, so
+    this says nothing about whether a relative root claimed a session — its
+    sibling arm on the scan filter pins that, and this one stays green either
+    way.
 
     Both directions: a rule that rejected everything satisfies the refusal
     alone. RED WHEN the absoluteness clause is dropped.
