@@ -56,6 +56,11 @@ is boring and rebuildable, the questions are not.
   membership Change BOTH dereference sites, the test and the message. Leaving
              `data["items"]` in the message body kills by KeyError from the
              mutant's own shape rather than by the property.
+  CAS pop  The pop must move ABOVE the `return [` inside the refusal branch.
+             Placed after the return it is DEAD CODE and the mutation is a
+             no-op that reads as a surviving arm — twice, before I read the
+             control flow instead of the diff. The faithful form is killed by
+             the RETRY clause, not by the refusal clause.
   memory ids The two sites now share one accessor, so the DISAGREEMENT between
              them is reproducible only by reverting SITE TWO to
              `item.get("memory") or []`. Dropping the str filter from the
@@ -189,6 +194,13 @@ afternoon.
   no success message at all           test_the_success_message_says_only_what_was_established
   the `_items` guard removed          test_show_reports_a_non_iterable_items_rather_than_raising
   the old repair promise restored     test_neither_note_promises_repair_will_move_a_corrupt_file
+  the call-site gate dropped          test_the_age_line_keys_on_the_trigger_and_not_on_the_anchor
+  the CAS comparison removed          test_a_refused_write_preserves_the_first_writers_data_and_stays_armed
+  the baseline popped on refusal      test_a_refused_write_preserves_the_first_writers_data_and_stays_armed
+  the query drops `stateReason`       test_the_query_requests_every_field_the_outcome_logic_reads
+  a write site appears in rePACT      test_four_files_stay_at_zero_write_sites
+  the write-site detector orphaned    test_four_files_stay_at_zero_write_sites
+  the wrap-up write moves below       test_the_wrap_up_write_precedes_the_worktree_removal
   the accessor reverted at site two   test_a_poisoned_memory_field_crashes_neither_site
   the accessor reverted at site two   test_the_flagged_ids_are_exactly_the_ids_that_were_looked_up
   the accessor reverted at site one   test_a_poisoned_memory_field_crashes_neither_site
@@ -2172,3 +2184,230 @@ def test_a_malformed_repo_slug_payload_yields_no_tracker(monkeypatch):
         ("nameWithOwner is a scalar", '{"nameWithOwner": 5}'),
     ):
         assert _slug(stdout) is None, label
+
+
+# ---------------------------------------------------------------------------
+# The self-maintaining backlog: the age line, the CAS, the query, the wiring
+# ---------------------------------------------------------------------------
+
+def test_the_age_line_keys_on_the_trigger_and_not_on_the_anchor(monkeypatch, tmp_path):
+    """THE DISCRIMINATING PAIR, and it only discriminates HERE.
+
+    The correct implementation gates on `is_context_reset` at the CALL SITE
+    (`session_init.py`: `context_anchor=(... if is_context_reset else None)`).
+    The broken twin renders whenever the anchor is non-None. `_age_line` never
+    sees the source at all, so BELOW that line the two are byte-identical —
+    an arm against `format_block` cannot tell them apart however it asserts.
+    That is why this arm drives the real `session_init`.
+
+    `compact` is NOT a consuming source, so a compact-only journal yields no
+    anchor and BOTH implementations are silent there — that row separates
+    nothing and is deliberately not used. The anchor is stubbed PRESENT for
+    both rows, which is what leaves the SOURCE as the only difference.
+
+    RED WHEN the call site stops gating on `is_context_reset`.
+    """
+    from datetime import datetime, timezone
+
+    import session_init
+
+    project = tmp_path / "project"
+    _repo(project)
+    store = tmp_path / ".claude" / "pact-backlog"
+    name = backlog.store_path().stem
+    _write(store, f"{name}.json",
+           _backlog(project, updated="2026-09-01T00:00:00Z",
+                    items=[_item(title="SEEDED BACKLOG ITEM")]))
+
+    # An anchor strictly LATER than `updated`, so the age line's own comparison
+    # is satisfied and the source gate is the only thing left that can suppress
+    # it. Stubbed present for BOTH rows deliberately.
+    anchor = datetime(2026, 9, 2, tzinfo=timezone.utc).timestamp()
+    monkeypatch.setattr(session_init, "_latest_consuming_start_ts",
+                        lambda session_dir: anchor)
+
+    def age_line_rendered(source):
+        context, _ = _drive_session_init(monkeypatch, tmp_path, project, source)
+        assert "SEEDED BACKLOG ITEM" in context, (
+            f"{source}: the block itself did not render, so the age-line "
+            f"assertion below would be vacuous"
+        )
+        return "nothing written to the backlog since this context was built" in context
+
+    assert age_line_rendered("compact"), (
+        "compact is a context reset and the anchor is present, so the age line "
+        "must render — this is the row the null-ness twin gets right by luck "
+        "and a broken GATE gets wrong"
+    )
+    assert not age_line_rendered("resume"), (
+        "resume is NOT a context reset, so the age line must stay silent even "
+        "though the anchor is present — this is the row that separates the "
+        "correct gate from a render-when-not-None rule"
+    )
+
+
+def test_a_refused_write_preserves_the_first_writers_data_and_stays_armed(tmp_path):
+    """A guard that refuses AND loses the data passes a refusal-only assertion.
+
+    THE TWO WRITERS MUST DIVERGE. Two byte-identical loads give the guard
+    nothing to protect, so it correctly does nothing and a probe reads that as
+    the guard failing — measured on this arc's first CAS probe.
+
+    RETRY: the refused document keeps its baseline, so re-saving the SAME stale
+    object must refuse AGAIN. A guard that disarmed on refusal would let the
+    retry through and destroy the first writer's change one call later.
+
+    RED WHEN the CAS is removed, when the baseline is popped on the refusal
+    path, or when the refusal writes anyway.
+    """
+    path = tmp_path / "demo.json"
+    _write(tmp_path, "demo.json", _backlog(tmp_path, items=[_item(title="ORIGINAL")]))
+
+    first = backlog.load_or_create(path)
+    second = backlog.load_or_create(path)
+
+    first["items"][0]["title"] = "FIRST WRITER WON"
+    assert backlog.save(first, path) == [], "the first write was refused"
+
+    second["items"][0]["title"] = "SECOND WRITER CLOBBERED IT"
+    problems = backlog.save(second, path)
+    assert problems, "the stale second write was accepted"
+    assert "changed since it was read" in " ".join(problems)
+
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk["items"][0]["title"] == "FIRST WRITER WON", (
+        f"the guard refused AND lost the first writer's data: "
+        f"{on_disk['items'][0]['title']!r}"
+    )
+
+    again = backlog.save(second, path)
+    assert again, "the retry was accepted — the refusal disarmed the guard"
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk["items"][0]["title"] == "FIRST WRITER WON", (
+        "the retry destroyed the first writer's data"
+    )
+
+
+def test_the_query_requests_every_field_the_outcome_logic_reads(monkeypatch):
+    """The constructed query, not a hand-built payload.
+
+    An arm that mocks `_run_capture`'s RETURN VALUE never exercises the string
+    the module BUILT. Measured by the auditor: a query `gh` rejects comes back
+    as `unverifiable` for every ref with no exception, indistinguishable from a
+    genuinely unresolvable ref — so a broken query ships dead and silent.
+
+    This reads the ACTUAL string and pins the coupling that degrades silently:
+    `_ref_outcome` branches on `state`, `stateReason` and the PRESENCE of
+    `merged`, so a query that stops selecting one of them returns nodes missing
+    that key and every affected ref quietly changes bucket. A returns-value
+    mock cannot see it, because the mock supplies the keys the query forgot.
+
+    RED WHEN any of the three selections is dropped from the query.
+    """
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["query"] = next(
+            (arg for arg in command if arg.startswith("query=")), None)
+        return subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(backlog, "_repo_slug", lambda: ("owner", "repo"))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    backlog.resolve_refs(["#1"])
+
+    query = captured["query"]
+    assert query, "no query was constructed — the rest of this arm is vacuous"
+    for field in ("state", "stateReason", "merged"):
+        assert field in query, (
+            f"the query does not select {field!r}, which `_ref_outcome` reads. "
+            f"Every ref depending on it silently changes bucket. Query: {query}"
+        )
+
+
+_COMMANDS_DIR = HOOKS_DIR.parent / "commands"
+# A WRITE site is an invocation of the module with a mutating verb. `show` and
+# a bare `/PACT:next` mention are READS and are deliberately not members: the
+# architect's ruling is about where something FINISHED, not where the backlog
+# is consulted, and bootstrap carries a call site with zero writes.
+_WRITE_VERBS = ("set ", "add ", "remove ")
+
+
+def _write_sites(name):
+    """Lines in one command file that invoke the backlog with a mutating verb."""
+    text = (_COMMANDS_DIR / name).read_text(encoding="utf-8")
+    return [
+        (number, line.strip())
+        for number, line in enumerate(text.splitlines(), 1)
+        if "backlog.py" in line and any(v in line for v in _WRITE_VERBS)
+    ]
+
+
+def test_four_files_stay_at_zero_write_sites(monkeypatch):
+    """Those four zeros are the ARCHITECT's RESULTS, not omissions.
+
+    rePACT sits below backlog-item granularity; refresh and pause have
+    "nothing has finished" as their entry condition; peer-review does merge but
+    hands to wrap-up unconditionally, so wrap-up's site already covers that
+    path and a second one would be two things to keep in step.
+
+    THE POSITIVE HALF RUNS FIRST AND IT IS NOT DECORATION. An absence proves
+    nothing about a detector that matches nothing, and `_write_sites` keys on
+    a string that a rewording could orphan — at which point all four zeros
+    would still hold, for the wrong reason, forever. Asserting the SAME
+    detector finds the sites that DO exist is the only thing that makes the
+    zeros mean anything.
+
+    THIS ARM PINS A RULING, NOT AN INDEPENDENT FINDING. Its correctness rests
+    on peer-review reaching wrap-up on every merge path — the architect flagged
+    that as the ruling they most wanted a second read on. If a path merges
+    without reaching wrap-up, this arm is pinning a GAP.
+
+    RED WHEN a write site is added to a file the ruling put at zero.
+    """
+    populated = {name: _write_sites(name)
+                 for name in ("wrap-up.md", "orchestrate.md", "comPACT.md", "imPACT.md")}
+    empty = [name for name, sites in populated.items() if not sites]
+    assert not empty, (
+        f"the detector found no write site in {empty} — it has been orphaned by "
+        f"a rewording, and every zero below is now vacuous"
+    )
+
+    for name in ("rePACT.md", "refresh.md", "pause.md", "peer-review.md"):
+        sites = _write_sites(name)
+        assert sites == [], (
+            f"{name} gained a backlog write site the architect's ruling put at "
+            f"zero: {sites}"
+        )
+
+
+def test_the_wrap_up_write_precedes_the_worktree_removal(monkeypatch):
+    """POSITION, not presence. A write appended to the end of the branch is
+    present and broken.
+
+    `_abandoned_flags` looks for a branch or worktree carrying the item's ref.
+    A write landing AFTER the worktree is removed leaves the item `active` with
+    its worktree gone, so every following session reports it abandoned — the
+    exact false flag the placement exists to prevent, and it would pass any
+    presence check.
+
+    RED WHEN the write moves below the removal, which is where the tidy-looking
+    placement — appended to the branch's numbered list — puts it.
+    """
+    text = (_COMMANDS_DIR / "wrap-up.md").read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    writes = [n for n, line in enumerate(lines, 1)
+              if "backlog.py" in line and any(v in line for v in _WRITE_VERBS)]
+    removals = [n for n, line in enumerate(lines, 1)
+                if "Remove the worktree" in line]
+
+    assert len(writes) == 1, f"expected exactly one wrap-up write site, found {writes}"
+    assert len(removals) == 1, (
+        f"expected exactly one worktree-removal step, found {removals} — the "
+        f"ordering assertion below cannot be read against several"
+    )
+    assert writes[0] < removals[0], (
+        f"the backlog write is at line {writes[0]}, BELOW the worktree removal "
+        f"at line {removals[0]}. Every item written there is reported abandoned "
+        f"from the next session onward."
+    )
