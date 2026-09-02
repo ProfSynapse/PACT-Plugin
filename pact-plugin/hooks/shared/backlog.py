@@ -1,0 +1,736 @@
+"""
+Location: pact-plugin/hooks/shared/backlog.py
+Summary: WRITE side and CLI of the cross-session backlog — item mutations,
+         atomic save, corrupt-file repair, batched pact-memory resolution,
+         one batched tracker query, and the reconciliation that reports drift.
+Used by: commands/next.md, invoked as a direct script —
+         python3 {plugin_root}/hooks/shared/backlog.py <subcommand>.
+         NOT a lifecycle hook: this file MUST NOT be registered in hooks.json.
+
+THE DEPENDENCY ARROW IS ONE-WAY. This module imports backlog_store;
+backlog_store imports this module never. session_init reaches only
+backlog_store, so pact-memory and the tracker stay out of the session-start
+import closure. An import in the other direction would undo that.
+
+Two measured constraints govern the shape here and neither is a preference:
+a subprocess per memory id measures ~9.6s median and is forbidden, so ids
+resolve in-process against ONE store instance; and `gh` does not self-timeout
+against an unreachable host, so every tracker call carries an explicit timeout
+and results are parsed from stdout rather than gated on a return code.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import secrets
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+# Make the package-path import (`from shared.X import Y`) resolvable when this
+# file runs as a direct script. In script mode Python puts this file's OWN
+# directory (`hooks/shared/`) on sys.path[0], not `hooks/`, so `from shared.X`
+# would raise ModuleNotFoundError and a bare `from X` fallback would import a
+# sibling as a TOP-LEVEL module, breaking that sibling's own relative imports.
+# Idempotent: skip when already present.
+_HOOKS_DIR = str(Path(__file__).resolve().parent.parent)
+if _HOOKS_DIR not in sys.path:
+    sys.path.insert(0, _HOOKS_DIR)
+
+from shared.backlog_store import (  # noqa: E402  # follows the sys.path bootstrap
+    MEMORY_MAX_IDS,
+    SCHEMA_VERSION,
+    STATUSES,
+    BacklogFileError,
+    file_local_flags,
+    load,
+    validate,
+)
+from shared.paths import get_backlog_dir  # noqa: E402  # follows the bootstrap
+
+# Exit codes.
+_EXIT_OK = 0
+_EXIT_REFUSED = 2
+
+# An `active` item untouched for longer than this is reported as stale.
+_STALE_AFTER = timedelta(days=14)
+
+# The tracker is a constant cost, not a per-item one: one batched round trip
+# measures flat at roughly a third of a second from 1 ref to 25. The timeout is
+# mandatory because `gh` runs to the caller's kill ceiling against an
+# unreachable host rather than giving up on its own.
+_TRACKER_TIMEOUT_SECONDS = 5
+
+# Characters a repository owner or name may hold. Everything else is refused
+# rather than interpolated into a query.
+_SLUG_CHARS = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+class BacklogWriteError(Exception):
+    """The write path cannot proceed. Raised rather than defaulted, because a
+    backlog written under a wrong or empty project name is a silent data-loss
+    path."""
+
+
+# ---------------------------------------------------------------------------
+# Store resolution — the only surface that derives a project name or path
+# ---------------------------------------------------------------------------
+
+def _memory_api():
+    """Import pact-memory lazily, from the write side only.
+
+    Kept inside a function rather than at module scope so that importing this
+    module for its CLI does not pay for the store, and so the read side has no
+    route to it even by accident.
+    """
+    scripts_parent = Path(__file__).resolve().parents[2] / "skills" / "pact-memory"
+    if str(scripts_parent) not in sys.path:
+        sys.path.insert(0, str(scripts_parent))
+    from scripts import memory_api
+
+    return memory_api
+
+
+def store_path(backlog_dir: Optional[Path] = None) -> Path:
+    """Absolute path of this project's backlog file.
+
+    Raises BacklogWriteError when the project id will not resolve. A default
+    slug would write a backlog nobody can find again.
+    """
+    project = _memory_api().PACTMemory._detect_project_id()
+    if not project:
+        raise BacklogWriteError(
+            "project id did not resolve, so there is no name to write under. "
+            "Nothing was written. Run from inside the project directory, or set "
+            "CLAUDE_PROJECT_DIR."
+        )
+    root = get_backlog_dir() if backlog_dir is None else backlog_dir
+    return root / f"{project}.json"
+
+
+def project_root() -> Path:
+    """The MAIN repo root, which is what a backlog stores as project_path.
+
+    Normalising to the main root is what lets a worktree session's read find
+    this file by containment: the read path is deliberately git-free and cannot
+    perform this resolution itself.
+    """
+    root = _memory_api().main_repo_root()
+    if root is None:
+        raise BacklogWriteError(
+            "the main repository root did not resolve, so project_path would be "
+            "wrong or empty. Nothing was written."
+        )
+    return root
+
+
+def load_or_create(path: Path) -> Dict[str, Any]:
+    """Load this project's backlog, or build an empty one in memory.
+
+    An absent file is normal and yields a fresh document. A present but corrupt
+    file raises, which the CLI turns into a repair offer rather than an
+    overwrite.
+    """
+    if path.exists():
+        return load(path)
+    return {
+        "version": SCHEMA_VERSION,
+        "project": path.stem,
+        "project_path": str(project_root()),
+        "updated": _now_iso(),
+        "items": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Write
+# ---------------------------------------------------------------------------
+
+def save(data: Dict[str, Any], path: Path) -> List[str]:
+    """Validate, then write atomically. Returns the problem list UNWRITTEN.
+
+    A non-empty return means nothing was written and the caller must fix the
+    data. There is no truncation anywhere in this module — an over-long note is
+    refused, never shortened, because silently shortening one would lose the
+    intent the note exists to carry.
+    """
+    problems = validate(data)
+    if problems:
+        return problems
+
+    data["updated"] = _now_iso()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, indent=2, sort_keys=False)
+            stream.write("\n")
+        os.replace(temp_name, path)
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
+    return []
+
+
+def repair(path: Path) -> Tuple[Path, str]:
+    """Move a corrupt backlog aside and report where it went.
+
+    Renamed, never overwritten and never deleted: destroying a corrupt file to
+    fix corruption would eat this design's own thesis, and the moved-aside copy
+    is what makes a wrong rebuild recoverable. The READ path never does this —
+    it runs at every session start, so a rename there would leave one
+    moved-aside copy per session.
+    """
+    # The moved-aside name deliberately DROPS the .json suffix. The read path
+    # globs *.json across the whole store directory and reads every match, so a
+    # corrupt file kept under .json would be picked up again at the next
+    # session start and the loud state would survive its own repair.
+    aside = path.with_name(
+        f"{path.stem}.corrupt-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.bak"
+    )
+    path.rename(aside)
+    return aside, f"moved the corrupt backlog aside to {aside}"
+
+
+def new_item_id(data: Dict[str, Any]) -> str:
+    """Four hex characters, unique within this file."""
+    taken = {item.get("id") for item in data.get("items") or []}
+    while True:
+        candidate = secrets.token_hex(2)
+        if candidate not in taken:
+            return candidate
+
+
+def add_item(data: Dict[str, Any], title: str, **fields: Any) -> Dict[str, Any]:
+    """Append a new item. Unset fields keep their empty defaults so every item
+    has the same shape."""
+    today = _now_iso()[:10]
+    item: Dict[str, Any] = {
+        "id": new_item_id(data),
+        "title": title,
+        "status": "planned",
+        "rank": None,
+        "blocked_by": [],
+        "batch_with": [],
+        "exclusive_with": [],
+        "ref": None,
+        "plan": None,
+        "memory": [],
+        "note": None,
+        "added": today,
+        "touched": today,
+    }
+    item.update({key: value for key, value in fields.items() if value is not None})
+    data.setdefault("items", []).append(item)
+    return item
+
+
+def find_item(data: Dict[str, Any], item_id: str) -> Optional[Dict[str, Any]]:
+    for item in data.get("items") or []:
+        if item.get("id") == item_id:
+            return item
+    return None
+
+
+def update_item(item: Dict[str, Any], **fields: Any) -> None:
+    """Apply the named fields and stamp `touched`. Validation happens in
+    save(), so a rejected change never reaches the file."""
+    item.update({key: value for key, value in fields.items() if value is not None})
+    item["touched"] = _now_iso()[:10]
+
+
+# ---------------------------------------------------------------------------
+# Resolution — pact-memory in-process, the tracker in one batched call
+# ---------------------------------------------------------------------------
+
+def resolve_memory_ids(ids: Sequence[str]) -> Dict[str, Optional[Dict[str, Any]]]:
+    """One store instance, N lookups. A None VALUE means unresolvable.
+
+    Returning None rather than omitting the key is what lets a caller tell
+    "resolved to nothing" from "never asked" — the drift table needs that
+    distinction, because a memory id that no longer resolves is FLAGGED rather
+    than skipped.
+
+    Resolution goes through `get <id>`, never a search. A stored id resolves
+    across project scope where a search cannot, and resolving a known id set is
+    not a search, so this satisfies the prohibition rather than skirting it.
+    """
+    resolved: Dict[str, Optional[Dict[str, Any]]] = {identifier: None for identifier in ids}
+    if not ids:
+        return resolved
+
+    try:
+        store = _memory_api().get_memory_instance()
+    except Exception:
+        return resolved
+
+    # ponytail: N sequential gets against one open store. The measured cost was
+    # process spawn, and that is already gone; push the id set into one query
+    # only if a real backlog ever makes this the bottleneck.
+    for identifier in ids:
+        try:
+            record = store.get(identifier)
+        except Exception:
+            continue
+        if record is not None:
+            resolved[identifier] = {
+                "id": getattr(record, "id", identifier),
+                "updated_at": _as_text(getattr(record, "updated_at", None)),
+            }
+    return resolved
+
+
+def resolve_refs(refs: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+    """ONE batched tracker query for every ref. Never a call per ref.
+
+    Every entry comes back with a `state` of `open`, `closed` or
+    `unverifiable`. Unverifiable covers a ref this tracker cannot address, a
+    ref that does not exist, an absent `gh`, and an unreachable host — the
+    caller reports it as such rather than as a clean pass.
+
+    STDOUT IS THE RESULT, NOT THE RETURN CODE. `gh api graphql` exits 1 on
+    PARTIAL success with every field that did resolve present on stdout, so a
+    return-code gate would discard good resolutions and report a blanket
+    tracker outage where per-ref `unverifiable` is required.
+    """
+    outcome: Dict[str, Dict[str, Any]] = {
+        ref: {"state": "unverifiable", "reason": "no tracker resolution for this ref"}
+        for ref in refs
+    }
+    numbered = {ref: _issue_number(ref) for ref in refs}
+    addressable = {ref: number for ref, number in numbered.items() if number is not None}
+    if not addressable:
+        return outcome
+
+    repo = _repo_slug()
+    if repo is None:
+        for ref in addressable:
+            outcome[ref] = {"state": "unverifiable", "reason": "no tracker configured"}
+        return outcome
+
+    owner, name = repo
+    aliases = {f"r{index}": ref for index, ref in enumerate(sorted(addressable))}
+    selections = " ".join(
+        f'{alias}: issueOrPullRequest(number: {addressable[ref]}) '
+        f"{{ ... on Issue {{ state }} ... on PullRequest {{ state }} }}"
+        for alias, ref in aliases.items()
+    )
+    query = f'query {{ repository(owner: "{owner}", name: "{name}") {{ {selections} }} }}'
+
+    stdout = _run_capture(["gh", "api", "graphql", "-f", f"query={query}"])
+    if stdout is None:
+        for ref in addressable:
+            outcome[ref] = {"state": "unverifiable", "reason": "tracker unreachable"}
+        return outcome
+
+    try:
+        payload = json.loads(stdout)
+    except ValueError:
+        return outcome
+
+    repository = (payload.get("data") or {}).get("repository") or {}
+    for alias, ref in aliases.items():
+        node = repository.get(alias)
+        if not isinstance(node, dict) or not node.get("state"):
+            outcome[ref] = {
+                "state": "unverifiable",
+                "reason": "the tracker did not resolve this ref",
+            }
+            continue
+        state = str(node["state"]).lower()
+        outcome[ref] = {"state": "closed" if state in {"closed", "merged"} else "open"}
+    return outcome
+
+
+def _repo_slug() -> Optional[Tuple[str, str]]:
+    """Owner and name of the configured tracker repository, or None.
+
+    One call, and its cost is a constant rather than a per-ref one. None means
+    no tracker is configured, which is a fully supported state.
+    """
+    stdout = _run_capture(["gh", "repo", "view", "--json", "nameWithOwner"])
+    if stdout is None:
+        return None
+    try:
+        slug = json.loads(stdout).get("nameWithOwner") or ""
+    except ValueError:
+        return None
+    owner, _, name = slug.partition("/")
+    # The slug reaches us from the local git remote, so it is interpolated
+    # into a GraphQL document only after it is confirmed to hold nothing but
+    # the characters a repository slug may contain. A slug carrying a quote or
+    # a brace would otherwise reshape the query.
+    if not owner or not name:
+        return None
+    if not all(_SLUG_CHARS.match(part) for part in (owner, name)):
+        return None
+    return owner, name
+
+
+def _run_capture(command: Sequence[str]) -> Optional[str]:
+    """Run a tracker command and return its stdout, or None when there is none.
+
+    Non-zero exit is NOT a failure here: stdout carries the resolved fields
+    even when one ref in the batch was bad. Only an empty stdout, a missing
+    binary or a timeout is a failure.
+    """
+    try:
+        result = subprocess.run(
+            list(command),
+            capture_output=True,
+            text=True,
+            timeout=_TRACKER_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    return result.stdout if result.stdout.strip() else None
+
+
+def _issue_number(ref: Any) -> Optional[int]:
+    """The issue number a ref addresses, or None when this tracker cannot.
+
+    A ref is an opaque string by design — a bare number, a Linear key, a URL
+    and null are all valid — so anything this resolver cannot address is
+    reported unverifiable rather than treated as absent.
+    """
+    if not isinstance(ref, str):
+        return None
+    digits = ref.strip().lstrip("#").rstrip("/").rsplit("/", 1)[-1]
+    return int(digits) if digits.isdigit() else None
+
+
+# ---------------------------------------------------------------------------
+# Reconcile — reports drift, repairs nothing
+# ---------------------------------------------------------------------------
+
+def reconcile(data: Dict[str, Any]) -> List[str]:
+    """Every drift class, as a list of flags. Writes nothing, changes nothing.
+
+    Drift is reported and never silently repaired: an automatic fix is the
+    orchestrator overwriting the user's recorded intent on the strength of an
+    inference. Propose, and let the user decide.
+    """
+    items = [item for item in data.get("items") or [] if isinstance(item, dict)]
+    flags = list(file_local_flags(data))
+    flags.extend(_ref_flags(items))
+    flags.extend(_plan_flags(items, data.get("project_path")))
+    flags.extend(_memory_flags(items))
+    flags.extend(_staleness_flags(items))
+    flags.extend(_abandoned_flags(items))
+    return flags
+
+
+def _ref_flags(items: List[Dict[str, Any]]) -> List[str]:
+    """An item with NO ref is never flagged. An item whose ref will not resolve
+    is flagged unverifiable. Absent and unresolvable are different states."""
+    refs = sorted({item["ref"] for item in items if item.get("ref")})
+    if not refs:
+        return []
+    states = resolve_refs(refs)
+    flags = []
+    for item in items:
+        ref = item.get("ref")
+        if not ref:
+            continue
+        state = states.get(ref, {})
+        if state.get("state") == "unverifiable":
+            flags.append(
+                f"{_label(item)}: ref {ref} is unverifiable "
+                f"({state.get('reason', 'no reason given')})"
+            )
+        elif state.get("state") == "closed" and item.get("status") != "done":
+            flags.append(
+                f"{_label(item)}: ref {ref} is closed but the item is "
+                f"{item.get('status')!r} — probably done"
+            )
+    return flags
+
+
+def _plan_flags(items: List[Dict[str, Any]], project_path: Any) -> List[str]:
+    if not isinstance(project_path, str) or not project_path:
+        return []
+    root = Path(project_path)
+    return [
+        f"{_label(item)}: plan {item['plan']!r} does not resolve under {root}"
+        for item in items
+        if item.get("plan") and not (root / str(item["plan"])).exists()
+    ]
+
+
+def _memory_flags(items: List[Dict[str, Any]]) -> List[str]:
+    wanted = sorted({
+        identifier
+        for item in items
+        for identifier in (item.get("memory") or [])
+        if isinstance(identifier, str)
+    })
+    if not wanted:
+        return []
+    records = resolve_memory_ids(wanted)
+    flags = []
+    for item in items:
+        for identifier in item.get("memory") or []:
+            record = records.get(identifier)
+            if record is None:
+                flags.append(f"{_label(item)}: memory id {identifier} no longer resolves")
+                continue
+            if _is_newer(record.get("updated_at"), item.get("touched")):
+                flags.append(
+                    f"{_label(item)}: memory record {identifier} changed after it "
+                    f"was linked ({record.get('updated_at')} > {item.get('touched')})"
+                )
+    return flags
+
+
+def _staleness_flags(items: List[Dict[str, Any]]) -> List[str]:
+    cutoff = datetime.now(timezone.utc) - _STALE_AFTER
+    flags = []
+    for item in items:
+        if item.get("status") != "active":
+            continue
+        touched = _as_datetime(item.get("touched"))
+        if touched is not None and touched < cutoff:
+            flags.append(
+                f"{_label(item)}: active and untouched since {item.get('touched')}"
+            )
+    return flags
+
+
+def _abandoned_flags(items: List[Dict[str, Any]]) -> List[str]:
+    """An `active` item with no branch and no worktree carrying its ref.
+
+    Only items that HAVE a ref are checked, so a ref-less item is never flagged
+    here either.
+    """
+    tracked = [item for item in items if item.get("status") == "active" and item.get("ref")]
+    if not tracked:
+        return []
+    # ponytail: the linkage is the ref's digits appearing in a branch or
+    # worktree name, which is how this project names them. Add an explicit
+    # `branch` field to the item shape if a backlog ever needs a firmer link.
+    names = _branch_and_worktree_names()
+    if names is None:
+        return []
+    flags = []
+    for item in tracked:
+        number = _issue_number(item.get("ref"))
+        token = str(number) if number is not None else str(item.get("ref"))
+        if not any(token in name for name in names):
+            flags.append(
+                f"{_label(item)}: active, but no branch or worktree carries "
+                f"{item.get('ref')} — work may have been abandoned"
+            )
+    return flags
+
+
+def _branch_and_worktree_names() -> Optional[List[str]]:
+    branches = _run_capture(["git", "branch", "--format=%(refname:short)"])
+    worktrees = _run_capture(["git", "worktree", "list", "--porcelain"])
+    if branches is None and worktrees is None:
+        return None
+    return f"{branches or ''}\n{worktrees or ''}".splitlines()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    """Argument grammar, separated so it is testable without running anything."""
+    parser = argparse.ArgumentParser(
+        description="PACT cross-session backlog — the user's ordered intent, "
+        "reconciled against git, the tracker and pact-memory.",
+    )
+    parser.add_argument(
+        "--backlog-dir",
+        help="Override the store directory. Testing seam; omit in normal use.",
+    )
+    sub = parser.add_subparsers(dest="command")
+    sub.required = True
+
+    show = sub.add_parser("show", help="Report every item with its drift flags")
+    show.add_argument(
+        "--no-reconcile",
+        action="store_true",
+        help="Skip the tracker, pact-memory and git checks",
+    )
+
+    add = sub.add_parser("add", help="Add an item")
+    add.add_argument("title")
+    _add_item_arguments(add)
+
+    update = sub.add_parser("set", help="Change fields on an existing item")
+    update.add_argument("item_id")
+    _add_item_arguments(update)
+    update.add_argument("--title")
+
+    sub.add_parser("repair", help="Move a corrupt backlog aside and start fresh")
+    return parser
+
+
+def _add_item_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--status", choices=sorted(STATUSES))
+    parser.add_argument("--rank", type=int)
+    parser.add_argument("--ref", help="Opaque tracker reference, or 'none' to clear")
+    parser.add_argument("--plan", help="Repo-relative path to a plan document")
+    parser.add_argument(
+        "--note",
+        help="One line in the orchestrator's voice, never the user's first "
+             "person. Longer than 200 characters is refused, not shortened.",
+    )
+    parser.add_argument(
+        "--memory",
+        action="append",
+        help=f"pact-memory record id; repeatable up to {MEMORY_MAX_IDS}",
+    )
+    for field in ("blocked-by", "batch-with", "exclusive-with"):
+        parser.add_argument(f"--{field}", action="append", help=f"Item id for {field}")
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = build_parser().parse_args(argv)
+    backlog_dir = Path(args.backlog_dir) if args.backlog_dir else None
+
+    try:
+        path = store_path(backlog_dir)
+        if args.command == "repair":
+            return _handle_repair(path)
+        return _handle_write_or_show(args, path)
+    except BacklogFileError as exc:
+        print(
+            f"backlog is unreadable: {exc}\n"
+            f"Nothing was changed. Run `repair` to move it aside and rebuild.",
+            file=sys.stderr,
+        )
+        return _EXIT_REFUSED
+    except BacklogWriteError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return _EXIT_REFUSED
+
+
+def _handle_repair(path: Path) -> int:
+    if not path.exists():
+        print(f"nothing to repair: {path} does not exist")
+        return _EXIT_OK
+    aside, message = repair(path)
+    print(message)
+    print(f"a fresh backlog will be created at {path} on the next write")
+    return _EXIT_OK
+
+
+def _handle_write_or_show(args: argparse.Namespace, path: Path) -> int:
+    data = load_or_create(path)
+
+    if args.command == "show":
+        print(_render(data, [] if args.no_reconcile else reconcile(data)))
+        return _EXIT_OK
+
+    if args.command == "add":
+        item = add_item(data, args.title, **_field_updates(args))
+    else:
+        item = find_item(data, args.item_id)
+        if item is None:
+            print(f"refused: no item with id {args.item_id!r}", file=sys.stderr)
+            return _EXIT_REFUSED
+        update_item(item, title=args.title, **_field_updates(args))
+
+    problems = save(data, path)
+    if problems:
+        print("refused, nothing written:", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        return _EXIT_REFUSED
+
+    print(f"{args.command} ok: {item['id']} {item['title']}")
+    return _EXIT_OK
+
+
+def _field_updates(args: argparse.Namespace) -> Dict[str, Any]:
+    """Namespace to item fields. `--ref none` clears; an unpassed flag leaves
+    the field alone."""
+    ref = getattr(args, "ref", None)
+    return {
+        "status": getattr(args, "status", None),
+        "rank": getattr(args, "rank", None),
+        "ref": None if ref is None else (None if ref.lower() == "none" else ref),
+        "plan": getattr(args, "plan", None),
+        "note": getattr(args, "note", None),
+        "memory": getattr(args, "memory", None),
+        "blocked_by": getattr(args, "blocked_by", None),
+        "batch_with": getattr(args, "batch_with", None),
+        "exclusive_with": getattr(args, "exclusive_with", None),
+    }
+
+
+def _render(data: Dict[str, Any], flags: Sequence[str]) -> str:
+    lines = [f"{data.get('project')} — {data.get('project_path')}"]
+    items = sorted(
+        (item for item in data.get("items") or [] if isinstance(item, dict)),
+        key=lambda item: (item.get("status") != "active", _rank_of(item)),
+    )
+    for item in items:
+        lines.append(
+            f"  [{item.get('status')}] {item.get('title')}"
+            + (f"  ref={item.get('ref')}" if item.get("ref") else "")
+            + (f"  plan={item.get('plan')}" if item.get("plan") else "")
+        )
+        if item.get("note"):
+            lines.append(f"      note: {item['note']}")
+    if not items:
+        lines.append("  (no items)")
+    lines.append("")
+    lines.append(f"{len(flags)} flag(s):" if flags else "no drift found")
+    lines.extend(f"  {flag}" for flag in flags)
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Small shared helpers
+# ---------------------------------------------------------------------------
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _as_text(value: Any) -> Optional[str]:
+    return None if value is None else str(value)
+
+
+def _as_datetime(value: Any) -> Optional[datetime]:
+    """Parse a stored date or timestamp, or None when it is unusable.
+
+    Dates are stored as YYYY-MM-DD and memory timestamps carry a time and a
+    zone, so both spellings reach this helper.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    text = value.strip().replace("Z", "+00:00").replace(" ", "T", 1)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _is_newer(candidate: Any, baseline: Any) -> bool:
+    left, right = _as_datetime(candidate), _as_datetime(baseline)
+    return left is not None and right is not None and left > right
+
+
+def _rank_of(item: Dict[str, Any]) -> float:
+    rank = item.get("rank")
+    return float(rank) if isinstance(rank, (int, float)) else float("inf")
+
+
+def _label(item: Dict[str, Any]) -> str:
+    return str(item.get("title") or item.get("id") or "?")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

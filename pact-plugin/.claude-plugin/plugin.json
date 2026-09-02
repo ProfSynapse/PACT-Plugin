@@ -35,6 +35,7 @@
     "./commands/wrap-up.md",
     "./commands/pause.md",
     "./commands/refresh.md",
+    "./commands/next.md",
     "./commands/pin-memory.md",
     "./commands/telegram-setup.md",
     "./commands/prune-memory.md"
