@@ -31,7 +31,7 @@ hit the prose copy instead of the code. Anchor on the `assert ` prefix, or work
 from the AST.
 
 Each arm was verified by mutating production source and confirming the NAMED
-test reddens: 52 mutations, 52 killed, run against an unmutated green baseline
+test reddens: 54 mutations, 54 killed, run against an unmutated green baseline
 with the tree restored byte-identical after every arm. Naming which test kills
 which mutation is what makes this a coverage claim rather than a survival
 count, since one over-broad assertion can kill many mutants while pinning
@@ -116,6 +116,8 @@ afternoon.
   the duplicates note asserts a cause   test_the_duplicates_message_names_the_files_and_asserts_no_cause
   the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_asserts_no_cause
   the top-level type check removed      test_a_top_level_non_object_reaches_the_named_path_machinery
+  the title TYPE check removed          test_a_non_string_title_is_reported_and_the_block_still_renders
+  `_SLUG_CHARS` anchored on `$`         test_a_repo_slug_with_a_trailing_newline_is_refused
 
 The source-gate pair is the reason this record exists. Twenty-four arms all
 killed their mutations while the launch-source gate sat entirely unpinned:
@@ -1201,3 +1203,44 @@ def test_a_top_level_non_object_reaches_the_named_path_machinery(tmp_path):
 
     notice = backlog_store.session_block(str(project), backlog_dir=store)
     assert "demo.json" in notice.alert, "the loud message named no file"
+
+
+def test_a_non_string_title_is_reported_and_the_block_still_renders(tmp_path):
+    """The title TYPE check, which is behaviour rather than a display rule.
+
+    RED WHEN the type check is removed. A separate arm from the note-length
+    one: both reach the non-conformance path, but only this one dies when the
+    title rule goes, and a shared arm would report the wrong cause.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+    store = tmp_path / "store"
+    data = _backlog(project, items=[_item(status="active")])
+    data["items"][0]["title"] = 123
+
+    _write(store, "demo.json", data)
+
+    notice = backlog_store.session_block(str(project), backlog_dir=store)
+
+    assert "title is int" in notice.alert, f"the title type was not reported: {notice.alert}"
+    assert "does not conform" in notice.context
+    assert notice.context.splitlines()[0].startswith("PACT backlog"), "no block rendered"
+
+
+def test_a_repo_slug_with_a_trailing_newline_is_refused():
+    """`_SLUG_CHARS` anchors on `\\Z`, so a trailing newline is refused.
+
+    A DIFFERENT regex from the item-id anchor in backlog_store.py, despite the
+    shared rationale — the sibling arm covers that one and leaves this one
+    bare. Every other slug reference in this file stubs `_repo_slug`, so the
+    guard is never reached through them.
+
+    THIS PINS HYGIENE, NOT A VULNERABILITY: a raw newline inside a GraphQL
+    string literal is a syntax error, so the residue degrades a query rather
+    than reshaping one. Do not escalate the anchor into a security control.
+
+    RED WHEN the anchor becomes `$`, which matches before a trailing newline.
+    """
+    assert backlog._SLUG_CHARS.match("owner-name_1.0")
+    assert not backlog._SLUG_CHARS.match("owner\n"), "a trailing newline was accepted"
+    assert not backlog._SLUG_CHARS.match("owner\nname")
