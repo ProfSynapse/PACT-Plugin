@@ -321,15 +321,45 @@ def _scan(
         # A malformed entry yields an empty set: no match, and the existing
         # loud resolution failure. No new raise site, so the totality boundary
         # does not move.
-        if target not in {
-            _resolved(Path(r)) for r in roots if isinstance(r, str) and r
-        }:
+        recorded = {_resolved(Path(r)) for r in roots if isinstance(r, str) and r}
+        if target not in recorded and _enclosing_checkout(target) not in recorded:
             continue
         found.append((str(data.get("updated") or ""), path))
 
     found.sort(reverse=True)
     matched = [path for _, path in found]
     return (matched[0] if matched else None), unreadable, matched
+
+
+def _enclosing_checkout(path: Path) -> Optional[Path]:
+    """The nearest ancestor holding a `.git`, or None.
+
+    THIS IS NOT CONTAINMENT RE-ADMITTED, and that is the only question worth
+    asking about it. A genuine subdirectory of a checkout and an unrelated
+    project nested under one are INDISTINGUISHABLE BY PATH SHAPE — both are "a
+    directory under a recorded root" — which is exactly why containment cannot
+    come back in any form, including one wearing a different noun.
+
+    `.git` is the discriminator the path itself does not carry. An unrelated
+    project HAS one, so its enclosing checkout is ITSELF and is not in `roots`,
+    and it is declined. A genuine subdirectory has none, so the walk continues
+    up to the checkout that DOES, which IS in `roots`. Same signal git uses,
+    read by stat rather than by subprocess.
+
+    The rung exists because CLAUDE_PROJECT_DIR really does point at in-repo
+    subdirectories: measured across recorded session contexts, one names a
+    path ending `/pact-plugin`, which is TRACKED repo content and so could
+    never have been a worktree root. Exact membership alone declined those
+    sessions, and the loud state could not self-heal, because the porcelain
+    that refreshes `roots` never emits a subdirectory.
+
+    `.exists()` on an unreadable path returns False rather than raising, so
+    this adds no raise site and the totality boundary does not move.
+    """
+    for directory in [path, *path.parents]:
+        if (directory / ".git").exists():
+            return directory
+    return None
 
 
 def _resolved(path: Path) -> Path:
