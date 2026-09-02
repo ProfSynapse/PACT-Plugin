@@ -242,19 +242,13 @@ def read_json(path: Path) -> Dict[str, Any]:
     return data
 
 
-def load(path: Path) -> Dict[str, Any]:
-    """Read, parse and validate one backlog file.
-
-    Raises BacklogFileError naming the path. Raising honestly is what lets
-    session_block be the single place that converts a failure into a value,
-    and it keeps this function usable from the write side, where raising is
-    the correct disposition.
-    """
-    data = read_json(path)
-    problems = validate(data)
-    if problems:
-        raise BacklogFileError(path, "; ".join(problems))
-    return data
+# THERE IS DELIBERATELY NO read-parse-AND-VALIDATE HELPER HERE. One existed and
+# was the single site that turned a validation failure into a BacklogFileError
+# — the exception the CLI maps to its unreadable exit code, which the command
+# file routes to `repair`, which MOVES THE USER'S FILE. Every caller had already
+# moved to read_json + validate so the two dispositions stay separate, leaving
+# it dead; deleting it makes "a merely non-conforming file cannot reach repair"
+# a property of the code rather than a fact about today's callers.
 
 
 def find_for(project_dir: str, backlog_dir: Path) -> Tuple[Optional[Path], List[Path]]:
@@ -340,8 +334,8 @@ def _scan(
         if not isinstance(roots, list):
             continue
         # NON-ABSOLUTE ROOTS ARE FILTERED HERE, NOT LEFT TO validate().
-        # validate() runs in load(), which runs AFTER this match, so the rule
-        # was enforced downstream of the decision it governs: a stored `"."`
+        # validate() runs on the file ALREADY SELECTED, so the rule was
+        # enforced downstream of the decision it governs: a stored `"."`
         # resolved against the process working directory and CLAIMED whatever
         # session happened to open there, rendering another project's items
         # with a conformance note beside them.
