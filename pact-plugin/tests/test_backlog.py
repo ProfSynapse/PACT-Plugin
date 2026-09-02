@@ -163,6 +163,8 @@ afternoon.
   `add` refuses but writes anyway       test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED
   the absoluteness clause dropped       test_validate_reports_a_relative_stored_root
   the scan's relative filter dropped    test_a_relative_root_never_matches_but_its_absolute_siblings_still_do
+  the plan containment gate dropped     test_an_escaping_plan_is_not_resolved_and_is_never_probed
+  the plan probe runs before the gate   test_an_escaping_plan_is_not_resolved_and_is_never_probed
   membership simplified to `.get()`     test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
   membership reverted to `is not None`  test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
   the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_the_cause
@@ -1620,4 +1622,45 @@ def test_a_relative_root_never_matches_but_its_absolute_siblings_still_do(tmp_pa
     _write(store, "relative.json", _backlog(project, roots=["relative/path", project]))
     assert backlog_store.find_for(str(project), store)[0] is not None, (
         "one relative root cost a file its legitimate absolute identity"
+    )
+
+
+def test_an_escaping_plan_is_not_resolved_and_is_never_probed(tmp_path, monkeypatch):
+    """A `../` plan must not become an existence oracle for files outside the
+    project root.
+
+    THE ESCAPING FILE EXISTS ON DISK. A non-existent one is refused by
+    `.exists()` alone and pins nothing — that is the weakness in the BADPLAN
+    fixture, which uses a path that neither escapes nor exists.
+
+    Two halves, both pinned. (a) the RESULT does not depend on the outside
+    file: it reports not-resolving though the file is there. (b) the explicit
+    probe never reaches it: containment is evaluated first and `and`
+    short-circuits. Half (b) is scoped to `.exists()`, not to all filesystem
+    access — `resolve()` walks and stats components, which the production
+    docstring says plainly.
+
+    RED WHEN the containment conjunct is dropped and only `.exists()` remains.
+    """
+    root = tmp_path / "project"
+    root.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("x")
+    inside = root / "inside.md"
+    inside.write_text("x")
+
+    probed = []
+    real_exists = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda self: probed.append(self) or real_exists(self))
+
+    # Control: a contained, existing plan DOES resolve, so the escaping
+    # assertion cannot be green because everything returns False.
+    assert backlog._plan_resolves(root, "inside.md") is True
+
+    probed.clear()
+    assert backlog._plan_resolves(root, "../outside.txt") is False, (
+        "an escaping plan resolved — the flag is an existence oracle"
+    )
+    assert not any(p.resolve() == outside.resolve() for p in probed), (
+        f"the escaping target was probed by exists(): {probed}"
     )
