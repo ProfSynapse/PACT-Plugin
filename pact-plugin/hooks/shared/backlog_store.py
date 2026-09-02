@@ -45,6 +45,12 @@ _ITEM_ID = re.compile(r"^[0-9a-f]{4}\Z")
 # How many planned items the session-start block names by title.
 _BLOCK_PLANNED_LIMIT = 3
 
+# How long a rendered title may be. A JUDGEMENT, not a measurement: its only
+# anchor is coherence with NOTE_MAX_CHARS, since a title is a label rather than
+# a sentence and so must bound tighter than a note. Anything in 80-150 is
+# defensible; move it without re-deriving why it exists.
+_TITLE_DISPLAY_MAX = 120
+
 # Sort key for an item with no usable rank: rank orders planned items and is
 # neither contiguous nor complete, so an unranked item sorts last rather than
 # raising against an int.
@@ -139,6 +145,13 @@ def _validate_item(item: Any, index: int, seen_ids: set) -> List[str]:
             f"{label}: status is {status!r}, expected one of {sorted(STATUSES)}"
         )
 
+    # Type only, deliberately no length rule: the length bound lives on the
+    # RENDER path in _title. A rule here would produce a flag and nothing more,
+    # since a validation failure no longer suppresses the block.
+    title = item.get("title")
+    if title is not None and not isinstance(title, str):
+        problems.append(f"{label}: title is {type(title).__name__}, expected a string")
+
     note = item.get("note")
     if note is not None:
         if not isinstance(note, str):
@@ -187,9 +200,20 @@ def read_json(path: Path) -> Dict[str, Any]:
     this project's file.
     """
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise BacklogFileError(path, f"unreadable or unparseable ({exc})") from exc
+    # Valid JSON is not necessarily an object. Without this, a top-level list,
+    # number or string reaches `.get()` in the scan and raises AttributeError,
+    # which is NOT a BacklogFileError and so escapes the per-file catch there
+    # into the generic handler — producing a message that names no file, where
+    # the designed unreadable path names every offending one. One check routes
+    # every caller, read side and write side alike, into the named-path path.
+    if not isinstance(data, dict):
+        raise BacklogFileError(
+            path, f"top level is {type(data).__name__}, expected an object"
+        )
+    return data
 
 
 def load(path: Path) -> Dict[str, Any]:
@@ -218,11 +242,13 @@ def find_for(project_dir: str, backlog_dir: Path) -> Tuple[Optional[Path], List[
 
 def _scan(
     project_dir: str, backlog_dir: Path
-) -> Tuple[Optional[Path], List[Path], int]:
+) -> Tuple[Optional[Path], List[Path], List[Path]]:
     """Locate this project's backlog by CONTAINMENT of the stored project_path.
 
-    Returns the best match (or None), the files that could not be read, and how
-    many entries claimed this project.
+    Returns the best match (or None), the files that could not be read, and
+    EVERY file that claimed this project, best first. The caller needs the
+    claimants themselves and not just their count, because reporting a
+    duplication means naming the files rather than asserting a cause for it.
 
     A stored project_path matches when it equals `project_dir` or is one of its
     parents; among the matches the longest wins. BOTH SIDES ARE RESOLVED before
@@ -278,7 +304,8 @@ def _scan(
         found.append((len(root.parts), str(data.get("updated") or ""), path))
 
     found.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
-    return (found[0][2] if found else None), unreadable, len(found)
+    matched = [path for _, _, path in found]
+    return (matched[0] if matched else None), unreadable, matched
 
 
 def _resolved(path: Path) -> Path:
@@ -375,18 +402,19 @@ def session_block(
       backlog dir absent, or present and empty  -> ("", "")
       one entry matches and validates           -> (block, "")
       a match PLUS unreadable files             -> (block + note, note)
-      the matching entry is invalid             -> loud, names the file
+      a match that does not CONFORM             -> (block + note, note)
+      a match whose `items` is not a list       -> loud, names the file
       no match, unreadable files seen           -> loud, names those files
       no match, all files readable              -> loud, resolution failure
       project_dir empty or relative             -> loud, names the cause
       anything unexpected                       -> loud, names the exception
 
-    The match-plus-unreadable row is the only one that is quiet and loud at
-    once, and its channels are ASYMMETRIC: `context` carries the block and the
-    note, `alert` carries the note alone. The block is not news to the user;
-    the corrupt file is, and the user is the only party who can authorise a
-    repair. Putting the note only in `context` would leave the corruption
-    visible to the orchestrator and invisible to the one person able to act.
+    The two block-plus-note rows are the only ones quiet and loud at once, and
+    their channels are ASYMMETRIC: `context` carries the block and the notes,
+    `alert` carries the notes alone. The block is not news to the user; the bad
+    file is, and the user is the only party who can authorise a repair. Putting
+    a note only in `context` would leave the problem visible to the
+    orchestrator and invisible to the one person able to act.
 
     This state repeats every session until the file is repaired, and that is
     correct rather than a defect. A correction must outlive the belief it
@@ -413,19 +441,19 @@ def session_block(
         if not entries:
             return BacklogNotice("", "")
 
-        match, unreadable, duplicates = _scan(project_dir, root)
-        unreadable_note = (
-            "PACT backlog: could not read "
-            + ", ".join(str(path) for path in unreadable)
-            + ". Nothing was modified — this path only reads. Repair with "
-            "/PACT:next, which moves a corrupt file aside before rebuilding."
-            if unreadable
-            else ""
-        )
+        match, unreadable, claimants = _scan(project_dir, root)
+        notes = []
+        if unreadable:
+            notes.append(
+                "PACT backlog: could not read "
+                + ", ".join(str(path) for path in unreadable)
+                + ". Nothing was modified — this path only reads. Repair with "
+                "/PACT:next, which moves a corrupt file aside before rebuilding."
+            )
 
         if match is None:
-            if unreadable:
-                return _loud(unreadable_note)
+            if notes:
+                return _loud(notes[0])
             return _loud(
                 f"PACT backlog: {len(entries)} backlog file(s) under {root}, and "
                 f"none records a project_path containing {project_dir}. This is a "
@@ -433,33 +461,71 @@ def session_block(
                 f"project as having no backlog."
             )
 
-        block = format_block(load(match))
-        if duplicates > 1:
-            # A rename left the older file in place. Both are reported rather
-            # than one being silently preferred, because only the user can say
-            # which name is now current.
-            block += (
-                f"\n  {duplicates} stored backlogs claim this project — "
-                f"reading {match.name}. A project rename leaves the older file "
-                f"behind; run /PACT:next to reconcile them."
+        # NON-CONFORMANCE IS NOT CORRUPTION. Corruption is "I cannot understand
+        # this" and justifies replacing the block; a rule violation is "I
+        # understand it and it breaks a rule I now enforce" and does not. So
+        # the block renders from a non-conforming file and the problems are
+        # reported beside it. The isinstance gate is load-bearing: format_block
+        # coerces item CONTENT, but it iterates `items` itself, so a non-list
+        # scalar raises where every other malformed shape is absorbed — and
+        # then there is no block to render and the loud path is correct.
+        data = read_json(match)
+        problems = validate(data)
+        if problems and not isinstance(data.get("items"), list):
+            raise BacklogFileError(match, "; ".join(problems))
+        if problems:
+            notes.append(
+                f"PACT backlog: {match} does not conform ({'; '.join(problems)}). "
+                f"The block is rendered from it anyway and nothing was modified."
             )
-        if unreadable:
-            # Quiet and loud at once: the block goes only to context, the note
-            # goes to both, so the user sees the corruption they alone can fix.
-            return BacklogNotice(f"{block}\n  {unreadable_note}", unreadable_note)
+
+        block = format_block(data)
+        if len(claimants) > 1:
+            # STATE WHAT IS OBSERVABLE AND STOP THERE. Two files claiming one
+            # project has more than one cause: a rename leaves an old file
+            # behind, and an ancestor repo produces the same state with BOTH
+            # files legitimate and belonging to DIFFERENT projects. Naming a
+            # cause the code cannot observe sends a reader to reconcile two
+            # backlogs that should stay separate, destroying a live one.
+            block += (
+                f"\n  {len(claimants)} stored backlogs claim this project: "
+                + ", ".join(path.name for path in claimants)
+                + f". Reading {match.name}. Run /PACT:next to see them."
+            )
+        if notes:
+            # Quiet and loud at once: the block goes only to context, the notes
+            # go to both, so the user sees what only they can act on.
+            joined = "\n  ".join(notes)
+            return BacklogNotice(f"{block}\n  {joined}", joined)
         return BacklogNotice(block, "")
 
     except BacklogFileError as exc:
         return _loud(
-            f"PACT backlog: {exc}. The file was NOT modified — this path only "
-            f"reads. Repair it with /PACT:next, which moves a corrupt file aside "
-            f"before rebuilding."
+            f"PACT backlog: {_safe_detail(exc)}. The file was NOT modified — this "
+            f"path only reads. Repair it with /PACT:next, which moves a corrupt "
+            f"file aside before rebuilding."
         )
     except Exception as exc:  # total helper: every state is a value, never a raise
         return _loud(
-            f"PACT backlog: could not be read ({type(exc).__name__}: {exc}). "
-            f"Nothing was modified."
+            f"PACT backlog: could not be read "
+            f"({type(exc).__name__}: {_safe_detail(exc)}). Nothing was modified."
         )
+
+
+def _safe_detail(exc: BaseException) -> str:
+    """`str(exc)`, or a type-only stand-in when the exception will not print.
+
+    An exception whose own `__str__` raises must not escape the helper whose
+    entire contract is that nothing escapes. `repr()` is no safer — `__repr__`
+    can raise too — so the fallback names the type, which is a class attribute
+    lookup and cannot raise. Shared by both handlers so the guarantee is in one
+    place: the corrupt-file handler still gets to name WHICH file, which is the
+    only actionable content in that message.
+    """
+    try:
+        return str(exc)
+    except Exception:
+        return f"<unprintable {type(exc).__name__}>"
 
 
 def _loud(message: str) -> BacklogNotice:
@@ -477,7 +543,22 @@ def _label(item: Dict[str, Any]) -> str:
 
 
 def _title(item: Dict[str, Any]) -> str:
-    return str(item.get("title") or item.get("id") or "?")
+    """The item's title as ONE capped line, for the session-start block.
+
+    FLATTENING IS THE SECURITY HALF and it has no tunable parameter: the block
+    is line-structured, and a title carrying a newline can forge a second
+    `active:` line or a role marker into session-start context. `split()` on no
+    argument splits on every whitespace class, so the rejoin removes newlines,
+    carriage returns and tabs together and collapses runs.
+
+    Capping is noise control, a different job with an arbitrary number. Both
+    live here rather than in validate() because an over-long or multi-line
+    title is non-conformance, not corruption, and must not take the loud path.
+    """
+    text = " ".join(str(item.get("title") or item.get("id") or "?").split())
+    if len(text) <= _TITLE_DISPLAY_MAX:
+        return text or "?"
+    return text[: _TITLE_DISPLAY_MAX - 1] + "…"
 
 
 def _rank_key(item: Dict[str, Any]) -> float:
