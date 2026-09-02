@@ -31,7 +31,7 @@ hit the prose copy instead of the code. Anchor on the `assert ` prefix, or work
 from the AST.
 
 Each arm was verified by mutating production source and confirming the NAMED
-test reddens: 31 mutations, 31 killed, run against an unmutated green baseline
+test reddens: 39 mutations, 39 killed, run against an unmutated green baseline
 with the tree restored byte-identical after every arm. Naming which test kills
 which mutation is what makes this a coverage claim rather than a survival
 count, since one over-broad assertion can kill many mutants while pinning
@@ -45,8 +45,10 @@ skip ever executing. A mixed fixture — one ref-carrying item, one without —
 forces the loop and kills it.
 
 Fixing that survivor produced a second lesson worth as much as the first. The
-mixed fixture initially gave both items the same title, and flags are labelled
-by TITLE rather than by id, so `len(flags) == 1` passed while the membership
+mixed fixture initially gave both items the same title, and write-side flags
+are labelled by TITLE rather than by id (the read side labels by ID — the two
+sides differ, so check which one a flag came from), so `len(flags) == 1` passed
+while the membership
 assertion could not tell which item had been flagged. A COUNT IS NOT A
 MEMBERSHIP CHECK: it is satisfied by the right number of the wrong things. Any
 arm here asserting a flag count also asserts which item the flag names, and
@@ -93,6 +95,14 @@ afternoon.
   source gate stuck off                 test_the_alert_channel_is_gated_on_the_launch_source
   `main` calls `sys.exit`               test_main_returns_an_exit_code_and_calls_no_sys_exit
   a `bin/pact-backlog` entry appears    test_no_bin_executable_was_added
+  the None-project-id guard removed     test_an_unresolvable_project_id_refuses_to_write
+  `reconcile` returns an empty list     test_reconcile_emits_every_drift_class
+  `reconcile` drops file_local_flags    test_reconcile_emits_every_drift_class
+  `reconcile` drops _ref_flags          test_reconcile_emits_every_drift_class
+  `reconcile` drops _plan_flags         test_reconcile_emits_every_drift_class
+  `reconcile` drops _memory_flags       test_reconcile_emits_every_drift_class
+  `reconcile` drops _staleness_flags    test_reconcile_emits_every_drift_class
+  `reconcile` drops _abandoned_flags    test_reconcile_emits_every_drift_class
 
 The source-gate pair is the reason this record exists. Twenty-four arms all
 killed their mutations while the launch-source gate sat entirely unpinned:
@@ -874,3 +884,80 @@ def test_the_alert_channel_is_gated_on_the_launch_source(monkeypatch, tmp_path):
     assert "PACT backlog" not in system_message, (
         "compact emitted a systemMessage; the source gate is not firing"
     )
+
+
+# --------------------------------------------------------------------------
+# the write-side guards and the reconciliation, both previously unprotected
+# --------------------------------------------------------------------------
+def test_an_unresolvable_project_id_refuses_to_write(monkeypatch, tmp_path):
+    """A None project id must fail LOUDLY and never write under a default name.
+
+    RED WHEN the guard in `store_path` is removed. A backlog written under a
+    default slug is a silent data-loss path: nothing errors, and the file is
+    invisible to every later read because no project_path will match it.
+    """
+    class _Stub:
+        class PACTMemory:
+            @staticmethod
+            def _detect_project_id():
+                return None
+
+    monkeypatch.setattr(backlog, "_memory_api", lambda: _Stub)
+
+    try:
+        path = backlog.store_path(backlog_dir=tmp_path)
+    except backlog.BacklogWriteError as exc:
+        assert "project id" in str(exc)
+    else:
+        raise AssertionError(f"an unresolved project id produced a path: {path}")
+
+    assert list(tmp_path.iterdir()) == [], "a default-named backlog was written"
+
+
+def test_reconcile_emits_every_drift_class(monkeypatch, tmp_path):
+    """Every drift class the design names, from one reconciliation.
+
+    RED WHEN `reconcile` drops ANY class, and red when it returns an empty
+    list. The six producers are asserted individually rather than by count, so
+    losing one class cannot be masked by another emitting twice.
+
+    The tracker, the memory store and git are replaced here — they are external
+    collaborators this process does not own. `reconcile` itself is NOT
+    replaced, which is the distinction that keeps this arm honest.
+    """
+    plan_that_exists = "README.md"
+    assert (tmp_path / plan_that_exists).write_text("x") or True
+
+    items = [
+        _item(item_id="aaaa", title="FINISHED", status="done"),
+        _item(item_id="bbbb", title="DANGLER", blocked_by=["zzzz"]),
+        _item(item_id="cccc", title="UNBLOCKABLE", status="blocked", blocked_by=["aaaa"]),
+        _item(item_id="dddd", title="BADPLAN", plan="does/not/exist.md"),
+        _item(item_id="eeee", title="BADMEMORY", memory=["0" * 32]),
+        _item(item_id="ffff", title="CLOSEDREF", ref="#2"),
+        _item(item_id="9999", title="STALEACTIVE", status="active", ref="#1",
+              touched="2020-01-01"),
+    ]
+    data = _backlog(tmp_path, items=items)
+
+    monkeypatch.setattr(backlog, "resolve_refs", lambda refs: {
+        "#1": {"state": "open"}, "#2": {"state": "closed"}})
+    monkeypatch.setattr(backlog, "resolve_memory_ids", lambda ids: {i: None for i in ids})
+    # Arity-agnostic: this stub stands in for a collaborator whose signature is
+    # not this arm's subject, so a parameter added there must not redden here.
+    monkeypatch.setattr(backlog, "_branch_and_worktree_names", lambda *_: [])
+
+    flags = "\n".join(backlog.reconcile(data))
+
+    # The read side labels flags by ID and the write side by TITLE, so the
+    # file-local markers are ids while the rest are titles.
+    for producer, marker in [
+        ("file_local: unknown id", "bbbb"),
+        ("file_local: blocked_by done", "cccc"),
+        ("_ref_flags: closed but not done", "CLOSEDREF"),
+        ("_plan_flags: path does not resolve", "BADPLAN"),
+        ("_memory_flags: id no longer resolves", "BADMEMORY"),
+        ("_staleness_flags: active and untouched", "untouched"),
+        ("_abandoned_flags: no branch or worktree", "abandoned"),
+    ]:
+        assert marker in flags, f"{producer} emitted nothing:\n{flags}"
