@@ -1,9 +1,11 @@
 """
 Location: pact-plugin/hooks/shared/paths.py
-Summary: Single source of truth for the Claude Code config/state root.
-         Resolves $CLAUDE_CONFIG_DIR (fail-loud, monkeypatch-safe, single-path),
-         falling back to ~/.claude. Every PACT hook that reads/writes state
-         under the config dir derives its base from get_claude_config_dir().
+Summary: Single source of truth for PACT's state roots.
+         get_claude_config_dir() resolves $CLAUDE_CONFIG_DIR (fail-loud,
+         monkeypatch-safe, single-path), falling back to ~/.claude; every PACT
+         hook that reads/writes state under the config dir derives its base
+         from it. get_backlog_dir() is the one deliberate exception — it is
+         home-pinned so the backlog does not fragment per backend.
 Used by: shared/{constants,session_registry,failure_log,merge_guard_common,
          task_utils,pact_context,...}.py and the hook entrypoints
          (dispatch_gate, session_init, session_end, ...).
@@ -46,3 +48,21 @@ def get_claude_config_dir(env=None, home=None) -> Path:
     if raw.startswith("~/"):
         return home / raw[2:]          # exact 2-char prefix — NOT lstrip, NOT removeprefix
     return Path(raw)
+
+
+def get_backlog_dir(home=None) -> Path:
+    """Resolve the cross-session backlog store root.
+
+    Home-pinned, and deliberately NOT routed through get_claude_config_dir():
+    the user switches LLM backends by switching CLAUDE_CONFIG_DIR across six
+    directories (.claude, -zai, -deepseek, -kimi, -qwen, -local), and a
+    config-dir-scoped backlog would fragment six ways — one per backend — when
+    the whole point is one backlog per project. Mirrors get_memory_dir() in
+    skills/pact-memory/scripts/config.py, which is home-pinned for the same
+    reason. Do NOT "fix" this to use get_claude_config_dir().
+
+    Param-style home matches get_claude_config_dir: monkeypatch-safe for
+    tests, and the form the config-dir AST guard does not flag.
+    """
+    home = Path.home() if home is None else home
+    return home / ".claude" / "pact-backlog"
