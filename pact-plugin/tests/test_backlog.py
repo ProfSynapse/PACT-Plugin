@@ -31,7 +31,7 @@ hit the prose copy instead of the code. Anchor on the `assert ` prefix, or work
 from the AST.
 
 Each arm was verified by mutating production source and confirming the NAMED
-test reddens: 59 mutations, 59 killed, run against an unmutated green baseline
+test reddens: 60 mutations, 60 killed, run against an unmutated green baseline
 with the tree restored byte-identical after every arm. Naming which test kills
 which mutation is what makes this a coverage claim rather than a survival
 count, since one over-broad assertion can kill many mutants while pinning
@@ -119,6 +119,7 @@ afternoon.
   exit 3 collapses back to 2            test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY
   unreadable returns the refusal code   test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY
   `_is_newer` compares instants         test_a_memory_record_flags_only_on_a_LATER_DAY
+  the rung becomes plain containment    test_a_nested_project_with_its_own_git_is_declined
   the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_the_cause
   the top-level type check removed      test_a_top_level_non_object_reaches_the_named_path_machinery
   the title TYPE check removed          test_a_non_string_title_is_reported_and_the_block_still_renders
@@ -1350,3 +1351,43 @@ def test_a_memory_record_flags_only_on_a_LATER_DAY(monkeypatch):
     assert _at("2026-09-02T00:00:00Z"), "a later-day record did not flag — stub unreached"
     assert not _at("2026-09-01T23:59:59Z"), "a same-day record flagged"
     assert not _at("2026-08-31T23:59:59Z"), "an earlier-day record flagged"
+
+
+def test_a_nested_project_with_its_own_git_is_declined(tmp_path):
+    """The rung admits a SUBDIRECTORY of a recorded checkout, and nothing else.
+
+    THE REGRESSION CASE IS FIRST BECAUSE IT IS THE ONLY ONE THAT CARRIES
+    INFORMATION. A plain subdirectory, a recorded root, and a tree under no
+    recorded root all behave identically under plain containment, so an arm
+    without the nested-project case cannot tell this rung from the containment
+    it replaces.
+
+    BOTH REPOS ARE REAL. A fabricated `.git` marker also satisfies `.exists()`,
+    so a hand-made file would pass this arm without exercising the shape — the
+    discriminator is the same signal git itself uses.
+
+    RED WHEN the predicate becomes plain containment.
+    """
+    root = tmp_path / "project"
+    nested = root / "vendor" / "other-project"
+    subdir = root / "pact-plugin" / "hooks"
+    for path in (root, nested, subdir):
+        path.mkdir(parents=True)
+    for repo in (root, nested):
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True,
+                       capture_output=True)
+
+    store = tmp_path / "store"
+    _write(store, "demo.json", _backlog(root, roots=[root]))
+
+    # The regression: an unrelated project nested under a recorded root.
+    stranger = backlog_store.session_block(str(nested), backlog_dir=store)
+    assert "An item" not in stranger.context, "containment re-admitted"
+    assert stranger.alert, "the nested project was silently given no backlog"
+
+    # The rung's purpose: a genuine in-repo subdirectory resolves.
+    inside = backlog_store.session_block(str(subdir), backlog_dir=store)
+    assert "An item" in inside.context, "a real subdirectory stopped resolving"
+
+    # And the recorded root itself, which exact membership answers first.
+    assert "An item" in backlog_store.session_block(str(root), backlog_dir=store).context
