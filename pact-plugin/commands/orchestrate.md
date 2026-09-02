@@ -226,6 +226,14 @@ JSON
 
 **User override**: User can always specify their preferred workflow regardless of assessment.
 
+> **Backlog boundary write** — starting the feature is a transition you WITNESSED, so set this item's status to `active` WITHOUT asking. Run the command rather than editing the file: it loads through `load_or_create`, which is what stashes the compare-and-swap baseline. A document built any other way is written with NO lost-update protection and nothing reports that.
+>
+> ```bash
+> python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status active
+> ```
+>
+> Report what you wrote. If the write is refused, report the refusal and carry on.
+
 ### Offering comPACT for Low-Variety Tasks
 
 When variety is Low (4-6), offer the user a choice using `AskUserQuestion` tool:
@@ -962,20 +970,25 @@ After you resolve a blocker, message the teammate by name. Spawn fresh if the te
 1. **Update plan status** (if plan exists): IN_PROGRESS → IMPLEMENTED
 2. **Verify all work is committed** — CODE and TEST phase commits should already exist; if any uncommitted changes remain, commit them now
 3. **`TaskUpdate`**: Feature task status = "completed" (all phases done, all work committed)
-4. **Run `/PACT:peer-review`** to create PR and get multi-agent review
-5. **Present review summary and stop** — use `AskUserQuestion` for merge authorization (S5 policy)
-6. **S4 Retrospective** (after user decides): Briefly note—what worked well? What should we adapt for next time? The secretary gathers calibration metrics during HANDOFF processing and will ask you for a brief difficulty assessment. Respond with whether actual difficulty was higher, lower, or about the same as predicted, and which dimensions surprised you.
-7. **Save memories from HANDOFFs** (idempotent — safe if already processed at phase boundary):
+4. **Backlog boundary write** — the feature task is now `completed`, a transition you WITNESSED, so set this item's status to `done` WITHOUT asking. Run the command rather than editing the file: it loads through `load_or_create`, which is what stashes the compare-and-swap baseline. A document built any other way is written with NO lost-update protection and nothing reports that.
+   ```bash
+   python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status done
+   ```
+   Report what you wrote. If the write is refused, report the refusal and carry on.
+5. **Run `/PACT:peer-review`** to create PR and get multi-agent review
+6. **Present review summary and stop** — use `AskUserQuestion` for merge authorization (S5 policy)
+7. **S4 Retrospective** (after user decides): Briefly note—what worked well? What should we adapt for next time? The secretary gathers calibration metrics during HANDOFF processing and will ask you for a brief difficulty assessment. Respond with whether actual difficulty was higher, lower, or about the same as predicted, and which dimensions surprised you.
+8. **Save memories from HANDOFFs** (idempotent — safe if already processed at phase boundary):
    ```
    TaskCreate(subject="secretary: harvest pending HANDOFFs (post-review)",
      description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
    TaskUpdate(taskId, owner="secretary")
    ```
-8. **Mid-session consolidation** (multi-feature sessions only): If this is the second or subsequent feature completed in this session, create a consolidation task to merge cross-feature knowledge:
+9. **Mid-session consolidation** (multi-feature sessions only): If this is the second or subsequent feature completed in this session, create a consolidation task to merge cross-feature knowledge:
    ```
    TaskCreate(subject="secretary: mid-session consolidation",
      description="Multiple features completed this session. Follow the Consolidation Harvest workflow in your pact-handoff-harvest skill: review memories saved so far, consolidate related entries across features, prune superseded memories. Report summary when done.")
    TaskUpdate(taskId, owner="secretary")
    ```
    Skip for the first feature in a session — full consolidation happens during `/PACT:wrap-up`.
-9. **High-variety audit trail** (variety 10+ only): Save key orchestration decisions, S3/S4 tensions resolved, and lessons learned via the secretary
+10. **High-variety audit trail** (variety 10+ only): Save key orchestration decisions, S3/S4 tensions resolved, and lessons learned via the secretary

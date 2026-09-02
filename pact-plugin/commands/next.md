@@ -19,7 +19,30 @@ view of it is what you report. Reconcile before you steer.
   recommend what to do next.
 - **With arguments**: apply what the user asked for, then report.
 
-## Step 1 — Reconcile and report
+## Step 1 — Update what you already know
+
+**This is the main job, not a preamble.** You have been at the work. Statuses you
+WITNESSED changing are facts, and you write them without asking:
+
+```bash
+python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status <status>
+```
+
+Run the command rather than editing the file: it loads through `load_or_create`,
+which is what stashes the compare-and-swap baseline. A document built any other way
+is written with NO lost-update protection and nothing reports that.
+
+Two writes need no permission, and ONLY these two:
+
+- **`status`**, when you witnessed the transition — you saw the PR merge, you started
+  the work, you raised or cleared the blocker.
+- **`add`**, when you are TRANSCRIBING something the user said. Recording their words
+  is not deciding for them.
+
+Everything else asks. Report every write you made — silent correctness is
+indistinguishable from silent breakage.
+
+## Step 2 — Reconcile and report
 
 Run:
 
@@ -37,10 +60,10 @@ Read the output and report to the user in plain language:
 2. The next two or three `planned` items by rank.
 3. Every flag, with what you think it means.
 
-Exit code 3 means the file could not be PARSED. Report that and go to Step 4.
+Exit code 3 means the file could not be PARSED. Report that and go to Step 5.
 
 Exit code 2 is a REFUSAL, not a corruption: the file is readable and nothing was
-written. Report what the message names and fix that. Do NOT go to Step 4 — a
+written. Report what the message names and fix that. Do NOT go to Step 5 — a
 readable file must never be repaired.
 
 A file that parses but breaks a schema rule reports as `schema:` flags and
@@ -52,29 +75,31 @@ Each line ends with `[id=xxxx]`. Use it as the `<item-id>` argument to Step 3's
 **Never cite an item's `id` to the user.** Ids exist so the relational fields
 survive a retitling; they mean nothing to a person. Refer to items by title.
 
-## Step 2 — Propose, never repair
+## Step 3 — Apply the facts, ask about the intent
 
-Drift is **reported and never silently repaired**. A flag is a proposal:
+**This step governs INFERENCES ONLY** — what the reconciliation found, not what you
+witnessed in Step 1. A flag is something the tool worked out, so almost all of it
+asks. Each row carries its own verdict; do not read one from the heading:
 
-| Flag | Propose |
-|---|---|
-| ref is closed but the item is not `done` | mark it done |
-| ref is unverifiable | check the ref by hand, or clear it |
-| `blocked_by` names an item already done | unblock it |
-| a relational field names an unknown id | drop the dangling reference |
-| two exclusive items are both `active` | pause one |
-| active with no branch or worktree | confirm the work is still live |
-| active and untouched for a fortnight | confirm it is still live |
-| `plan` does not resolve | find where the document moved |
-| a `memory` id no longer resolves | drop it or replace it |
-| a `memory` id is unverifiable | say the store could not be opened; change nothing |
-| a `memory` record changed after linking | re-read it before relying on it |
+| Flag | Verdict | What you do |
+|---|---|---|
+| ref is closed but the item is not `done` | ASK | propose marking it done, and say which close reason the tracker gave |
+| ref is unverifiable | ASK | check the ref by hand, or clear it |
+| `blocked_by` names an item already done | ASK | propose unblocking it |
+| a relational field names an unknown id | ASK | the id WAS the record, so nothing is recoverable, and a failed lookup cannot tell a mistype from a deletion |
+| two exclusive items are both `active` | ASK | propose pausing one |
+| active with no branch or worktree | ASK | confirm the work is still live |
+| active and untouched past the cutoff | ASK | confirm it is still live |
+| `plan` does not resolve | APPLY at exactly ONE candidate | at zero or two-plus, ASK |
+| a `memory` id no longer resolves | ASK | same reason as the relational id — the id was the record |
+| a `memory` id is unverifiable | NEITHER | say the store could not be opened; change nothing |
+| a `memory` record changed after linking | ASK | re-read it before relying on it |
 
 An automatic fix is you overwriting the user's recorded intent on the strength
 of an inference. Put the proposal to the user with `AskUserQuestion` and let
 them decide.
 
-## Step 3 — Write what the user decides
+## Step 4 — Write what the user decides
 
 Add an item:
 
@@ -109,11 +134,41 @@ written rather than quietly adjusted:
 - `memory` holds at most 5 record ids.
 - An item with no `ref` is fully supported and is never second-class.
 
-Write when work lands — a PR merges, `/PACT:peer-review` completes,
-`/PACT:wrap-up` or `/PACT:pause` runs — and when the user steers. Not on every
-small action: the file's value is its stability.
+### When the writes happen, and which they are
 
-## Step 4 — When the file is corrupt
+**FOUR FILES carry boundary writes**: `orchestrate.md`, `comPACT.md`,
+`imPACT.md` and `wrap-up.md`. Naming the files rather than the occasions is
+deliberate — a file is checkable, an occasion is not.
+
+**BOUNDARY WRITES COVER WITNESSED TRANSITIONS; RECONCILIATION COVERS UNWITNESSED
+ONES.** That is what lets you classify a site this table omits. An out-of-band
+merge — a PR merged in the web UI with no PACT command run — is unwitnessed by
+definition, so it correctly gets no site, and it is picked up and asked about at
+the next reconciliation instead.
+
+| # | Write | Where | Asked first? |
+|---|---|---|---|
+| 1 | `status` → `active` | `orchestrate.md`, end of pre-flight | no — witnessed |
+| 2 | `status` → `done` | `orchestrate.md`, between the completion steps | no — witnessed |
+| 3 | `status` → `active` | `comPACT.md`, pre-invocation | no — witnessed |
+| 4 | `status` → `done` | `comPACT.md`, after task-completion verification | no — witnessed |
+| 5 | `status` → `blocked` | `imPACT.md`, when the blocker is raised | no — witnessed |
+| 6 | `status` → `active` | `imPACT.md`, when the blocker is cleared | no — witnessed |
+| 7 | `status` → `done` | `wrap-up.md`, inside worktree cleanup, BEFORE the worktree is removed | no — witnessed |
+| 8 | `touched` | rides every row above | not yours to write — `set` and `add` stamp it themselves and there is no flag for it |
+| 9 | `add` | wherever the user says it | no — but ONLY when transcribing their words |
+| 10 | `rank` | — | ALWAYS asks; the ordering IS the intent |
+| 11 | `ref` | — | ALWAYS asks |
+| 12 | `plan` | — | ALWAYS asks at a boundary |
+| 13 | `blocked_by`, `batch_with`, `exclusive_with` | — | ALWAYS ask |
+| 14 | removing an item | — | NEVER, at any site |
+
+No site writes two status rows. Rows 10-14 are here because a permissions table
+that lists only what is allowed reads as though the omissions are allowed too.
+
+Not on every small action: the file's value is its stability.
+
+## Step 5 — When the file is corrupt
 
 The read path reports a corrupt backlog and changes nothing. Repair is a write,
 and it is yours:

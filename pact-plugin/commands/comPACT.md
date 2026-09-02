@@ -162,6 +162,11 @@ See also: [Communication Charter](../protocols/pact-communication-charter.md) fo
 1. **Set up worktree** — If already in a worktree for this feature, reuse it. Otherwise, invoke `/PACT:worktree-setup` with the feature branch name. All subsequent work happens in the worktree.
 2. **Session team** — The `{team_name}` team is provisioned automatically by the platform — use it for dispatches; you do not create it.
 3. **S2 coordination** (if concurrent) — Check for file conflicts, assign boundaries
+4. **Backlog boundary write** — starting the work is a transition you WITNESSED, so set this item's status to `active` WITHOUT asking. Run the command rather than editing the file: it loads through `load_or_create`, which is what stashes the compare-and-swap baseline. A document built any other way is written with NO lost-update protection and nothing reports that.
+   ```bash
+   python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status active
+   ```
+   Report what you wrote. If the write is refused, report the refusal and carry on.
 
 > **Teachback**: All dispatched specialists send a TEACHBACK before starting work (see [pact-ct-teachback.md](../protocols/pact-ct-teachback.md)).
 
@@ -397,6 +402,11 @@ JSON
   ```
 - [ ] **Calibration** — The secretary gathers calibration metrics during HANDOFF processing. When asked, provide a brief difficulty assessment: was actual difficulty higher, lower, or about the same as predicted? Which dimensions surprised you?
 - [ ] **Verify agent task completion**: On receiving each HANDOFF summary via `SendMessage`, check the agent's task status via `TaskList`. If still "in_progress", mark it completed: `TaskUpdate(taskId, status="completed")`.
+- [ ] **Backlog boundary write** — the specialist's work is verified complete, a transition you WITNESSED, so set this item's status to `done` WITHOUT asking. Run the command rather than editing the file: it loads through `load_or_create`, which is what stashes the compare-and-swap baseline. A document built any other way is written with NO lost-update protection and nothing reports that.
+  ```bash
+  python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status done
+  ```
+  Report what you wrote. If the write is refused, report the refusal and carry on.
 - [ ] **Process specialist HANDOFFs** (dispatch once no auditor task is `pending` or `in_progress` — a contamination ordering, NOT a verdict wait):
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",

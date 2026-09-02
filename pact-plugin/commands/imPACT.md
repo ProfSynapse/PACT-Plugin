@@ -15,11 +15,20 @@ These are orchestrator-side operations (agents report blockers via `SendMessage`
 ```
 1. `TaskGet(blocker_id)` — understand the blocker context
 2. Triage: redo prior phase? need specialist? need user?
-3. On resolution path chosen:
+3. Backlog boundary write: you witnessed the work stop, so set this item's status
+   to blocked WITHOUT asking. Run the backlog command, never a hand-built document
+   — the command loads through load_or_create, which is what stashes the
+   compare-and-swap baseline, and any other route writes with no lost-update
+   protection. Report what you wrote:
+     python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status blocked
+   This is the ONLY site that writes blocked; without it the status is unreachable.
+4. On resolution path chosen:
    - If delegating: `TaskCreate` resolution agent task
    - If self-resolving: proceed directly
-4. On resolution complete: `TaskUpdate(blocker_id, status="completed")`
-5. Blocked agent task is now unblocked
+5. On resolution complete: `TaskUpdate(blocker_id, status="completed")`
+6. Backlog boundary write: the clear is witnessed too, so set the same item back to
+   active, same command with --status active. Report what you wrote.
+7. Blocked agent task is now unblocked
 ```
 
 **Note**: Agents report blockers via `SendMessage` to the team-lead ("BLOCKER: {description}"). The orchestrator creates blocker Tasks and uses `addBlockedBy` to block the agent's task. When the blocker is resolved (marked completed), the agent's task becomes unblocked.
@@ -150,7 +159,7 @@ Use this diagnostic lens **after** identifying an outcome to understand **why** 
 
 ## Phase Re-Entry Task Protocol
 
-**Context**: Invoked from [orchestrate.md](orchestrate.md) when redoing a prior phase. Complete original blocker first ([Task Operations](#task-operations) step 4). Retry failure triggers 3+ cycle escalation (ALERT: META-BLOCK).
+**Context**: Invoked from [orchestrate.md](orchestrate.md) when redoing a prior phase. Complete original blocker first ([Task Operations](#task-operations) step 5). Retry failure triggers 3+ cycle escalation (ALERT: META-BLOCK).
 
 **Worktree context**: Phase re-entry operates within the current worktree. The re-entered phase inherits the same worktree path -- no new worktree is created.
 
