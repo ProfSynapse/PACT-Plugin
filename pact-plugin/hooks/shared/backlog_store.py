@@ -454,7 +454,10 @@ def _relation_ids(
     dropped = len(value) - len(ids)
     if not dropped:
         return ids, []
-    return ids, [f"{label}: {field} holds {dropped} entr{'y' if dropped == 1 else 'ies'} that is not an item id"]
+    # Noun-only phrasing: no verb, so nothing has to agree with the count.
+    return ids, [
+        f"{label}: {field} holds {dropped} non-id entr{'y' if dropped == 1 else 'ies'}"
+    ]
 
 
 def format_block(data: Dict[str, Any]) -> str:
