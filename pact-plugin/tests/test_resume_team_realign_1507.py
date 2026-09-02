@@ -420,6 +420,48 @@ def test_ii_two_candidates_stale_default_and_new_remedy(tmp_path, monkeypatch,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# (ii-b) CONCURRENT PEER SESSION — a live peer must not suppress the realign
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_ii_b_concurrent_peer_session_still_realigns(tmp_path, monkeypatch,
+                                                     capsys):
+    """CELL ii-b (#1507 follow-up) — the OTHER two-candidate world, and the
+    one that actually happens: this session's own re-provisioned team plus a
+    PEER session live in the same recency window from a DIFFERENT project
+    directory. Unlike cell ii these are not two ownership claims — the peer
+    fails the subject anchor — so the census must realign, not fail safe.
+
+    Counting the RAW candidate set first rejected both on COUNT before the
+    predicate ran, so every resumed session belonging to a user with a
+    second session open kept the phantom persisted team and the gate DENIED
+    every spawn. RED against corroborate-after-count, GREEN after.
+
+    NON-VACUITY (this file's convention): the owner's task is seeded ONLY
+    under the live team, so the ALLOW is reachable solely by resolving
+    there — a stale-default resolution reads an absent store and DENIES."""
+    _seed_census_world(monkeypatch, tmp_path, live_team=NEW_TEAM_ID8,
+                       live_lead_sid=NEW_SID,
+                       journal_events=["session_end", "task_metadata_snapshot"])
+    # The peer: live store inside the window, fully-formed binding fields,
+    # but its lead works in another project — corroborates nothing here.
+    _seed_team_store(tmp_path / ".claude", team_name=FOREIGN_TEAM,
+                     lead_session_id=FOREIGN_SID, members=(), tasks=(),
+                     corroborate=True,
+                     lead_cwd="/other/project/a-peer-session-lives-here")
+    import shared.pact_context as ctx_module
+    assert ctx_module.get_team_name() == NEW_TEAM_ID8, (
+        "a live peer session in another directory must not suppress the "
+        "census — this is the #1507 follow-up defect"
+    )
+    code, out = _run_dispatch(_make_spawn(team_name_arg="wrong-team"), capsys)
+    assert code == 0
+    assert out == _SUPPRESS_EXPECTED
+    assert (tmp_path / ".claude" / "tasks" / NEW_TEAM_ID8).exists()
+    assert not (tmp_path / ".claude" / "tasks" / OLD_TEAM).exists()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # (iii) EMPTY-SSOT SECURITY GATE — census must sit BEHIND the short-circuit
 # ══════════════════════════════════════════════════════════════════════════════
 
