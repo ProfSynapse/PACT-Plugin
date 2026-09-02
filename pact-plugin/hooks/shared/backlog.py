@@ -162,10 +162,12 @@ def checkout_roots() -> List[str]:
     """Every checkout of this project — the main one and each worktree — as
     absolute resolved paths. NEVER empty and never absent.
 
-    This is what the read path matches against by exact membership, so a
-    missing entry costs that checkout a loud resolution failure and a wrong
-    entry would claim another project's session. The fallback when git cannot
-    answer is the main root alone, which is always right about at least itself.
+    This is what the read path matches against, so a wrong entry would claim
+    another project's session. A missing entry costs that checkout a loud
+    resolution failure UNLESS it sits inside a checkout that IS recorded, in
+    which case the read path's enclosing-checkout rung still matches it. The
+    fallback when git cannot answer is the main root alone, which is always
+    right about at least itself.
 
     Deliberately NOT merged with _branch_and_worktree_names, which runs the
     same porcelain: that caller wants raw lines including branch names, this

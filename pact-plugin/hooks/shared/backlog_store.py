@@ -276,7 +276,10 @@ def _scan(
 
     `roots` holds every checkout of the project — the main one and each
     worktree — as the writer resolved them. A file claims this session when
-    `project_dir` IS one of them. NOT when it sits under one.
+    `project_dir` IS one of them, or when the checkout ENCLOSING it is —
+    `_enclosing_checkout` walks up to the nearest `.git`, so a session opened
+    in a subdirectory of a recorded checkout matches, and one opened in a
+    nested project that has its own `.git` does not.
 
     CONTAINMENT IS THE DEFECT, NOT THE FIX, AND "or under" IS CONTAINMENT
     RENAMED. A git repo at any ANCESTOR of another project claimed that
