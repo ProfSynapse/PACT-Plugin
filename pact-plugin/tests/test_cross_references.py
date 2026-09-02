@@ -139,9 +139,17 @@ class TestWorktreeScopeWarnings:
         ids=[label for label, _ in SCOPE_WARNING_FILES],
     )
     def test_has_claudemd_scope_warning(self, label, path):
-        content = path.read_text(encoding="utf-8")
-        assert "CLAUDE.md" in content and "gitignored" in content, (
-            f"{label} missing CLAUDE.md worktree scope warning"
+        """Anchor on the INSTRUCTION, not a word from its rationale.
+
+        The previous anchor was `gitignored`, taken from a justification that
+        turned out false and was deleted — so this failed while the warning it
+        guards was intact. A rationale can be corrected; the prohibition is
+        what must not disappear. Lowercased because the files differ on
+        `do NOT` / `do not`.
+        """
+        content = path.read_text(encoding="utf-8").lower()
+        assert "do not write a `claude.md` file in a project directory" in content, (
+            f"{label} missing the CLAUDE.md write prohibition"
         )
 
 
