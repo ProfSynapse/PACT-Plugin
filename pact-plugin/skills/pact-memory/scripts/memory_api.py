@@ -184,11 +184,19 @@ def main_repo_root(start: Optional[str] = None) -> Optional[Path]:
             return None
         common_dir = Path(result.stdout.strip())
         if not common_dir.is_absolute():
-            # git returns a bare ".git" at a repo root, relative to the
-            # directory it ran in. The base therefore tracks `start`: resolving
-            # unconditionally against the cwd would be wrong for a caller that
-            # passed `start`, and wrong specifically inside a worktree, where
-            # the cwd and the passed directory differ.
+            # git returns this path RELATIVE TO THE DIRECTORY IT RAN IN, at any
+            # depth — measured in the main checkout: ".git" at the root,
+            # "../.git" one level down, "../../../.git" three levels down. Not
+            # only the bare ".git" at a root, and CLAUDE_PROJECT_DIR is known to
+            # reach subdirectories in real launch modes, so this branch is
+            # exercised rather than an edge case.
+            # The base therefore tracks `start`: resolving unconditionally
+            # against the cwd returns the WRONG ROOT for any caller whose
+            # `start` differs from the cwd.
+            # Measured, and stated because the obvious example is the wrong one:
+            # a LINKED WORKTREE returns an ABSOLUTE path at every depth, so this
+            # branch never runs there. The case it protects is the main
+            # checkout, not the worktree.
             base = Path(start) if start is not None else Path.cwd()
             common_dir = base / common_dir
         return common_dir.resolve().parent
