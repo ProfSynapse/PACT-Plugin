@@ -186,6 +186,28 @@ def checkout_roots() -> List[str]:
     return roots or [str(project_root())]
 
 
+# Key under which load_or_create stashes the bytes it read, so save() can
+# refuse a write that would discard somebody else's. Carried ON THE LOADED
+# DOCUMENT rather than in a path-keyed cache: two loads of one path in one
+# process are two independent baselines, and a shared cache lets a later load
+# overwrite an earlier one's — measured, and it let the lost update straight
+# through. save() pops it before writing, so it never reaches the file.
+# CONTENT, not `updated`: that field is whole-second (`_now_iso`) and two
+# consecutive calls in one process return the byte-identical string, so a
+# guard keyed on it would be coarser than the interval between the events it
+# guards and would pass most reliably in exactly the case it exists to catch.
+_BASELINE_KEY = "__baseline_bytes__"
+_UNSET = object()
+
+
+def _bytes_now(path: Path) -> Optional[bytes]:
+    """The file's current bytes, or None when it is not readable as a file."""
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
 def load_or_create(path: Path) -> Dict[str, Any]:
     """Load this project's backlog, or build an empty one in memory.
 
@@ -201,8 +223,12 @@ def load_or_create(path: Path) -> Dict[str, Any]:
     remain, so nothing invalid is persisted and nothing readable is moved aside.
     """
     if path.exists():
-        return read_json(path)
+        baseline = _bytes_now(path)
+        data = read_json(path)
+        data[_BASELINE_KEY] = baseline
+        return data
     return {
+        _BASELINE_KEY: None,
         "version": SCHEMA_VERSION,
         "project": path.stem,
         # project_path stays a SIBLING of roots, not roots[0]: three consumers
@@ -236,6 +262,24 @@ def save(data: Dict[str, Any], path: Path) -> List[str]:
     problems = validate(data)
     if problems:
         return problems
+    # Compare-and-swap, immediately before the write. Reproduced without it:
+    # two load_or_create calls before either save, both returned ok, one write
+    # silently won and the other writer's item reverted with no error. Refused
+    # through the existing problem-list shape, so no new raise site.
+    # THE POP IS ON THE SUCCESS PATH ONLY. Popping inside the condition ran it
+    # on the refusal too, handing the rejected document back with no baseline —
+    # so a caller that retried the same object wrote unguarded and destroyed the
+    # other writer's change one retry later. Measured. `_UNSET` rather than
+    # `.get()` because a legitimately-empty baseline is falsy.
+    baseline = data.get(_BASELINE_KEY, _UNSET)
+    if baseline is not _UNSET and _bytes_now(path) != baseline:
+        return [
+            f"{path} changed since it was read, so writing would discard the "
+            f"other change. Nothing was written. Re-run the command; do NOT "
+            f"reapply your change to the copy you are holding, which is now "
+            f"stale."
+        ]
+    data.pop(_BASELINE_KEY, None)
 
     data["updated"] = _now_iso()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -520,7 +564,8 @@ def resolve_refs(refs: Sequence[str]) -> Dict[str, Dict[str, Any]]:
     aliases = {f"r{index}": ref for index, ref in enumerate(sorted(addressable))}
     selections = " ".join(
         f'{alias}: issueOrPullRequest(number: {addressable[ref]}) '
-        f"{{ ... on Issue {{ state }} ... on PullRequest {{ state }} }}"
+        f"{{ ... on Issue {{ state stateReason }} "
+        f"... on PullRequest {{ state merged }} }}"
         for alias, ref in aliases.items()
     )
     query = f'query {{ repository(owner: "{owner}", name: "{name}") {{ {selections} }} }}'
@@ -553,9 +598,48 @@ def resolve_refs(refs: Sequence[str]) -> Dict[str, Dict[str, Any]]:
                 "reason": "the tracker did not resolve this ref",
             }
             continue
-        state = str(node["state"]).lower()
-        outcome[ref] = {"state": "closed" if state in {"closed", "merged"} else "open"}
+        outcome[ref] = _ref_outcome(node)
     return outcome
+
+
+# A closed ref is NOT evidence the work was done. GitHub closes an issue for
+# more than one reason and two of them mean the OPPOSITE. Measured live over a
+# sample of this repo's most recent closed issues: COMPLETED and NOT_PLANNED
+# both occur. DUPLICATE is documented, did NOT occur in that sample, and is
+# handled anyway — handled-and-unobserved, which is the part a later reader
+# would otherwise round off to "unused".
+# A PR carries the same distinction without a second field: MERGED is done,
+# CLOSED is abandoned, and those two arrived together and were collapsed into
+# one bucket on the line that used to be here.
+_ABANDONED_REASONS = {"not_planned", "duplicate"}
+
+
+def _ref_outcome(node: Dict[str, Any]) -> Dict[str, Any]:
+    """`done`, `abandoned`, `closed` or `open` for one resolved ref.
+
+    `closed` is the honest third bucket, not a fallback: an issue closed before
+    GitHub had `stateReason` returns None for it, and a closed-with-no-reason
+    ref cannot be called done or abandoned without inventing the answer.
+    """
+    state = str(node.get("state") or "").lower()
+    if state == "merged":
+        return {"state": "done"}
+    if state != "closed":
+        return {"state": "open"}
+    reason = str(node.get("stateReason") or "").lower()
+    if reason in _ABANDONED_REASONS:
+        return {"state": "abandoned", "reason": reason}
+    if reason == "completed":
+        return {"state": "done"}
+    # A PR closed unmerged has no stateReason and is abandoned by definition;
+    # an issue with no reason is genuinely undetermined.
+    # PRESENCE, not truth: the case this catches is `merged: False`, which is
+    # falsy, so `node.get("merged")` would break exactly the closed-unmerged PR
+    # and nothing else. The key is selected only on the PullRequest fragment, so
+    # its presence is what separates a closed PR from a closed issue.
+    if "merged" in node:
+        return {"state": "abandoned", "reason": "closed unmerged"}
+    return {"state": "closed"}
 
 
 def _repo_slug() -> Optional[Tuple[str, str]]:
@@ -662,10 +746,24 @@ def _ref_flags(items: List[Dict[str, Any]]) -> List[str]:
                 f"{_label(item)}: ref {ref} is unverifiable "
                 f"({state.get('reason', 'no reason given')})"
             )
-        elif state.get("state") == "closed" and item.get("status") != "done":
+        elif item.get("status") == "done":
+            continue
+        elif state.get("state") == "done":
             flags.append(
-                f"{_label(item)}: ref {ref} is closed but the item is "
-                f"{item.get('status')!r} — probably done"
+                f"{_label(item)}: ref {ref} is closed as completed but the item "
+                f"is {item.get('status')!r} — probably done"
+            )
+        elif state.get("state") == "abandoned":
+            flags.append(
+                f"{_label(item)}: ref {ref} was closed WITHOUT the work being "
+                f"done ({state.get('reason', 'abandoned')}) but the item is "
+                f"{item.get('status')!r} — probably abandoned, NOT done"
+            )
+        elif state.get("state") == "closed":
+            flags.append(
+                f"{_label(item)}: ref {ref} is closed with no stated reason, so "
+                f"whether the work was done is unknown; the item is "
+                f"{item.get('status')!r}"
             )
     return flags
 
