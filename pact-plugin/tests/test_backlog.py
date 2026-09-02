@@ -36,8 +36,10 @@ still reads as a kill, and certifies nothing about the property in its row:
 reverting half of a two-part change leaves the halves incompatible and kills by
 TypeError. Two tells — a row owned by one arm that reddens SEVERAL, and a
 failure message carrying an exception type where the row claims a behaviour.
-Two rows here are killed by an exception legitimately, because their stated
-property IS that an exception must not escape.
+Some rows here are killed by an exception legitimately: exactly those whose
+stated property IS that an exception must not escape. That is the whole
+licence, and an exception-kill on any other row is unfaithful until shown
+otherwise.
 
 Some mutations are recorded as strings because re-deriving them is where the
 unfaithful version comes from. These are questions, not a harness: the runner
@@ -54,6 +56,12 @@ is boring and rebuildable, the questions are not.
   membership Change BOTH dereference sites, the test and the message. Leaving
              `data["items"]` in the message body kills by KeyError from the
              mutant's own shape rather than by the property.
+  memory ids The two sites now share one accessor, so the DISAGREEMENT between
+             them is reproducible only by reverting SITE TWO to
+             `item.get("memory") or []`. Dropping the str filter from the
+             accessor instead un-filters site one as well, and kills by
+             TypeError out of `sorted({5, "mem-real"})` — a crash in the batch
+             builder, where the row claims a fabricated flag.
 
 Each arm was verified by mutating production source and confirming the NAMED
 test reddens. Every mutation listed was killed, run against an unmutated green
@@ -179,6 +187,22 @@ afternoon.
   the caveat dropped when unreadable  test_the_success_message_says_only_what_was_established
   `corrupt` back in the prose         test_the_success_message_says_only_what_was_established
   no success message at all           test_the_success_message_says_only_what_was_established
+  the `_items` guard removed          test_show_reports_a_non_iterable_items_rather_than_raising
+  the old repair promise restored     test_neither_note_promises_repair_will_move_a_corrupt_file
+  the accessor reverted at site two   test_a_poisoned_memory_field_crashes_neither_site
+  the accessor reverted at site two   test_the_flagged_ids_are_exactly_the_ids_that_were_looked_up
+  the accessor reverted at site one   test_a_poisoned_memory_field_crashes_neither_site
+  the accessor guard removed          test_a_poisoned_memory_field_crashes_neither_site
+  the accessor guard removed          test_a_str_or_dict_memory_fabricates_no_ids
+  the guard narrowed to crash-safety  test_a_str_or_dict_memory_fabricates_no_ids
+  the resolve batch emptied           test_the_flagged_ids_are_exactly_the_ids_that_were_looked_up
+  the default store never opened      test_a_linked_memory_id_flags_through_the_real_store_open
+  the accessor returns nothing        test_a_linked_memory_id_flags_through_the_real_store_open
+  the payload type check removed      test_a_malformed_tracker_payload_is_unverifiable_not_a_crash
+  the repository type check removed   test_a_malformed_tracker_payload_is_unverifiable_not_a_crash
+  the slug payload check removed      test_a_malformed_repo_slug_payload_yields_no_tracker
+  the slug value type check removed   test_a_malformed_repo_slug_payload_yields_no_tracker
+  the argv regains `--no-reconcile`   test_show_reports_a_non_iterable_items_rather_than_raising
   membership simplified to `.get()`     test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
   membership reverted to `is not None`  test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
   the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_the_cause
@@ -1865,3 +1889,286 @@ def test_the_success_message_says_only_what_was_established(tmp_path):
     for label, text in (("unforced corrupt", unforced_corrupt), ("forced corrupt", forced_corrupt),
                         ("forced readable", forced_readable), ("forced unreadable", forced_unreadable)):
         assert "corrupt" not in text, f"{label}: the message asserts corruption it did not establish"
+
+
+def test_a_truthy_non_iterable_items_is_reported_not_raised(tmp_path):
+    """`items: 5` reached `for item in 5` before the guard.
+
+    THE CONTROL RENDERS FIRST. backend-coder's own probe passed on a
+    RESOLUTION FAILURE — its fixture carried `project_path` alone while the
+    schema had moved to `roots`, so it never matched and never reached the gate.
+    A store that does not match returns a notice too, and it looks like a pass.
+    So the same fixture with a valid list must RENDER before the bad one is
+    asserted about.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+    store = tmp_path / "store"
+
+    _write(store, "demo.json", _backlog(project, items=[_item(title="CONTROL-RENDERS")]))
+    assert "CONTROL-RENDERS" in backlog_store.session_block(str(project), backlog_dir=store).context, (
+        "the fixture did not match — every assertion below would be vacuous"
+    )
+
+    bad = _backlog(project)
+    bad["items"] = 5
+    _write(store, "demo.json", bad)
+    notice = backlog_store.session_block(str(project), backlog_dir=store)
+    assert "demo.json" in notice.alert, "the notice does not name the file"
+    assert "items" in notice.alert, "the notice does not name the schema problem"
+
+
+def test_show_reports_a_non_iterable_items_rather_than_raising(tmp_path):
+    """The write side reaches `_items` through `reconcile`, which the read
+    path's render gate does not protect.
+
+    NOT `--no-reconcile`: that flag skips the only path the guard exists for,
+    so the arm passes with the guard removed. Measured — the mutation survived
+    until the flag came off.
+
+    RED WHEN the guard is removed.
+    """
+    name = backlog.store_path().stem
+    store = tmp_path / "store"
+    store.mkdir()
+    control = _item(title="CONTROL-RENDERS")
+    # COUPLED TO `reconcile`, which this arm runs and the flag above would have
+    # skipped. This fixture stays inside the process only while its item has no
+    # ref and no memory ids: a ref reaches `gh repo view` and a memory id opens
+    # the real memory store, both from a unit test, and both would pass.
+    assert control["ref"] is None and not control["memory"], (
+        "this fixture gained a ref or a memory id — this arm now leaves the process"
+    )
+    good = _backlog(tmp_path, items=[control])
+    (store / f"{name}.json").write_text(json.dumps(good), encoding="utf-8")
+
+    argv = [sys.executable, "hooks/shared/backlog.py", "--backlog-dir", str(store),
+            "show"]
+    # COUPLED TO THE ARGV ABOVE, and asserted rather than left to a comment:
+    # adding `--no-reconcile` here would make every assertion below pass with
+    # the guard removed, and nothing else in this arm would notice.
+    assert "--no-reconcile" not in argv, (
+        "this arm went vacuous — the flag skips the path under test"
+    )
+
+    def show():
+        r = subprocess.run(argv, capture_output=True, text=True)
+        return r.returncode, r.stdout
+
+    code, out = show()
+    assert code == 0 and "CONTROL-RENDERS" in out, (
+        "the fixture was not read — the assertion below would be vacuous"
+    )
+
+    bad = {**good, "items": 5}
+    (store / f"{name}.json").write_text(json.dumps(bad), encoding="utf-8")
+    code, out = show()
+    assert code == 0, f"a non-iterable items exited {code} instead of reporting"
+    assert "items" in out, "the schema problem was not reported"
+
+
+def test_neither_note_promises_repair_will_move_a_corrupt_file(tmp_path):
+    """An absence pin: the guard made that promise false, and a promise can
+    come back quietly. Each note is asserted PRESENT before it is asserted
+    not to contain the old wording."""
+    project = tmp_path / "project"
+    project.mkdir()
+    store = tmp_path / "store"
+
+    _write(store, "0000-other.json", "{ not json at all")
+    _write(store, "demo.json", _backlog(project))
+    sibling = backlog_store.session_block(str(project), backlog_dir=store).alert
+    assert "/PACT:next" in sibling, "the unreadable-sibling note was not produced"
+
+    _write(store, "demo.json", "{ not json at all")
+    loud = backlog_store.session_block(str(project), backlog_dir=store).alert
+    assert "/PACT:next" in loud, "the corrupt-file note was not produced"
+
+    for label, note in (("sibling", sibling), ("corrupt", loud)):
+        assert "moves a corrupt" not in note, f"{label}: the old promise came back"
+
+
+class _RecordingStore:
+    """A memory store that records what it was ASKED, not only what it answered.
+
+    The store seam is the only place the resolve batch is visible from outside
+    `_memory_flags`. An arm that stubs `resolve_memory_ids` wholesale can see
+    what was FLAGGED and never what was LOOKED UP, and the defect these arms
+    cover is precisely a disagreement between those two sets.
+    """
+
+    def __init__(self, resolves=None):
+        self.asked = []
+        self._resolves = resolves or {}
+
+    def get(self, identifier):
+        self.asked.append(identifier)
+        return self._resolves.get(identifier)
+
+
+def test_a_poisoned_memory_field_crashes_neither_site(monkeypatch):
+    """TWO items, and the second one is the whole arm.
+
+    `_memory_flags` returns early at `if not wanted: return []`. A ONE-ITEM
+    fixture whose `memory` is poisoned therefore leaves `wanted` empty and the
+    second loop NEVER RUNS — so it reports site two clean whatever site two
+    does. That is not a hypothetical: it is how the reported defect was first
+    measured as half-fixed.
+
+    One item carries a real id so `wanted` is non-empty and execution reaches
+    the second site; the other carries a truthy non-iterable. The surviving
+    flag from the good item is this arm's reach control.
+
+    MEASURED, with the accessor reverted at site two: the one-item fixture
+    returns `[]` and reads as a pass, and this two-item fixture raises
+    TypeError. Same mutation, opposite verdicts, and the difference is entirely
+    the second item.
+
+    RED WHEN the accessor is reverted at EITHER site — site one raises building
+    `wanted`, site two raises in the flag loop, and only this fixture reaches
+    both.
+    """
+    items = [
+        {"id": "aaaa", "title": "GOOD", "memory": ["mem-real"]},
+        {"id": "bbbb", "title": "BAD", "memory": 5},
+    ]
+
+    flags = backlog._memory_flags(items, _RecordingStore())
+
+    assert flags == ["GOOD: memory id mem-real no longer resolves"], (
+        f"a poisoned sibling changed the good item's flags: {flags}"
+    )
+
+
+def test_a_str_or_dict_memory_fabricates_no_ids():
+    """The quiet half. A truthy ITERABLE does not crash — it invents.
+
+    A str iterates CHARACTERS and a dict iterates KEYS, so `memory: "abc"`
+    produced three flags naming ids `a`, `b` and `c`, each reading exactly like
+    a real finding about a real record. A crash-only arm misses this entirely,
+    and it is the worse of the two because the output is acted on.
+
+    THE CONTROL RUNS FIRST and it is not decoration: every assertion after it
+    is an ABSENCE, and an empty flag list is also what a `_memory_flags` that
+    never reached anything returns.
+
+    RED WHEN the list type check is dropped from the accessor.
+    """
+    def _flags(memory_value):
+        item = {"id": "cccc", "title": "ITEM", "memory": memory_value}
+        return backlog._memory_flags([item], _RecordingStore())
+
+    assert _flags(["mem-real"]), "control: a real id did not flag — the rest is vacuous"
+    assert _flags("abc") == [], "a str memory fabricated ids from its characters"
+    assert _flags({"k": 1}) == [], "a dict memory fabricated ids from its keys"
+
+
+def test_the_flagged_ids_are_exactly_the_ids_that_were_looked_up():
+    """The two sites once disagreed about what an id IS.
+
+    Site one filtered `isinstance(str)`; site two did not. So `[5, "mem-real"]`
+    put ONE id in the resolve batch and reported on TWO, inventing a finding
+    about a value the resolver was never asked about. One accessor serving both
+    sites is what makes them agree — per-site guards would have closed the
+    crash and left this.
+
+    BOTH SETS ARE ASSERTED, which is what a stub on `resolve_memory_ids` cannot
+    do: the batch is only observable through the store seam.
+
+    RED WHEN site two stops filtering, or when the batch is emptied.
+    """
+    store = _RecordingStore()
+    items = [{"id": "bbbb", "title": "BAD", "memory": [5, "mem-real"]}]
+
+    flags = backlog._memory_flags(items, store)
+
+    assert store.asked == ["mem-real"], f"the resolve batch was {store.asked}"
+    assert flags == ["BAD: memory id mem-real no longer resolves"], (
+        f"the flags name an id that was never looked up: {flags}"
+    )
+
+
+def test_a_linked_memory_id_flags_through_the_real_store_open(monkeypatch):
+    """Non-vacuity for the three arms above, taken through the DEFAULT path.
+
+    The others pass a store explicitly, so none of them executes
+    `_memory_api().get_memory_instance()` on its success branch — the only
+    arm that touches that call at all exercises its failure. This one leaves
+    `store` unpassed, which is what every production caller does.
+
+    RED WHEN the accessor returns nothing, and RED WHEN the store is never
+    opened — the second of which every other arm here survives.
+    """
+    store = _RecordingStore()
+    monkeypatch.setattr(
+        backlog, "_memory_api",
+        lambda: types.SimpleNamespace(get_memory_instance=lambda: store),
+    )
+
+    flags = backlog._memory_flags([_item(title="LINKED", memory=["mem-real"])])
+
+    assert store.asked == ["mem-real"], f"the real store was asked {store.asked}"
+    assert flags == ["LINKED: memory id mem-real no longer resolves"], (
+        f"a linked id that does not resolve went unflagged: {flags}"
+    )
+
+
+def test_a_malformed_tracker_payload_is_unverifiable_not_a_crash(monkeypatch):
+    """`or {}` defends against a FALSY value and not a truthy wrong-typed one.
+
+    Each shape here reached `.get` on a non-mapping and raised AttributeError,
+    which is not a `BacklogFileError` and takes the whole command down. The
+    required behaviour is the one an unreachable tracker already produces:
+    every ref reports `unverifiable`.
+
+    A HOSTILE `gh` IS NOT THE THREAT MODEL — the guard is armed because an
+    unarmed guard reads as dead code to the next person to touch this function.
+
+    RED WHEN either type check is removed. The well-formed control runs first:
+    a `resolve_refs` that returned `unverifiable` unconditionally would satisfy
+    every other assertion here.
+    """
+    monkeypatch.setattr(backlog, "_repo_slug", lambda: ("owner", "repo"))
+
+    def _state(stdout):
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda command, **kwargs: subprocess.CompletedProcess(
+                command, 0, stdout=stdout, stderr=""),
+        )
+        return backlog.resolve_refs(["#1"])["#1"]["state"]
+
+    assert _state('{"data": {"repository": {"r0": {"state": "OPEN"}}}}') == "open", (
+        "control: a well-formed payload did not resolve — the rest is vacuous"
+    )
+    for label, stdout in (
+        ("data is a scalar", '{"data": 5}'),
+        ("a top-level array", '[1]'),
+        ("repository is a scalar", '{"data": {"repository": 5}}'),
+    ):
+        assert _state(stdout) == "unverifiable", label
+
+
+def test_a_malformed_repo_slug_payload_yields_no_tracker(monkeypatch):
+    """`except ValueError` covers unparseable bytes and nothing else.
+
+    A payload that PARSED to an array reached `.get`, and a numeric
+    `nameWithOwner` reached `.partition` — both AttributeError, neither caught.
+    No tracker configured is a fully supported state, so returning None is the
+    honest answer for all three.
+
+    RED WHEN either type check is removed.
+    """
+    def _slug(stdout):
+        monkeypatch.setattr(backlog, "_run_capture", lambda command: stdout)
+        return backlog._repo_slug()
+
+    assert _slug('{"nameWithOwner": "owner/repo"}') == ("owner", "repo"), (
+        "control: a well-formed slug did not resolve — the rest is vacuous"
+    )
+    for label, stdout in (
+        ("a top-level array", '[1]'),
+        ("a top-level number", '5'),
+        ("nameWithOwner is a scalar", '{"nameWithOwner": 5}'),
+    ):
+        assert _slug(stdout) is None, label

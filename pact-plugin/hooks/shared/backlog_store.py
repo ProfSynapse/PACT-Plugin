@@ -422,6 +422,25 @@ def _enclosing_checkout(path: Path) -> Optional[Path]:
     return None
 
 
+def _items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The item dicts, or NONE when `items` is not a list.
+
+    `data.get("items") or []` returns THE VALUE when it is truthy, so a
+    non-list `items` reaches the `for` and raises TypeError on a file that
+    parses. Both readers of `items` run on data validate() has already
+    rejected, where fields arrive unchecked, so the type is tested rather than
+    assumed — the docstrings said so and the code did not.
+
+    The guard belongs here rather than at either call site: the READ path is
+    already protected upstream by session_block's render gate, but reconcile()
+    on the write side is not, and both route through this function.
+    """
+    value = data.get("items")
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def _resolved(path: Path) -> Path:
     """Absolute, symlink-free form, or the path unchanged when it will not
     resolve. Never raises, so a comparison is always well defined."""
@@ -447,7 +466,7 @@ def file_local_flags(data: Dict[str, Any]) -> List[str]:
     now runs on data validate() has already REJECTED: rendering a
     non-conforming file means its fields arrive unchecked.
     """
-    items = [item for item in data.get("items") or [] if isinstance(item, dict)]
+    items = _items(data)
     by_id = {item.get("id"): item for item in items if isinstance(item.get("id"), str)}
     flags: List[str] = []
 
@@ -525,7 +544,7 @@ def format_block(data: Dict[str, Any]) -> str:
     a count of file-local drift. Never the whole list — a block that grows with
     the backlog becomes noise and gets skimmed.
     """
-    items = [item for item in data.get("items") or [] if isinstance(item, dict)]
+    items = _items(data)
     active = [item for item in items if item.get("status") == "active"]
     planned = sorted(
         (item for item in items if item.get("status") == "planned"),
@@ -609,8 +628,8 @@ def session_block(
             notes.append(
                 "PACT backlog: could not read "
                 + ", ".join(str(path) for path in unreadable)
-                + ". Nothing was modified — this path only reads. Repair with "
-                "/PACT:next, which moves a corrupt file aside before rebuilding."
+                + ". Nothing was modified — this path only reads. Run /PACT:next, "
+                "which reports what it can do with each one."
             )
 
         if match is None:
@@ -676,8 +695,8 @@ def session_block(
     except BacklogFileError as exc:
         return _loud(
             f"PACT backlog: {_safe_detail(exc)}. The file was NOT modified — this "
-            f"path only reads. Repair it with /PACT:next, which moves a corrupt "
-            f"file aside before rebuilding."
+            f"path only reads. Run /PACT:next, which reports what it can do "
+            f"with it."
         )
     except Exception as exc:  # total helper: every state is a value, never a raise
         return _loud(

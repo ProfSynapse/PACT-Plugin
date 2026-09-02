@@ -536,7 +536,15 @@ def resolve_refs(refs: Sequence[str]) -> Dict[str, Dict[str, Any]]:
     except ValueError:
         return outcome
 
-    repository = (payload.get("data") or {}).get("repository") or {}
+    # `or {}` alone defends against a FALSY value and not against a truthy
+    # wrong-typed one, so a payload carrying `"data": 5` reached `(5).get` and
+    # raised AttributeError. An empty mapping here reports every ref as
+    # unverifiable through the loop, which is what an unreachable tracker
+    # already does.
+    data = payload.get("data") if isinstance(payload, dict) else None
+    repository = data.get("repository") if isinstance(data, dict) else None
+    if not isinstance(repository, dict):
+        repository = {}
     for alias, ref in aliases.items():
         node = repository.get(alias)
         if not isinstance(node, dict) or not node.get("state"):
@@ -560,8 +568,16 @@ def _repo_slug() -> Optional[Tuple[str, str]]:
     if stdout is None:
         return None
     try:
-        slug = json.loads(stdout).get("nameWithOwner") or ""
+        payload = json.loads(stdout)
     except ValueError:
+        return None
+    # ValueError covers unparseable bytes and nothing else: a payload that
+    # parsed to an array reached `.get` and a numeric nameWithOwner reached
+    # `.partition`, both AttributeError, neither caught.
+    if not isinstance(payload, dict):
+        return None
+    slug = payload.get("nameWithOwner")
+    if not isinstance(slug, str):
         return None
     owner, _, name = slug.partition("/")
     # The slug reaches us from the local git remote, so it is interpolated
@@ -687,21 +703,44 @@ def _plan_resolves(root: Path, plan: str) -> bool:
     return (target == base or base in target.parents) and target.exists()
 
 
+def _memory_ids(item: Dict[str, Any]) -> List[str]:
+    """This item's memory ids, or an empty list. THE ONLY way this module reads
+    them.
+
+    The same unchecked-field hazard as `_items`, one level down. `memory`
+    reaches here from a file that PARSED but need not CONFORM, so it can be a
+    truthy non-iterable — iterating one raises TypeError, not a
+    BacklogFileError — or a truthy iterable that is not a list of ids: a str
+    iterates CHARACTERS and a dict iterates KEYS, and both then read as
+    perfectly good ids from a field that holds none.
+
+    The str filter was on ONE of the two call sites and not the other, so the
+    same file could contribute an id to the resolve batch and a flag naming a
+    different one. One accessor makes the two agree.
+
+    A non-list `memory` returns empty rather than flagging, because `validate`
+    already reports it by name and a second report would say it twice.
+    """
+    memory = item.get("memory")
+    if not isinstance(memory, list):
+        return []
+    return [identifier for identifier in memory if isinstance(identifier, str)]
+
+
 def _memory_flags(
     items: List[Dict[str, Any]], store: Any = None
 ) -> List[str]:
     wanted = sorted({
         identifier
         for item in items
-        for identifier in (item.get("memory") or [])
-        if isinstance(identifier, str)
+        for identifier in _memory_ids(item)
     })
     if not wanted:
         return []
     records = resolve_memory_ids(wanted, store)
     flags = []
     for item in items:
-        for identifier in item.get("memory") or []:
+        for identifier in _memory_ids(item):
             record = records.get(identifier)
             if record is _UNVERIFIABLE:
                 flags.append(
