@@ -316,6 +316,9 @@ def _scan(
     that genuinely aborts the scan.
     """
     target = _resolved(Path(project_dir))
+    # Computed ONCE. It depends only on `target`, so re-walking it per file was
+    # one filesystem walk per backlog in the store for an unchanging answer.
+    enclosing = _enclosing_checkout(target)
     found = []
     unreadable: List[Path] = []
 
@@ -328,11 +331,30 @@ def _scan(
         roots = data.get("roots")
         if not isinstance(roots, list):
             continue
-        # A malformed entry yields an empty set: no match, and the existing
-        # loud resolution failure. No new raise site, so the totality boundary
-        # does not move.
-        recorded = {_resolved(Path(r)) for r in roots if isinstance(r, str) and r}
-        if target not in recorded and _enclosing_checkout(target) not in recorded:
+        # NON-ABSOLUTE ROOTS ARE FILTERED HERE, NOT LEFT TO validate().
+        # validate() runs in load(), which runs AFTER this match, so the rule
+        # was enforced downstream of the decision it governs: a stored `"."`
+        # resolved against the process working directory and CLAIMED whatever
+        # session happened to open there, rendering another project's items
+        # with a conformance note beside them.
+        #
+        # This is not the silent-skip that keeping the rule in validate() was
+        # meant to avoid. Skipping a legitimate root would hide a real match;
+        # a relative root IDENTIFIES NOTHING, because its meaning depends on
+        # where the reader stands, so declining to match on it withholds no
+        # identity. A file whose roots are ALL relative therefore never
+        # matches — and it is not invisible: no match means the existing loud
+        # resolution failure fires, and `/PACT:next` still finds the file by
+        # name and reports the relative root as a schema problem.
+        #
+        # A malformed entry yields an empty set: no match, same loud path. No
+        # new raise site, so the totality boundary does not move.
+        recorded = {
+            _resolved(Path(r))
+            for r in roots
+            if isinstance(r, str) and Path(r).is_absolute()
+        }
+        if target not in recorded and enclosing not in recorded:
             continue
         found.append((str(data.get("updated") or ""), path))
 
