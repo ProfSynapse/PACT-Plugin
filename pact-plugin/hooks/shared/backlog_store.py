@@ -124,12 +124,17 @@ def validate(obj: Any) -> List[str]:
     elif not all(Path(r).is_absolute() for r in roots):
         # ABSOLUTE, for the same reason `plan` must be RELATIVE: a stored path
         # whose meaning depends on where the reader stands is not an identity.
-        # `_scan` resolves each root, and resolving a relative one anchors it to
-        # the process working directory — so one file would match different
-        # projects depending on where the hook ran. The writer only ever records
-        # resolved absolute paths, so this can arise from a hand-edited or
-        # corrupted file, which is the population the read path exists to
-        # survive.
+        # The writer only ever records resolved absolute paths, so this can
+        # arise from a hand-edited or corrupted file, which is the population
+        # the read path exists to survive.
+        #
+        # THE RULE LIVES IN TWO PLACES ON PURPOSE, AND NEITHER IS REDUNDANT.
+        # `_scan` DECLINES to match on a non-absolute root, which is what stops
+        # a stored "." claiming whatever session happens to open in the
+        # directory it resolves against. This rule REPORTS that root to the
+        # user, which is what turns a file that silently stopped matching into
+        # one whose problem is named. Delete this and the diagnosis goes;
+        # delete the filter and the claim comes back.
         problems.append(f"roots holds a relative path: {roots!r}")
 
     items = obj.get("items")
