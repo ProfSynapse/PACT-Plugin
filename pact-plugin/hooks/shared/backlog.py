@@ -650,13 +650,24 @@ def _memory_flags(items: List[Dict[str, Any]]) -> List[str]:
 
 
 def _staleness_flags(items: List[Dict[str, Any]]) -> List[str]:
-    cutoff = datetime.now(timezone.utc) - _STALE_AFTER
+    # DAYS ON BOTH SIDES, the sibling of the same fix in _is_newer. `touched` is
+    # stored as a date, so it parses to midnight — the EARLIEST moment it could
+    # mean — while the cutoff carried a real time. An item touched on the cutoff
+    # day therefore compared older than it was and flagged at roughly 13 days
+    # against a 14-day threshold.
+    #
+    # THE EDGE THIS PICKS: an item touched exactly _STALE_AFTER days ago does
+    # NOT flag; one touched a day earlier does. That is what `_STALE_AFTER`'s
+    # own comment already says the rule is — untouched for LONGER than this —
+    # so this aligns the behaviour with the stated intent rather than choosing
+    # a new one.
+    cutoff = (datetime.now(timezone.utc) - _STALE_AFTER).date()
     flags = []
     for item in items:
         if item.get("status") != "active":
             continue
         touched = _as_datetime(item.get("touched"))
-        if touched is not None and touched < cutoff:
+        if touched is not None and touched.date() < cutoff:
             flags.append(
                 f"{_label(item)}: active and untouched since {item.get('touched')}"
             )
