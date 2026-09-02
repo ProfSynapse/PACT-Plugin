@@ -328,6 +328,10 @@ def file_local_flags(data: Dict[str, Any]) -> List[str]:
 
     Shared with the write side so both surfaces report the same file-local
     drift rather than growing two answers to one question.
+
+    EVERY relational field is read through _relation_ids, because this function
+    now runs on data validate() has already REJECTED: rendering a
+    non-conforming file means its fields arrive unchecked.
     """
     items = [item for item in data.get("items") or [] if isinstance(item, dict)]
     by_id = {item.get("id"): item for item in items if isinstance(item.get("id"), str)}
@@ -336,7 +340,9 @@ def file_local_flags(data: Dict[str, Any]) -> List[str]:
     for item in items:
         label = _label(item)
         for field in RELATIONAL_FIELDS:
-            for other in item.get(field) or []:
+            ids, malformed = _relation_ids(item, field, label)
+            flags.extend(malformed)
+            for other in ids:
                 if other not in by_id:
                     flags.append(f"{label}: {field} names unknown id {other!r}")
                 elif field == "blocked_by" and by_id[other].get("status") == "done":
@@ -347,7 +353,11 @@ def file_local_flags(data: Dict[str, Any]) -> List[str]:
     for item in items:
         if item.get("status") != "active":
             continue
-        for other in item.get("exclusive_with") or []:
+        # The malformed flags are DISCARDED here: this field was already read
+        # in the loop that precedes this one, and reporting it twice would
+        # double-count one defect in the block's flag count.
+        ids, _ = _relation_ids(item, "exclusive_with", _label(item))
+        for other in ids:
             peer = by_id.get(other)
             if peer is not None and peer.get("status") == "active":
                 if _label(item) < _label(peer):  # report each pair once
@@ -356,6 +366,41 @@ def file_local_flags(data: Dict[str, Any]) -> List[str]:
                     )
 
     return flags
+
+
+def _relation_ids(
+    item: Dict[str, Any], field: str, label: str
+) -> Tuple[List[str], List[str]]:
+    """Usable ids from one relational field, plus flags for what was dropped.
+
+    TWO RAISES LIVE HERE WITHOUT THIS GUARD, and both became reachable when the
+    read path began rendering files that failed validate(): a truthy
+    non-iterable field raises on iteration, and an unhashable entry (a dict, a
+    list) raises on the `in by_id` membership test. Either one is caught by
+    session_block's outer handler, so totality holds — but the OUTCOME is that
+    the block and its named conformance note are both replaced by a read
+    failure naming no file, which is the state the named-path work exists to
+    prevent.
+
+    Ids are strings by schema, so a non-string entry could never match one; it
+    is dropped rather than compared. Dropping is REPORTED rather than silent,
+    because a non-conforming file is exactly what the render path now shows and
+    says so about.
+
+    The guard lives here rather than in validate() for the reason that settled
+    the title-length question: a validate() failure no longer suppresses the
+    block, so a rule there yields a flag and defends nothing on this path.
+    """
+    value = item.get(field)
+    if value is None:
+        return [], []
+    if not isinstance(value, list):
+        return [], [f"{label}: {field} is {type(value).__name__}, expected a list"]
+    ids = [entry for entry in value if isinstance(entry, str)]
+    dropped = len(value) - len(ids)
+    if not dropped:
+        return ids, []
+    return ids, [f"{label}: {field} holds {dropped} entr{'y' if dropped == 1 else 'ies'} that is not an item id"]
 
 
 def format_block(data: Dict[str, Any]) -> str:
@@ -466,13 +511,16 @@ def session_block(
         # understand it and it breaks a rule I now enforce" and does not. So
         # the block renders from a non-conforming file and the problems are
         # reported beside it. The isinstance gate is load-bearing, for a
-        # NARROWER class than "not a list": format_block coerces item CONTENT
-        # and its `or []` absorbs any falsy `items`, so what actually raises is
+        # NARROWER class than "not a list": format_block coerces the item
+        # fields IT renders — title, id and rank — and its `or []` absorbs any
+        # falsy `items`, so what actually raises HERE is
         # a TRUTHY NON-ITERABLE. Measured — 5, 3.5 and True raise TypeError,
         # while "not a list", {"a": 1}, (1, 2), b"bytes" and None all render
         # cleanly. Pick a truthy non-iterable when testing this branch: a
         # string is a non-list scalar that does NOT raise, so an arm built on
-        # one passes with the gate removed.
+        # one passes with the gate removed. This gate covers `items` ONLY; the
+        # relational fields are read by file_local_flags and carry their own
+        # guard in _relation_ids.
         data = read_json(match)
         problems = validate(data)
         if problems and not isinstance(data.get("items"), list):
