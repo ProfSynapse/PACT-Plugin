@@ -152,6 +152,52 @@ def _with_store_scope(method):
     return wrapper
 
 
+def main_repo_root(start: Optional[str] = None) -> Optional[Path]:
+    """Resolve the MAIN repository root via `git rev-parse --git-common-dir`.
+
+    Worktree-safe: --git-common-dir points at the shared .git directory from a
+    linked worktree as well as from the main checkout, so its parent is the
+    main repo root in both. `git rev-parse --show-toplevel` would return the
+    WORKTREE path instead, fragmenting a project across its own checkouts.
+
+    Args:
+        start: Directory git resolves from, passed as `-C`. When None, git
+            runs in the current working directory.
+
+    Returns:
+        The main repo root, or None when git is absent, times out, exits
+        non-zero, or the path is not inside a repository.
+    """
+    command = ["git"]
+    if start is not None:
+        command += ["-C", str(start)]
+    command += ["rev-parse", "--git-common-dir"]
+
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        common_dir = Path(result.stdout.strip())
+        if not common_dir.is_absolute():
+            # git returns a bare ".git" at a repo root, relative to the
+            # directory it ran in. The base therefore tracks `start`: resolving
+            # unconditionally against the cwd would be wrong for a caller that
+            # passed `start`, and wrong specifically inside a worktree, where
+            # the cwd and the passed directory differ.
+            base = Path(start) if start is not None else Path.cwd()
+            common_dir = base / common_dir
+        return common_dir.resolve().parent
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        # git not installed, not a repo, command timed out, or the path could
+        # not be resolved.
+        return None
+
+
 class PACTMemory:
     """
     High-level interface for PACT Memory operations.
@@ -280,62 +326,50 @@ class PACTMemory:
             # root differs from the env path; only a repo-root env path or a
             # non-git path (where the main anchor equals, or cannot be resolved
             # from, the env path) keeps the original basename.
-            try:
-                result = subprocess.run(
-                    ["git", "-C", project_dir, "rev-parse", "--git-common-dir"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    common_dir = Path(result.stdout.strip())
-                    if not common_dir.is_absolute():
-                        common_dir = Path(project_dir) / common_dir
-                    main_repo_root = common_dir.resolve().parent
+            # The local name is env_main_root, NOT main_repo_root: rebinding
+            # the module-level helper's own name inside this method would make
+            # it local for the whole method and raise UnboundLocalError on the
+            # call itself.
+            env_main_root = main_repo_root(project_dir)
+            if env_main_root is not None:
+                try:
                     # Compare via normcase so a case-insensitive filesystem does
                     # not fire the rewrite for paths that differ only in case
                     # (a no-op on case-sensitive systems, where normcase is
                     # identity).
                     env_root = Path(project_dir).resolve()
-                    if os.path.normcase(str(main_repo_root)) != os.path.normcase(str(env_root)):
-                        logger.debug(
-                            "project_id detected from CLAUDE_PROJECT_DIR worktree main repo: %s",
-                            main_repo_root.name,
-                        )
-                        return main_repo_root.name
-            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-                pass
+                except OSError:
+                    env_root = None
+                if env_root is not None and os.path.normcase(
+                    str(env_main_root)
+                ) != os.path.normcase(str(env_root)):
+                    logger.debug(
+                        "project_id detected from CLAUDE_PROJECT_DIR worktree main repo: %s",
+                        env_main_root.name,
+                    )
+                    return env_main_root.name
             logger.debug("project_id detected from CLAUDE_PROJECT_DIR: %s", Path(project_dir).name)
             return Path(project_dir).name
 
         # Strategy 2: Git repository root (worktree-safe)
-        # Uses --git-common-dir instead of --show-toplevel because the latter
-        # returns the worktree path when run inside a worktree, fragmenting
-        # project_id across sessions. --git-common-dir always points to the
-        # shared .git directory; its parent is the main repo root.
-        # git returns this path relative to the invoking directory when run at
-        # a repo root (the bare ".git") and absolute elsewhere, so resolve a
-        # relative result against the cwd before taking its parent.
+        # main_repo_root() carries the --git-common-dir resolution and the
+        # relative-result guard for both this strategy and Strategy 1, so the
+        # two share one derivation of the path exactly as they already share
+        # one derivation of the name. Passing no `start` runs git in the cwd,
+        # which is this strategy's base.
         # NOTE: Twin pattern in working_memory.py (_get_claude_md_path) and
         #       hooks/staleness.py (get_project_claude_md_path) -- keep in sync.
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--git-common-dir"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                common_dir = Path(result.stdout.strip())
-                if not common_dir.is_absolute():
-                    common_dir = Path.cwd() / common_dir
-                repo_root = common_dir.resolve().parent
-                project_name = repo_root.name
-                logger.debug("project_id detected from git root: %s", project_name)
-                return project_name
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            # git not installed, not a repo, or command timed out
-            logger.debug("Git detection failed, falling back to cwd")
+        #       Those two couple the resolution to a CLAUDE.md existence check
+        #       and return the root only when one is found there, so they need
+        #       restructuring rather than substitution and are deliberately not
+        #       migrated onto this helper.
+        repo_root = main_repo_root()
+        if repo_root is not None:
+            project_name = repo_root.name
+            logger.debug("project_id detected from git root: %s", project_name)
+            return project_name
+        # git not installed, not a repo, or command timed out
+        logger.debug("Git detection failed, falling back to cwd")
 
         # Strategy 3: Current working directory — walk UP to nearest project marker.
         # Fixes subdirectory invocation (e.g., running CLI from .claude/ or src/
