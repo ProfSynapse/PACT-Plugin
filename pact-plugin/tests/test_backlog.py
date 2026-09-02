@@ -1008,7 +1008,7 @@ def test_reconcile_emits_every_drift_class(monkeypatch, tmp_path):
 
     monkeypatch.setattr(backlog, "resolve_refs", lambda refs: {
         "#1": {"state": "open"}, "#2": {"state": "closed"}})
-    monkeypatch.setattr(backlog, "resolve_memory_ids", lambda ids: {i: None for i in ids})
+    monkeypatch.setattr(backlog, "resolve_memory_ids", lambda ids, *_: {i: None for i in ids})
     # Arity-agnostic: this stub stands in for a collaborator whose signature is
     # not this arm's subject, so a parameter added there must not redden here.
     monkeypatch.setattr(backlog, "_branch_and_worktree_names", lambda *_: [])
@@ -1369,17 +1369,15 @@ def test_a_memory_record_flags_only_on_a_LATER_DAY(monkeypatch):
     instants made every same-day edit report "changed after it was linked".
 
     THE LATER-DAY CASE IS ASSERTED FIRST AND THAT ORDER IS THE POINT: it is the
-    reach control. `_memory_flags` calls `resolve_memory_ids` as a MODULE
-    GLOBAL, so the `store=` seam does not reach it — an arm that stubs only the
-    store gets unverifiable for every id, the comparison never runs, and the
-    absence of a flag reads as a pass. Stub `resolve_memory_ids` itself, and
-    prove a flag CAN appear before concluding from one that does not.
+    reach control. Every other case here asserts an ABSENCE, and an absence is
+    also what an unreached comparison produces — so prove a flag CAN appear
+    before concluding anything from one that does not.
 
     RED WHEN the comparison returns to instants.
     """
     def _at(stamp):
         monkeypatch.setattr(backlog, "resolve_memory_ids",
-                            lambda ids: {i: {"id": i, "updated_at": stamp} for i in ids})
+                            lambda ids, *_: {i: {"id": i, "updated_at": stamp} for i in ids})
         return backlog._memory_flags([_item(memory=["a" * 32], touched="2026-09-01")])
 
     assert _at("2026-09-02T00:00:00Z"), "a later-day record did not flag — stub unreached"
