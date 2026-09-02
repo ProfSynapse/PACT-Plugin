@@ -1,6 +1,6 @@
 """Substantive coverage for the cross-session backlog.
 
-Five of these cases do not occur naturally and are constructed deliberately.
+These cases do not occur naturally and are constructed deliberately.
 Each corresponds to a defect found in this feature by running something rather
 than by reading it, and none would be sampled by an ordinary fixture:
 
@@ -39,7 +39,7 @@ failure message carrying an exception type where the row claims a behaviour.
 Two rows here are killed by an exception legitimately, because their stated
 property IS that an exception must not escape.
 
-Three mutations are recorded as strings because re-deriving them is where the
+Some mutations are recorded as strings because re-deriving them is where the
 unfaithful version comes from. These are questions, not a harness: the runner
 is boring and rebuildable, the questions are not.
 
@@ -56,8 +56,9 @@ is boring and rebuildable, the questions are not.
              mutant's own shape rather than by the property.
 
 Each arm was verified by mutating production source and confirming the NAMED
-test reddens: 73 mutations, 73 killed, run against an unmutated green baseline
-with the tree restored byte-identical after every arm. Naming which test kills
+test reddens. Every mutation listed was killed, run against an unmutated green
+baseline with the tree restored byte-identical after every arm. The list is its
+own census; no count is restated beside it. Naming which test kills
 which mutation is what makes this a coverage claim rather than a survival
 count, since one over-broad assertion can kill many mutants while pinning
 nothing in particular.
@@ -82,7 +83,7 @@ fixtures give items distinct titles for that reason.
 The two import-closure tests carry their own counter-test in this file rather
 than a row in this record.
 
-Three arms build real git repositories, so this file needs `git` on the runner
+Some arms build real git repositories, so this file needs `git` on the runner
 where every other arm is pure Python. They read the same signals the production
 code reads, so faked git state would keep them green and stop them testing
 anything.
