@@ -69,7 +69,17 @@ _TRACKER_TIMEOUT_SECONDS = 5
 
 # Characters a repository owner or name may hold. Everything else is refused
 # rather than interpolated into a query.
-_SLUG_CHARS = re.compile(r"^[A-Za-z0-9._-]+$")
+# `\Z` rather than `$`, matching the sibling anchor in backlog_store.py: Python's
+# `$` also matches before a trailing newline, so `$` would accept "owner\n".
+_SLUG_CHARS = re.compile(r"^[A-Za-z0-9._-]+\Z")
+
+# Sentinel for "the caller explicitly asked to clear this field", which None
+# cannot express here because None already means "the flag was not passed".
+_CLEAR = object()
+
+# Returned per id when the memory store could not be opened at all. Distinct
+# from None, which means the store was asked and had no such record.
+_UNVERIFIABLE: Dict[str, Any] = {"unverifiable": True}
 
 
 class BacklogWriteError(Exception):
@@ -226,9 +236,24 @@ def add_item(data: Dict[str, Any], title: str, **fields: Any) -> Dict[str, Any]:
         "added": today,
         "touched": today,
     }
-    item.update({key: value for key, value in fields.items() if value is not None})
+    _apply_fields(item, fields)
     data.setdefault("items", []).append(item)
     return item
+
+
+def _apply_fields(item: Dict[str, Any], fields: Dict[str, Any]) -> None:
+    """Apply passed fields to an item. THE ONLY place the three-way distinction
+    lives: None means the flag was not passed and the field is left alone,
+    _CLEAR means the caller asked to clear it, anything else is a value.
+
+    Both callers route through here so the two cannot disagree about what an
+    unpassed flag means — they each carried their own copy of the None filter
+    before, and the copy is what made `--ref none` silently inert.
+    """
+    for key, value in fields.items():
+        if value is None:
+            continue
+        item[key] = None if value is _CLEAR else value
 
 
 def find_item(data: Dict[str, Any], item_id: str) -> Optional[Dict[str, Any]]:
@@ -241,7 +266,7 @@ def find_item(data: Dict[str, Any], item_id: str) -> Optional[Dict[str, Any]]:
 def update_item(item: Dict[str, Any], **fields: Any) -> None:
     """Apply the named fields and stamp `touched`. Validation happens in
     save(), so a rejected change never reaches the file."""
-    item.update({key: value for key, value in fields.items() if value is not None})
+    _apply_fields(item, fields)
     item["touched"] = _now_iso()[:10]
 
 
@@ -249,13 +274,23 @@ def update_item(item: Dict[str, Any], **fields: Any) -> None:
 # Resolution — pact-memory in-process, the tracker in one batched call
 # ---------------------------------------------------------------------------
 
-def resolve_memory_ids(ids: Sequence[str]) -> Dict[str, Optional[Dict[str, Any]]]:
-    """One store instance, N lookups. A None VALUE means unresolvable.
+def resolve_memory_ids(
+    ids: Sequence[str], store: Any = None
+) -> Dict[str, Optional[Dict[str, Any]]]:
+    """One store instance, N lookups. A None VALUE means unresolvable, and
+    _UNVERIFIABLE means the store could not be opened to ask at all.
 
-    Returning None rather than omitting the key is what lets a caller tell
-    "resolved to nothing" from "never asked" — the drift table needs that
-    distinction, because a memory id that no longer resolves is FLAGGED rather
-    than skipped.
+    THOSE TWO ARE DIFFERENT ANSWERS AND MUST NOT COLLAPSE. An unopenable store
+    once made every linked id report as deleted — an inability to CHECK
+    presented as a definite negative, which is the same conflation the tracker
+    path already refuses by giving `unverifiable` its own state. The memory
+    path now matches it rather than inventing a third pattern.
+
+    Returning a value per id rather than omitting the key is what lets a caller
+    tell "resolved to nothing" from "never asked".
+
+    `store` is a testing seam: pass an opened store to exercise the lookup
+    without reaching the real one. None opens the real store.
 
     Resolution goes through `get <id>`, never a search. A stored id resolves
     across project scope where a search cannot, and resolving a known id set is
@@ -265,10 +300,11 @@ def resolve_memory_ids(ids: Sequence[str]) -> Dict[str, Optional[Dict[str, Any]]
     if not ids:
         return resolved
 
-    try:
-        store = _memory_api().get_memory_instance()
-    except Exception:
-        return resolved
+    if store is None:
+        try:
+            store = _memory_api().get_memory_instance()
+        except Exception:
+            return {identifier: _UNVERIFIABLE for identifier in ids}
 
     # ponytail: N sequential gets against one open store. The measured cost was
     # process spawn, and that is already gone; push the id set into one query
@@ -422,7 +458,7 @@ def reconcile(data: Dict[str, Any]) -> List[str]:
     flags.extend(_plan_flags(items, data.get("project_path")))
     flags.extend(_memory_flags(items))
     flags.extend(_staleness_flags(items))
-    flags.extend(_abandoned_flags(items))
+    flags.extend(_abandoned_flags(items, data.get("project_path")))
     return flags
 
 
@@ -477,6 +513,12 @@ def _memory_flags(items: List[Dict[str, Any]]) -> List[str]:
     for item in items:
         for identifier in item.get("memory") or []:
             record = records.get(identifier)
+            if record is _UNVERIFIABLE:
+                flags.append(
+                    f"{_label(item)}: memory id {identifier} is unverifiable "
+                    f"(the memory store could not be opened) — NOT a missing record"
+                )
+                continue
             if record is None:
                 flags.append(f"{_label(item)}: memory id {identifier} no longer resolves")
                 continue
@@ -502,11 +544,20 @@ def _staleness_flags(items: List[Dict[str, Any]]) -> List[str]:
     return flags
 
 
-def _abandoned_flags(items: List[Dict[str, Any]]) -> List[str]:
+def _abandoned_flags(
+    items: List[Dict[str, Any]], project_path: Any = None
+) -> List[str]:
     """An `active` item with no branch and no worktree carrying its ref.
 
     Only items that HAVE a ref are checked, so a ref-less item is never flagged
     here either.
+
+    `project_path` anchors git to THIS project. Without it git read whichever
+    repository the process CWD happened to sit in, so running from outside the
+    project evaluated the heuristic against a different repo's branches and
+    emitted wrong flags with nothing to show they were wrong. Threaded down
+    from reconcile the way _plan_flags already receives it, rather than calling
+    project_root(), which raises and would turn a drift report into a refusal.
     """
     tracked = [item for item in items if item.get("status") == "active" and item.get("ref")]
     if not tracked:
@@ -514,7 +565,7 @@ def _abandoned_flags(items: List[Dict[str, Any]]) -> List[str]:
     # ponytail: the linkage is the ref's digits appearing in a branch or
     # worktree name, which is how this project names them. Add an explicit
     # `branch` field to the item shape if a backlog ever needs a firmer link.
-    names = _branch_and_worktree_names()
+    names = _branch_and_worktree_names(project_path)
     if names is None:
         return []
     flags = []
@@ -529,9 +580,10 @@ def _abandoned_flags(items: List[Dict[str, Any]]) -> List[str]:
     return flags
 
 
-def _branch_and_worktree_names() -> Optional[List[str]]:
-    branches = _run_capture(["git", "branch", "--format=%(refname:short)"])
-    worktrees = _run_capture(["git", "worktree", "list", "--porcelain"])
+def _branch_and_worktree_names(project_path: Any = None) -> Optional[List[str]]:
+    at = ["-C", str(project_path)] if project_path else []
+    branches = _run_capture(["git", *at, "branch", "--format=%(refname:short)"])
+    worktrees = _run_capture(["git", *at, "worktree", "list", "--porcelain"])
     if branches is None and worktrees is None:
         return None
     return f"{branches or ''}\n{worktrees or ''}".splitlines()
@@ -653,12 +705,13 @@ def _handle_write_or_show(args: argparse.Namespace, path: Path) -> int:
 
 def _field_updates(args: argparse.Namespace) -> Dict[str, Any]:
     """Namespace to item fields. `--ref none` clears; an unpassed flag leaves
-    the field alone."""
+    the field alone. The clear rides _CLEAR rather than None, because None is
+    already how an unpassed flag reaches _apply_fields."""
     ref = getattr(args, "ref", None)
     return {
         "status": getattr(args, "status", None),
         "rank": getattr(args, "rank", None),
-        "ref": None if ref is None else (None if ref.lower() == "none" else ref),
+        "ref": None if ref is None else (_CLEAR if ref.lower() == "none" else ref),
         "plan": getattr(args, "plan", None),
         "note": getattr(args, "note", None),
         "memory": getattr(args, "memory", None),
@@ -674,11 +727,17 @@ def _render(data: Dict[str, Any], flags: Sequence[str]) -> str:
         (item for item in data.get("items") or [] if isinstance(item, dict)),
         key=lambda item: (item.get("status") != "active", _rank_of(item)),
     )
+    # The id is emitted for the AGENT, which needs it as the argument to `set`.
+    # `add` echoes it once at creation, and that echo is gone by the next
+    # session — so without it here a later session, which is the only kind this
+    # backlog exists for, has no route to any id at all. The rule that it is
+    # never cited to the USER lives in commands/next.md and is unaffected.
     for item in items:
         lines.append(
             f"  [{item.get('status')}] {item.get('title')}"
             + (f"  ref={item.get('ref')}" if item.get("ref") else "")
             + (f"  plan={item.get('plan')}" if item.get("plan") else "")
+            + f"  [id={item.get('id')}]"
         )
         if item.get("note"):
             lines.append(f"      note: {item['note']}")

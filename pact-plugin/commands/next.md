@@ -39,6 +39,9 @@ Read the output and report to the user in plain language:
 
 Exit code 2 means the file could not be read. Report that and go to Step 4.
 
+Each line ends with `[id=xxxx]`. Use it as the `<item-id>` argument to Step 3's
+`set` command — this output is where you get it.
+
 **Never cite an item's `id` to the user.** Ids exist so the relational fields
 survive a retitling; they mean nothing to a person. Refer to items by title.
 
@@ -57,6 +60,7 @@ Drift is **reported and never silently repaired**. A flag is a proposal:
 | active and untouched for a fortnight | confirm it is still live |
 | `plan` does not resolve | find where the document moved |
 | a `memory` id no longer resolves | drop it or replace it |
+| a `memory` id is unverifiable | say the store could not be opened; change nothing |
 | a `memory` record changed after linking | re-read it before relying on it |
 
 An automatic fix is you overwriting the user's recorded intent on the strength
@@ -87,17 +91,14 @@ repeatable `--memory`, `--blocked-by`, `--batch-with`, `--exclusive-with`.
 Field rules the writer enforces, and a violation is REFUSED with nothing
 written rather than quietly adjusted:
 
-- `note` is capped at 200 characters. Anything longer is a mission brief, and
-  mission briefs are what rot. Put it in the tracker issue or in pact-memory
-  and point at it.
+- `note` is capped at 200 characters. Anything longer goes in the tracker issue
+  or in pact-memory, with the note pointing at it.
 - `note` is written in YOUR voice, never in the user's first person. A relay in
   the user's first person gains an authority it never had and no later reader
   can strip it off. Where the distinction carries weight, mark it: `user
   ruled:` or `inferred:`.
-- `plan` is repo-relative. An absolute path captured inside a worktree points
-  into a directory that `git worktree remove` deletes.
-- `memory` holds at most 5 record ids. The cap is a curation forcing-function,
-  not a storage limit.
+- `plan` is repo-relative.
+- `memory` holds at most 5 record ids.
 - An item with no `ref` is fully supported and is never second-class.
 
 Write when work lands — a PR merges, `/PACT:peer-review` completes,
@@ -121,8 +122,7 @@ the moved-aside path, then rebuild the items from what you can recover.
 
 The file lives under the directory `get_backlog_dir()` resolves in
 `hooks/shared/paths.py`, one JSON file per project. Ask that function rather
-than writing the path out — it is home-pinned rather than config-dir-pinned, so
-one project keeps one backlog across every backend the user switches between.
+than writing the path out.
 
 The session-start block that surfaces this backlog automatically is a pure file
 read. It reports a corrupt or unresolvable store loudly and never writes.
