@@ -853,8 +853,24 @@ def _as_datetime(value: Any) -> Optional[datetime]:
 
 
 def _is_newer(candidate: Any, baseline: Any) -> bool:
+    """Strictly LATER CALENDAR DAY, not later instant.
+
+    `touched` is stored as a date, so it parses to midnight UTC, while a memory
+    record's `updated_at` carries a real time. Comparing them as instants made
+    ANY record updated later the same day compare greater — so an item linked
+    this morning reported "the record changed after it was linked" on its very
+    next reconcile. The natural workflow makes that the common case rather than
+    the edge one: you link a record and keep working on the same material, so
+    the flag fired on exactly the items under active work.
+
+    Comparing days costs the within-day signal, which is the cheapest one to
+    lose: a same-day change is one the user was present for, and a change on any
+    later day still flags. The alternative was storing `touched` at full
+    precision, which changes the stored shape and would have to take `added`
+    with it for consistency — a schema change to recover a signal nobody needs.
+    """
     left, right = _as_datetime(candidate), _as_datetime(baseline)
-    return left is not None and right is not None and left > right
+    return left is not None and right is not None and left.date() > right.date()
 
 
 def _rank_of(item: Dict[str, Any]) -> float:
