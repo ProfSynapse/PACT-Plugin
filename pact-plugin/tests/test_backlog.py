@@ -94,6 +94,8 @@ coverage. This list is the checkable claim, and it can be rebuilt from in an
 afternoon.
 
   MUTATION (in hooks/shared/ or hooks/session_init.py)  ->  TEST THAT KILLS IT
+  Two spaces at least before the test name; one makes the row invisible
+  to the reconciliation that counts them.
 
   a recorded worktree stops matching    test_a_recorded_worktree_finds_its_project_backlog
   the match admits a descendant         test_an_ancestor_checkout_does_not_claim_an_unrelated_project
@@ -165,6 +167,18 @@ afternoon.
   the scan's relative filter dropped    test_a_relative_root_never_matches_but_its_absolute_siblings_still_do
   the plan containment gate dropped     test_an_escaping_plan_is_not_resolved_and_is_never_probed
   the plan probe runs before the gate   test_an_escaping_plan_is_not_resolved_and_is_never_probed
+  a schema problem reddens a READ      test_only_an_unparseable_file_reports_as_unreadable
+  a schema WRITE reports unreadable    test_only_an_unparseable_file_reports_as_unreadable
+  a parse failure reads as refused    test_only_an_unparseable_file_reports_as_unreadable
+  non-utf8 bytes routed nowhere       test_repair_moves_every_corrupt_shape_including_non_utf8
+  the readable guard removed          test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place
+  the unreadable guard removed        test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place
+  repair refuses but moves anyway     test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place
+  `force` defaulted on                test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place
+  the caveat glued to every move      test_the_success_message_says_only_what_was_established
+  the caveat dropped when unreadable  test_the_success_message_says_only_what_was_established
+  `corrupt` back in the prose         test_the_success_message_says_only_what_was_established
+  no success message at all           test_the_success_message_says_only_what_was_established
   membership simplified to `.get()`     test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
   membership reverted to `is not None`  test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
   the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_the_cause
@@ -1664,3 +1678,190 @@ def test_an_escaping_plan_is_not_resolved_and_is_never_probed(tmp_path, monkeypa
     assert not any(p.resolve() == outside.resolve() for p in probed), (
         f"the escaping target was probed by exists(): {probed}"
     )
+
+
+def test_only_an_unparseable_file_reports_as_unreadable(tmp_path):
+    """The boundary in front of the operation that moves the user's file.
+
+    An agent reads the unreadable code and routes to `repair`, which renames
+    what the user has. So a file that PARSES but breaks a rule must never
+    produce that code: it is refused, or rendered, but not repair-worthy.
+
+    THE CONTROL IS THE LOAD-BEARING PART. The fixture is only read when its
+    name matches `store_path().stem`; under any other name the CLI creates a
+    fresh empty backlog and still exits 0, so every exit-code assertion here
+    would pass against a store the code never opened. The control keys on
+    CONTENT — a title that can only appear if the file was read — because the
+    exit code is identical in both cases and cannot discriminate.
+
+    RED WHEN a schema problem reaches the unreadable code on either command,
+    or when a parse failure stops reaching it.
+    """
+    name = backlog.store_path().stem
+    base = {"version": 1, "project": name, "project_path": "/x", "roots": ["/x"],
+            "updated": "2026-09-02T00:00:00Z", "items": []}
+
+    def run(body, *args):
+        store = tmp_path / f"case{len(list(tmp_path.iterdir()))}"
+        store.mkdir()
+        (store / f"{name}.json").write_text(body, encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, "hooks/shared/backlog.py", "--backlog-dir", str(store), *args],
+            capture_output=True, text=True)
+        return r.returncode, r.stdout
+
+    conforming = json.dumps({**base, "items": [_item(title="CONTROL-TITLE")]})
+    code, out = run(conforming, "show", "--no-reconcile")
+    assert code == 0 and "CONTROL-TITLE" in out, (
+        "the fixture was not read — every assertion below would be vacuous"
+    )
+
+    # A BAD ITEM ID, not a bad `roots`: `save()` refreshes roots before
+    # validating, so a relative root self-heals on write and never refuses.
+    bad_item = {**_item(item_id="ZZZZ"), "title": "t"}
+    non_conforming = json.dumps({**base, "items": [bad_item]})
+    assert run(non_conforming, "show", "--no-reconcile")[0] == 0, (
+        "a schema problem exited non-zero on a READ"
+    )
+    # The id must EXIST in the fixture, or the write refuses for a missing
+    # item before validation is reached and the schema problem never matters.
+    assert run(non_conforming, "set", "ZZZZ", "--status", "done")[0] == 2, (
+        "a schema problem did not exit the refusal code on a WRITE"
+    )
+    assert run("{ broken", "show")[0] == 3, "an unparseable file did not report as unreadable"
+
+
+def test_repair_moves_every_corrupt_shape_including_non_utf8(tmp_path):
+    """Six shapes that cannot be interrogated, all repaired with no override.
+
+    The non-UTF8 case is written FROM BYTES, not from a description of bytes.
+    `read_text()` raises `UnicodeDecodeError`, a ValueError rather than an
+    OSError, so it once escaped uncaught and crashed the CLI — and an arm
+    written from the prose describing that branch would have passed.
+
+    Each shape asserts separately and names itself, so a regression on one
+    reddens alone rather than collapsing the loop.
+    """
+    shapes = {
+        "truncated": b"{ broken",
+        "top-level list": b"[1,2,3]",
+        "bare string": b'"just a string"',
+        "bare number": b"42",
+        "empty file": b"",
+        "non-utf8 bytes": b"\xff\xfe\x00\x80garbage",
+    }
+    for label, raw in shapes.items():
+        path = tmp_path / f"{label.replace(' ', '_')}.json"
+        path.write_bytes(raw)
+        aside, _ = backlog.repair(path)
+        assert not path.exists(), f"{label}: was not moved"
+        assert aside.read_bytes() == raw, f"{label}: bytes changed in the move"
+
+
+def test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place(tmp_path):
+    """Refusing is half; leaving the thing in place is the other half.
+
+    A returncode-only assertion passes for a guard that refuses and moves the
+    file anyway, so the survival assertion is the load-bearing one.
+
+    THE GUARD IS CALLED DIRECTLY, not through the CLI. That is the point: it
+    lives inside `repair()`, so moving it back to the command handler would
+    leave this function able to move a readable file for its next caller, and
+    this arm is what fails if someone does.
+
+    A DIRECTORY rather than a chmod-000 file: both reach the same
+    unreadable branch, and chmod does not fail as root, so an arm built on it
+    would pass vacuously there. The directory also proves the distinction
+    lives below the handler's existence check — it passes `exists()`.
+    """
+    readable = tmp_path / "readable.json"
+    backlog.save(_backlog(tmp_path), readable)
+    before = readable.read_bytes()
+    try:
+        backlog.repair(readable)
+    except backlog.BacklogWriteError as exc:
+        assert "readable" in str(exc)
+    else:
+        raise AssertionError("repair moved a file it could read")
+    assert readable.read_bytes() == before, "a refused repair moved the file anyway"
+
+    unreadable = tmp_path / "a-directory.json"
+    unreadable.mkdir()
+    try:
+        backlog.repair(unreadable)
+    except backlog.BacklogWriteError:
+        pass
+    else:
+        raise AssertionError("repair moved something it could not read")
+    assert unreadable.is_dir(), "a refused repair moved the directory anyway"
+
+
+def test_force_overrides_every_refusal_branch(tmp_path):
+    """The capability the user deliberately kept, pinned as kept.
+
+    All three branches: readable, unreadable, and corrupt. Message ORDER is
+    asserted rather than wording — the unreadable-force text is being reworded
+    and pinning it would redden on a copy edit.
+    """
+    readable = tmp_path / "readable.json"
+    backlog.save(_backlog(tmp_path), readable)
+    aside, message = backlog.repair(readable, force=True)
+    assert not readable.exists() and aside.exists()
+    assert message.index(str(aside)) < len(message), "the moved-aside path is not named"
+
+    corrupt = tmp_path / "corrupt.json"
+    corrupt.write_bytes(b"{ broken")
+    aside, _ = backlog.repair(corrupt, force=True)
+    assert not corrupt.exists() and aside.exists()
+
+    directory = tmp_path / "dir.json"
+    directory.mkdir()
+    aside, message = backlog.repair(directory, force=True)
+    assert not directory.exists() and aside.is_dir()
+    assert message.index(str(aside)) < message.index("NOT made readable"), (
+        "the caveat precedes the destination it qualifies"
+    )
+
+
+def test_the_success_message_says_only_what_was_established(tmp_path):
+    """The caveat appears on exactly one path, and no path calls the file corrupt.
+
+    THE ABSENCES ARE THE LOAD-BEARING HALF. A caveat glued to every move would
+    satisfy a presence assertion while telling a user their corrupt backlog was
+    not made readable — when reading it is exactly what a human can now do.
+
+    SEPARATING PROSE FROM PATH: the moved-aside FILENAME contains
+    `.corrupt-<timestamp>.bak` by design, and the message names that path, so a
+    substring check over the whole message fails against correct behaviour. The
+    path is removed by string, leaving only prose. The next person will reach
+    for the naive check; this is why it does not work.
+
+    Each case asserts the message was PRODUCED before asserting what it lacks —
+    an absence assertion passes when the code never ran.
+    """
+    def prose(name, force=False, raw=None, as_dir=False):
+        path = tmp_path / name
+        if as_dir:
+            path.mkdir()
+        elif raw is None:
+            backlog.save(_backlog(tmp_path), path)
+        else:
+            path.write_bytes(raw)
+        aside, message = backlog.repair(path, force=force)
+        assert "moved the backlog aside to" in message, f"{name}: no move was reported"
+        assert aside.exists(), f"{name}: the destination does not exist"
+        return message.replace(str(aside), "")
+
+    unforced_corrupt = prose("a.json", raw=b"{ broken")
+    forced_corrupt = prose("b.json", raw=b"{ broken", force=True)
+    forced_readable = prose("c.json", force=True)
+    forced_unreadable = prose("d.json", force=True, as_dir=True)
+
+    assert "NOT made readable" not in unforced_corrupt, "caveat on an unforced corrupt move"
+    assert "NOT made readable" not in forced_corrupt, "caveat on a forced corrupt move"
+    assert "NOT made readable" not in forced_readable, "caveat on a forced readable move"
+    assert "NOT made readable" in forced_unreadable, "no caveat on a forced unreadable move"
+
+    for label, text in (("unforced corrupt", unforced_corrupt), ("forced corrupt", forced_corrupt),
+                        ("forced readable", forced_readable), ("forced unreadable", forced_unreadable)):
+        assert "corrupt" not in text, f"{label}: the message asserts corruption it did not establish"

@@ -86,6 +86,21 @@ class BacklogFileError(Exception):
         self.problem = problem
 
 
+class BacklogUnreadableError(BacklogFileError):
+    """The BYTES could not be read — permission, a directory at the path, a
+    lock, a transient IO failure. NOT a statement about the contents.
+
+    Separate from its parent because the two answer different questions and
+    one caller acts on the difference: `repair` MOVES the user's file, and
+    "I could not read it" is not evidence of corruption. Collapsing them let a
+    healthy backlog behind a permission bit present exactly as a corrupt one.
+
+    A subclass rather than a sibling so every existing `except
+    BacklogFileError` keeps catching both; only a caller that needs the
+    distinction has to know it exists.
+    """
+
+
 def validate(obj: Any) -> List[str]:
     """Return a list of human-readable problems. An empty list means valid.
 
@@ -226,9 +241,20 @@ def read_json(path: Path) -> Dict[str, Any]:
     this project's file.
     """
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise BacklogFileError(path, f"unreadable or unparseable ({exc})") from exc
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        # We READ the bytes and they are not text, so this is corruption rather
+        # than an access failure. Caught explicitly because it is a ValueError
+        # raised by the READ call: it is not an OSError, so the OSError clause
+        # does not see it and it would escape read_json uncaught. Measured —
+        # it crashed the CLI with a traceback before this clause existed.
+        raise BacklogFileError(path, f"unparseable ({exc})") from exc
+    except OSError as exc:
+        raise BacklogUnreadableError(path, f"could not be read ({exc})") from exc
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise BacklogFileError(path, f"unparseable ({exc})") from exc
     # Valid JSON is not necessarily an object. Without this, a top-level list,
     # number or string reaches `.get()` in the scan and raises AttributeError,
     # which is NOT a BacklogFileError and so escapes the per-file catch there

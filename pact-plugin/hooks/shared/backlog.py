@@ -48,6 +48,7 @@ from shared.backlog_store import (  # noqa: E402  # follows the sys.path bootstr
     SCHEMA_VERSION,
     STATUSES,
     BacklogFileError,
+    BacklogUnreadableError,
     file_local_flags,
     read_json,
     validate,
@@ -250,8 +251,23 @@ def save(data: Dict[str, Any], path: Path) -> List[str]:
     return []
 
 
-def repair(path: Path) -> Tuple[Path, str]:
-    """Move a corrupt backlog aside and report where it went.
+def repair(path: Path, force: bool = False) -> Tuple[Path, str]:
+    """Move a CORRUPT backlog aside and report where it went.
+
+    REFUSES A FILE IT CAN READ unless `force`, and equally refuses one whose
+    BYTES it cannot read, where corruption is undetermined rather than ruled
+    out. Repair is the one operation here that moves the user's data, and
+    nothing in the code used to stop it moving a perfectly good backlog — only
+    the command file's prose and an agent's compliance with it. The condition
+    for the readable refusal is whether `read_json` succeeds, which is
+    exactly the corruption line: a dict has a key space and can be interrogated,
+    so it is non-conforming at worst; an array or a truncated file cannot be
+    asked anything and is corrupt. A non-conforming file therefore needs the
+    override too, and that is correct — the override IS the deliberate-archive
+    path, not an escape hatch for a rule that got in the way.
+
+    The guard is HERE rather than in the CLI handler because a call-site guard
+    leaves this function able to move a readable file for the next caller.
 
     Renamed, never overwritten and never deleted: destroying a corrupt file to
     fix corruption would eat this design's own thesis, and the moved-aside copy
@@ -259,6 +275,35 @@ def repair(path: Path) -> Tuple[Path, str]:
     it runs at every session start, so a rename there would leave one
     moved-aside copy per session.
     """
+    # The probe runs under --force too. Unforced it decides whether to refuse;
+    # FORCED it decides what the success message may claim, because a move is
+    # not a rescue when we could not read the bytes in the first place.
+    caveat = ""
+    try:
+        read_json(path)
+    except BacklogUnreadableError as exc:
+        # COULD NOT READ THE BYTES, so corruption is undetermined and we
+        # must not move the file. A permission bit or a directory at the
+        # path is not a broken backlog.
+        if not force:
+            raise BacklogWriteError(
+                f"{path} {exc.problem}, so whether it is corrupt is unknown. "
+                f"Nothing was moved. Pass --force to rename it aside anyway — "
+                f"it is kept, not deleted."
+            ) from exc
+        caveat = (
+            f" It was NOT made readable: it {exc.problem}, and that still "
+            f"applies to the copy."
+        )
+    except BacklogFileError:
+        pass              # read it, and it is not a backlog — repair's case
+    else:
+        if not force:
+            raise BacklogWriteError(
+                f"{path} is readable, so it is not corrupt. Nothing was moved. "
+                f"Pass --force to rename it aside anyway — it is kept, not deleted."
+            )
+
     # The moved-aside name deliberately DROPS the .json suffix. The read path
     # globs *.json across the whole store directory and reads every match, so a
     # corrupt file kept under .json would be picked up again at the next
@@ -272,7 +317,7 @@ def repair(path: Path) -> Tuple[Path, str]:
         f"{path.stem}.corrupt-{datetime.now(timezone.utc):%Y%m%dT%H%M%S.%fZ}.bak"
     )
     path.rename(aside)
-    return aside, f"moved the corrupt backlog aside to {aside}"
+    return aside, f"moved the backlog aside to {aside}.{caveat}"
 
 
 def _items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -778,7 +823,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_item_arguments(update)
     update.add_argument("--title")
 
-    sub.add_parser("repair", help="Move a corrupt backlog aside and start fresh")
+    fix = sub.add_parser("repair", help="Move a corrupt backlog aside and start fresh")
+    fix.add_argument(
+        "--force",
+        action="store_true",
+        help="Move the file aside even when it is readable, or could not be read",
+    )
     return parser
 
 
@@ -812,7 +862,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         path = store_path(backlog_dir)
         if args.command == "repair":
-            return _handle_repair(path)
+            return _handle_repair(path, args.force)
         return _handle_write_or_show(args, path)
     except BacklogFileError as exc:
         print(
@@ -826,11 +876,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _EXIT_REFUSED
 
 
-def _handle_repair(path: Path) -> int:
+def _handle_repair(path: Path, force: bool = False) -> int:
     if not path.exists():
         print(f"nothing to repair: {path} does not exist")
         return _EXIT_OK
-    aside, message = repair(path)
+    aside, message = repair(path, force)
     print(message)
     print(f"a fresh backlog will be created at {path} on the next write")
     return _EXIT_OK

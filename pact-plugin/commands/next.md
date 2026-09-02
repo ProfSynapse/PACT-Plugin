@@ -126,6 +126,20 @@ This RENAMES the corrupt file aside and reports where it went. It never
 overwrites and never deletes, so a wrong rebuild loses nothing. Tell the user
 the moved-aside path, then rebuild the items from what you can recover.
 
+`repair` REFUSES a file it can read, and says so. That refusal means the file
+is not corrupt — nothing was moved and the backlog is intact. Report to the
+user what the flags say is wrong with it and stop there.
+
+It also refuses a file it CANNOT read at all — a permission bit, a directory
+at the path, an IO error. That refusal names the error and means corruption is
+unknown, not established. Report the error to the user; do not move the file.
+
+`--force` renames the file aside anyway — readable or unreadable — and reports
+where it went. The file is KEPT, not deleted, so nothing is lost. Forcing an
+unreadable file does NOT make it readable: whatever stopped the read applies to
+the moved-aside copy too. Use it ONLY when the user has asked for that file to
+be set aside. Never reach for it to get past a refusal.
+
 ## Store location
 
 The file lives under the directory `get_backlog_dir()` resolves in
