@@ -23,13 +23,13 @@ For LLM agents, **conversation IS cognition**. Understanding doesn't exist insid
 
 ### Teachback Mechanism
 
-When a downstream agent receives an upstream handoff (via `TaskGet`), their first action is to send a teachback message — restating key decisions, constraints, and interfaces before proceeding.
+When a downstream agent receives an upstream handoff (by reading the upstream task's file — `TaskGet` does NOT surface task metadata), their first action is to send a teachback message — restating key decisions, constraints, and interfaces before proceeding.
 
 #### Flow
 
 ```
 1. Agent dispatched as a Task A (TEACHBACK gate) + Task B (primary work, blockedBy=[A]) pair
-2. Agent claims Task A, reads the upstream handoff/mission via `TaskGet`
+2. Agent claims Task A, reads the upstream handoff/mission from the upstream task file
 3. Agent writes its teachback to Task A metadata (`metadata.teachback_submit`, 5 canonical
    fields) and sends a wake-signal `SendMessage` carrying the canonical payload verbatim
    (per pact-teachback Step 2).

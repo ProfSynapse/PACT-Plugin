@@ -95,7 +95,7 @@ When "first agent's choice becomes standard," subsequent agents need to discover
 
 4. **Persist `established_conventions`**: `TaskUpdate(codePhaseTaskId, metadata={"established_conventions": {"naming": "...", "patterns": "...", "style": "..."}})`
 
-> **State recovery**: After compaction, read the journal's `s2_state_seeded` event for `s2_boundaries` and `established_conventions`; fall back to `TaskGet(codePhaseTaskId).metadata` if unavailable. See [pact-state-recovery.md](pact-state-recovery.md) for the full recovery hierarchy.
+> **State recovery**: After compaction, read the journal's `s2_state_seeded` event for `s2_boundaries` and `established_conventions`; fall back to the CODE phase task's file on disk if unavailable (`TaskGet` does NOT surface task metadata). See [pact-state-recovery.md](pact-state-recovery.md) for the full recovery hierarchy.
 
 ### Shared Language
 

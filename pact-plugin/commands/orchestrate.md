@@ -355,7 +355,7 @@ Wire variety dimension scores (already computed in the Task Variety Assessment a
 
 **If any hard gate fires** → Phase runs. No further analysis needed for this phase.
 
-**Missing variety data**: If variety scores are not available, hard gates cannot be evaluated — the default-run posture applies. After compaction, read the journal's `variety_assessed` event first (`python3 "$SJ" read-last --session-dir '{session_dir}' --type variety_assessed`); fall back to `TaskGet(featureTaskId).metadata.variety` if journal is unavailable. See [pact-state-recovery.md](../protocols/pact-state-recovery.md) for the full recovery hierarchy.
+**Missing variety data**: If variety scores are not available, hard gates cannot be evaluated — the default-run posture applies. After compaction, read the journal's `variety_assessed` event first (`python3 "$SJ" read-last --session-dir '{session_dir}' --type variety_assessed`); fall back to the feature task file's `metadata.variety` if journal is unavailable (`TaskGet` does NOT surface metadata). See [pact-state-recovery.md](../protocols/pact-state-recovery.md) for the full recovery hierarchy.
 
 ### Layer 3: Structured Analysis Gate
 
@@ -574,7 +574,7 @@ When detection fires (score >= threshold), follow the evaluation response protoc
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
      - CONTEXT: [task description, where to find PREPARE outputs (e.g., "Read `docs/preparation/{feature}.md`"), plan sections (if any), plan reference]
      - MISSION: [design mission]
-     - INSTRUCTIONS: "Preparer task: #{taskId} — read via `TaskGet` for research decisions and context."
+     - INSTRUCTIONS: "Preparer task: #{taskId} — read its task file for research decisions and context; `TaskGet` does NOT surface metadata."
      - GUIDELINES: Do not read phase output files yourself or paste their content into the task description. If PREPARE was skipped: pass the plan's Preparation Phase section instead.
 3. `TaskUpdate(A_id, owner="architect", addBlocks=[B_id])`
 4. `TaskUpdate(B_id, owner="architect", addBlockedBy=[A_id])`
@@ -710,7 +710,7 @@ JSON
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
      - CONTEXT: Where to find ARCHITECT outputs (e.g., "Read `docs/architecture/{feature}.md`"), plan sections (if any), plan reference. (NOTE: Do not read the phase output files yourself or paste their content into the task description.)
      - MISSION: [implementation mission]
-     - INSTRUCTIONS: "Architect task: #{taskId} — read via `TaskGet` for design decisions." If multiple coders are dispatched concurrently, include peer names: "Your peers on this phase: {other-coder-names}."
+     - INSTRUCTIONS: "Architect task: #{taskId} — read its task file for design decisions; `TaskGet` does NOT surface metadata." If multiple coders are dispatched concurrently, include peer names: "Your peers on this phase: {other-coder-names}."
      - GUIDELINES:
        - If ARCHITECT was skipped: pass the plan's Architecture Phase section instead.
        - If PREPARE/ARCHITECT were skipped, include: "PREPARE and/or ARCHITECT were skipped based on existing context. Minor decisions (naming, local structure) are yours to make. For moderate decisions (interface shape, error patterns), decide and implement but flag the decision with your rationale in the HANDOFF so it can be validated. Major decisions affecting other components are blockers—don't implement, escalate."
@@ -863,7 +863,7 @@ Execute the [CONSOLIDATE Phase protocol](../protocols/pact-scope-phases.md#conso
 1. `TaskCreate(subject="test-engineer: TEACHBACK for {feature}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
 2. `TaskCreate(subject="test-engineer: test {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
-     - CONTEXT: [task description, coder task references (e.g., "Coder tasks: #{id1}, #{id2} — read via `TaskGet` for implementation decisions and flagged uncertainties"), plan sections (if any), plan reference]
+     - CONTEXT: [task description, coder task references (e.g., "Coder tasks: #{id1}, #{id2} — read their task files for implementation decisions and flagged uncertainties"), plan sections (if any), plan reference]
      - MISSION: [testing mission]
      - INSTRUCTIONS: [test-engineer-specific instructions]
      - GUIDELINES: "You own ALL substantive testing: unit tests, integration, E2E, edge cases."

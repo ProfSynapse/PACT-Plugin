@@ -22,7 +22,7 @@ This is the deep-clean pass. Pass 1 (workflow-level HANDOFF review) is the prima
 
 > **Track whether this ran**: step 5's journal template requires a `{consolidation_ran}` flag — pass the literal string `true` when the secretary confirms Pass 2 completed, or `false` when you skipped consolidation per the trivial-session rule above. The flag drives the shell-clamped `session_consolidated` emission in step 5.
 
-> **Why this runs first**: Memory consolidation reads task HANDOFFs via `TaskGet`. Task audit (step 7) may delete completed tasks. Running consolidation first ensures HANDOFF data is available.
+> **Why this runs first**: Memory consolidation reads task HANDOFFs from the task files (`TaskGet` does NOT surface metadata). Task audit (step 7) may delete completed tasks. Running consolidation first ensures HANDOFF data is available.
 
 ## 2. Documentation Sync
 

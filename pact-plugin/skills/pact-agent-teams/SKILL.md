@@ -53,15 +53,20 @@ A reply to the user that contains content the team-lead needs to act on (a block
 ## Reading Upstream Context
 
 Your task description may reference upstream task IDs (e.g., "Architect task: #5").
-Use `TaskGet(taskId)` to read their metadata for design decisions, HANDOFF data, and
-integration points — rather than relying on the team-lead to relay this information.
+`TaskGet` does NOT surface task metadata, so read the task file for design
+decisions, HANDOFF data and integration points — rather than relying on the
+team-lead to relay this information:
+
+```bash
+cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.<key>
+```
 
 Common chain-reads:
 - **Coders** → read architect's task for design decisions and interface contracts
 - **Test engineers** → read coder tasks for what was built and flagged uncertainties
 - **Reviewers** → read prior phase tasks for full context
 
-If `TaskGet` returns no metadata or the referenced task doesn't exist, proceed with information from your task description and file system artifacts (docs/architecture/, docs/preparation/).
+If the task file is absent or carries no such metadata, proceed with information from your task description and file system artifacts (docs/architecture/, docs/preparation/).
 
 ## Teachback (Conversation Verification)
 
@@ -351,7 +356,7 @@ This flag has a lead-side consumer: the `missed_wake_scan` hook re-surfaces task
 idling on `awaiting_lead_completion` past the staleness threshold at the
 team-lead's next user prompt or session start. The schema primitives
 (`KNOWN_REASONS`, `KNOWN_RESOLVERS`, `wait_stale`) in `shared.intentional_wait`
-define the teammate-facing metadata contract for protocol-defined waits. Using the flag documents the wait intent for the team-lead's `TaskGet`
+define the teammate-facing metadata contract for protocol-defined waits. Using the flag documents the wait intent for the team-lead's task-file
 inspection and for post-hoc session review.
 
 ### SET — before going idle
@@ -452,7 +457,7 @@ Unknown keys are preserved (forward-compat).
 The `wait_stale` primitive in `shared.intentional_wait` considers the flag stale after 30
 minutes from `since`. The `missed_wake_scan` hook surfaces `awaiting_lead_completion` waits stale past
 this threshold to the team-lead; for all other reasons the flag is advisory
-metadata the team-lead may inspect via `TaskGet`. If your wait genuinely takes longer, re-SET with a fresh `since` so
+metadata the team-lead may inspect by reading the task file. If your wait genuinely takes longer, re-SET with a fresh `since` so
 later inspection reflects the real duration.
 
 ### When NOT to set
