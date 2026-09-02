@@ -37,7 +37,10 @@ Read the output and report to the user in plain language:
 2. The next two or three `planned` items by rank.
 3. Every flag, with what you think it means.
 
-Exit code 2 means the file could not be read. Report that and go to Step 4.
+Exit code 2 means the file could not be PARSED. Report that and go to Step 4.
+A file that parses but breaks a schema rule is not that case: it reports as
+`schema:` flags, is still readable, and must not be repaired. Fix the field the
+flag names.
 
 Each line ends with `[id=xxxx]`. Use it as the `<item-id>` argument to Step 3's
 `set` command — this output is where you get it.

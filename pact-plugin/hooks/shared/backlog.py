@@ -49,7 +49,7 @@ from shared.backlog_store import (  # noqa: E402  # follows the sys.path bootstr
     STATUSES,
     BacklogFileError,
     file_local_flags,
-    load,
+    read_json,
     validate,
 )
 from shared.paths import get_backlog_dir  # noqa: E402  # follows the bootstrap
@@ -143,12 +143,19 @@ def project_root() -> Path:
 def load_or_create(path: Path) -> Dict[str, Any]:
     """Load this project's backlog, or build an empty one in memory.
 
-    An absent file is normal and yields a fresh document. A present but corrupt
-    file raises, which the CLI turns into a repair offer rather than an
-    overwrite.
+    An absent file is normal and yields a fresh document. An UNPARSEABLE file
+    raises, which the CLI turns into a repair offer.
+
+    A file that parses but does NOT CONFORM does not raise, and that asymmetry
+    is deliberate. The read path already renders a non-conforming file rather
+    than suppressing it, so raising here would let a backlog the user just saw
+    at session start be renamed off the read path by the repair route — the two
+    sides disagreeing about whether one file is usable. The schema problems are
+    surfaced as flags instead, and save() still refuses to write while any
+    remain, so nothing invalid is persisted and nothing readable is moved aside.
     """
     if path.exists():
-        return load(path)
+        return read_json(path)
     return {
         "version": SCHEMA_VERSION,
         "project": path.stem,
@@ -201,8 +208,13 @@ def repair(path: Path) -> Tuple[Path, str]:
     # globs *.json across the whole store directory and reads every match, so a
     # corrupt file kept under .json would be picked up again at the next
     # session start and the loud state would survive its own repair.
+    # MICROSECONDS, not seconds. Path.rename OVERWRITES its destination on
+    # POSIX (measured — it does not raise), so two repairs inside one second
+    # destroyed the first moved-aside copy: the very copy this function exists
+    # to preserve. Microsecond granularity keeps the names sortable while making
+    # a collision need two repairs in the same microsecond.
     aside = path.with_name(
-        f"{path.stem}.corrupt-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.bak"
+        f"{path.stem}.corrupt-{datetime.now(timezone.utc):%Y%m%dT%H%M%S.%fZ}.bak"
     )
     path.rename(aside)
     return aside, f"moved the corrupt backlog aside to {aside}"
@@ -296,7 +308,16 @@ def resolve_memory_ids(
     across project scope where a search cannot, and resolving a known id set is
     not a search, so this satisfies the prohibition rather than skirting it.
     """
-    resolved: Dict[str, Optional[Dict[str, Any]]] = {identifier: None for identifier in ids}
+    # UNVERIFIABLE IS THE DEFAULT, and that is the whole fix rather than a
+    # style choice. Starting at None made "we never found out" indistinguishable
+    # from "we asked and there is no such record", so every path that failed to
+    # get an answer — an unopenable store, a lookup that raised, a future early
+    # return — silently reported the records as DELETED. Starting here means
+    # only a real answer overwrites it, and any new non-answer path inherits the
+    # honest value for free.
+    resolved: Dict[str, Optional[Dict[str, Any]]] = {
+        identifier: _UNVERIFIABLE for identifier in ids
+    }
     if not ids:
         return resolved
 
@@ -304,7 +325,7 @@ def resolve_memory_ids(
         try:
             store = _memory_api().get_memory_instance()
         except Exception:
-            return {identifier: _UNVERIFIABLE for identifier in ids}
+            return resolved
 
     # ponytail: N sequential gets against one open store. The measured cost was
     # process spawn, and that is already gone; push the id set into one query
@@ -313,12 +334,19 @@ def resolve_memory_ids(
         try:
             record = store.get(identifier)
         except Exception:
-            continue
-        if record is not None:
-            resolved[identifier] = {
+            # A store that opens and then fails on a lookup — missing, locked
+            # or corrupt database — is still an inability to CHECK. Stop: the
+            # remaining ids would fail the same way and give the same answer N
+            # times, and they already hold it.
+            break
+        resolved[identifier] = (
+            None
+            if record is None
+            else {
                 "id": getattr(record, "id", identifier),
                 "updated_at": _as_text(getattr(record, "updated_at", None)),
             }
+        )
     return resolved
 
 
@@ -678,9 +706,12 @@ def _handle_repair(path: Path) -> int:
 
 def _handle_write_or_show(args: argparse.Namespace, path: Path) -> int:
     data = load_or_create(path)
+    # Schema problems are file-local, so they show even with --no-reconcile.
+    schema = [f"schema: {problem}" for problem in validate(data)]
 
     if args.command == "show":
-        print(_render(data, [] if args.no_reconcile else reconcile(data)))
+        flags = [] if args.no_reconcile else reconcile(data)
+        print(_render(data, schema + flags))
         return _EXIT_OK
 
     if args.command == "add":
