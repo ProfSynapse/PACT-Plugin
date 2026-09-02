@@ -309,8 +309,15 @@ def add_item(data: Dict[str, Any], title: str, **fields: Any) -> Dict[str, Any]:
     would silently discard whatever was there and then pass validate(), turning
     a refusal the user can act on into an unannounced overwrite of their file.
     """
-    items = data.get("items")
-    if items is not None and not isinstance(items, list):
+    # `"items" in data`, NOT `data.get("items") is not None`. The clause only
+    # needs to permit an ABSENT key, which setdefault then creates — but
+    # `.get()` collapses absent and JSON `null` into the same None, so the
+    # clause that permitted absence also permitted null, and `setdefault` then
+    # returned None for `.append` to raise on. Membership separates the two
+    # where `.get()` cannot: absence is legitimate, an explicit null is a
+    # non-conforming value and validate() reports it as one.
+    if "items" in data and not isinstance(data["items"], list):
+        items = data["items"]
         raise BacklogWriteError(
             f"items is {type(items).__name__}, expected a list. The backlog "
             f"does not conform and nothing was written — run `show` to see "
