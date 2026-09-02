@@ -465,10 +465,14 @@ def session_block(
         # this" and justifies replacing the block; a rule violation is "I
         # understand it and it breaks a rule I now enforce" and does not. So
         # the block renders from a non-conforming file and the problems are
-        # reported beside it. The isinstance gate is load-bearing: format_block
-        # coerces item CONTENT, but it iterates `items` itself, so a non-list
-        # scalar raises where every other malformed shape is absorbed — and
-        # then there is no block to render and the loud path is correct.
+        # reported beside it. The isinstance gate is load-bearing, for a
+        # NARROWER class than "not a list": format_block coerces item CONTENT
+        # and its `or []` absorbs any falsy `items`, so what actually raises is
+        # a TRUTHY NON-ITERABLE. Measured — 5, 3.5 and True raise TypeError,
+        # while "not a list", {"a": 1}, (1, 2), b"bytes" and None all render
+        # cleanly. Pick a truthy non-iterable when testing this branch: a
+        # string is a non-list scalar that does NOT raise, so an arm built on
+        # one passes with the gate removed.
         data = read_json(match)
         problems = validate(data)
         if problems and not isinstance(data.get("items"), list):
