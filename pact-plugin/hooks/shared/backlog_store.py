@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
@@ -539,10 +540,14 @@ def _relation_ids(
     ]
 
 
-def format_block(data: Dict[str, Any]) -> str:
+def format_block(data: Dict[str, Any], context_anchor: Optional[float] = None) -> str:
     """The session-start block: active work, the next few planned by rank, and
     a count of file-local drift. Never the whole list — a block that grows with
     the backlog becomes noise and gets skimmed.
+
+    `context_anchor` is UNIX epoch SECONDS for when the context was last
+    populated from scratch, or None. Passed rather than imported: this module
+    deliberately excludes session_init from its import closure.
     """
     items = _items(data)
     active = [item for item in items if item.get("status") == "active"]
@@ -561,11 +566,56 @@ def format_block(data: Dict[str, Any]) -> str:
         lines.append("  nothing active or planned")
     if flags:
         lines.append(f"  {len(flags)} flagged — run /PACT:next for the detail")
+    age = _age_line(data, context_anchor)
+    if age:
+        lines.append(age)
     return "\n".join(lines)
 
 
+def _age_line(data: Dict[str, Any], context_anchor: Optional[float]) -> str:
+    """One line when the backlog has not been written since the context was
+    last populated from scratch, otherwise "".
+
+    REPORTS THE OBSERVATION, NOT A DIAGNOSIS. "Nothing written since" cannot
+    separate a write mechanism that stopped from a caller that skipped its
+    write, and both are worth surfacing, so it says what is true and claims
+    no cause.
+
+    With NO anchor this renders nothing rather than falling back to a
+    fabricated left-hand side. The caller gates on the TRIGGER — whether this
+    is a context reset — never on this value's null-ness: `compact` is not a
+    consuming source, so a compact-only journal yields None, and a
+    render-when-not-None rule would miss the primary re-injection trigger while
+    firing on every resume, which is not a re-injection at all.
+    """
+    if context_anchor is None:
+        return ""
+    written = _as_epoch(data.get("updated"))
+    if written is None or written >= context_anchor:
+        return ""
+    return (
+        f"  nothing written to the backlog since this context was built "
+        f"(last write {data.get('updated')})"
+    )
+
+
+def _as_epoch(value: Any) -> Optional[float]:
+    """UNIX seconds for a stored UTC ISO-8601 stamp, or None if unusable."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
 def session_block(
-    project_dir: str, backlog_dir: Optional[Path] = None
+    project_dir: str,
+    backlog_dir: Optional[Path] = None,
+    context_anchor: Optional[float] = None,
 ) -> BacklogNotice:
     """THE TOTAL HELPER. Every state is a return value; nothing raises.
 
@@ -669,7 +719,7 @@ def session_block(
                 f"The block is rendered from it anyway and nothing was modified."
             )
 
-        block = format_block(data)
+        block = format_block(data, context_anchor)
         if len(claimants) > 1:
             # THE CAUSE IS NOW DETERMINATE, so name it. Under containment this
             # sentence was silent about cause, because an ANCESTOR repo produced

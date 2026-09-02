@@ -2030,7 +2030,24 @@ def main():
         # over, so a source gate would remove the only copy that reader gets),
         # while systemMessage answers a repetition question for a reader that
         # remembers, and is gated on the launch sources.
-        notice = backlog_store.session_block(project_dir)
+        # THE TRIGGER AND THE TIMESTAMP ARE TWO INDEPENDENT FACTS, and the age
+        # line needs both. `is_context_reset` is the trigger; the anchor is only
+        # the comparison operand, and it is passed ONLY on a reset.
+        # Gating on the anchor's null-ness instead would be silently wrong in
+        # both directions: `compact` is absent from
+        # _FIRST_SURFACE_CONSUMING_SOURCES, so a compact-only journal yields
+        # None and the line would never fire on the PRIMARY re-injection
+        # trigger, while every `resume` yields a non-None value and would fire
+        # the line where there has been no re-injection at all.
+        # A compact-only journal therefore stays silent. That is the narrow
+        # accepted case, NOT a defect: _age_line refuses to fabricate a
+        # left-hand side, and it self-heals at the next startup/resume/clear.
+        notice = backlog_store.session_block(
+            project_dir,
+            context_anchor=(
+                _latest_consuming_start_ts(session_dir) if is_context_reset else None
+            ),
+        )
         if notice.context:
             context_parts.append(notice.context)
         if notice.alert and source in ("startup", "resume"):
