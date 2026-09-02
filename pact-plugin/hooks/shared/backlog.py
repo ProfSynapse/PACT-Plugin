@@ -542,7 +542,7 @@ def _issue_number(ref: Any) -> Optional[int]:
 # Reconcile — reports drift, repairs nothing
 # ---------------------------------------------------------------------------
 
-def reconcile(data: Dict[str, Any]) -> List[str]:
+def reconcile(data: Dict[str, Any], store: Any = None) -> List[str]:
     """Every drift class, as a list of flags. Writes nothing, changes nothing.
 
     Drift is reported and never silently repaired: an automatic fix is the
@@ -553,7 +553,7 @@ def reconcile(data: Dict[str, Any]) -> List[str]:
     flags = list(file_local_flags(data))
     flags.extend(_ref_flags(items))
     flags.extend(_plan_flags(items, data.get("project_path")))
-    flags.extend(_memory_flags(items))
+    flags.extend(_memory_flags(items, store))
     flags.extend(_staleness_flags(items))
     flags.extend(_abandoned_flags(items, data.get("project_path")))
     return flags
@@ -618,7 +618,9 @@ def _plan_resolves(root: Path, plan: str) -> bool:
     return (target == base or base in target.parents) and target.exists()
 
 
-def _memory_flags(items: List[Dict[str, Any]]) -> List[str]:
+def _memory_flags(
+    items: List[Dict[str, Any]], store: Any = None
+) -> List[str]:
     wanted = sorted({
         identifier
         for item in items
@@ -627,7 +629,7 @@ def _memory_flags(items: List[Dict[str, Any]]) -> List[str]:
     })
     if not wanted:
         return []
-    records = resolve_memory_ids(wanted)
+    records = resolve_memory_ids(wanted, store)
     flags = []
     for item in items:
         for identifier in item.get("memory") or []:
@@ -772,7 +774,11 @@ def _add_item_arguments(parser: argparse.ArgumentParser) -> None:
         help=f"pact-memory record id; repeatable up to {MEMORY_MAX_IDS}",
     )
     for field in ("blocked-by", "batch-with", "exclusive-with"):
-        parser.add_argument(f"--{field}", action="append", help=f"Item id for {field}")
+        parser.add_argument(
+            f"--{field}",
+            action="append",
+            help=f"Item id for {field}; the single value 'none' clears it",
+        )
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -837,9 +843,15 @@ def _handle_write_or_show(args: argparse.Namespace, path: Path) -> int:
 
 
 def _field_updates(args: argparse.Namespace) -> Dict[str, Any]:
-    """Namespace to item fields. `--ref none` clears; an unpassed flag leaves
-    the field alone. The clear rides _CLEAR rather than None, because None is
-    already how an unpassed flag reaches _apply_fields."""
+    """Namespace to item fields. `none` clears; an unpassed flag leaves the
+    field alone. The clear rides _CLEAR rather than None, because None is
+    already how an unpassed flag reaches _apply_fields.
+
+    A LIST FIELD CLEARS THE SAME WAY, because `action="append"` cannot produce
+    an empty list and omitting the flag means "leave it" — so without this,
+    removing a dependency meant hand-editing a file whose whole design says
+    the user never hand-edits it.
+    """
     ref = getattr(args, "ref", None)
     return {
         "status": getattr(args, "status", None),
@@ -848,10 +860,31 @@ def _field_updates(args: argparse.Namespace) -> Dict[str, Any]:
         "plan": getattr(args, "plan", None),
         "note": getattr(args, "note", None),
         "memory": getattr(args, "memory", None),
-        "blocked_by": getattr(args, "blocked_by", None),
-        "batch_with": getattr(args, "batch_with", None),
-        "exclusive_with": getattr(args, "exclusive_with", None),
+        "blocked_by": _list_field(args, "blocked_by"),
+        "batch_with": _list_field(args, "batch_with"),
+        "exclusive_with": _list_field(args, "exclusive_with"),
     }
+
+
+def _list_field(args: argparse.Namespace, name: str) -> Any:
+    """A repeated flag's value: _CLEAR for `none`, the list otherwise.
+
+    MIXING `none` WITH AN ID IS REFUSED rather than resolved. `--blocked-by
+    none --blocked-by x1` reads as "clear then add" to one person and "add,
+    and one of them is literally none" to another, and either silently does
+    something the other did not ask for. Refusing costs one retype; guessing
+    costs a relationship the user did not mean to change.
+    """
+    values = getattr(args, name, None)
+    if values is None:
+        return None
+    clears = [v for v in values if v.lower() == "none"]
+    if clears and len(values) > 1:
+        raise BacklogWriteError(
+            f"--{name.replace('_', '-')} takes ids OR the single value "
+            f"'none' to clear, not both. Nothing was written."
+        )
+    return _CLEAR if clears else values
 
 
 def _render(data: Dict[str, Any], flags: Sequence[str]) -> str:

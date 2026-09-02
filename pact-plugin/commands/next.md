@@ -93,7 +93,8 @@ python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> \
 
 Both accept `--status`, `--rank`, `--ref`, `--plan`, `--note`, and the
 repeatable `--memory`, `--blocked-by`, `--batch-with`, `--exclusive-with`.
-`--ref none` clears a ref.
+`--ref none` clears a ref. The three list fields clear the same way:
+`--blocked-by none`. Passing `none` alongside an id is refused.
 
 Field rules the writer enforces, and a violation is REFUSED with nothing
 written rather than quietly adjusted:
