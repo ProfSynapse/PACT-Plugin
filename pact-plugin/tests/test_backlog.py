@@ -53,7 +53,7 @@ is boring and rebuildable, the questions are not.
              and the signal is buried.
 
 Each arm was verified by mutating production source and confirming the NAMED
-test reddens: 67 mutations, 67 killed, run against an unmutated green baseline
+test reddens: 71 mutations, 71 killed, run against an unmutated green baseline
 with the tree restored byte-identical after every arm. Naming which test kills
 which mutation is what makes this a coverage claim rather than a survival
 count, since one over-broad assertion can kill many mutants while pinning
@@ -154,6 +154,10 @@ afternoon.
   abandoned loses its `-C` anchor       test_the_abandoned_heuristic_reads_real_branches
   staleness cutoff back to a timestamp  test_staleness_flags_at_the_threshold_not_before
   staleness never flags                 test_staleness_flags_at_the_threshold_not_before
+  `add` guard reverted (crash)          test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED
+  `add` COERCES instead of refusing     test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED
+  `add` refuses but writes anyway       test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED
+  the absoluteness clause dropped       test_a_stored_root_must_be_absolute
   the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_the_cause
   the top-level type check removed      test_a_top_level_non_object_reaches_the_named_path_machinery
   the title TYPE check removed          test_a_non_string_title_is_reported_and_the_block_still_renders
@@ -1505,3 +1509,42 @@ def test_staleness_flags_at_the_threshold_not_before(monkeypatch):
     assert _age(14) == [], "an item at exactly the threshold flagged"
     assert len(_age(15)) == 1, "an item past the threshold did not flag"
     assert _age(13) == []
+
+
+def test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED(tmp_path, monkeypatch):
+    """Refusing is half the property; not writing is the other half.
+
+    A two-line coercion would make the document pass `validate()`, so `save()`
+    would write it and silently discard whatever `items` held. An arm asserting
+    only the refusal passes against that coercion — the worse bug this fix
+    avoids. So the byte comparison is the load-bearing assertion, exactly as it
+    is for the None-project-id guard.
+
+    RED WHEN the guard is reverted (AttributeError escapes `main`), and RED
+    WHEN the coercion is installed instead (file overwritten).
+    """
+    path = tmp_path / "b.json"
+    path.write_text(json.dumps({**_backlog(tmp_path), "items": 5}), encoding="utf-8")
+    before = path.read_bytes()
+    monkeypatch.setattr(backlog, "store_path", lambda backlog_dir=None: path)
+    monkeypatch.setattr(backlog, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(backlog, "checkout_roots", lambda: [str(tmp_path)])
+
+    code = backlog.main(["add", "a new item"])
+
+    assert code == 2, f"expected a refusal exit, got {code}"
+    assert path.read_bytes() == before, "the file was rewritten by a refused add"
+
+
+def test_a_stored_root_must_be_absolute(tmp_path):
+    """A relative root resolves against the process working directory, so one
+    file would match different projects depending on where a hook runs.
+
+    Both directions: a rule that rejected everything satisfies the refusal
+    alone. RED WHEN the absoluteness clause is dropped.
+    """
+    assert backlog_store.validate(_backlog(tmp_path, roots=[tmp_path])) == []
+
+    problems = backlog_store.validate(_backlog(tmp_path, roots=["relative/path"]))
+    assert problems, "a relative root was accepted"
+    assert "relative path" in problems[0]
