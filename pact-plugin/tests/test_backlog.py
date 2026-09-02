@@ -51,9 +51,12 @@ is boring and rebuildable, the questions are not.
   read path  Inject the rename into `session_block` and read the NAMED arm
              alone. In a full run it takes thirteen bystanders down with it
              and the signal is buried.
+  membership Change BOTH dereference sites, the test and the message. Leaving
+             `data["items"]` in the message body kills by KeyError from the
+             mutant's own shape rather than by the property.
 
 Each arm was verified by mutating production source and confirming the NAMED
-test reddens: 71 mutations, 71 killed, run against an unmutated green baseline
+test reddens: 73 mutations, 73 killed, run against an unmutated green baseline
 with the tree restored byte-identical after every arm. Naming which test kills
 which mutation is what makes this a coverage claim rather than a survival
 count, since one over-broad assertion can kill many mutants while pinning
@@ -158,6 +161,8 @@ afternoon.
   `add` COERCES instead of refusing     test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED
   `add` refuses but writes anyway       test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED
   the absoluteness clause dropped       test_a_stored_root_must_be_absolute
+  membership simplified to `.get()`     test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
+  membership reverted to `is not None`  test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
   the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_the_cause
   the top-level type check removed      test_a_top_level_non_object_reaches_the_named_path_machinery
   the title TYPE check removed          test_a_non_string_title_is_reported_and_the_block_still_renders
@@ -1548,3 +1553,31 @@ def test_a_stored_root_must_be_absolute(tmp_path):
     problems = backlog_store.validate(_backlog(tmp_path, roots=["relative/path"]))
     assert problems, "a relative root was accepted"
     assert "relative path" in problems[0]
+
+
+def test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses(tmp_path, monkeypatch):
+    """The absent case is the regression risk, not the null one.
+
+    Null is the bug just fixed and is obvious once named. ABSENT is what the
+    fix must not break, and a tidier-looking `data.get("items")` refuses it —
+    which would break every first write to a new backlog. So the absent case
+    is asserted first and is what the mutation kills.
+
+    RED WHEN membership is simplified back to a `.get()` lookup.
+    """
+    monkeypatch.setattr(backlog, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(backlog, "checkout_roots", lambda: [str(tmp_path)])
+
+    absent = _backlog(tmp_path)
+    absent.pop("items")
+    missing = tmp_path / "missing.json"
+    missing.write_text(json.dumps(absent), encoding="utf-8")
+    monkeypatch.setattr(backlog, "store_path", lambda backlog_dir=None: missing)
+    assert backlog.main(["add", "first item"]) == 0, "an absent item list was refused"
+    assert json.loads(missing.read_text())["items"], "the item was not written"
+
+    explicit_null = tmp_path / "null.json"
+    explicit_null.write_text(json.dumps({**_backlog(tmp_path), "items": None}), encoding="utf-8")
+    monkeypatch.setattr(backlog, "store_path", lambda backlog_dir=None: explicit_null)
+    assert backlog.main(["add", "another"]) == 2, "an explicit null was accepted"
+    assert json.loads(explicit_null.read_text())["items"] is None, "a refused add rewrote the file"
