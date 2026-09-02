@@ -136,11 +136,20 @@ def store_path(backlog_dir: Optional[Path] = None) -> Path:
 def project_root() -> Path:
     """The MAIN repo root, which is what a backlog stores as project_path.
 
-    Normalising to the main root is what lets a worktree session's read find
-    this file by containment: the read path is deliberately git-free and cannot
-    perform this resolution itself.
+    Normalising to the main root is what puts every checkout of this project in
+    one place: the read path is deliberately git-free and cannot perform this
+    resolution itself, so the writer does it and records the result.
+
+    ANCHORED ON CLAUDE_PROJECT_DIR, NOT THE PROCESS CWD. Unanchored, a write run
+    from another repository resolved THAT repo's root, so `checkout_roots()`
+    stored the other project's worktrees into this project's backlog — after
+    which this project's sessions stop matching their own file and the other
+    project's sessions can claim it. That is the cross-project bleed the
+    disambiguator exists to prevent, arriving through the writer. Same
+    precedence `_detect_project_id` uses, so the stored name and the stored
+    paths cannot disagree about which project this is.
     """
-    root = _memory_api().main_repo_root()
+    root = _memory_api().main_repo_root(os.environ.get("CLAUDE_PROJECT_DIR"))
     if root is None:
         raise BacklogWriteError(
             "the main repository root did not resolve, so project_path would be "
@@ -264,9 +273,25 @@ def repair(path: Path) -> Tuple[Path, str]:
     return aside, f"moved the corrupt backlog aside to {aside}"
 
 
+def _items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The item dicts, or an empty list. THE ONLY way this module reads them.
+
+    `data` reaches here from a file that PARSED but need not CONFORM, since the
+    read-anyway change stopped a schema problem raising. So `items` can be a
+    truthy non-iterable, and iterating one raises TypeError — not a
+    BacklogFileError, so it crashes the CLI instead of reporting. Two of the
+    four call sites carried this guard and two did not; one accessor means a
+    fifth cannot be added without it.
+    """
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
 def new_item_id(data: Dict[str, Any]) -> str:
     """Four hex characters, unique within this file."""
-    taken = {item.get("id") for item in data.get("items") or []}
+    taken = {item.get("id") for item in _items(data)}
     while True:
         candidate = secrets.token_hex(2)
         if candidate not in taken:
@@ -313,7 +338,7 @@ def _apply_fields(item: Dict[str, Any], fields: Dict[str, Any]) -> None:
 
 
 def find_item(data: Dict[str, Any], item_id: str) -> Optional[Dict[str, Any]]:
-    for item in data.get("items") or []:
+    for item in _items(data):
         if item.get("id") == item_id:
             return item
     return None
@@ -524,7 +549,7 @@ def reconcile(data: Dict[str, Any]) -> List[str]:
     orchestrator overwriting the user's recorded intent on the strength of an
     inference. Propose, and let the user decide.
     """
-    items = [item for item in data.get("items") or [] if isinstance(item, dict)]
+    items = _items(data)
     flags = list(file_local_flags(data))
     flags.extend(_ref_flags(items))
     flags.extend(_plan_flags(items, data.get("project_path")))
@@ -567,8 +592,25 @@ def _plan_flags(items: List[Dict[str, Any]], project_path: Any) -> List[str]:
     return [
         f"{_label(item)}: plan {item['plan']!r} does not resolve under {root}"
         for item in items
-        if item.get("plan") and not (root / str(item["plan"])).exists()
+        if item.get("plan") and not _plan_resolves(root, str(item["plan"]))
     ]
+
+
+def _plan_resolves(root: Path, plan: str) -> bool:
+    """The plan exists AND stays under the project root.
+
+    validate() already refuses an ABSOLUTE plan, which leaves `../` — and a
+    bare exists() on an escaped path answers questions about files outside the
+    project. The containment check runs FIRST, so a traversal never reaches the
+    filesystem, and an escaping path reports as not resolving rather than as a
+    silent pass.
+    """
+    try:
+        base = root.resolve()
+        target = (base / plan).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return (target == base or base in target.parents) and target.exists()
 
 
 def _memory_flags(items: List[Dict[str, Any]]) -> List[str]:
@@ -799,7 +841,7 @@ def _field_updates(args: argparse.Namespace) -> Dict[str, Any]:
 def _render(data: Dict[str, Any], flags: Sequence[str]) -> str:
     lines = [f"{data.get('project')} — {data.get('project_path')}"]
     items = sorted(
-        (item for item in data.get("items") or [] if isinstance(item, dict)),
+        _items(data),
         key=lambda item: (item.get("status") != "active", _rank_of(item)),
     )
     # The id is emitted for the AGENT, which needs it as the argument to `set`.
