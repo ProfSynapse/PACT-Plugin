@@ -111,6 +111,17 @@ def validate(obj: Any) -> List[str]:
         if not isinstance(value, str) or not value:
             problems.append(f"{key} is {value!r}, expected a non-empty string")
 
+    # `roots` is REQUIRED, with no optional-with-fallback branch. A fallback
+    # would have to guess the missing checkouts, and the only guess available
+    # is containment — the defect this field exists to remove. The writer
+    # always emits at least project_root(), so an absent or empty roots means
+    # the file was not written by this writer.
+    roots = obj.get("roots")
+    if not isinstance(roots, list) or not roots:
+        problems.append(f"roots is {roots!r}, expected a non-empty list of paths")
+    elif not all(isinstance(r, str) and r for r in roots):
+        problems.append("roots holds a non-string or empty entry")
+
     items = obj.get("items")
     if not isinstance(items, list):
         return problems + [f"items is {type(items).__name__}, expected a list"]
@@ -243,31 +254,40 @@ def find_for(project_dir: str, backlog_dir: Path) -> Tuple[Optional[Path], List[
 def _scan(
     project_dir: str, backlog_dir: Path
 ) -> Tuple[Optional[Path], List[Path], List[Path]]:
-    """Locate this project's backlog by CONTAINMENT of the stored project_path.
+    """Locate this project's backlog by EXACT MEMBERSHIP in the stored `roots`.
 
     Returns the best match (or None), the files that could not be read, and
-    EVERY file that claimed this project, best first. The caller needs the
-    claimants themselves and not just their count, because reporting a
-    duplication means naming the files rather than asserting a cause for it.
+    EVERY file that claimed this project, best first.
 
-    A stored project_path matches when it equals `project_dir` or is one of its
-    parents; among the matches the longest wins. BOTH SIDES ARE RESOLVED before
-    comparing: the writer stores a path that has been through `.resolve()`, so
-    a lexical comparison against an unresolved `project_dir` compares different
-    things the moment either crosses a symlink. On macOS `/var` is a symlink to
-    `/private/var`, which makes that the default under any temporary directory.
-    Resolution is a stat-level call — still no subprocess and no network.
+    `roots` holds every checkout of the project — the main one and each
+    worktree — as the writer resolved them. A file claims this session when
+    `project_dir` IS one of them. NOT when it sits under one.
 
-    Equality alone is broken here and its failure is the one this design exists
-    to prevent: CLAUDE_PROJECT_DIR points at the WORKTREE, while the writer
-    resolves through git and stores the MAIN repo root, so equality misses from
-    every worktree session and an empty result would certify an empty backlog
-    for a project that has one.
+    CONTAINMENT IS THE DEFECT, NOT THE FIX, AND "or under" IS CONTAINMENT
+    RENAMED. A git repo at any ANCESTOR of another project claimed that
+    project's sessions, which a dotfiles repo at $HOME makes the ordinary case
+    rather than the exotic one: a store recording <tmp>/home surfaced its own
+    active item into a session at <tmp>/home/Sites/unrelated-project. Exact
+    membership declines that and keeps everything containment existed for,
+    because a worktree path and the main root are BOTH `worktree ` lines and
+    therefore both members.
 
-    A project RENAME puts two files in the directory carrying the same
-    project_path — the old name and the new one — because the name derivation
-    changed while the path did not. That is exactly the case project_path
-    exists to survive, so the newer `updated` wins rather than whichever name
+    BOTH SIDES ARE RESOLVED before comparing: the writer stores paths that have
+    been through `.resolve()`, so a lexical comparison against an unresolved
+    `project_dir` compares different things the moment either crosses a
+    symlink. On macOS `/var` is a symlink to `/private/var`, which makes that
+    the default under any temporary directory. Resolution is a stat-level call
+    — still no subprocess and no network.
+
+    A CHECKOUT CREATED SINCE THE LAST WRITE is absent from `roots`, so its
+    session finds no match and goes LOUD through the existing resolution-failure
+    branch. That is the design working: the remedy that message names is itself
+    a write, which refreshes `roots`. There is deliberately NO containment
+    fallback for this case — it would reintroduce the defect verbatim.
+
+    A project RENAME puts two files in the directory carrying the same roots —
+    the old name and the new one — because the name derivation changed while
+    the checkouts did not. The newer `updated` wins rather than whichever name
     sorts first, and the duplication is reported.
 
     AN UNREADABLE FILE NEVER ABORTS THE SCAN. The store is one flat directory
@@ -295,16 +315,20 @@ def _scan(
         except BacklogFileError:
             unreadable.append(path)
             continue
-        stored = data.get("project_path")
-        if not isinstance(stored, str) or not stored:
+        roots = data.get("roots")
+        if not isinstance(roots, list):
             continue
-        root = _resolved(Path(stored))
-        if root != target and root not in target.parents:
+        # A malformed entry yields an empty set: no match, and the existing
+        # loud resolution failure. No new raise site, so the totality boundary
+        # does not move.
+        if target not in {
+            _resolved(Path(r)) for r in roots if isinstance(r, str) and r
+        }:
             continue
-        found.append((len(root.parts), str(data.get("updated") or ""), path))
+        found.append((str(data.get("updated") or ""), path))
 
-    found.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
-    matched = [path for _, _, path in found]
+    found.sort(reverse=True)
+    matched = [path for _, path in found]
     return (matched[0] if matched else None), unreadable, matched
 
 
@@ -501,9 +525,11 @@ def session_block(
                 return _loud(notes[0])
             return _loud(
                 f"PACT backlog: {len(entries)} backlog file(s) under {root}, and "
-                f"none records a project_path containing {project_dir}. This is a "
+                f"none records {project_dir} as a checkout root. This is a "
                 f"resolution failure, NOT an empty backlog — do not treat this "
-                f"project as having no backlog."
+                f"project as having no backlog. A checkout created since the "
+                f"last write is not yet recorded; /PACT:next writes, which "
+                f"records it."
             )
 
         # NON-CONFORMANCE IS NOT CORRUPTION. Corruption is "I cannot understand
@@ -533,16 +559,19 @@ def session_block(
 
         block = format_block(data)
         if len(claimants) > 1:
-            # STATE WHAT IS OBSERVABLE AND STOP THERE. Two files claiming one
-            # project has more than one cause: a rename leaves an old file
-            # behind, and an ancestor repo produces the same state with BOTH
-            # files legitimate and belonging to DIFFERENT projects. Naming a
-            # cause the code cannot observe sends a reader to reconcile two
-            # backlogs that should stay separate, destroying a live one.
+            # THE CAUSE IS NOW DETERMINATE, so name it. Under containment this
+            # sentence was silent about cause, because an ANCESTOR repo produced
+            # the same state with both files legitimate and belonging to
+            # different projects — naming a cause there would have sent a reader
+            # to merge two backlogs that must stay separate. Exact membership
+            # removes that case: two files can only share a checkout root by a
+            # rename or a double write, and both mean one file is stale.
             block += (
-                f"\n  {len(claimants)} stored backlogs claim this project: "
+                f"\n  {len(claimants)} stored backlogs record this checkout: "
                 + ", ".join(path.name for path in claimants)
-                + f". Reading {match.name}. Run /PACT:next to see them."
+                + f". Reading {match.name} (most recently updated). A rename or "
+                f"a double write left the other behind; run /PACT:next to "
+                f"reconcile them."
             )
         if notes:
             # Quiet and loud at once: the block goes only to context, the notes

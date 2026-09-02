@@ -31,7 +31,7 @@ hit the prose copy instead of the code. Anchor on the `assert ` prefix, or work
 from the AST.
 
 Each arm was verified by mutating production source and confirming the NAMED
-test reddens: 54 mutations, 54 killed, run against an unmutated green baseline
+test reddens: 58 mutations, 58 killed, run against an unmutated green baseline
 with the tree restored byte-identical after every arm. Naming which test kills
 which mutation is what makes this a coverage claim rather than a survival
 count, since one over-broad assertion can kill many mutants while pinning
@@ -64,9 +64,10 @@ afternoon.
 
   MUTATION (in hooks/shared/ or hooks/session_init.py)  ->  TEST THAT KILLS IT
 
-  containment becomes equality          test_worktree_session_finds_the_main_root_backlog
-  containment becomes a string prefix   test_a_sibling_project_is_not_matched_by_containment
-  `.resolve()` dropped                  test_containment_resolves_both_sides_across_a_symlink
+  a recorded worktree stops matching    test_a_recorded_worktree_finds_its_project_backlog
+  the match admits a descendant         test_an_ancestor_checkout_does_not_claim_an_unrelated_project
+  the match becomes a string prefix     test_a_textual_prefix_sibling_is_not_matched
+  `.resolve()` dropped                  test_the_match_resolves_both_sides_across_a_symlink
   an unreadable file aborts the scan    test_corrupt_sibling_sorting_first_does_not_suppress_the_block
   the two channels made symmetric       test_corrupt_sibling_splits_the_two_channels_asymmetrically
   the read path repairs what it finds   test_the_read_path_writes_nothing_when_it_reports_corruption
@@ -82,7 +83,7 @@ afternoon.
   memory cap not enforced               test_a_sixth_memory_id_is_rejected_rather_than_dropped
   absolute plan path accepted           test_an_absolute_plan_path_is_rejected_at_write_time
   item id anchored on `$`               test_an_item_id_with_a_trailing_newline_is_rejected
-  tie-break made alphabetical           test_a_rename_prefers_the_newer_stamp_and_reports_the_duplication
+  the sort loses recency                test_a_rename_prefers_the_newer_stamp_and_reports_the_duplication
   filename used as a fallback match     test_nothing_matches_on_the_filename
   an absent store made loud             test_an_absent_store_is_silent
   a no-match state reads as empty       test_a_non_empty_store_with_no_match_is_loud_not_silent
@@ -90,6 +91,7 @@ afternoon.
   totality broken, exception escapes    test_session_block_never_raises_on_a_hostile_store
   call site emits nothing               test_session_init_emits_the_block_for_a_worktree_session
   block prepended, marker displaced     test_session_init_emits_the_block_for_a_worktree_session
+  the rejected equal-or-under sketch    test_an_ancestor_checkout_does_not_claim_an_unrelated_project
   store no longer home-pinned           test_session_init_emits_the_block_for_a_worktree_session
   source gate deleted                   test_the_alert_channel_is_gated_on_the_launch_source
   source gate stuck off                 test_the_alert_channel_is_gated_on_the_launch_source
@@ -113,8 +115,10 @@ afternoon.
   `--ref none` made inert               test_ref_none_clears_and_an_unpassed_ref_does_not
   `--ref` clears unconditionally        test_ref_none_clears_and_an_unpassed_ref_does_not
   `_UNVERIFIABLE` collapses to None     test_an_unopenable_memory_store_is_distinct_from_an_unresolved_id
-  the duplicates note asserts a cause   test_the_duplicates_message_names_the_files_and_asserts_no_cause
-  the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_asserts_no_cause
+  duplicates note WITHHOLDS its cause   test_the_duplicates_message_names_the_files_and_the_cause
+  exit 3 collapses back to 2            test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY
+  unreadable returns the refusal code   test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY
+  the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_the_cause
   the top-level type check removed      test_a_top_level_non_object_reaches_the_named_path_machinery
   the title TYPE check removed          test_a_non_string_title_is_reported_and_the_block_still_renders
   `_SLUG_CHARS` anchored on `$`         test_a_repo_slug_with_a_trailing_newline_is_refused
@@ -145,12 +149,19 @@ SHARED_DIR = HOOKS_DIR / "shared"
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
-def _backlog(project_path, items=None, project="demo", updated="2026-09-01T00:00:00Z"):
-    """The smallest valid file shape. Callers override only what they test."""
+def _backlog(project_path, items=None, project="demo", updated="2026-09-01T00:00:00Z",
+             roots=None):
+    """The smallest valid file shape. Callers override only what they test.
+
+    `roots` defaults to the main root alone, which is what a writer records for
+    a project with no worktrees. A test exercising the match rule passes its
+    own list; every other test only needs the file to be findable.
+    """
     return {
         "version": 1,
         "project": project,
         "project_path": str(project_path),
+        "roots": [str(project_path)] if roots is None else [str(r) for r in roots],
         "updated": updated,
         "items": items if items is not None else [_item()],
     }
@@ -188,7 +199,7 @@ def _write(directory, name, payload):
 # --------------------------------------------------------------------------
 # constructed case 1 — the worktree
 # --------------------------------------------------------------------------
-def test_worktree_session_finds_the_main_root_backlog(tmp_path):
+def test_a_recorded_worktree_finds_its_project_backlog(tmp_path):
     """A session inside a worktree resolves the backlog stored at the main root.
 
     RED WHEN the match rule is equality rather than containment. The assertion
@@ -200,18 +211,19 @@ def test_worktree_session_finds_the_main_root_backlog(tmp_path):
     worktree = main_root / ".worktrees" / "feat-x"
     worktree.mkdir(parents=True)
     store = tmp_path / "store"
-    _write(store, "demo.json", _backlog(main_root))
+    _write(store, "demo.json", _backlog(main_root, roots=[main_root, worktree]))
 
-    # The discriminating fact: equality CANNOT match these two.
+    # The discriminating fact: the worktree is NOT the main root, so this can
+    # only match because the writer recorded it as a checkout.
     assert str(worktree) != str(main_root)
 
     match, unreadable = backlog_store.find_for(str(worktree), store)
-    assert match is not None, "containment failed to reach the main-root backlog"
+    assert match is not None, "a recorded worktree failed to reach its backlog"
     assert match.name == "demo.json"
     assert unreadable == []
 
 
-def test_a_sibling_project_is_not_matched_by_containment(tmp_path):
+def test_a_textual_prefix_sibling_is_not_matched(tmp_path):
     """Containment must not widen into matching an unrelated project.
 
     RED WHEN containment is implemented as a substring or prefix test on the
@@ -231,8 +243,8 @@ def test_a_sibling_project_is_not_matched_by_containment(tmp_path):
 # --------------------------------------------------------------------------
 # constructed case 2 — symlink normalisation
 # --------------------------------------------------------------------------
-def test_containment_resolves_both_sides_across_a_symlink(tmp_path):
-    """A stored resolved path matches an unresolved session directory.
+def test_the_match_resolves_both_sides_across_a_symlink(tmp_path):
+    """A stored resolved root matches an unresolved session directory.
 
     On macOS `tempfile` hands out `/var/...` whose resolved form is
     `/private/var/...`, so this divergence is the DEFAULT under any temporary
@@ -719,7 +731,9 @@ def test_session_block_never_raises_on_a_hostile_store(tmp_path, monkeypatch):
 def test_a_rename_prefers_the_newer_stamp_and_reports_the_duplication(tmp_path):
     """Two files record one `project_path` after a rename.
 
-    RED WHEN the tie-break is alphabetical or by path length. The fixture is
+    RED WHEN the sort loses recency. The path-length key is gone with
+    containment — every match is now the same checkout, so length ranked
+    nothing. The fixture is
     built so alphabetical order and recency DISAGREE: `aaa-old.json` sorts
     first but carries the older stamp, so a green here means recency decided.
     """
@@ -744,7 +758,7 @@ def test_a_rename_prefers_the_newer_stamp_and_reports_the_duplication(tmp_path):
 
     assert "CURRENT" in notice.context, "the older stamp won the tie-break"
     assert "STALE" not in notice.context
-    assert "2 stored backlogs claim this project" in notice.context
+    assert "2 stored backlogs record this checkout" in notice.context
 
 
 def test_nothing_matches_on_the_filename(tmp_path):
@@ -849,7 +863,8 @@ def test_session_init_emits_the_block_for_a_worktree_session(monkeypatch, tmp_pa
     _write(
         tmp_path / ".claude" / "pact-backlog",
         "demo.json",
-        _backlog(main_root, items=[_item(title="SEEDED BACKLOG ITEM", status="active")]),
+        _backlog(main_root, roots=[main_root, worktree],
+                 items=[_item(title="SEEDED BACKLOG ITEM", status="active")]),
     )
 
     context, _ = _drive_session_init(monkeypatch, tmp_path, worktree, "startup")
@@ -1161,13 +1176,16 @@ def test_an_unopenable_memory_store_is_distinct_from_an_unresolved_id(monkeypatc
     )
 
 
-def test_the_duplicates_message_names_the_files_and_asserts_no_cause(tmp_path):
-    """Two files claiming one project has more than one cause, so the message
-    names what is observable and stops.
+def test_the_duplicates_message_names_the_files_and_the_cause(tmp_path):
+    """Two files recording one CHECKOUT names both files and the cause.
 
-    RED WHEN it names a cause: an ancestor repo produces this state with BOTH
-    files legitimate, and telling a reader to reconcile them destroys a live
-    backlog.
+    REWRITTEN, not repaired: this arm previously asserted that NO cause was
+    named, which was right while an ancestor could collide with an unrelated
+    project — any cause was then false. Exact membership removes that
+    collision, so a duplicate is a rename or a double write and nothing else,
+    and withholding the determinate cause is now the defect.
+
+    RED WHEN the files stop being named or the cause is dropped again.
     """
     project = tmp_path / "project"
     project.mkdir()
@@ -1178,7 +1196,7 @@ def test_the_duplicates_message_names_the_files_and_asserts_no_cause(tmp_path):
     context = backlog_store.session_block(str(project), backlog_dir=store).context
 
     assert "aaa.json" in context and "zzz.json" in context, "claimants not named"
-    assert "rename" not in context.lower(), "the message asserted a cause"
+    assert "rename" in context.lower(), "the determinate cause was withheld"
 
 
 def test_a_top_level_non_object_reaches_the_named_path_machinery(tmp_path):
@@ -1244,3 +1262,67 @@ def test_a_repo_slug_with_a_trailing_newline_is_refused():
     assert backlog._SLUG_CHARS.match("owner-name_1.0")
     assert not backlog._SLUG_CHARS.match("owner\n"), "a trailing newline was accepted"
     assert not backlog._SLUG_CHARS.match("owner\nname")
+
+
+def test_an_ancestor_checkout_does_not_claim_an_unrelated_project(tmp_path):
+    """A backlog whose root is an ANCESTOR of another project must not claim it.
+
+    This is the case the match rule exists to close, and it is the one no
+    other arm here distinguishes: under equal-or-under matching, a backlog
+    recorded at a home directory silently answers for every project beneath
+    it. Exact membership refuses.
+
+    BOTH HALVES ARE ASSERTED because only the pair is discriminating. A matcher
+    that declined everything would satisfy the first alone, so the arm also
+    pins that each recorded checkout still matches — which is what an
+    over-narrow rule breaks.
+
+    RED WHEN the rule admits descendants.
+    """
+    home = tmp_path / "home"
+    worktree = home / ".worktrees" / "feat-x"
+    unrelated = home / "Sites" / "unrelated-project"
+    for path in (home, worktree, unrelated):
+        path.mkdir(parents=True)
+
+    store = tmp_path / "store"
+    _write(store, "home.json", _backlog(home, roots=[home, worktree]))
+
+    stranger = backlog_store.session_block(str(unrelated), backlog_dir=store)
+    assert "An item" not in stranger.context, "an ancestor claimed an unrelated project"
+    assert stranger.alert, "the unrelated project was silently given no backlog"
+
+    for member in (home, worktree):
+        notice = backlog_store.session_block(str(member), backlog_dir=store)
+        assert "An item" in notice.context, f"a recorded checkout stopped matching: {member}"
+        assert notice.alert == ""
+
+
+def test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY(tmp_path, monkeypatch):
+    """Exit 3 means the file will not parse; exit 2 means it parsed and a rule
+    refused, with nothing written.
+
+    The command file routes 3 to `repair`, which MOVES USER DATA. Collapsing
+    the two makes an agent rename a READABLE file aside because one field was
+    wrong. An arm asserting only that a refusal exits non-zero passes under
+    both the collapsed and the separated behaviour, so this asserts each value
+    AND that they differ.
+
+    RED WHEN 3 collapses back to 2.
+    """
+    unreadable = tmp_path / "bad.json"
+    unreadable.write_text("{ not json at all", encoding="utf-8")
+    monkeypatch.setattr(backlog, "store_path", lambda backlog_dir=None: unreadable)
+    monkeypatch.setattr(backlog, "project_root", lambda: tmp_path)
+    unreadable_code = backlog.main(["show"])
+
+    readable = tmp_path / "good.json"
+    backlog.save(_backlog(tmp_path), readable)
+    monkeypatch.setattr(backlog, "store_path", lambda backlog_dir=None: readable)
+    refusal_code = backlog.main(["set", "zzzz", "--status", "done"])
+
+    assert unreadable_code == 3, f"an unparseable file exited {unreadable_code}"
+    assert refusal_code == 2, f"a refusal exited {refusal_code}"
+    assert unreadable_code != refusal_code, (
+        "repair-worthy and refused are indistinguishable to a caller"
+    )

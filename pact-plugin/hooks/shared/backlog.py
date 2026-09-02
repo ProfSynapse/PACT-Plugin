@@ -57,6 +57,15 @@ from shared.paths import get_backlog_dir  # noqa: E402  # follows the bootstrap
 # Exit codes.
 _EXIT_OK = 0
 _EXIT_REFUSED = 2
+# A SEPARATE CODE FOR UNREADABLE, because repair is the one operation that moves
+# user data and it must be reachable ONLY from a file that genuinely will not
+# parse. Sharing code 2 with the refusal exits made a merely NON-CONFORMING file
+# — readable, renderable, fixable by editing one field — route the agent to
+# repair, which renames it aside. Measured before this split: `set` on a file
+# with a bad item id and `show` on an unparseable one BOTH exited 2. The
+# alternative was to have the caller read the message text, which is the
+# substring routing this design refuses everywhere else.
+_EXIT_UNREADABLE = 3
 
 # An `active` item untouched for longer than this is reported as stale.
 _STALE_AFTER = timedelta(days=14)
@@ -140,6 +149,31 @@ def project_root() -> Path:
     return root
 
 
+def checkout_roots() -> List[str]:
+    """Every checkout of this project — the main one and each worktree — as
+    absolute resolved paths. NEVER empty and never absent.
+
+    This is what the read path matches against by exact membership, so a
+    missing entry costs that checkout a loud resolution failure and a wrong
+    entry would claim another project's session. The fallback when git cannot
+    answer is the main root alone, which is always right about at least itself.
+
+    Deliberately NOT merged with _branch_and_worktree_names, which runs the
+    same porcelain: that caller wants raw lines including branch names, this
+    one wants resolved paths, and one helper serving both needs a mode flag.
+    Two subprocesses per write on a path the design says can afford one.
+    """
+    porcelain = _run_capture(
+        ["git", "-C", str(project_root()), "worktree", "list", "--porcelain"]
+    )
+    roots = [
+        str(Path(line[len("worktree "):]).resolve())
+        for line in (porcelain or "").splitlines()
+        if line.startswith("worktree ")
+    ]
+    return roots or [str(project_root())]
+
+
 def load_or_create(path: Path) -> Dict[str, Any]:
     """Load this project's backlog, or build an empty one in memory.
 
@@ -159,7 +193,12 @@ def load_or_create(path: Path) -> Dict[str, Any]:
     return {
         "version": SCHEMA_VERSION,
         "project": path.stem,
+        # project_path stays a SIBLING of roots, not roots[0]: three consumers
+        # need the main root specifically (_plan_flags, the _abandoned_flags
+        # git -C, and rename detection), and roots[0] would tie them to
+        # porcelain ordering.
         "project_path": str(project_root()),
+        "roots": checkout_roots(),
         "updated": _now_iso(),
         "items": [],
     }
@@ -177,6 +216,11 @@ def save(data: Dict[str, Any], path: Path) -> List[str]:
     refused, never shortened, because silently shortening one would lose the
     intent the note exists to carry.
     """
+    # roots is refreshed on EVERY write, before validation, so a checkout added
+    # since the last write is recorded by the next one. That is what makes the
+    # read path's exact-membership rule self-healing: its loud message names
+    # /PACT:next, and /PACT:next writes.
+    data["roots"] = checkout_roots()
     problems = validate(data)
     if problems:
         return problems
@@ -688,7 +732,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"Nothing was changed. Run `repair` to move it aside and rebuild.",
             file=sys.stderr,
         )
-        return _EXIT_REFUSED
+        return _EXIT_UNREADABLE
     except BacklogWriteError as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return _EXIT_REFUSED
