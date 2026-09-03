@@ -570,6 +570,24 @@ def file_local_flags(
                         f"{blocker.get('status')} — it will not clear on its own"
                     )
 
+    # DEDUP ON IDS, NOT LABELS, and only when the subject HAS one.
+    #
+    # The old guard was `_label(item) < _label(peer)`, which reports a pair
+    # once ONLY IF BOTH SIDES CARRY THE LINK. The writer sets exclusive_with
+    # from user args on ONE item, so one-sided is the normal shape — and a
+    # one-sided link whose subject sorts second satisfied the guard from
+    # neither direction and went unreported. A 50% silent miss.
+    #
+    # `_label` is `str(id or title or "?")`, so it is NOT unique on the
+    # non-conforming data this function is documented to run on: two items
+    # with neither id nor title both label "?". Keying `seen` on labels would
+    # swallow a real pair there — trading this silent miss for a new one.
+    #
+    # A subject with no string id needs no dedup AT ALL, which is why the key
+    # is skipped rather than faked: it never enters `by_id`, so no other item's
+    # exclusive_with can resolve to it, so its pair cannot be emitted from the
+    # other direction.
+    seen_pairs = set()
     for item in subjects:
         if item.get("status") != "active":
             continue
@@ -577,13 +595,21 @@ def file_local_flags(
         # in the loop that precedes this one, and reporting it twice would
         # double-count one defect in the block's flag count.
         ids, _ = _relation_ids(item, "exclusive_with", _label(item))
+        item_id = item.get("id")
         for other in ids:
             peer = by_id.get(other)
-            if peer is not None and peer.get("status") == "active":
-                if _label(item) < _label(peer):  # report each pair once
-                    flags.append(
-                        f"{_label(item)} and {_label(peer)} are exclusive and both active"
-                    )
+            if peer is None or peer.get("status") != "active":
+                continue
+            if isinstance(item_id, str):
+                key = tuple(sorted((item_id, other)))
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
+            # SORTED, which reproduces the old text byte for byte: the old
+            # guard only fired when the subject's label sorted first, so the
+            # smaller label was always named first.
+            first, second = sorted((_label(item), _label(peer)))
+            flags.append(f"{first} and {second} are exclusive and both active")
 
     return flags
 
