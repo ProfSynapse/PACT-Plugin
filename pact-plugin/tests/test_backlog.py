@@ -60,6 +60,19 @@ is boring and rebuildable, the questions are not.
              is ALSO named in the write table below it, so dropping one from
              the sentence leaves the section mention and the mutation survives
              against an arm that scans the section. Measured.
+  hunk     REVERT THE HUNK, NOT THE FILE. Swapping in a whole pre-fix module
+             from a parent nine commits back replaces far more than the one
+             fix: it removed symbols the current tests import, pytest failed
+             at COLLECTION, and the run produced NO SUMMARY LINE AT ALL rather
+             than a kill. A crashed swap also leaves the tree mid-mutation, so
+             wrap every restore in `finally` — measured, it left 50 lines
+             deleted in a production file.
+  traps    Both measured against 6c99af63^, not argued. Arm 1 with ONE
+             poisoned ref: no exception, SURVIVES — `{5}` is a one-element set
+             and `sorted()` never compares. Arm 2 with `5`: 0 names, SURVIVES
+             — `git -C 5` fails for the wrong reason. The real fixtures kill:
+             two items raise TypeError, and `"."` returns 221 names from the
+             WRONG repository.
   settled  THE SHIPPED DEFECT is neither of the obvious mutations. Recover
              it verbatim: `git show 08b4f5b8^` — the ref set is built from
              `items` with NO filter, the loop is unfiltered, and a mid-loop
@@ -243,6 +256,12 @@ afternoon.
   the shipped defect, 08b4f5b8^       test_a_settled_item_neither_flags_nor_reaches_the_resolver
   the shipped defect, 08b4f5b8^       test_one_ref_shared_by_a_live_and_a_settled_item
   the shipped defect, 08b4f5b8^       test_an_all_settled_backlog_makes_no_tracker_call
+  ref set unfiltered, 6c99af63^       test_a_ref_set_mixing_a_string_and_an_int_does_not_raise
+  project_path guard removed          test_a_relative_project_path_yields_no_branch_names
+  the `ref` type rule removed         test_a_non_string_ref_is_reported_by_the_schema_check
+  the `ref` type rule removed         test_a_bad_field_on_one_item_locks_writes_to_every_other_item
+  the date rule becomes type-only     test_an_unparseable_date_is_reported_not_just_a_wrong_type
+  the date rule removed               test_an_unparseable_date_is_reported_not_just_a_wrong_type
   the accessor reverted at site two   test_a_poisoned_memory_field_crashes_neither_site
   the accessor reverted at site two   test_the_flagged_ids_are_exactly_the_ids_that_were_looked_up
   the accessor reverted at site one   test_a_poisoned_memory_field_crashes_neither_site
@@ -276,6 +295,7 @@ import importlib.util
 import json
 import re
 import subprocess
+import tempfile
 import sys
 import types
 from pathlib import Path
@@ -2864,3 +2884,152 @@ def test_an_all_settled_backlog_opens_no_memory_store():
         [_item(title="LIVE", status="active", memory=["mem-real"])], store)
     assert store.asked == ["mem-real"], "control: the live item did not resolve"
     assert flags, "control: the live item did not flag"
+
+
+# ---------------------------------------------------------------------------
+# Six external findings. Each was measured by its author; these pin them.
+# ---------------------------------------------------------------------------
+
+def _cli_store(tmp_path, items, **top):
+    """A store the real CLI will read, returning (backlog_dir, project_dir)."""
+    project = tmp_path / "project"
+    project.mkdir(parents=True, exist_ok=True)
+    store = tmp_path / "store"
+    payload = _backlog(project, items=items)
+    payload.update(top)
+    _write(store, f"{backlog.store_path().stem}.json", payload)
+    return store, project
+
+
+def _run_cli(store, *args):
+    r = subprocess.run(
+        [sys.executable, "hooks/shared/backlog.py", "--backlog-dir", str(store), *args],
+        capture_output=True, text=True)
+    return r.returncode, r.stdout + r.stderr
+
+
+def test_a_ref_set_mixing_a_string_and_an_int_does_not_raise(monkeypatch):
+    """TWO ITEMS, AND THAT IS THE ENTIRE ARM.
+
+    `sorted()` over a set mixing str and int raises TypeError before any flag
+    exists. ONE poisoned ref makes a ONE-ELEMENT set, and `sorted()` never
+    compares a single element — so a one-item fixture passes against the very
+    bug this arm exists to catch. Measured: the one-item version survives the
+    pre-fix bytes.
+
+    RED WHEN the `isinstance(..., str)` filter leaves the ref comprehension.
+    """
+    calls = _recording_refs(monkeypatch)
+    flags = backlog._ref_flags([
+        _item(item_id="good", title="GOOD", status="active", ref="#1"),
+        _item(item_id="bad", title="BAD", status="active", ref=5),
+    ])
+    assert calls == [["#1"]], (
+        f"the int ref must be dropped before `sorted`, leaving the str: {calls}"
+    )
+    assert flags, "control: the conforming ref produced no flag, so this is vacuous"
+    assert not any("BAD" in f for f in flags), f"the int ref produced a flag: {flags}"
+
+
+def test_a_relative_project_path_yields_no_branch_names():
+    """A RELATIVE STRING IS THE DANGEROUS VALUE, NOT A NON-STRING.
+
+    `git -C 5` fails and the heuristic returns nothing — safe BY ACCIDENT — so
+    a `5` fixture passes against the unfixed code. `"."` passes every type
+    check and makes git answer about the CURRENT WORKING DIRECTORY's repo:
+    devops measured 221 branch and worktree names belonging to the wrong
+    project, which is the misleading-flags outcome.
+
+    RED WHEN the absolute-string guard is removed. The control is the second
+    assertion: an ABSOLUTE path must still return a list, or this arm would
+    pass against a function that returns None for everything.
+    """
+    for relative in (".", "../"):
+        assert backlog._branch_and_worktree_names(relative) is None, (
+            f"{relative!r} reached git and answered about the wrong repository"
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _repo(Path(tmp), branch="control-branch")
+        names = backlog._branch_and_worktree_names(tmp)
+        assert names is not None and any("control-branch" in n for n in names), (
+            f"control: an absolute path returned {names!r}, so the Nones above "
+            f"prove nothing about the guard"
+        )
+
+
+def test_a_non_string_ref_is_reported_by_the_schema_check(tmp_path):
+    """RED WHEN `_validate_item`'s `ref` type rule is removed.
+
+    KEYS ON `schema:` SPECIFICALLY. A conforming ref still emits a DRIFT flag
+    (`ref ABC-123 is unverifiable`), so a control asserting flag-absence would
+    fail against correct code. The discriminator is the `schema:` prefix, which
+    only the validation layer emits.
+    """
+    store, _ = _cli_store(tmp_path, [_item(item_id="aaaa", ref=5)])
+    code, out = _run_cli(store, "show", "--no-reconcile")
+    assert code == 0, f"a schema problem must render, not abort: {out}"
+    assert "schema: item 'aaaa': ref is int, expected a string" in out, out
+
+    store, _ = _cli_store(tmp_path / "ok", [_item(item_id="aaaa", ref="ABC-123")])
+    code, out = _run_cli(store, "show", "--no-reconcile")
+    assert code == 0 and "schema:" not in out, (
+        f"control: a conforming ref emitted a schema line: {out}"
+    )
+
+
+def test_a_bad_field_on_one_item_locks_writes_to_every_other_item(tmp_path):
+    """THE BYSTANDER LOCK, and both halves matter.
+
+    A bad `ref` on item A refuses a write to item B — the file is validated as
+    a whole, so one bad item freezes the rest. That is defensible ONLY IF the
+    refusal says WHAT TO FIX: a lock that does not name the offender leaves the
+    user editing the item they touched, which is not the broken one.
+
+    RED WHEN the `ref` rule is removed (the write succeeds), and RED WHEN the
+    message stops naming item A.
+    """
+    store, _ = _cli_store(tmp_path, [
+        _item(item_id="aaaa", title="THE BROKEN ONE", ref=5),
+        _item(item_id="bbbb", title="THE BYSTANDER"),
+    ])
+    code, out = _run_cli(store, "set", "bbbb", "--note", "a write to the bystander")
+
+    assert code == 2, f"the write to the bystander was not refused: exit {code}\n{out}"
+    assert "aaaa" in out, (
+        f"the refusal did not name the item to fix, so the user has no route "
+        f"out of it: {out}"
+    )
+    assert "ref is int" in out, f"the refusal did not say what is wrong: {out}"
+
+
+def test_an_unparseable_date_is_reported_not_just_a_wrong_type(tmp_path):
+    """A TYPE-ONLY RULE PASSES `'banana'`, AND THAT IS THE WHOLE ARM.
+
+    `_as_datetime` returns None both for a non-string AND for a string it
+    cannot parse, and a None there silently disables the staleness check. So a
+    rule checking only `isinstance(value, str)` closes half the hole and leaves
+    `touched: 'banana'` exactly as quiet as `touched: 5`.
+
+    THE CONTROLS ARE THE OVER-TIGHTENING SIDE, which is the only side it is
+    visible from: both spellings the consumer accepts must still pass. A rule
+    stricter than its reader rejects files the reader copes with.
+
+    RED WHEN the parse rule becomes a type rule, and RED WHEN it is removed.
+    """
+    store, _ = _cli_store(tmp_path, [_item(item_id="aaaa", touched="banana")])
+    code, out = _run_cli(store, "show", "--no-reconcile")
+    assert code == 0, out
+    assert "touched is 'banana'" in out, (
+        f"an unparseable date was accepted, so the staleness check is silently "
+        f"disabled for this item: {out}"
+    )
+
+    for spelling in ("2026-01-31", "2026-01-31T12:00:00Z"):
+        store, _ = _cli_store(tmp_path / spelling.replace(":", "-"),
+                              [_item(item_id="aaaa", touched=spelling)])
+        code, out = _run_cli(store, "show", "--no-reconcile")
+        assert code == 0 and "schema:" not in out, (
+            f"control: {spelling!r} parses for the consumer but was rejected "
+            f"here — the rule is tighter than its reader: {out}"
+        )
