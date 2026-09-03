@@ -60,6 +60,13 @@ is boring and rebuildable, the questions are not.
              is ALSO named in the write table below it, so dropping one from
              the sentence leaves the section mention and the mutation survives
              against an arm that scans the section. Measured.
+  gated    A MUTATION INSIDE A GUARD THE FIXTURE DOES NOT ENTER IS
+             UNREACHABLE, AND IT SURVIVES LOOKING LIKE A COVERAGE GAP. Swapping
+             the dedup key to labels while KEEPING `if isinstance(item_id, str)`
+             never runs for an id-less subject, so the arm that exists to catch
+             label-keying passed. The design actually rejected drops the gate —
+             not needing an id is the POINT of keying on labels. Faithful form:
+             replace the whole gated block with an ungated label key.
   scratch  MUTATE A COPY, AND RUN PYTEST *FROM* IT. Putting the scratch
              `hooks/` on PYTHONPATH is INERT — conftest inserts the real tree
              at sys.path[0] and wins, so the mutant never loads and EVERY ARM
@@ -297,6 +304,10 @@ afternoon.
   suppression moved to the blocker        test_a_live_item_blocked_by_a_settled_one_is_told_it_will_not_clear
   bab1d9b7, the exit-3 advice             test_exit_three_gives_different_advice_for_unreadable_and_unparseable
   bab1d9b7, the ref-outcome split         test_every_ref_flag_branch_has_a_row_in_the_step_three_table
+  the ordering guard returns, 463e0a37    test_a_one_sided_exclusive_pair_flags_in_either_id_order
+  the dedup deleted entirely              test_a_two_sided_exclusive_pair_flags_once_in_either_visit_order
+  the dedup key made order-dependent      test_a_two_sided_exclusive_pair_flags_once_in_either_visit_order
+  labels keyed with no id gate            test_two_id_less_items_each_flag_against_a_shared_peer
   the accessor reverted at site two   test_a_poisoned_memory_field_crashes_neither_site
   the accessor reverted at site two   test_the_flagged_ids_are_exactly_the_ids_that_were_looked_up
   the accessor reverted at site one   test_a_poisoned_memory_field_crashes_neither_site
@@ -3349,3 +3360,106 @@ def test_every_ref_flag_branch_has_a_row_in_the_step_three_table():
         f"a verdict for a flag nobody will see.\nRows:\n  " +
         "\n  ".join(r[:90] for r in rows)
     )
+
+
+# ---------------------------------------------------------------------------
+# exclusive_with: a field with zero coverage until now, guarding a fix for a
+# 50% silent miss. Ids are PINNED LITERALS throughout — the defect IS a
+# label-ordering asymmetry, so generated ids make the assertion unreadable.
+# ---------------------------------------------------------------------------
+
+_EXCLUSIVE_FLAG = "{a} and {b} are exclusive and both active"
+
+
+def _bare(exclusive_with):
+    """An item with NEITHER id NOR title — both label `?` via _label's fallback."""
+    return {"status": "active", "rank": 1, "blocked_by": [], "batch_with": [],
+            "exclusive_with": exclusive_with, "ref": None, "plan": None,
+            "memory": [], "note": "", "added": "2026-09-01", "touched": "2026-09-01"}
+
+
+def test_two_id_less_items_each_flag_against_a_shared_peer():
+    """RANKED FIRST BY ITS AUTHOR because nothing else can see it.
+
+    The dedup could have been keyed on `_label`. It is keyed on sorted IDS,
+    and the key is SKIPPED when the subject has no string id. `_label` falls
+    back to `"?"` for an item with neither id nor title, so a label-keyed set
+    would collapse these two into one — A NEW SILENT MISS TRADED FOR THE OLD.
+
+    `len(flags) == 2` IS THE ONLY ASSERTION THAT WORKS HERE, AND THAT IS NOT A
+    STYLE CHOICE. Both flags are the BYTE-IDENTICAL string `? and aaaa are
+    exclusive and both active`, because both subjects label `?`. Anything
+    set-shaped, any `in` check, any dedup-by-message collapses them and this
+    arm silently becomes a one-flag arm — which is the exact collapse it
+    exists to catch. Do not "tidy" this into a membership assertion.
+
+    RED WHEN the dedup is keyed on labels instead of ids.
+    """
+    flags = backlog_store.file_local_flags({"items": [
+        _bare(["aaaa"]), _bare(["aaaa"]),
+        _item(item_id="aaaa", title=None, status="active"),
+    ]})
+    exclusive = [f for f in flags if "are exclusive and both active" in f]
+    assert len(exclusive) == 2, (
+        f"two id-less subjects must each flag; a label-keyed dedup collapses "
+        f"them to one: {exclusive}"
+    )
+    assert exclusive[0] == exclusive[1] == _EXCLUSIVE_FLAG.format(a="?", b="aaaa"), (
+        f"the two flags should be identical text — see the docstring: {exclusive}"
+    )
+
+
+def test_a_one_sided_exclusive_pair_flags_in_either_id_order():
+    """THE DEFECT. The old guard was `_label(item) < _label(peer)`, so a
+    one-sided link flagged only when the subject's label sorted FIRST. The
+    writer sets `exclusive_with` from user args on ONE item, so one-sided is
+    the NORMAL shape — and half of them were reported from neither direction.
+
+    THE CONTROL IS THE SECOND ORDERING AND IT IS THE WHOLE ARM. The
+    `aaaa`-linker case PASSED BEFORE THE FIX; only the `bbbb`-linker case was
+    invisible. An arm testing one direction reproduces the blind spot it
+    exists to close.
+
+    ASSERTS THE MESSAGE, NOT THE COUNT: the text must come out identical in
+    both orderings, which is the byte-for-byte preservation the fix claims and
+    which no count can check.
+
+    RED WHEN the ordering guard returns.
+    """
+    expected = _EXCLUSIVE_FLAG.format(a="aaaa", b="bbbb")
+    for linker, peer in (("bbbb", "aaaa"), ("aaaa", "bbbb")):
+        flags = backlog_store.file_local_flags({"items": [
+            _item(item_id=linker, title=None, status="active", exclusive_with=[peer]),
+            _item(item_id=peer, title=None, status="active"),
+        ]})
+        exclusive = [f for f in flags if "are exclusive and both active" in f]
+        assert exclusive == [expected], (
+            f"linker={linker} peer={peer}: expected exactly [{expected!r}], "
+            f"got {exclusive}"
+        )
+
+
+def test_a_two_sided_exclusive_pair_flags_once_in_either_visit_order():
+    """THE FAILURE THE FIX COULD HAVE INTRODUCED. Deleting the ordering guard
+    fixes the one-sided case and emits the two-sided case TWICE — once from
+    each side. That tempting fix passes the arm above and fails only here.
+
+    BOTH VISIT ORDERS, WHICH THE SPEC GAVE THE OTHER ARM AND NOT THIS ONE.
+    `seen_pairs` is keyed on a SORTED pair so it SHOULD be order-independent —
+    and "should be" is the claim under test. A two-sided fixture visited in
+    one subject order cannot tell an order-independent dedup from one that
+    happens to work for that order, which is the same blind spot the arm above
+    exists to close.
+
+    RED WHEN the dedup is removed, and RED WHEN it is order-dependent.
+    """
+    expected = _EXCLUSIVE_FLAG.format(a="aaaa", b="bbbb")
+    a = _item(item_id="aaaa", title=None, status="active", exclusive_with=["bbbb"])
+    b = _item(item_id="bbbb", title=None, status="active", exclusive_with=["aaaa"])
+    for label, items in (("aaaa first", [a, b]), ("bbbb first", [b, a])):
+        flags = backlog_store.file_local_flags({"items": items})
+        exclusive = [f for f in flags if "are exclusive and both active" in f]
+        assert exclusive == [expected], (
+            f"{label}: a two-sided link must flag ONCE, not once per side: "
+            f"{exclusive}"
+        )
