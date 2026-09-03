@@ -762,7 +762,11 @@ def _ref_flags(items: List[Dict[str, Any]]) -> List[str]:
     signal.
     """
     live = [item for item in items if item.get("status") not in SETTLED]
-    refs = sorted({item["ref"] for item in live if item.get("ref")})
+    # STR ONLY: `sorted` over a mixed set raises TypeError, and `validate`
+    # does not type-check `ref`, so a non-str ref is neither reported nor
+    # survivable. Dropped here the same way `_memory_ids` drops a non-str id.
+    refs = sorted({item["ref"] for item in live
+                   if isinstance(item.get("ref"), str) and item["ref"]})
     if not refs:
         return []
     states = resolve_refs(refs)
@@ -960,7 +964,16 @@ def _abandoned_flags(
 
 
 def _branch_and_worktree_names(project_path: Any = None) -> Optional[List[str]]:
-    at = ["-C", str(project_path)] if project_path else []
+    # ABSOLUTE STR ONLY. A truthy non-string fails safe already — `git -C 5`
+    # exits 128 with empty stdout, so `_run_capture` returns None. The
+    # dangerous value is a truthy RELATIVE string: `"."` resolves to the
+    # process CWD and git reports THAT repository's branches, producing
+    # abandoned-work flags computed against the wrong project. Anything
+    # else degrades to None, which `_abandoned_flags` reads as no flags.
+    if not (isinstance(project_path, str) and project_path
+            and Path(project_path).is_absolute()):
+        return None
+    at = ["-C", project_path]
     branches = _run_capture(["git", *at, "branch", "--format=%(refname:short)"])
     worktrees = _run_capture(["git", *at, "worktree", "list", "--porcelain"])
     if branches is None and worktrees is None:
