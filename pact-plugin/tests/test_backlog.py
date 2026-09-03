@@ -151,14 +151,25 @@ is boring and rebuildable, the questions are not.
              the rename: the detection would rest on an ordering nobody chose,
              and a later rename-for-clarity would switch it off silently.
   tie sort Revert `found.sort(key=lambda entry: entry[0], reverse=True)` to
-             `found.sort(reverse=True)`. Killed by three — both tie arms and
-             the tie-message pin, the last because the winner's NAME appears in
-             the byte-exact sentence. Survived by the source pin and by the
-             unequal-stamp arm, correctly: neither reads a tie outcome.
-             `reverse=False` is the mirror mutation and separates them the
-             other way — it kills the unequal-stamp arm and the rename arm and
-             LEAVES BOTH TIE ARMS GREEN, because a stable sort over equal keys
-             preserves order in either direction.
+             `found.sort(reverse=True)`. Killed by the two tie-outcome arms and
+             NOTHING ELSE. Survived by the source pin and by the unequal-stamp
+             arm, correctly: neither reads a tie outcome. `reverse=False` is
+             the mirror mutation and separates them the other way — it kills
+             the unequal-stamp arm and the rename arm and LEAVES BOTH TIE ARMS
+             GREEN, because a stable sort over equal keys preserves order in
+             either direction.
+             NARROWING A PIN CAN RETIRE A DETECTOR SILENTLY, AND IT DID HERE.
+             While the tie message was pinned BYTE-EXACT this mutation killed
+             THREE arms, because the winning file's NAME sits in that sentence.
+             Narrowing the pin to the clause `not chosen by recency — N share
+             the newest stamp` bought reword-tolerance and cost that third
+             kill: the clause is invariant under the revert, since `tied` keys
+             on `found[0][0]` and both sorts put the maximum stamp at position
+             0. Both counts were measured, before and after. The lesson is not
+             that narrowing was wrong — it was right — but that the kill count
+             moved without anything going red, so a pin's SCOPE is part of the
+             coverage claim and re-measuring after a scope change is not
+             optional.
   tie text Two mutations, two disjoint kills, which is what makes them two
              pins rather than one. Collapsing `chosen` to the bare
              `"most recently updated"` kills the tie-message arm alone;
@@ -1186,6 +1197,45 @@ def test_an_equal_stamp_tie_hands_the_win_to_the_first_file_in_sorted_order(tmp_
     this arm stays green through that, because these two filenames enumerate
     in sorted order anyway. `test_the_scan_globs_the_store_in_sorted_order`
     is the sole detector, and this arm is why it exists.
+
+    THIS ARM PINS THE CURRENT MECHANISM AS A REGRESSION DETECTOR, NOT AS AN
+    ENDORSED PROPERTY. Nothing here says the alphabetically first file OUGHT
+    to win a tie. It says that is what happens today, and that a change to it
+    deserves a human look. An arm may pin a mechanism this way provided it
+    says that is what it is doing and says what would rightly change it. The
+    failure shape to avoid is an arm that holds a mechanism in place by
+    CLAIMING the mechanism is desired, and this one makes no such claim.
+
+    WHAT WOULD LEGITIMATELY REDDEN IT, written so a correct change is not
+    misread as a regression: a decision to satisfy the criterion's
+    no-name-tie-break clause on the OUTCOME reading rather than the
+    comparison reading. Today the sort applies no tie-break KEY, which
+    satisfies that clause read as a ban on comparisons; the alphabetically
+    first file still wins, which does not satisfy it read as a ban on
+    outcomes correlating with name order. If the second reading is ever
+    adopted, this arm SHOULD go red and should be rewritten, not repaired.
+
+    THE REPORT ARM CANNOT SUBSTITUTE FOR THIS ONE, and that matters because
+    two arms over one behaviour invite a later reader to delete whichever
+    looks more brittle. `tied` counts stamps equal to `found[0][0]`, and BOTH
+    sorts put the maximum stamp at position 0 — the tuple sort compares
+    element 0 before it ever reaches the path. So the tie CLAUSE that
+    `test_the_duplicate_report_does_not_claim_recency_when_the_stamps_tie`
+    pins is emitted verbatim whether or not the sort key exists, and that arm
+    is blind to the revert BY CONSTRUCTION.
+
+    That blindness is new, and deliberate. While the tie message was pinned
+    byte-exact it named the winning FILE, so it did detect the revert — the
+    sentence was never invariant even though the clause always was. Narrowing
+    that pin to the clause bought reword-tolerance and PAID FOR IT by
+    retiring a second detector, which is a fair trade only if this arm stays.
+    MEASURED after the narrowing: reverting `key=lambda entry: entry[0]`
+    reddens this arm and the swap control and NOTHING ELSE. Delete this arm
+    and that key can be removed with the whole suite green.
+
+    The swap control is not a substitute either. It separates "the path
+    decides" from "position decides"; it cannot separate WHICH path rule
+    decides, which is the axis a revert moves along.
     """
     project, store, titles = _tie_store(tmp_path, "ALPHA", "OMEGA")
 
@@ -1266,15 +1316,13 @@ def test_the_duplicate_report_does_not_claim_recency_when_the_stamps_tie(tmp_pat
         and _RECENCY_CLAIM not in line
     ), _tie_report_diagnosis(line)
 
-    assert line == (
-        "  2 stored backlogs record this checkout: aaa-tie.json, zzz-tie.json. "
-        "Reading aaa-tie.json (not chosen by recency \u2014 2 share the newest "
-        "stamp); run /PACT:next to reconcile them."
-    ), (
-        "the tie wording changed. The property above still holds, so this is a "
-        "REWORDING and not a regression — read the new line, confirm it still "
-        "declines to claim recency, and re-pin it here. "
-        f"Received: {line!r}"
+    assert "not chosen by recency \u2014 2 share the newest stamp" in line, (
+        "the tie CLAUSE changed. This is the substantive half of the message: "
+        "it declines recency AND says how many files tied. The surrounding "
+        "sentence is deliberately NOT pinned here — the tail is what keeps "
+        "moving, and pinning a whole sentence is what made the cause arm "
+        "brittle across three rewrites. Confirm the new clause still declines "
+        f"to claim recency, then re-pin the clause alone. Received: {line!r}"
     )
 
 
