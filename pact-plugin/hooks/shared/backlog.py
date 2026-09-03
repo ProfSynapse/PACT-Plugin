@@ -573,7 +573,16 @@ def resolve_refs(refs: Sequence[str]) -> Dict[str, Dict[str, Any]]:
     stdout = _run_capture(["gh", "api", "graphql", "-f", f"query={query}"])
     if stdout is None:
         for ref in addressable:
-            outcome[ref] = {"state": "unverifiable", "reason": "tracker unreachable"}
+            # NOT "tracker unreachable". `_run_capture` returns None for THREE
+            # causes — a timeout, an absent `gh`, and an OSError at the argv
+            # wall — and only the first is unreachability. At the argv wall the
+            # tracker is reachable and configured and the request never left,
+            # so naming the network sent the reader to check the one thing that
+            # was fine. This says what is true of all three and asserts no cause.
+            outcome[ref] = {
+                "state": "unverifiable",
+                "reason": "the tracker call did not complete",
+            }
         return outcome
 
     try:
