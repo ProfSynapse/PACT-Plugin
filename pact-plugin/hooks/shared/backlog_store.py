@@ -245,16 +245,16 @@ def _validate_item(item: Any, index: int, seen_ids: set) -> List[str]:
                 f"{label}: plan {plan!r} is absolute, expected a repo-relative path"
             )
 
-    # `added` and `touched` are dates, and the tolerance is COPIED FROM THEIR
-    # CONSUMER rather than chosen here. The write side's _as_datetime returns
-    # None both for a non-string AND for an unparseable string, and a None
-    # there silently disables the staleness check — so a type-only rule would
-    # close half the hole, leaving `touched: "banana"` exactly as quiet as
-    # `touched: 5`. A bare date and a full timestamp both pass, because both
-    # parse there; rejecting the timestamp would tighten past the consumer.
+    # `added` and `touched` are dates, tested through THE SAME as_datetime the
+    # staleness checks use, so validate cannot accept a value the reader will
+    # not take. That helper returns None both for a non-string AND for an
+    # unparseable string, and a None there silently disables the staleness
+    # check — so a type-only rule would close half the hole, leaving
+    # `touched: "banana"` exactly as quiet as `touched: 5`. A bare date and a
+    # full timestamp both pass, because both parse there.
     for field in ("added", "touched"):
         value = item.get(field)
-        if value is not None and not _parses_as_date(value):
+        if value is not None and as_datetime(value) is None:
             problems.append(
                 f"{label}: {field} is {value!r}, expected a date like 2026-01-31"
             )
@@ -269,24 +269,26 @@ def _validate_item(item: Any, index: int, seen_ids: set) -> List[str]:
     return problems
 
 
-def _parses_as_date(value: Any) -> bool:
-    """Whether the write side's _as_datetime would get a datetime out of this.
+def as_datetime(value: Any) -> Optional[datetime]:
+    """Parse a stored date or timestamp, or None when it is unusable.
 
-    THE NORMALISATION IS DUPLICATED FROM THAT HELPER AND MUST TRACK IT. It
-    cannot be shared: _as_datetime lives on the write side, which imports this
-    module, so importing back would close a cycle. Changing what _as_datetime
-    accepts without changing this makes validate() reject a value the reader
-    handles, or pass one it cannot.
+    Dates are stored as YYYY-MM-DD and memory timestamps carry a time and a
+    zone, so both spellings reach this helper.
+
+    PUBLIC AND LIVING HERE so validate() and the write side's staleness checks
+    share ONE definition of a usable date. Held separately they drifted by
+    construction: a validator that accepts what its consumer rejects passes a
+    value the reader cannot use, and one that rejects what its consumer accepts
+    refuses a file that would have read fine.
     """
     if not isinstance(value, str) or not value:
-        return False
+        return None
+    text = value.strip().replace("Z", "+00:00").replace(" ", "T", 1)
     try:
-        datetime.fromisoformat(
-            value.strip().replace("Z", "+00:00").replace(" ", "T", 1)
-        )
+        parsed = datetime.fromisoformat(text)
     except ValueError:
-        return False
-    return True
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def read_json(path: Path) -> Dict[str, Any]:

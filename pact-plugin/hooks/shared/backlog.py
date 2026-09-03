@@ -50,6 +50,7 @@ from shared.backlog_store import (  # noqa: E402  # follows the sys.path bootstr
     STATUSES,
     BacklogFileError,
     BacklogUnreadableError,
+    as_datetime,
     file_local_flags,
     read_json,
     validate,
@@ -919,7 +920,7 @@ def _staleness_flags(items: List[Dict[str, Any]]) -> List[str]:
     for item in items:
         if item.get("status") != "active":
             continue
-        touched = _as_datetime(item.get("touched"))
+        touched = as_datetime(item.get("touched"))
         if touched is not None and touched.date() < cutoff:
             flags.append(
                 f"{_label(item)}: active and untouched since {item.get('touched')}"
@@ -1240,22 +1241,6 @@ def _as_text(value: Any) -> Optional[str]:
     return None if value is None else str(value)
 
 
-def _as_datetime(value: Any) -> Optional[datetime]:
-    """Parse a stored date or timestamp, or None when it is unusable.
-
-    Dates are stored as YYYY-MM-DD and memory timestamps carry a time and a
-    zone, so both spellings reach this helper.
-    """
-    if not isinstance(value, str) or not value:
-        return None
-    text = value.strip().replace("Z", "+00:00").replace(" ", "T", 1)
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
 def _is_newer(candidate: Any, baseline: Any) -> bool:
     """Strictly LATER CALENDAR DAY, not later instant.
 
@@ -1273,7 +1258,7 @@ def _is_newer(candidate: Any, baseline: Any) -> bool:
     precision, which changes the stored shape and would have to take `added`
     with it for consistency — a schema change to recover a signal nobody needs.
     """
-    left, right = _as_datetime(candidate), _as_datetime(baseline)
+    left, right = as_datetime(candidate), as_datetime(baseline)
     return left is not None and right is not None and left.date() > right.date()
 
 
