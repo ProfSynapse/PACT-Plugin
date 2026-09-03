@@ -62,7 +62,8 @@ This is a CALL SITE, not a boundary write: nothing has finished at session start
 there is no witnessed transition and no status to set here. Report only the drift
 FLAGS. Do NOT re-print the item list — the session-start block already showed it, and
 a bookend that repeats what the reader just saw stops being read. If there are no
-flags, say nothing at all: the block already proves the backlog was read.
+flags, say nothing at all: the block already proves the backlog was read. If the
+report does not run, say so and carry on — never run `repair` here.
 
 ---
 

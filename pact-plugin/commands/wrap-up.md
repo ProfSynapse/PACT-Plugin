@@ -253,7 +253,7 @@ Run the backlog report before the decision below:
 python3 "{plugin_root}/hooks/shared/backlog.py" show
 ```
 
-This is a CALL SITE, not a boundary write: every status this session witnessed was already recorded at its own transition, so nothing has newly finished here. Report only the drift FLAGS and what remains open. The report is READ-ONLY in your hands — report a flag, never correct one; an item whose status looks wrong is corrected through `/PACT:next`, not here. If there are no flags and nothing is open, say nothing.
+This is a CALL SITE, not a boundary write: every status this session witnessed was already recorded at its own transition, so nothing has newly finished here. Report only the drift FLAGS and what remains open. The report is READ-ONLY in your hands — report a flag, never correct one; an item whose status looks wrong is corrected through `/PACT:next`, not here. If there are no flags and nothing is open, say nothing. If the report does not run, say so and carry on to the decision — never run `repair` here.
 
 Use `AskUserQuestion` with these exact options:
 - **"Yes, continue"** (description: "Keep team alive, ready for next task") → On selection: Report "Ready for next task." Teammates stay alive — do NOT stop them on this branch.
