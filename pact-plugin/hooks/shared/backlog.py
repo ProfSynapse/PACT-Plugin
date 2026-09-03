@@ -46,6 +46,7 @@ if _HOOKS_DIR not in sys.path:
 from shared.backlog_store import (  # noqa: E402  # follows the sys.path bootstrap
     MEMORY_MAX_IDS,
     SCHEMA_VERSION,
+    SETTLED,
     STATUSES,
     BacklogFileError,
     BacklogUnreadableError,
@@ -755,7 +756,10 @@ def _ref_flags(items: List[Dict[str, Any]]) -> List[str]:
                 f"{_label(item)}: ref {ref} is unverifiable "
                 f"({state.get('reason', 'no reason given')})"
             )
-        elif item.get("status") == "done":
+        elif item.get("status") in SETTLED:
+            # SETTLED, not just `done`: a DROPPED item whose ref closed was
+            # told "probably done", which proposes undoing the decision the
+            # status exists to record.
             continue
         elif state.get("state") == "done":
             flags.append(
@@ -784,7 +788,10 @@ def _plan_flags(items: List[Dict[str, Any]], project_path: Any) -> List[str]:
     return [
         f"{_label(item)}: plan {item['plan']!r} does not resolve under {root}"
         for item in items
-        if item.get("plan") and not _plan_resolves(root, str(item["plan"]))
+        # A SETTLED item's attachments are not drift. The work is not
+        # happening, so a dead plan pointer is not something to chase.
+        if item.get("status") not in SETTLED
+        and item.get("plan") and not _plan_resolves(root, str(item["plan"]))
     ]
 
 
@@ -839,14 +846,23 @@ def _memory_flags(
 ) -> List[str]:
     wanted = sorted({
         identifier
+        # Same rule as the plan pointers: a settled item's links are not
+        # drift. Measured before this clause — a dropped item and a done
+        # item were both flagged for a dead memory id.
         for item in items
+        if item.get("status") not in SETTLED
         for identifier in _memory_ids(item)
     })
     if not wanted:
         return []
     records = resolve_memory_ids(wanted, store)
     flags = []
+    # The SAME filter as the one on `wanted`, and BOTH are needed: two items
+    # can share one memory id, so a live item keeps that id in `wanted`
+    # and this loop would still emit a flag against the settled one.
     for item in items:
+        if item.get("status") in SETTLED:
+            continue
         for identifier in _memory_ids(item):
             record = records.get(identifier)
             if record is _UNVERIFIABLE:
@@ -955,6 +971,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     show = sub.add_parser("show", help="Report every item with its drift flags")
     show.add_argument(
+        "--all",
+        action="store_true",
+        help="Show every item, including done and dropped",
+    )
+    show.add_argument(
         "--no-reconcile",
         action="store_true",
         help="Skip the tracker, pact-memory and git checks",
@@ -1039,7 +1060,7 @@ def _handle_write_or_show(args: argparse.Namespace, path: Path) -> int:
 
     if args.command == "show":
         flags = [] if args.no_reconcile else reconcile(data)
-        print(_render(data, schema + flags))
+        print(_render(data, schema + flags, show_all=args.all))
         return _EXIT_OK
 
     if args.command == "add":
@@ -1107,11 +1128,45 @@ def _list_field(args: argparse.Namespace, name: str) -> Any:
     return _CLEAR if clears else values
 
 
-def _render(data: Dict[str, Any], flags: Sequence[str]) -> str:
+def _render(
+    data: Dict[str, Any], flags: Sequence[str], show_all: bool = False
+) -> str:
+    """The `show` report. BOUNDS THE REPORT, NOT THE STORE.
+
+    SETTLED items are omitted by default because `show` is read every time and
+    its readability is what degrades, while keeping every item costs about a
+    millisecond. Hiding `dropped` is not a bonus alongside hiding `done` — it
+    is the half that makes the status do its job, because the case for adding
+    it was that a mistaken item clutters the ranked list forever, and that
+    stays true if `show` keeps displaying it.
+
+    THE HIDDEN COUNT IS NOT OPTIONAL: an omission the reader cannot see is a
+    lie by another route, the same defect as a message naming a cause it did
+    not establish. It names the categories SEPARATELY rather than summing —
+    four done items is a working project and four dropped ones is a project
+    that keeps abandoning things, and those want different responses.
+    """
     lines = [f"{data.get('project')} — {data.get('project_path')}"]
+    shown = _items(data)
+    hidden = {}
+    if not show_all:
+        hidden = {
+            status: sum(1 for i in shown if i.get("status") == status)
+            for status in sorted(SETTLED)
+        }
+        hidden = {status: n for status, n in hidden.items() if n}
+        shown = [i for i in shown if i.get("status") not in SETTLED]
     items = sorted(
-        _items(data),
-        key=lambda item: (item.get("status") != "active", _rank_of(item)),
+        shown,
+        # Three keys, not two: SETTLED items sort last regardless of rank,
+        # because rank orders WORK TO DO and a settled item has none. Without
+        # the first key a dropped item with rank 1 outranks a planned item
+        # with rank 2.
+        key=lambda item: (
+            item.get("status") in SETTLED,
+            item.get("status") != "active",
+            _rank_of(item),
+        ),
     )
     # The id is emitted for the AGENT, which needs it as the argument to `set`.
     # `add` echoes it once at creation, and that echo is gone by the next
@@ -1129,6 +1184,15 @@ def _render(data: Dict[str, Any], flags: Sequence[str]) -> str:
             lines.append(f"      note: {item['note']}")
     if not items:
         lines.append("  (no items)")
+    if hidden:
+        # A category absent at zero, and the whole line absent when nothing is
+        # hidden — the one omission here that is honest, because the reader is
+        # missing nothing.
+        # NO NOUN: "1 done and 1 dropped items" is wrong and "item" is wrong
+        # at two categories of one each, so the count word is the trap. Naming
+        # the statuses alone has nothing to agree with.
+        parts = " and ".join(f"{n} {status}" for status, n in hidden.items())
+        lines.append(f"  {parts} hidden (--all to show)")
     lines.append("")
     lines.append(f"{len(flags)} flag(s):" if flags else "no drift found")
     lines.extend(f"  {flag}" for flag in flags)

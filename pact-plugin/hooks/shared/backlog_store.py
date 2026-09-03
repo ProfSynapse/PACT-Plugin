@@ -33,7 +33,15 @@ from .paths import get_backlog_dir
 SCHEMA_VERSION = 1
 NOTE_MAX_CHARS = 200
 MEMORY_MAX_IDS = 5
-STATUSES = frozenset({"planned", "active", "blocked", "done"})
+STATUSES = frozenset({"planned", "active", "blocked", "done", "dropped"})
+
+# `dropped` says the user DECIDED NOT TO DO THIS. It is not `done` (that would
+# be false) and not `planned` (that clutters the ranked list forever). The id
+# stays alive, so nothing that points at the item dangles — which is the whole
+# reason this exists instead of a delete.
+# SETTLED means "no more work will happen here", which is what every consumer
+# that used to test `== "done"` actually meant.
+SETTLED = frozenset({"done", "dropped"})
 RELATIONAL_FIELDS = ("blocked_by", "batch_with", "exclusive_with")
 
 # Item ids are exactly four lowercase hex characters, generated at creation and
@@ -479,9 +487,15 @@ def file_local_flags(data: Dict[str, Any]) -> List[str]:
             for other in ids:
                 if other not in by_id:
                     flags.append(f"{label}: {field} names unknown id {other!r}")
-                elif field == "blocked_by" and by_id[other].get("status") == "done":
+                elif field == "blocked_by" and by_id[other].get("status") in SETTLED:
+                    # SETTLED, not just `done`. Tested against `== "done"` this
+                    # said NOTHING about an item blocked by a DROPPED one, which
+                    # leaves it stuck forever with no flag — an absent flag, not
+                    # a wrong one, and the harder kind to notice.
+                    blocker = by_id[other]
                     flags.append(
-                        f"{label}: blocked_by names {_label(by_id[other])}, already done"
+                        f"{label}: blocked_by names {_label(blocker)}, which is "
+                        f"{blocker.get('status')} — it will not clear on its own"
                     )
 
     for item in items:
