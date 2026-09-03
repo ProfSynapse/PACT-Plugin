@@ -328,6 +328,8 @@ afternoon.
   the CAS comparison removed          test_a_refused_write_preserves_the_first_writers_data_and_stays_armed
   the baseline popped on refusal      test_a_refused_write_preserves_the_first_writers_data_and_stays_armed
   the query drops `stateReason`       test_the_query_requests_every_field_the_outcome_logic_reads
+  bootstrap loses its read site       test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
+  wrap-up loses its read site         test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
   a write site appears in rePACT      test_four_files_stay_at_zero_write_sites
   the write-site detector orphaned    test_four_files_stay_at_zero_write_sites
   the wrap-up write moves below       test_the_wrap_up_write_precedes_the_worktree_removal
@@ -3012,6 +3014,63 @@ def test_the_wrap_up_write_precedes_the_worktree_removal(monkeypatch):
         f"the backlog write is at line {writes[0]}, BELOW the worktree removal "
         f"at line {removals[0]}. Every item written there is reported abandoned "
         f"from the next session onward."
+    )
+
+
+def _read_sites(name):
+    """Lines in one command file that invoke the backlog with a READ verb."""
+    text = (_COMMANDS_DIR / name).read_text(encoding="utf-8")
+    return [
+        (number, line.strip())
+        for number, line in enumerate(text.splitlines(), 1)
+        if "backlog.py" in line and any(f" {v}" in line for v in _NON_WRITE_SUBCOMMANDS)
+    ]
+
+
+def test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site():
+    """The two files that REPORT the backlog, pinned per file.
+
+    The whole plugin surfaces the backlog at SessionStart and nowhere else, so
+    these two call sites are the only bookends a session gets: bootstrap's at
+    the start, wrap-up's before a decision whose continue branch keeps the team
+    alive with no SessionStart in between.
+
+    THE NEIGHBOURING ARM'S POSITIVE HALF DOES NOT TRANSFER, and copying it here
+    would be cargo cult. `test_four_files_stay_at_zero_write_sites` asserts an
+    ABSENCE, which an orphaned detector satisfies forever — hence its positive
+    half. This asserts a PRESENCE, so the same orphaning reddens it directly.
+    The failure direction is inverted and the guard it needs is the opposite
+    one: a detector loose enough to match a PROSE MENTION, or one that cannot
+    tell this call site from the step 6 write, would pass while pinning
+    nothing. Both are asserted below.
+
+    RED WHEN either file loses its read site.
+    """
+    sites = {name: _read_sites(name) for name in ("bootstrap.md", "wrap-up.md")}
+    missing = [name for name, found in sites.items() if not found]
+    assert not missing, (
+        f"{missing} carry no backlog read site. Either the report was removed, "
+        f"or it was reworded past a detector keyed on `backlog.py` plus a verb "
+        f"in {sorted(_NON_WRITE_SUBCOMMANDS)}."
+    )
+
+    # An INVOCATION, not a mention. Prose naming the command reads identically
+    # to the detector and would satisfy the presence assertion above while no
+    # agent ever runs anything.
+    for name, found in sites.items():
+        for number, line in found:
+            assert line.startswith("python3 "), (
+                f"{name}:{number} matches the detector but is not an "
+                f"invocation, so this arm would pass on prose alone: {line!r}"
+            )
+
+    # DISJOINT from the write sites. A detector that also matched the step 6
+    # write would report wrap-up as covered on the strength of the very line
+    # the architect's ruling is about.
+    overlap = {n for n, _ in sites["wrap-up.md"]} & {n for n, _ in _write_sites("wrap-up.md")}
+    assert not overlap, (
+        f"wrap-up.md line(s) {sorted(overlap)} count as BOTH a read and a "
+        f"write site, so this arm cannot say which one it found"
     )
 
 
