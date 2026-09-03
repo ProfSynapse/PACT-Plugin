@@ -330,6 +330,12 @@ afternoon.
   the query drops `stateReason`       test_the_query_requests_every_field_the_outcome_logic_reads
   bootstrap loses its read site       test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
   wrap-up loses its read site         test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
+  a report site uses a NON-reporting verb  test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
+  a fourth file gains a report site   test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
+  next.md loses its own report site   test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
+  the wrap-up report moves below the ask   test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
+  the report verb is renamed in the CLI    test_the_verb_classification_covers_every_cli_subcommand
+  the report verb becomes a write verb     test_the_verb_classification_covers_every_cli_subcommand
   a write site appears in rePACT      test_four_files_stay_at_zero_write_sites
   the write-site detector orphaned    test_four_files_stay_at_zero_write_sites
   the wrap-up write moves below       test_the_wrap_up_write_precedes_the_worktree_removal
@@ -2934,6 +2940,16 @@ _WRITE_VERBS = ("set ", "add ")
 # Subcommands that are not item writes: `show` reads, `repair` moves a corrupt
 # FILE aside and touches no item. Neither can appear at a work boundary.
 _NON_WRITE_SUBCOMMANDS = frozenset({"show", "repair"})
+# The ONE subcommand that REPORTS the backlog, and it is deliberately NOT the
+# frozenset above. That set answers "is this a write?"; a read site asks "does
+# this REPORT?", and only `show` answers it — `repair` is a non-write that
+# reports nothing. Keying a read detector on the non-write set widens it every
+# time a future non-write subcommand is classified, with nothing going red at
+# the moment the guarantee weakens. Measured: with the set as the population, a
+# file whose only call was `repair` satisfied the read-site arm below. The
+# coupling to the CLI is kept explicitly instead, in
+# test_the_verb_classification_covers_every_cli_subcommand.
+_REPORT_SUBCOMMAND = "show"
 
 
 def _write_sites(name):
@@ -3018,40 +3034,84 @@ def test_the_wrap_up_write_precedes_the_worktree_removal(monkeypatch):
 
 
 def _read_sites(name):
-    """Lines in one command file that invoke the backlog with a READ verb."""
+    """Lines in one command file that invoke the backlog's REPORT verb."""
     text = (_COMMANDS_DIR / name).read_text(encoding="utf-8")
     return [
         (number, line.strip())
         for number, line in enumerate(text.splitlines(), 1)
-        if "backlog.py" in line and any(f" {v}" in line for v in _NON_WRITE_SUBCOMMANDS)
+        if "backlog.py" in line and f" {_REPORT_SUBCOMMAND}" in line
     ]
 
 
-def test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site():
-    """The two files that REPORT the backlog, pinned per file.
+_BOOKENDS = ("bootstrap.md", "wrap-up.md")
+# Every command file that invokes the report, bookend or not. next.md's is Step
+# 2 of its own procedure. Stated here so its membership is a DECISION rather
+# than an absence a reader cannot distinguish from an oversight.
+_REPORT_CALL_SITES = frozenset({"bootstrap.md", "wrap-up.md", "next.md"})
+# The decision wrap-up's report must precede, quoted as it appears in the file.
+_SESSION_DECISION = "Use `AskUserQuestion` with these exact options:"
 
-    The whole plugin surfaces the backlog at SessionStart and nowhere else, so
-    these two call sites are the only bookends a session gets: bootstrap's at
-    the start, wrap-up's before a decision whose continue branch keeps the team
-    alive with no SessionStart in between.
+
+def test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site():
+    """The two files that report the backlog UNASKED, pinned per file.
+
+    AUTOMATIC surfacing happens in exactly one place: `session_init` is the only
+    hook that reads `backlog_store`, so nothing reports at session END without
+    being asked. That is why these two call sites matter — bootstrap's at the
+    start, wrap-up's before a decision whose continue branch keeps the team
+    alive with no SessionStart in between. It is NOT a claim that they are the
+    only call sites: `next.md` carries a third, run when a user invokes the
+    command. The census below enumerates all three rather than leaving the
+    reader to infer a population from this sentence.
 
     THE NEIGHBOURING ARM'S POSITIVE HALF DOES NOT TRANSFER, and copying it here
     would be cargo cult. `test_four_files_stay_at_zero_write_sites` asserts an
     ABSENCE, which an orphaned detector satisfies forever — hence its positive
     half. This asserts a PRESENCE, so the same orphaning reddens it directly.
-    The failure direction is inverted and the guard it needs is the opposite
-    one: a detector loose enough to match a PROSE MENTION, or one that cannot
-    tell this call site from the step 6 write, would pass while pinning
-    nothing. Both are asserted below.
 
-    RED WHEN either file loses its read site.
+    BUT ORPHANING IS NOT THE ONLY ROUTE TO VACUITY, and assuming it was is what
+    let a survivor through review. A detector can be fully live, match a real
+    invocation, and certify nothing, when the POPULATION it matches contains a
+    member that does not do the thing: keyed on `_NON_WRITE_SUBCOMMANDS`, a file
+    whose only call was `repair` satisfied this arm while reporting nothing.
+    Hence `_REPORT_SUBCOMMAND`. The other two guards the inverted direction
+    needs are a detector loose enough to match a PROSE MENTION, and one that
+    cannot tell this call site from the step 6 write. Both are asserted below.
+
+    CEILING, stated rather than discovered later. This pins a COMMAND LINE and
+    its POSITION. It cannot see whether an agent is TOLD to run it: the sentence
+    above the fence is unpinned, so demoting `Run the backlog report
+    unconditionally:` to `If there are flags, run:` or to `For reference:`
+    leaves this arm green while the report stops happening. Measured, twice.
+    Pinning that would mean pinning prose, which this file refuses elsewhere for
+    good reason — so it is a ceiling and not a gap to be quietly closed.
+
+    The disjointness assertion is vacuously true if wrap-up carries no write
+    site at all. Measured: that state reddens BOTH neighbours, so its
+    non-vacuity is guaranteed there rather than here.
+
+    RED WHEN either file loses its report site, when a file gains or loses one
+    outside the census, when a site is prose rather than an invocation, when one
+    line counts as both a read and a write, or when wrap-up's report drifts
+    below the session decision.
     """
-    sites = {name: _read_sites(name) for name in ("bootstrap.md", "wrap-up.md")}
+    # THE POPULATION, DERIVED FROM THE TREE rather than asserted. A fourth file
+    # gaining a report site, or next.md losing its own, is drift either way.
+    carrying = {p.name for p in _COMMANDS_DIR.glob("*.md") if _read_sites(p.name)}
+    assert carrying == set(_REPORT_CALL_SITES), (
+        f"the files invoking `backlog.py {_REPORT_SUBCOMMAND}` are "
+        f"{sorted(carrying)}, not {sorted(_REPORT_CALL_SITES)}. Gained: "
+        f"{sorted(carrying - _REPORT_CALL_SITES)} (report the backlog and is "
+        f"pinned nowhere). Lost: {sorted(_REPORT_CALL_SITES - carrying)} "
+        f"(stopped reporting, or was reworded past the detector)."
+    )
+
+    sites = {name: _read_sites(name) for name in _BOOKENDS}
     missing = [name for name, found in sites.items() if not found]
     assert not missing, (
         f"{missing} carry no backlog read site. Either the report was removed, "
-        f"or it was reworded past a detector keyed on `backlog.py` plus a verb "
-        f"in {sorted(_NON_WRITE_SUBCOMMANDS)}."
+        f"or it was reworded past a detector keyed on `backlog.py` plus "
+        f"{_REPORT_SUBCOMMAND!r}."
     )
 
     # An INVOCATION, not a mention. Prose naming the command reads identically
@@ -3071,6 +3131,24 @@ def test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site():
     assert not overlap, (
         f"wrap-up.md line(s) {sorted(overlap)} count as BOTH a read and a "
         f"write site, so this arm cannot say which one it found"
+    )
+
+    # POSITION, not presence — the same property `test_the_wrap_up_write_
+    # precedes_the_worktree_removal` pins for the write, and for the same
+    # reason: a report appended below the decision is present and useless,
+    # because the choice it exists to inform has already been made.
+    lines = (_COMMANDS_DIR / "wrap-up.md").read_text(encoding="utf-8").splitlines()
+    decisions = [n for n, line in enumerate(lines, 1) if _SESSION_DECISION in line]
+    assert len(decisions) == 1, (
+        f"expected exactly one session decision matching {_SESSION_DECISION!r}, "
+        f"found {decisions} — the ordering assertion below cannot be read "
+        f"against several"
+    )
+    last_report = max(n for n, _ in sites["wrap-up.md"])
+    assert last_report < decisions[0], (
+        f"wrap-up's backlog report is at line {last_report}, BELOW the session "
+        f"decision at line {decisions[0]}. The user chooses before the report "
+        f"they were meant to read it against ever renders."
     )
 
 
@@ -3102,6 +3180,22 @@ def test_the_verb_classification_covers_every_cli_subcommand():
     assert len(actions) == 1, f"expected one subparser group, found {len(actions)}"
     declared = set(actions[0].choices)
     assert declared, "the parser declares no subcommands — this arm is vacuous"
+
+    # THE READ DETECTOR'S COUPLING TO THE PARSER LIVES HERE, so that renaming
+    # `show` reddens rather than silently orphaning `_read_sites`.
+    assert _REPORT_SUBCOMMAND in declared, (
+        f"the reporting subcommand {_REPORT_SUBCOMMAND!r} is no longer declared "
+        f"by the CLI, so `_read_sites` matches nothing and every report-site "
+        f"assertion is vacuous. Declared: {sorted(declared)}."
+    )
+    # THE MIRROR, and nothing else catches it AT THE CLASSIFICATION. Measured:
+    # making the report verb a write verb too reddens three downstream arms with
+    # messages about overlapping sites, and leaves THIS arm green, because a
+    # union cannot see a verb classified both ways.
+    assert _REPORT_SUBCOMMAND not in {verb.strip() for verb in _WRITE_VERBS}, (
+        f"{_REPORT_SUBCOMMAND!r} is classified as BOTH the report verb and a "
+        f"write verb, so every report site also counts as a boundary write"
+    )
 
     classified = {verb.strip() for verb in _WRITE_VERBS} | set(_NON_WRITE_SUBCOMMANDS)
     assert classified == declared, (
