@@ -3325,11 +3325,12 @@ def test_next_md_names_exactly_the_files_that_carry_write_sites():
         f"reworded and this arm is reading nothing"
     )
     sentence = text.split(marker, 1)[1].split("\n\n", 1)[0]
-    claimed = {name for name in
-               ("orchestrate.md", "comPACT.md", "imPACT.md", "wrap-up.md",
-                "rePACT.md", "refresh.md", "pause.md", "peer-review.md",
-                "bootstrap.md", "next.md")
-               if f"`{name}`" in sentence}
+    # BOTH SIDES COME FROM THE SAME GLOB, as on the read rule. A hardcoded
+    # candidate list makes a file named in the sentence but absent from the
+    # literal invisible, so the comparison passes while the rule is wrong.
+    # Measured: with the literal, a new command file named here and carrying no
+    # write site was not noticed.
+    claimed = {p.name for p in _COMMANDS_DIR.glob("*.md") if f"`{p.name}`" in sentence}
     assert claimed, (
         "the trigger sentence names no command file — it was restructured and "
         "this arm is now reading nothing"
