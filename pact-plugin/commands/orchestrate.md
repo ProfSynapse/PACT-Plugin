@@ -226,6 +226,14 @@ JSON
 
 **User override**: User can always specify their preferred workflow regardless of assessment.
 
+> **Backlog boundary write** — starting the feature is a transition you WITNESSED, so set this item's status to `active` WITHOUT asking. Run the command rather than editing the file: it loads through `load_or_create`, which is what stashes the compare-and-swap baseline. A document built any other way is written with NO lost-update protection and nothing reports that.
+>
+> ```bash
+> python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status active
+> ```
+>
+> Report what you wrote. If the write is refused, report the refusal and carry on.
+
 ### Offering comPACT for Low-Variety Tasks
 
 When variety is Low (4-6), offer the user a choice using `AskUserQuestion` tool:
@@ -355,7 +363,7 @@ Wire variety dimension scores (already computed in the Task Variety Assessment a
 
 **If any hard gate fires** → Phase runs. No further analysis needed for this phase.
 
-**Missing variety data**: If variety scores are not available, hard gates cannot be evaluated — the default-run posture applies. After compaction, read the journal's `variety_assessed` event first (`python3 "$SJ" read-last --session-dir '{session_dir}' --type variety_assessed`); fall back to `TaskGet(featureTaskId).metadata.variety` if journal is unavailable. See [pact-state-recovery.md](../protocols/pact-state-recovery.md) for the full recovery hierarchy.
+**Missing variety data**: If variety scores are not available, hard gates cannot be evaluated — the default-run posture applies. After compaction, read the journal's `variety_assessed` event first (`python3 "$SJ" read-last --session-dir '{session_dir}' --type variety_assessed`); fall back to the feature task file's `metadata.variety` if journal is unavailable (`TaskGet` does NOT surface metadata). See [pact-state-recovery.md](../protocols/pact-state-recovery.md) for the full recovery hierarchy.
 
 ### Layer 3: Structured Analysis Gate
 
@@ -574,7 +582,7 @@ When detection fires (score >= threshold), follow the evaluation response protoc
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
      - CONTEXT: [task description, where to find PREPARE outputs (e.g., "Read `docs/preparation/{feature}.md`"), plan sections (if any), plan reference]
      - MISSION: [design mission]
-     - INSTRUCTIONS: "Preparer task: #{taskId} — read via `TaskGet` for research decisions and context."
+     - INSTRUCTIONS: "Preparer task: #{taskId} — read its task file for research decisions and context; `TaskGet` does NOT surface metadata."
      - GUIDELINES: Do not read phase output files yourself or paste their content into the task description. If PREPARE was skipped: pass the plan's Preparation Phase section instead.
 3. `TaskUpdate(A_id, owner="architect", addBlocks=[B_id])`
 4. `TaskUpdate(B_id, owner="architect", addBlockedBy=[A_id])`
@@ -699,7 +707,7 @@ python3 "{plugin_root}/hooks/shared/session_journal.py" write \
 JSON
 ```
 
-**Include worktree path in all agent prompts**: "You are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree. Note: `CLAUDE.md` is gitignored and does not exist in worktrees. As a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead."
+**Include worktree path in all agent prompts**: "You are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree. As a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead."
 
 **Progress monitoring**: For tasks where mid-flight visibility matters (variety 7+, parallel execution, novel domains), include in the agent prompt: "Send progress signals per the agent-teams skill Progress Signals section."
 
@@ -710,7 +718,7 @@ JSON
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
      - CONTEXT: Where to find ARCHITECT outputs (e.g., "Read `docs/architecture/{feature}.md`"), plan sections (if any), plan reference. (NOTE: Do not read the phase output files yourself or paste their content into the task description.)
      - MISSION: [implementation mission]
-     - INSTRUCTIONS: "Architect task: #{taskId} — read via `TaskGet` for design decisions." If multiple coders are dispatched concurrently, include peer names: "Your peers on this phase: {other-coder-names}."
+     - INSTRUCTIONS: "Architect task: #{taskId} — read its task file for design decisions; `TaskGet` does NOT surface metadata." If multiple coders are dispatched concurrently, include peer names: "Your peers on this phase: {other-coder-names}."
      - GUIDELINES:
        - If ARCHITECT was skipped: pass the plan's Architecture Phase section instead.
        - If PREPARE/ARCHITECT were skipped, include: "PREPARE and/or ARCHITECT were skipped based on existing context. Minor decisions (naming, local structure) are yours to make. For moderate decisions (interface shape, error patterns), decide and implement but flag the decision with your rationale in the HANDOFF so it can be validated. Major decisions affecting other components are blockers—don't implement, escalate."
@@ -863,7 +871,7 @@ Execute the [CONSOLIDATE Phase protocol](../protocols/pact-scope-phases.md#conso
 1. `TaskCreate(subject="test-engineer: TEACHBACK for {feature}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
 2. `TaskCreate(subject="test-engineer: test {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
-     - CONTEXT: [task description, coder task references (e.g., "Coder tasks: #{id1}, #{id2} — read via `TaskGet` for implementation decisions and flagged uncertainties"), plan sections (if any), plan reference]
+     - CONTEXT: [task description, coder task references (e.g., "Coder tasks: #{id1}, #{id2} — read their task files for implementation decisions and flagged uncertainties"), plan sections (if any), plan reference]
      - MISSION: [testing mission]
      - INSTRUCTIONS: [test-engineer-specific instructions]
      - GUIDELINES: "You own ALL substantive testing: unit tests, integration, E2E, edge cases."
@@ -962,20 +970,25 @@ After you resolve a blocker, message the teammate by name. Spawn fresh if the te
 1. **Update plan status** (if plan exists): IN_PROGRESS → IMPLEMENTED
 2. **Verify all work is committed** — CODE and TEST phase commits should already exist; if any uncommitted changes remain, commit them now
 3. **`TaskUpdate`**: Feature task status = "completed" (all phases done, all work committed)
-4. **Run `/PACT:peer-review`** to create PR and get multi-agent review
-5. **Present review summary and stop** — use `AskUserQuestion` for merge authorization (S5 policy)
-6. **S4 Retrospective** (after user decides): Briefly note—what worked well? What should we adapt for next time? The secretary gathers calibration metrics during HANDOFF processing and will ask you for a brief difficulty assessment. Respond with whether actual difficulty was higher, lower, or about the same as predicted, and which dimensions surprised you.
-7. **Save memories from HANDOFFs** (idempotent — safe if already processed at phase boundary):
+4. **Backlog boundary write** — the feature task is now `completed`, a transition you WITNESSED, so set this item's status to `done` WITHOUT asking. Run the command rather than editing the file: it loads through `load_or_create`, which is what stashes the compare-and-swap baseline. A document built any other way is written with NO lost-update protection and nothing reports that.
+   ```bash
+   python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status done
+   ```
+   Report what you wrote. If the write is refused, report the refusal and carry on.
+5. **Run `/PACT:peer-review`** to create PR and get multi-agent review
+6. **Present review summary and stop** — use `AskUserQuestion` for merge authorization (S5 policy)
+7. **S4 Retrospective** (after user decides): Briefly note—what worked well? What should we adapt for next time? The secretary gathers calibration metrics during HANDOFF processing and will ask you for a brief difficulty assessment. Respond with whether actual difficulty was higher, lower, or about the same as predicted, and which dimensions surprised you.
+8. **Save memories from HANDOFFs** (idempotent — safe if already processed at phase boundary):
    ```
    TaskCreate(subject="secretary: harvest pending HANDOFFs (post-review)",
      description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
    TaskUpdate(taskId, owner="secretary")
    ```
-8. **Mid-session consolidation** (multi-feature sessions only): If this is the second or subsequent feature completed in this session, create a consolidation task to merge cross-feature knowledge:
+9. **Mid-session consolidation** (multi-feature sessions only): If this is the second or subsequent feature completed in this session, create a consolidation task to merge cross-feature knowledge:
    ```
    TaskCreate(subject="secretary: mid-session consolidation",
      description="Multiple features completed this session. Follow the Consolidation Harvest workflow in your pact-handoff-harvest skill: review memories saved so far, consolidate related entries across features, prune superseded memories. Report summary when done.")
    TaskUpdate(taskId, owner="secretary")
    ```
    Skip for the first feature in a session — full consolidation happens during `/PACT:wrap-up`.
-9. **High-variety audit trail** (variety 10+ only): Save key orchestration decisions, S3/S4 tensions resolved, and lessons learned via the secretary
+10. **High-variety audit trail** (variety 10+ only): Save key orchestration decisions, S3/S4 tensions resolved, and lessons learned via the secretary

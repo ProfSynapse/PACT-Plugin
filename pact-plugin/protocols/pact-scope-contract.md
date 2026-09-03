@@ -82,9 +82,9 @@ The executor interface defines the contract between the parent orchestrator and 
 
 ```
 Input:
-  scope_contract: {read from TaskGet(taskId).metadata.scope_contract}
-  worktree_path: {read from TaskGet(taskId).metadata.worktree_path}
-  nesting_depth: {read from TaskGet(taskId).metadata.nesting_depth}
+  scope_contract: {read from the task file's metadata.scope_contract}
+  worktree_path: {read from the task file's metadata.worktree_path}
+  nesting_depth: {read from the task file's metadata.nesting_depth}
   feature_context: {parent feature description, branch, relevant docs}
 
 Output:
@@ -93,7 +93,7 @@ Output:
   status: completed  # Non-happy-path uses completed with metadata (e.g., {"stalled": true} or {"blocked": true}) per task lifecycle conventions
 ```
 
-> **State persistence**: Input fields are stored in per-scope sub-task metadata during ATOMIZE and read via `TaskGet` on entry.
+> **State persistence**: Input fields are stored in per-scope sub-task metadata during ATOMIZE and read on entry from the task file — `TaskGet` does NOT surface task metadata, so read the raw JSON: `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.<key>`.
 
 #### Current Executor: rePACT
 
@@ -101,10 +101,10 @@ rePACT implements the executor interface as follows:
 
 | Interface Element | rePACT Implementation |
 |-------------------|-----------------------|
-| **Input: scope_contract** | Read from `TaskGet(taskId).metadata.scope_contract` on entry (stored by parent during ATOMIZE) |
+| **Input: scope_contract** | Read from the task file's `metadata.scope_contract` on entry (stored by parent during ATOMIZE) |
 | **Input: feature_context** | Inherited from parent orchestration context (branch, requirements, architecture) |
-| **Input: worktree_path** | Read from `TaskGet(taskId).metadata.worktree_path` on entry (stored by parent during ATOMIZE) |
-| **Input: nesting_depth** | Read from `TaskGet(taskId).metadata.nesting_depth` on entry; enforced at 1-level maximum |
+| **Input: worktree_path** | Read from the task file's `metadata.worktree_path` on entry (stored by parent during ATOMIZE) |
+| **Input: nesting_depth** | Read from the task file's `metadata.nesting_depth` on entry; enforced at 1-level maximum |
 | **Output: handoff** | Standard handoff (6 fields, 5 required) with Contract Fulfillment section appended (see [rePACT After Completion](../commands/rePACT.md#after-completion)) |
 | **Output: commits** | Code committed directly to the feature branch during Mini-Code phase |
 | **Output: status** | Always `completed`; non-happy-path uses metadata (`{"stalled": true, "reason": "..."}` or `{"blocked": true, "blocker_task": "..."}`) per task lifecycle conventions |

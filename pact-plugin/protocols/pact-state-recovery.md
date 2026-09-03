@@ -95,7 +95,7 @@ Events are JSONL entries with common fields `v` (schema version), `type`, and `t
 
 1. Read session journal for current session → full event history survives
 2. `TaskList` → task summaries (status, blocking, ownership)
-3. `TaskGet` on in-progress tasks → metadata if task files still exist
+3. The task file on disk (`cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.<key>`) → metadata if task files still exist; `TaskGet` does NOT surface it
 4. Journal is authoritative when task metadata is unavailable
 
 ### Crash Recovery

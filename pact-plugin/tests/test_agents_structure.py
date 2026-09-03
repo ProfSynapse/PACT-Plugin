@@ -582,11 +582,22 @@ class TestTeachbackMicroSkillExtraction:
     # size after that instruction replaced the unmeasured "<5KB" bound:
     # 17834 chars. Budget ceiling provides ~166-char headroom.
     #
+    # RAISED from 18000. The skill instructed the reader to read Task B's
+    # `metadata.variety` and named NO mechanism, while `TaskGet` is
+    # metadata-blind — so the variety-acknowledgment check the teachback
+    # protocol REQUIRES was unperformable from the moment it shipped.
+    # Naming the raw-JSON read is the minimum text that makes an existing
+    # instruction executable, not new scope. Absorbing it was tried first
+    # and recovered 21 chars by adopting this repo's own "metadata-blind"
+    # phrasing; the rest would have come out of load-bearing text.
+    # Measured after that addition: 18020 chars. The ceiling preserves the
+    # 133-char headroom measured at this branch's base (17867 of 18000).
+    #
     # Tighten-back trigger: if a future PR removes optional content
     # (e.g., if a future PR removes the transitional permissiveness
     # paragraph), reduce MAX_SKILL_CHARS to keep this budget a
     # meaningful ceiling and not a ratchet.
-    MAX_SKILL_CHARS = 18000
+    MAX_SKILL_CHARS = 18153
 
     # Key protocol elements that must be in the extracted skill.
     # Presence-only checks are deliberately strict — any drop indicates
@@ -666,7 +677,7 @@ class TestTeachbackMicroSkillExtraction:
         assert "description" in fm, "pact-teachback missing description"
 
     def test_teachback_skill_under_size_budget(self, teachback_skill):
-        """T2: micro-skill must be compact (<1.5K chars)."""
+        """T2: micro-skill must stay under MAX_SKILL_CHARS."""
         text = teachback_skill.read_text(encoding="utf-8")
         char_count = len(text)
         assert char_count <= self.MAX_SKILL_CHARS, (

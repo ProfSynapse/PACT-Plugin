@@ -59,6 +59,7 @@ Treat a pass as evidence about the code as written, not as a proof of absence.
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 # Names that mean "the memory API". Reaching any of these at import time is what
@@ -173,6 +174,38 @@ class TestNoImportTimeReachIntoMemoryAPI:
             "a function body must NOT count as import time"
         )
 
+    def test_a_path_that_vanishes_between_the_walk_and_the_read_is_skipped(
+        self, monkeypatch
+    ):
+        """MEASURED, not hypothetical: a concurrent pytest planted a probe file
+        under `tests/fixtures/`, this walk enumerated it, and the other run
+        deleted it before the read — reddening this class with a
+        FileNotFoundError naming a test that has nothing to do with the fault.
+
+        Concurrency merely EXPOSED it. An editor save or a `git checkout`
+        during a run removes a listed path just as well, so the guard is not
+        about running two suites.
+
+        THE GHOST IS APPENDED TO THE REAL POPULATION rather than replacing it,
+        so the walk still does its real work and this arm cannot pass by
+        scanning nothing — the vacuity `test_population_is_not_empty` exists
+        to catch.
+
+        RED WHEN FileNotFoundError leaves the except tuple.
+        """
+        ghost = _PLUGIN_ROOT / "tests" / "_vanished_between_walk_and_read.py"
+        assert not ghost.exists(), "the ghost path must not exist on disk"
+
+        real = _python_files()
+        assert len(real) > 100, "real population implausibly small"
+        monkeypatch.setattr(
+            sys.modules[__name__], "_python_files", lambda: real + [ghost]
+        )
+
+        # Must not raise. The tripwire's own verdict is asserted by the arm
+        # below; this one asserts only that a vanished path cannot abort it.
+        self.test_no_module_scope_reach_into_memory_api()
+
     def test_no_module_scope_reach_into_memory_api(self):
         """The tripwire itself. Passes at zero today.
 
@@ -187,6 +220,16 @@ class TestNoImportTimeReachIntoMemoryAPI:
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8"))
             except (SyntaxError, UnicodeDecodeError):
+                continue
+            except FileNotFoundError:
+                # THE WALK AND THE READ ARE NOT ONE OPERATION. A path listed by
+                # rglob can stop existing before this line runs: an editor
+                # save, a `git checkout`, or a concurrent pytest deleting its
+                # own temporary file. A file that no longer exists cannot be an
+                # offender, so skipping it is the correct membership decision
+                # rather than a swallowed error. NARROW ON PURPOSE — an
+                # unreadable file that still exists is a different condition
+                # and must stay loud.
                 continue
             for lineno, name in _import_time_calls(tree):
                 offenders.append(f"{path.relative_to(_PLUGIN_ROOT)}:{lineno} calls {name}()")

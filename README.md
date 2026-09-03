@@ -96,7 +96,7 @@ pact() { claude --agent PACT:pact-orchestrator "$@"; }
 
 Same effect as the symlinked script.
 
-> **Roadmap**: A first-class `pact` CLI wrapper with install automation, manpage, and packaging-manager integration is planned for v4.0.x or v4.1.0; the symlink + shell function patterns above are the interim paths.
+> **Roadmap**: Install automation, a manpage, and package-manager integration remain unbuilt and unscheduled. The launcher script and shell function above are the supported paths.
 
 ---
 
@@ -652,7 +652,7 @@ When installed as a plugin, PACT lives in your plugin cache:
 │   └── cache/
 │       └── pact-plugin/
 │           └── PACT/
-│               └── 4.6.54/     # Plugin version
+│               └── 4.7.0/     # Plugin version
 │                   ├── agents/
 │                   ├── commands/
 │                   ├── skills/

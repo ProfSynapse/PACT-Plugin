@@ -247,16 +247,19 @@ class TestSourceEquivalence:
 
         # Check key implementation lines are present
         assert 'os.environ.get("CLAUDE_PROJECT_DIR")' in real_source
-        assert '["git", "rev-parse", "--git-common-dir"]' in real_source
-        assert "timeout=5" in real_source
-        assert "(subprocess.TimeoutExpired, FileNotFoundError, OSError)" in real_source
+        # Strategies 1 and 2 reach git through the module-level main_repo_root()
+        # helper rather than each spawning their own subprocess. The subprocess
+        # markers this assertion used to carry moved with it and are pinned on
+        # the helper by test_main_repo_root_carries_the_git_derivation.
+        assert "main_repo_root(project_dir)" in real_source
+        assert "repo_root = main_repo_root()" in real_source
         # Strategy 3 now walks up from cwd to find the nearest project marker.
         assert "_find_project_root(Path.cwd())" in real_source
 
         # Verify strategy ordering in the CODE (not docstring).
         # Use code-specific markers that won't appear in the docstring.
         pos_env = real_source.index('os.environ.get("CLAUDE_PROJECT_DIR")')
-        pos_git = real_source.index('["git", "rev-parse", "--git-common-dir"]')
+        pos_git = real_source.index("repo_root = main_repo_root()")
         pos_cwd = real_source.index("_find_project_root(Path.cwd())")
 
         assert pos_env < pos_git, (
@@ -267,6 +270,46 @@ class TestSourceEquivalence:
             f"Strategy ordering violation: git (pos {pos_git}) should appear "
             f"before cwd (pos {pos_cwd})"
         )
+
+    def test_main_repo_root_carries_the_git_derivation(self):
+        """The extracted helper holds what the two strategies used to duplicate.
+
+        These four markers moved out of _detect_project_id when Strategies 1
+        and 2 collapsed onto one derivation, so they are pinned here rather
+        than dropped. The relative-result guard is the load-bearing one: git
+        returns a bare ".git" at a repo root, and a caller joining a relative
+        base against a path would get a cwd-relative result.
+        """
+        helper_body = _extract_method_body(_MEMORY_API_PATH, "main_repo_root")
+        assert helper_body is not None, "main_repo_root must exist in memory_api.py"
+        assert '"rev-parse", "--git-common-dir"' in helper_body
+        assert "timeout=5" in helper_body
+        assert "(subprocess.TimeoutExpired, FileNotFoundError, OSError)" in helper_body
+        assert "if not common_dir.is_absolute():" in helper_body
+
+    def test_main_repo_root_bases_a_relative_result_on_its_start_argument(self):
+        """A relative git result resolves against `start`, not unconditionally
+        against the cwd.
+
+        The two callers pass different bases — Strategy 1 passes the env path
+        and Strategy 2 passes nothing — and those bases differ precisely inside
+        a worktree. A helper that always joined against the cwd would change
+        Strategy 1 silently, in the one case the caller exists to handle.
+        """
+        helper_body = _extract_method_body(_MEMORY_API_PATH, "main_repo_root")
+        assert helper_body is not None
+        assert "Path(start) if start is not None else Path.cwd()" in helper_body
+
+    def test_detect_project_id_does_not_rebind_the_helper_name(self):
+        """No local named main_repo_root inside _detect_project_id.
+
+        Rebinding the module-level helper's own name in the method would make
+        it local for the whole method and raise UnboundLocalError on the call
+        that produces the value.
+        """
+        real_source = _extract_method_body(_MEMORY_API_PATH, "_detect_project_id")
+        assert real_source is not None
+        assert "main_repo_root =" not in real_source
 
     def test_find_project_root_exists_in_source(self):
         """The real memory_api.py must define _find_project_root as a class method."""

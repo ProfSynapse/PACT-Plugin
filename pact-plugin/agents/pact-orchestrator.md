@@ -149,7 +149,7 @@ Reconstruct state:
 1. `git worktree list` — identify active feature work
 2. Read session journal (`{session_dir}/session-journal.jsonl`) — durable record of HANDOFFs, phase transitions, variety scores, and commits
 3. `TaskList` — tasks, status, owners, blockers (summaries survive compaction, but task files with full metadata may be GC'd)
-4. `TaskGet` on priority tasks: in-progress first, then recent completed (fallback for metadata not yet in journal)
+4. `TaskGet` on priority tasks for status and blocking: in-progress first, then recent completed. For METADATA not yet in the journal, `TaskGet` is blind — read the task file: `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.<key>`
 5. Next action: blocker → imPACT; in-progress phase → invoke its command; all complete → peer-review; PR open → check status; no tasks → check `gh pr list` or await user
 
 Workflow commands handle recovery automatically. Your context window doesn't survive compaction — the *session journal* does.
@@ -765,7 +765,7 @@ Use this structure in the `prompt` field to ensure agents have adequate context:
 **CONTEXT**
 
 [Brief background, what phase we are in, and relevant state]
-[Upstream task references: "Architect task: #5 — read via `TaskGet` for design decisions"]
+[Upstream task references: "Architect task: #5 — read its task file for design decisions"]
 [Peer names if concurrent: "Your peers on this phase: frontend-coder, database-engineer"]
 
 **MISSION**

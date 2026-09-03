@@ -176,7 +176,7 @@ Branch behavior depends on whether rePACT is invoked with a scope contract:
 **With scope contract** (from ATOMIZE phase):
 - **Receives worktree path** from the parent orchestrator (created by parent via `/PACT:worktree-setup`)
 - **Operates in isolated worktree** on a suffix branch (e.g., `feature-X--{scope_id}`)
-- **Pass worktree path to all agent prompts**: Include "You are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree. Note: `CLAUDE.md` is gitignored and does not exist in worktrees. As a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead." in specialist dispatches, consistent with orchestrate.md
+- **Pass worktree path to all agent prompts**: Include "You are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree. As a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead." in specialist dispatches, consistent with orchestrate.md
 - All commits stay on the suffix branch within the worktree
 - Branch merges back to the feature branch during the CONSOLIDATE phase
 
@@ -187,9 +187,9 @@ Branch behavior depends on whether rePACT is invoked with a scope contract:
 ### Phase 0: Assess
 
 Before starting, verify:
-1. **Nesting depth**: Read `TaskGet(taskId).metadata.nesting_depth` — if > 1, reject (max depth exceeded). If absent, treat as 0.
-2. **Scope contract**: If this rePACT was dispatched from ATOMIZE, read the scope contract from `TaskGet(taskId).metadata.scope_contract` instead of expecting it inline in the prompt. This ensures scope state survives compaction.
-   - **Journal fallback (covers items 1–2)**: If `TaskGet(taskId)` cannot resolve (task store drained), recover from the session journal instead: run `python3 "{plugin_root}/hooks/shared/session_journal.py" read --session-dir "{session_dir}" --type task_metadata_snapshot` (prints a JSON array), filter to events whose `task_id` matches this task, take the latest-`ts` event, and read `nesting_depth` / `scope_contract` from its `metadata` (honor `_truncated` / `_dropped_keys` markers if present).
+1. **Nesting depth**: Read the task file's `metadata.nesting_depth` (`TaskGet` does NOT surface metadata) — if > 1, reject (max depth exceeded). If absent, treat as 0.
+2. **Scope contract**: If this rePACT was dispatched from ATOMIZE, read the scope contract from the task file's `metadata.scope_contract` instead of expecting it inline in the prompt. This ensures scope state survives compaction.
+   - **Journal fallback (covers items 1–2)**: If the task file cannot be read (task store drained), recover from the session journal instead: run `python3 "{plugin_root}/hooks/shared/session_journal.py" read --session-dir "{session_dir}" --type task_metadata_snapshot` (prints a JSON array), filter to events whose `task_id` matches this task, take the latest-`ts` event, and read `nesting_depth` / `scope_contract` from its `metadata` (honor `_truncated` / `_dropped_keys` markers if present).
 3. **Scope appropriateness**: Is this truly a sub-task of the parent?
 4. **Domain determination**: Single-domain or multi-domain?
 

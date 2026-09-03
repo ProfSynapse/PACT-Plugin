@@ -104,6 +104,7 @@ from shared.pact_config import llm_options
 from shared.peer_context import get_peer_context
 from shared.session_registry import resolve as _registry_resolve
 from shared.paths import get_claude_config_dir
+from shared import backlog_store
 
 # Import extracted modules (decomposed for maintainability per M5 audit finding).
 from shared.symlinks import SYMLINKS_VERIFIED_MESSAGE, setup_plugin_symlinks
@@ -2002,6 +2003,55 @@ def main():
             resume_msg = check_resume_state(prev_session_dir=prev_session_dir)
             if resume_msg:
                 context_parts.append(resume_msg)
+
+        # Cross-session backlog. Deliberately OUTSIDE the frame_is_lead block:
+        # every frame gets the block, and the INDENTATION IS THE WHOLE GATE —
+        # one level in would scope it to lead frames that also carry a resume
+        # prompt, which reads as correct at the call site and silently emits
+        # nothing for everyone else. Column 8, level with `# Build output`.
+        #
+        # session_block is TOTAL and is the outermost call: it converts every
+        # failure into a return value, so nothing here can raise. That is
+        # correctness, not style — an exception at this point reaches the
+        # handler at the bottom of main(), which discards context_parts
+        # wholesale and replaces the entire session-start context with the
+        # safety net, taking the plugin banner and the pin surfacings with it.
+        # If anything ever escapes, fix the boundary in backlog_store; do NOT
+        # add a try/except here.
+        #
+        # NO CLASSIFICATION HAPPENS HERE. BacklogNotice carries two independent
+        # fields, so routing is decided by WHICH field holds the text, never by
+        # inspecting the text itself. Do not reintroduce the "failed"/"skipped"
+        # substring matcher the sibling status messages use — rewording a
+        # message would silently reroute it.
+        #
+        # Channel asymmetry mirrors _UNKNOWN_ROLE_NOTICE: additionalContext is
+        # ungated (a post-compact frame does not carry the earlier context
+        # over, so a source gate would remove the only copy that reader gets),
+        # while systemMessage answers a repetition question for a reader that
+        # remembers, and is gated on the launch sources.
+        # THE TRIGGER AND THE TIMESTAMP ARE TWO INDEPENDENT FACTS, and the age
+        # line needs both. `is_context_reset` is the trigger; the anchor is only
+        # the comparison operand, and it is passed ONLY on a reset.
+        # Gating on the anchor's null-ness instead would be silently wrong in
+        # both directions: `compact` is absent from
+        # _FIRST_SURFACE_CONSUMING_SOURCES, so a compact-only journal yields
+        # None and the line would never fire on the PRIMARY re-injection
+        # trigger, while every `resume` yields a non-None value and would fire
+        # the line where there has been no re-injection at all.
+        # A compact-only journal therefore stays silent. That is the narrow
+        # accepted case, NOT a defect: _age_line refuses to fabricate a
+        # left-hand side, and it self-heals at the next startup/resume/clear.
+        notice = backlog_store.session_block(
+            project_dir,
+            context_anchor=(
+                _latest_consuming_start_ts(session_dir) if is_context_reset else None
+            ),
+        )
+        if notice.context:
+            context_parts.append(notice.context)
+        if notice.alert and source in ("startup", "resume"):
+            system_messages.append(notice.alert)
 
         # Build output
         output = {}

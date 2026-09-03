@@ -400,13 +400,13 @@ For LLM agents, **conversation IS cognition**. Understanding doesn't exist insid
 
 ### Teachback Mechanism
 
-When a downstream agent receives an upstream handoff (via `TaskGet`), their first action is to send a teachback message — restating key decisions, constraints, and interfaces before proceeding.
+When a downstream agent receives an upstream handoff (by reading the upstream task's file — `TaskGet` does NOT surface task metadata), their first action is to send a teachback message — restating key decisions, constraints, and interfaces before proceeding.
 
 #### Flow
 
 ```
 1. Agent dispatched as a Task A (TEACHBACK gate) + Task B (primary work, blockedBy=[A]) pair
-2. Agent claims Task A, reads the upstream handoff/mission via `TaskGet`
+2. Agent claims Task A, reads the upstream handoff/mission from the upstream task file
 3. Agent writes its teachback to Task A metadata (`metadata.teachback_submit`, 5 canonical
    fields) and sends a wake-signal `SendMessage` carrying the canonical payload verbatim
    (per pact-teachback Step 2).
@@ -617,7 +617,7 @@ When "first agent's choice becomes standard," subsequent agents need to discover
 
 4. **Persist `established_conventions`**: `TaskUpdate(codePhaseTaskId, metadata={"established_conventions": {"naming": "...", "patterns": "...", "style": "..."}})`
 
-> **State recovery**: After compaction, read the journal's `s2_state_seeded` event for `s2_boundaries` and `established_conventions`; fall back to `TaskGet(codePhaseTaskId).metadata` if unavailable. See [pact-state-recovery.md](pact-state-recovery.md) for the full recovery hierarchy.
+> **State recovery**: After compaction, read the journal's `s2_state_seeded` event for `s2_boundaries` and `established_conventions`; fall back to the CODE phase task's file on disk if unavailable (`TaskGet` does NOT surface task metadata). See [pact-state-recovery.md](pact-state-recovery.md) for the full recovery hierarchy.
 
 ### Shared Language
 
@@ -1779,9 +1779,9 @@ The executor interface defines the contract between the parent orchestrator and 
 
 ```
 Input:
-  scope_contract: {read from TaskGet(taskId).metadata.scope_contract}
-  worktree_path: {read from TaskGet(taskId).metadata.worktree_path}
-  nesting_depth: {read from TaskGet(taskId).metadata.nesting_depth}
+  scope_contract: {read from the task file's metadata.scope_contract}
+  worktree_path: {read from the task file's metadata.worktree_path}
+  nesting_depth: {read from the task file's metadata.nesting_depth}
   feature_context: {parent feature description, branch, relevant docs}
 
 Output:
@@ -1790,7 +1790,7 @@ Output:
   status: completed  # Non-happy-path uses completed with metadata (e.g., {"stalled": true} or {"blocked": true}) per task lifecycle conventions
 ```
 
-> **State persistence**: Input fields are stored in per-scope sub-task metadata during ATOMIZE and read via `TaskGet` on entry.
+> **State persistence**: Input fields are stored in per-scope sub-task metadata during ATOMIZE and read on entry from the task file — `TaskGet` does NOT surface task metadata, so read the raw JSON: `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.<key>`.
 
 #### Current Executor: rePACT
 
@@ -1798,10 +1798,10 @@ rePACT implements the executor interface as follows:
 
 | Interface Element | rePACT Implementation |
 |-------------------|-----------------------|
-| **Input: scope_contract** | Read from `TaskGet(taskId).metadata.scope_contract` on entry (stored by parent during ATOMIZE) |
+| **Input: scope_contract** | Read from the task file's `metadata.scope_contract` on entry (stored by parent during ATOMIZE) |
 | **Input: feature_context** | Inherited from parent orchestration context (branch, requirements, architecture) |
-| **Input: worktree_path** | Read from `TaskGet(taskId).metadata.worktree_path` on entry (stored by parent during ATOMIZE) |
-| **Input: nesting_depth** | Read from `TaskGet(taskId).metadata.nesting_depth` on entry; enforced at 1-level maximum |
+| **Input: worktree_path** | Read from the task file's `metadata.worktree_path` on entry (stored by parent during ATOMIZE) |
+| **Input: nesting_depth** | Read from the task file's `metadata.nesting_depth` on entry; enforced at 1-level maximum |
 | **Output: handoff** | Standard handoff (6 fields, 5 required) with Contract Fulfillment section appended (see [rePACT After Completion](../commands/rePACT.md#after-completion)) |
 | **Output: commits** | Code committed directly to the feature branch during Mini-Code phase |
 | **Output: status** | Always `completed`; non-happy-path uses metadata (`{"stalled": true, "reason": "..."}` or `{"blocked": true, "blocker_task": "..."}`) per task lifecycle conventions |
@@ -1888,7 +1888,7 @@ This phase dispatches sub-scopes for independent execution. Each sub-scope runs 
 
 This phase verifies that independently-developed sub-scopes are compatible before comprehensive testing.
 
-**Recover scope state**: Read from `TaskGet(scopeTaskId).metadata` (`scope_contract`, `worktree_path`) for each sub-scope. If `TaskGet(scopeTaskId)` cannot resolve (task store drained), recover from the session journal instead: run `python3 "{plugin_root}/hooks/shared/session_journal.py" read --session-dir "{session_dir}" --type task_metadata_snapshot` (prints a JSON array), filter to events whose `task_id` matches the scope task, take the latest-`ts` event, and read `scope_contract` / `worktree_path` from its `metadata` (honor `_truncated` / `_dropped_keys` markers if present).
+**Recover scope state**: Read each sub-scope's `scope_contract` and `worktree_path` from its task file — `TaskGet` does NOT surface task metadata: `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.<key>`. If that file cannot be read (task store drained), recover from the session journal instead: run `python3 "{plugin_root}/hooks/shared/session_journal.py" read --session-dir "{session_dir}" --type task_metadata_snapshot` (prints a JSON array), filter to events whose `task_id` matches the scope task, take the latest-`ts` event, and read `scope_contract` / `worktree_path` from its `metadata` (honor `_truncated` / `_dropped_keys` markers if present).
 
 **Merge sub-scope branches**: Before running contract verification, merge each sub-scope's work back:
 1. For each completed sub-scope, merge its suffix branch to the feature branch
@@ -2523,7 +2523,7 @@ Events are JSONL entries with common fields `v` (schema version), `type`, and `t
 
 1. Read session journal for current session → full event history survives
 2. `TaskList` → task summaries (status, blocking, ownership)
-3. `TaskGet` on in-progress tasks → metadata if task files still exist
+3. The task file on disk (`cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.<key>`) → metadata if task files still exist; `TaskGet` does NOT surface it
 4. Journal is authoritative when task metadata is unavailable
 
 ### Crash Recovery

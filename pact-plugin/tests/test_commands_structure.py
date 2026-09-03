@@ -872,19 +872,57 @@ class TestPerLoopDispatchSites:
 
     LEAD_IN = "follow the steps for [Teachback-Gated Dispatch]"
 
-    # 9 per-loop dispatch sites. Each entry is
-    # (relative_command_path, lead_in_line_number_1based, role_or_phase_label).
+    # 9 per-loop dispatch sites, keyed by CONTENT rather than by line number.
+    # Each entry is (relative_command_path, anchor_substring, label), and the
+    # anchor is text on the SAME LINE as the lead-in.
+    #
+    # LINE NUMBERS WERE THE PREVIOUS KEY AND THEY BROKE ON EVERY INSERTION.
+    # Six of these nine needed re-locating after one arc's edits, with drifts
+    # constant per file (orchestrate +8, comPACT +5) — the anchors were fine,
+    # the file moved underneath them. A content key does not move.
+    #
+    # THE ANCHOR IS NOT THE LEAD-IN, AND THAT IS THE WHOLE DESIGN. The lead-in
+    # occurs FOUR times in orchestrate.md and TWICE in comPACT.md, so keying on
+    # it alone would collapse those sites onto whichever came first and quietly
+    # test one block several times. Each anchor below is the phrase that makes
+    # its own lead-in line unique, and `_locate` REQUIRES EXACTLY ONE MATCH —
+    # which is what preserves the property the line numbers had: a site
+    # pointing at the wrong block is still detected, now as 0 or 2 matches
+    # rather than as a stale integer.
     SITES = [
-        ("orchestrate.md", 462, "PREPARE"),
-        ("orchestrate.md", 570, "ARCHITECT"),
-        ("orchestrate.md", 706, "CODE"),
-        ("orchestrate.md", 861, "TEST"),
-        ("comPACT.md", 234, "MultipleSpecialists"),
-        ("comPACT.md", 295, "SingleSpecialist"),
-        ("peer-review.md", 193, "Reviewers"),
-        ("plan-mode.md", 237, "Consultants"),
-        ("rePACT.md", 264, "SubScopeSpecialists"),
+        ("orchestrate.md", "**Dispatch `pact-preparer`**", "PREPARE"),
+        ("orchestrate.md", "**Dispatch `pact-architect`**", "ARCHITECT"),
+        ("orchestrate.md", "**Dispatch coder(s)**", "CODE"),
+        ("orchestrate.md", "**Dispatch `pact-test-engineer`**", "TEST"),
+        ("comPACT.md", "invoke multiple specialists together", "MultipleSpecialists"),
+        ("comPACT.md", "**Dispatch the specialist**", "SingleSpecialist"),
+        ("peer-review.md", "**Dispatch reviewers**", "Reviewers"),
+        ("plan-mode.md", "**Dispatch each consultant**", "Consultants"),
+        ("rePACT.md", "For each specialist needed,", "SubScopeSpecialists"),
     ]
+
+    @classmethod
+    def _locate(cls, lines, anchor: str) -> int:
+        """1-based line number of the one line carrying BOTH the lead-in and
+        `anchor`, or raise AssertionError naming how many were found.
+
+        EXACTLY ONE is the requirement, not "at least one". Zero means the site
+        was deleted or reworded; two means the anchor stopped discriminating
+        and the arm would silently test one block twice. Both are drift and
+        both must be loud.
+        """
+        hits = [
+            number
+            for number, line in enumerate(lines, 1)
+            if cls.LEAD_IN in line and anchor in line
+        ]
+        assert len(hits) == 1, (
+            f"anchor {anchor!r} matched {len(hits)} dispatch lead-in lines "
+            f"(expected exactly 1) at lines {hits}. Zero means the site moved "
+            f"or was reworded; more than one means the anchor no longer "
+            f"discriminates and SITES needs a narrower one."
+        )
+        return hits[0]
 
     @staticmethod
     def _site_block(text: str, lead_in_line: int) -> str:
@@ -901,30 +939,68 @@ class TestPerLoopDispatchSites:
         end = min(len(lines), start + 40)
         return "\n".join(lines[start:end])
 
+    def test_sites_accounts_for_every_dispatch_lead_in_in_the_tree(self):
+        """The table and the tree must have the same cardinality.
+
+        WITHOUT THIS, THE TABLE IS SELF-RATIFYING. Every other arm here starts
+        from a SITES row, so a row DELETED from the table simply stops being
+        tested — the suite goes greener, not redder — and a NEW dispatch site
+        added to a command file is never checked at all. Neither is visible
+        from inside a parametrized run over the table itself.
+
+        Counting from the FILES rather than from the table is what makes this
+        a control instead of a restatement: it fails in both directions, and
+        the positive fact it asserts — that the lead-in literal is present in
+        the tree at all — could not be true if the command files had been
+        reorganised out from under the pin.
+        """
+        # THE POPULATION COMES FROM THE DIRECTORY, NOT FROM SITES, AND THAT IS
+        # THE WHOLE CONTROL. Deriving it from the table under audit made this
+        # blind to the deletion it exists to catch: remove a file's ONLY row
+        # and the file left BOTH dicts, so they still matched and the suite
+        # went greener. It caught a deletion in orchestrate.md only because
+        # three sibling rows kept that file in the census. Measured — the
+        # sole-row files (peer-review, plan-mode, rePACT) all survived.
+        # Globbing also covers a command file that has no row at all.
+        found = {}
+        for path in sorted(COMMANDS_DIR.glob("*.md")):
+            count = sum(
+                1 for line in path.read_text(encoding="utf-8").splitlines()
+                if self.LEAD_IN in line
+            )
+            if count:
+                found[path.name] = count
+
+        assert sum(found.values()) > 0, (
+            "no dispatch lead-in found anywhere — the literal was reworded and "
+            "every arm in this class is now vacuous"
+        )
+
+        expected = {}
+        for rel, _anchor, _label in self.SITES:
+            expected[rel] = expected.get(rel, 0) + 1
+        assert found == expected, (
+            f"SITES disagrees with the tree. In the files: {found}. In the "
+            f"table: {expected}. A file with MORE is a dispatch site nobody "
+            f"pins; a file with FEWER is a table row pointing at a site that "
+            f"no longer exists."
+        )
+
     @pytest.mark.parametrize(
-        "rel_path,lead_in_line,label",
+        "rel_path,anchor,label",
         SITES,
-        ids=[f"{rel}:line{ln}:{lbl}" for rel, ln, lbl in SITES],
+        ids=[f"{rel}:{lbl}" for rel, _anchor, lbl in SITES],
     )
-    def test_dispatch_site_has_canonical_shape(self, rel_path, lead_in_line, label):
+    def test_dispatch_site_has_canonical_shape(self, rel_path, anchor, label):
         path = COMMANDS_DIR / rel_path
         assert path.is_file(), f"Command file missing: {rel_path}"
         text = path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        # Verify the lead-in is at the recorded line (1-based). If the
-        # command file was reorganized, the line anchor must be updated in
-        # SITES — the test surfaces the drift instead of silently passing
-        # against a different block.
-        assert 1 <= lead_in_line <= len(lines), (
-            f"{rel_path}:{label}: SITES line anchor {lead_in_line} out of "
-            f"range (file has {len(lines)} lines)."
-        )
-        assert self.LEAD_IN in lines[lead_in_line - 1], (
-            f"{rel_path}:{label}: SITES line anchor {lead_in_line} no longer "
-            f"contains lead-in {self.LEAD_IN!r}. Re-locate the per-loop "
-            "dispatch site and update SITES."
-        )
+        # The test finds its own line. A reorganisation that moves the site
+        # is followed silently; a reorganisation that DELETES or duplicates it
+        # is loud, which is the drift worth surfacing.
+        lead_in_line = self._locate(lines, anchor)
 
         block = self._site_block(text, lead_in_line)
         task_create_count = block.count("TaskCreate")

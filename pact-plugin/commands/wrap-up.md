@@ -22,7 +22,7 @@ This is the deep-clean pass. Pass 1 (workflow-level HANDOFF review) is the prima
 
 > **Track whether this ran**: step 5's journal template requires a `{consolidation_ran}` flag — pass the literal string `true` when the secretary confirms Pass 2 completed, or `false` when you skipped consolidation per the trivial-session rule above. The flag drives the shell-clamped `session_consolidated` emission in step 5.
 
-> **Why this runs first**: Memory consolidation reads task HANDOFFs via `TaskGet`. Task audit (step 7) may delete completed tasks. Running consolidation first ensures HANDOFF data is available.
+> **Why this runs first**: Memory consolidation reads task HANDOFFs from the task files (`TaskGet` does NOT surface metadata). Task audit (step 7) may delete completed tasks. Running consolidation first ensures HANDOFF data is available.
 
 ## 2. Documentation Sync
 
@@ -184,6 +184,18 @@ gh pr view --json state,headRefName,headRepository,headRepositoryOwner
 `gh pr view` with no positional argument resolves the PR associated with the current branch (hence the pre-removal, in-worktree precondition above). Let `BRANCH = headRefName`, `HEAD_OWNER = headRepositoryOwner.login`, `HEAD_REPO = headRepository.name`. Then take **exactly one** of the three branches below, keyed on PR state.
 
 **A — PR is MERGED** (`state == "MERGED"`): a verified `MERGED` state is the **hard precondition for every delete below**. Run the sequence in order:
+
+> **Backlog boundary write** — a verified `MERGED` is a transition you WITNESSED, so set this item's status to `done` WITHOUT asking. Run the command rather than editing the file: it loads through `load_or_create`, which is what stashes the compare-and-swap baseline. A document built any other way is written with NO lost-update protection and nothing reports that.
+>
+> ```bash
+> python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status done
+> ```
+>
+> Report what you wrote. If the write is refused, report the refusal and carry on.
+
+> This write belongs HERE, before sub-step 1 removes the worktree — NOT appended to the end
+> of this list. `_abandoned_flags` looks for a branch or worktree carrying the ref, so an item
+> still `active` after the removal is reported as abandoned at every following session.
 
 1. **Remove the worktree.** Invoke `/PACT:worktree-cleanup` to remove the worktree cleanly. It runs its harvest-before-teardown guard (already satisfied by the step-5 drain), removes the worktree, and attempts a **safe** `git branch -d` — which succeeds on a true merge (deleting the local branch) and is declined on a squash merge ("not fully merged"). This leaves the shell CWD at the repo root.
 2. **Minted local delete (only if the branch still exists).** If `BRANCH` still exists after worktree removal (the squash-merge case, where safe `-d` declined), authorize and run the force-delete through a single-leg `AskUserQuestion` — this one prompt IS both the decision and the authorization, and it names the exact command the guard will see run. When worktree-cleanup's safe `-d` declined, that skill surfaces its own "force delete: `git branch -D`" options text — those are **superseded** here: the user acts on THIS minted prompt, not on the skill's bare `-D` suggestion, which is the single authorized force-delete path. Phrase it: `Delete the merged local branch now? On approval the team runs git branch -D <branch>` (where `<branch>` is `BRANCH`, the only variable). Use that single `AskUserQuestion` (single-select) with these exact options:
