@@ -328,14 +328,17 @@ afternoon.
   the CAS comparison removed          test_a_refused_write_preserves_the_first_writers_data_and_stays_armed
   the baseline popped on refusal      test_a_refused_write_preserves_the_first_writers_data_and_stays_armed
   the query drops `stateReason`       test_the_query_requests_every_field_the_outcome_logic_reads
-  bootstrap loses its read site       test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
-  wrap-up loses its read site         test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
-  a report site uses a NON-reporting verb  test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
-  a fourth file gains a report site   test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
-  next.md loses its own report site   test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
-  the wrap-up report moves below the ask   test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site
+  bootstrap loses its read site       test_every_backlog_report_site_is_a_choice_point
+  wrap-up loses its read site         test_every_backlog_report_site_is_a_choice_point
+  a report site uses a NON-reporting verb  test_every_backlog_report_site_is_a_choice_point
+  a fourth file gains a report site   test_every_backlog_report_site_is_a_choice_point
+  next.md loses its own report site   test_every_backlog_report_site_is_a_choice_point
+  the wrap-up report moves below the ask   test_every_backlog_report_site_is_a_choice_point
   the report verb is renamed in the CLI    test_the_verb_classification_covers_every_cli_subcommand
   the report verb becomes a write verb     test_the_verb_classification_covers_every_cli_subcommand
+  the read-only clause drops from step 8   test_every_backlog_report_site_is_a_choice_point
+  the read rule and the tree disagree      test_every_backlog_report_site_is_a_choice_point
+  the read rule is reworded away entirely  test_every_backlog_report_site_is_a_choice_point
   a write site appears in rePACT      test_four_files_stay_at_zero_write_sites
   the write-site detector orphaned    test_four_files_stay_at_zero_write_sites
   the wrap-up write moves below       test_the_wrap_up_write_precedes_the_worktree_removal
@@ -2966,9 +2969,13 @@ def test_four_files_stay_at_zero_write_sites(monkeypatch):
     """Those four zeros are the ARCHITECT's RESULTS, not omissions.
 
     rePACT sits below backlog-item granularity; refresh and pause have
-    "nothing has finished" as their entry condition; peer-review does merge but
-    hands to wrap-up unconditionally, so wrap-up's site already covers that
-    path and a second one would be two things to keep in step.
+    "nothing has finished" as their entry condition; peer-review does merge, and
+    a write site there would not cover the case that motivates one — an
+    out-of-band merge runs no PACT command at all, so it reaches neither
+    peer-review nor wrap-up. next.md classifies that case as unwitnessed by
+    definition and routes it to reconciliation, which is the coverage; a second
+    write site would buy only a narrow window and cost two things to keep in
+    step.
 
     THE POSITIVE HALF RUNS FIRST AND IT IS NOT DECORATION. An absence proves
     nothing about a detector that matches nothing, and `_write_sites` keys on
@@ -2977,10 +2984,12 @@ def test_four_files_stay_at_zero_write_sites(monkeypatch):
     detector finds the sites that DO exist is the only thing that makes the
     zeros mean anything.
 
-    THIS ARM PINS A RULING, NOT AN INDEPENDENT FINDING. Its correctness rests
-    on peer-review reaching wrap-up on every merge path — the architect flagged
-    that as the ruling they most wanted a second read on. If a path merges
-    without reaching wrap-up, this arm is pinning a GAP.
+    THIS ARM PINS A RULING, NOT AN INDEPENDENT FINDING, and the second read it
+    asked for has been done. The answer: it is NOT pinning a gap. The original
+    reason was wrong — a handoff to wrap-up is a subsequent action rather than a
+    guarantee, so "peer-review hands to wrap-up" would not have licensed the
+    zero. The verdict survives on reconciliation coverage instead, as stated
+    above, which holds for every merge path including the ones no command sees.
 
     RED WHEN a write site is added to a file the ruling put at zero.
     """
@@ -3043,26 +3052,43 @@ def _read_sites(name):
     ]
 
 
-_BOOKENDS = ("bootstrap.md", "wrap-up.md")
-# Every command file that invokes the report, bookend or not. next.md's is Step
-# 2 of its own procedure. Stated here so its membership is a DECISION rather
-# than an absence a reader cannot distinguish from an oversight.
+# The two that report UNASKED. Pinned per file because a session gets them
+# whether or not anyone invokes anything.
+_UNASKED_REPORTS = ("bootstrap.md", "wrap-up.md")
+# Every command file that invokes the report. next.md is a member VIA LINE 57 —
+# `## Step 2 — Reconcile and report`, an imperative executed at that point in
+# the flow. Its OTHER backlog lines are a different nature: 28 and 152 are
+# syntax templates, and 216 invokes `repair`. Saying which line earns the
+# membership matters, because a reader grepping next.md finds several and
+# cannot otherwise tell. Stated here so the set is a DECISION rather than an
+# absence indistinguishable from an oversight — the rule it pins is written
+# beside the write rule in next.md.
 _REPORT_CALL_SITES = frozenset({"bootstrap.md", "wrap-up.md", "next.md"})
 # The decision wrap-up's report must precede, quoted as it appears in the file.
 _SESSION_DECISION = "Use `AskUserQuestion` with these exact options:"
+# The clause that makes section 8's missing write-site enumeration safe.
+_READ_ONLY_PROHIBITION = "READ-ONLY in your hands"
 
 
-def test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site():
-    """The two files that report the backlog UNASKED, pinned per file.
+def test_every_backlog_report_site_is_a_choice_point():
+    """Every report site, censused; the two that report UNASKED, pinned per file.
+
+    THE RULE THIS PINS IS WRITTEN IN next.md, beside the write rule, and this
+    arm is the check rather than the statement of it: a report belongs where the
+    user is choosing WHAT TO DO NEXT — not where they are executing an item
+    already chosen, and not where they are judging one artifact. Three files
+    qualify and all three carry a site.
+
+    An earlier version of this docstring was the only place the population
+    existed, and that is why a third member stayed invisible for a whole review:
+    when the enumeration IS the policy, a missed member contradicts nothing.
 
     AUTOMATIC surfacing happens in exactly one place: `session_init` is the only
     hook that reads `backlog_store`, so nothing reports at session END without
-    being asked. That is why these two call sites matter — bootstrap's at the
-    start, wrap-up's before a decision whose continue branch keeps the team
-    alive with no SessionStart in between. It is NOT a claim that they are the
-    only call sites: `next.md` carries a third, run when a user invokes the
-    command. The census below enumerates all three rather than leaving the
-    reader to infer a population from this sentence.
+    being asked. That is why bootstrap's and wrap-up's sites are pinned
+    individually — a session gets those two whether or not anyone invokes
+    anything. It is NOT a claim that they are the only call sites: `next.md`
+    carries a third, run when a user invokes the command.
 
     THE NEIGHBOURING ARM'S POSITIVE HALF DOES NOT TRANSFER, and copying it here
     would be cargo cult. `test_four_files_stay_at_zero_write_sites` asserts an
@@ -3077,6 +3103,11 @@ def test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site():
     Hence `_REPORT_SUBCOMMAND`. The other two guards the inverted direction
     needs are a detector loose enough to match a PROSE MENTION, and one that
     cannot tell this call site from the step 6 write. Both are asserted below.
+
+    The invocation test is per LINE, which is what makes widening to three files
+    safe: next.md's line 57 is an imperative and its 28 and 152 are syntax
+    templates, and one file can carry both natures. The write side can only
+    exclude a whole FILE, and does.
 
     CEILING, stated rather than discovered later. This pins a COMMAND LINE and
     its POSITION. It cannot see whether an agent is TOLD to run it: the sentence
@@ -3097,7 +3128,30 @@ def test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site():
     """
     # THE POPULATION, DERIVED FROM THE TREE rather than asserted. A fourth file
     # gaining a report site, or next.md losing its own, is drift either way.
+    # THE STATED RULE AND THE TREE MUST AGREE, the same seam
+    # test_next_md_names_exactly_the_files_that_carry_write_sites pins for the
+    # write side. Without this the rule in next.md and the census here are two
+    # independent claims that can drift apart, which is the state this arm was
+    # written in and the reason a third member went unnoticed.
+    marker = "**THREE FILES carry a backlog report**"
+    text = _next_md()
+    assert marker in text, (
+        f"the read rule's marker {marker!r} is gone from next.md — the rule was "
+        f"reworded or removed and this arm is reading nothing"
+    )
+    sentence = text.split(marker, 1)[1].split("\n\n", 1)[0]
+    stated = {name for name in _REPORT_CALL_SITES | {"orchestrate.md", "comPACT.md",
+                                                     "imPACT.md", "rePACT.md",
+                                                     "refresh.md", "pause.md",
+                                                     "peer-review.md"}
+              if f"`{name}`" in sentence}
+
     carrying = {p.name for p in _COMMANDS_DIR.glob("*.md") if _read_sites(p.name)}
+    assert stated == carrying, (
+        f"next.md's read rule names {sorted(stated)} but the files carrying a "
+        f"report site are {sorted(carrying)}. An agent reading that rule would "
+        f"be told the wrong file set."
+    )
     assert carrying == set(_REPORT_CALL_SITES), (
         f"the files invoking `backlog.py {_REPORT_SUBCOMMAND}` are "
         f"{sorted(carrying)}, not {sorted(_REPORT_CALL_SITES)}. Gained: "
@@ -3106,7 +3160,7 @@ def test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site():
         f"(stopped reporting, or was reworded past the detector)."
     )
 
-    sites = {name: _read_sites(name) for name in _BOOKENDS}
+    sites = {name: _read_sites(name) for name in _UNASKED_REPORTS}
     missing = [name for name, found in sites.items() if not found]
     assert not missing, (
         f"{missing} carry no backlog read site. Either the report was removed, "
@@ -3117,9 +3171,16 @@ def test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site():
     # An INVOCATION, not a mention. Prose naming the command reads identically
     # to the detector and would satisfy the presence assertion above while no
     # agent ever runs anything.
+    # A BLOCKQUOTED COMMAND IS STILL A COMMAND. `_write_sites` already matches
+    # the blockquoted write at wrap-up.md:191, so requiring a bare `python3 `
+    # here made the two detectors disagree about the same file: moving this
+    # read into a blockquote to match section 6's style would have reddened
+    # this arm with a message about prose that does not exist. Stripping the
+    # marker costs nothing — `Run `python3 ...`` and `> Run `python3 ...``
+    # both still fail, which is the property being guarded.
     for name, found in sites.items():
         for number, line in found:
-            assert line.startswith("python3 "), (
+            assert line.lstrip("> ").startswith("python3 "), (
                 f"{name}:{number} matches the detector but is not an "
                 f"invocation, so this arm would pass on prose alone: {line!r}"
             )
@@ -3149,6 +3210,20 @@ def test_bootstrap_and_wrap_up_each_carry_a_backlog_read_site():
         f"wrap-up's backlog report is at line {last_report}, BELOW the session "
         f"decision at line {decisions[0]}. The user chooses before the report "
         f"they were meant to read it against ever renders."
+    )
+
+    # WHAT LICENSES THE ABSENCE OF A WRITE-SITE ENUMERATION AT THIS CALL SITE.
+    # Section 8 does not list which writes are forbidden; it does not need to,
+    # because an agent believing the framing sentence does not write, and one
+    # disbelieving it is stopped by this prohibition. Both roads end in the same
+    # action ONLY while this sentence exists. Dropping it for brevity re-arms
+    # the defect silently, so its presence is pinned here. A short distinctive
+    # phrase, not the sentence: a rewording should not redden, a deletion must.
+    assert _READ_ONLY_PROHIBITION in "\n".join(lines), (
+        f"wrap-up.md no longer carries {_READ_ONLY_PROHIBITION!r}. That clause "
+        f"is what makes the missing write-site enumeration at this call site "
+        f"safe; without it an agent that doubts the framing has nothing "
+        f"stopping it correcting a flag in place."
     )
 
 

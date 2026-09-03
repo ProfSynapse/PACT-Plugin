@@ -171,6 +171,20 @@ written rather than quietly adjusted:
 - `memory` holds at most 5 record ids.
 - An item with no `ref` is fully supported and is never second-class.
 
+### Where the report happens, and which files carry it
+
+**THREE FILES carry a backlog report**: `bootstrap.md`, `wrap-up.md` and
+`next.md`. Naming the files rather than the occasions is deliberate — a file is
+checkable, an occasion is not.
+
+A report belongs where the user is choosing WHAT TO DO NEXT: at session start,
+before the session decision, and in this command. It does not belong where an
+already-chosen item is being executed, or where one artifact is being judged —
+those are occasions to write a witnessed transition, not to re-read the list.
+
+Two of the three report without being asked, so they are the session's bookends;
+this command's report happens because the user invoked it.
+
 ### When the writes happen, and which they are
 
 **FOUR FILES carry boundary writes**: `orchestrate.md`, `comPACT.md`,
