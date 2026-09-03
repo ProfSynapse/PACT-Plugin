@@ -664,16 +664,20 @@ def _age_line(data: Dict[str, Any], context_anchor: Optional[float]) -> str:
 
 
 def _as_epoch(value: Any) -> Optional[float]:
-    """UNIX seconds for a stored UTC ISO-8601 stamp, or None if unusable."""
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.timestamp()
+    """UNIX seconds for a stored UTC ISO-8601 stamp, or None if unusable.
+
+    DELEGATES so this module holds ONE definition of a parseable stamp. Kept
+    separate they had already drifted: this one lacked as_datetime's .strip(),
+    so a whitespace-padded value parsed for validate() and not here — the same
+    value, two answers, both silent, because both return None on failure.
+
+    The deeper reason to have one and not two agreeing ones: a single parser
+    cannot diverge from ITSELF across interpreter versions. Two parsers with
+    different normalisation can, and the difference would show up only on the
+    versions where fromisoformat's own tolerance differs.
+    """
+    parsed = as_datetime(value)
+    return None if parsed is None else parsed.timestamp()
 
 
 def session_block(
