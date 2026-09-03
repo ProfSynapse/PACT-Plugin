@@ -247,6 +247,14 @@ Audit and optionally clean up Task state:
 
 ## 8. Session Decision
 
+Run the backlog report before the decision below:
+
+```bash
+python3 "{plugin_root}/hooks/shared/backlog.py" show
+```
+
+This is a CALL SITE, not a boundary write: every status this session witnessed was already recorded at its own transition, so nothing has newly finished here. Report only the drift FLAGS and what remains open. The report is READ-ONLY in your hands — report a flag, never correct one; an item whose status looks wrong is corrected through `/PACT:next`, not here. If there are no flags and nothing is open, say nothing.
+
 Use `AskUserQuestion` with these exact options:
 - **"Yes, continue"** (description: "Keep team alive, ready for next task") → On selection: Report "Ready for next task." Teammates stay alive — do NOT stop them on this branch.
 - **"Pause work for now"** (description: "Save session knowledge and pause — resume later") → On selection: invoke `/PACT:pause`. That command owns the teammate shutdown — do NOT stop teammates here.
