@@ -60,6 +60,12 @@ is boring and rebuildable, the questions are not.
              is ALSO named in the write table below it, so dropping one from
              the sentence leaves the section mention and the mutation survives
              against an arm that scans the section. Measured.
+  path     ONE PROPERTY, TWO PATHS, AND ONLY ONE READS EACH FIELD. Asserting
+             that every list-typed field reports its type through
+             `file_local_flags` FAILED on `memory`, which that function does
+             not read at all — its type report is on the validate path. The
+             arm was measuring the wrong subject for one field of four. Split
+             each field to the path that reads it.
   hunk     REVERT THE HUNK, NOT THE FILE. Swapping in a whole pre-fix module
              from a parent nine commits back replaces far more than the one
              fix: it removed symbols the current tests import, pytest failed
@@ -262,6 +268,9 @@ afternoon.
   the `ref` type rule removed         test_a_bad_field_on_one_item_locks_writes_to_every_other_item
   the date rule becomes type-only     test_an_unparseable_date_is_reported_not_just_a_wrong_type
   the date rule removed               test_an_unparseable_date_is_reported_not_just_a_wrong_type
+  the two parsers, a6800f4d^          test_both_date_parsers_agree_on_a_padded_stamp
+  the `memory` type report removed    test_every_list_typed_field_reports_its_type
+  the relational type report removed  test_every_list_typed_field_reports_its_type
   the accessor reverted at site two   test_a_poisoned_memory_field_crashes_neither_site
   the accessor reverted at site two   test_the_flagged_ids_are_exactly_the_ids_that_were_looked_up
   the accessor reverted at site one   test_a_poisoned_memory_field_crashes_neither_site
@@ -3032,4 +3041,94 @@ def test_an_unparseable_date_is_reported_not_just_a_wrong_type(tmp_path):
         assert code == 0 and "schema:" not in out, (
             f"control: {spelling!r} parses for the consumer but was rejected "
             f"here — the rule is tighter than its reader: {out}"
+        )
+
+
+def test_every_list_typed_field_reports_its_type(tmp_path):
+    """THE REPLACEMENT FOR A RETIRED ARM, and it pins the guarantee rather
+    than the absent hazard.
+
+    A FABRICATES bucket was pre-registered — a truthy ITERABLE that neither
+    crashes nor vanishes but yields plausible wrong output. It came back EMPTY,
+    and measuring showed why: every list-typed field NAMES ITS TYPE and
+    refuses. A str is never iterated into characters, a dict never into keys.
+    So the hazard does not exist, and an arm asserting it would pin nothing.
+
+    THIS ASSERTS THE PROPERTY THAT DOES EXIST. The three relational names come
+    from `RELATIONAL_FIELDS` rather than a list here, so a FOURTH relational
+    field added to the module is covered without editing this arm — and if one
+    is added without a type rule, this reddens.
+
+    RED WHEN any list-typed field loses its type check.
+    """
+    fields = tuple(backlog_store.RELATIONAL_FIELDS) + ("memory",)
+    assert len(fields) == 4, f"the list-typed field set changed: {fields}"
+
+    # EACH FIELD THROUGH THE PATH THAT ACTUALLY READS IT. `memory` is not read
+    # by `file_local_flags` at all — its type report lives on the validate
+    # path — so asserting all four through one function measured the wrong
+    # subject for one of them. Found by this arm failing on its first run.
+    for field in fields:
+        for poison in ("abc", {"k": 1}, 5):
+            problems = backlog_store.validate(
+                _backlog(tmp_path, items=[_item(item_id="aaaa",
+                                                **{field: poison})]))
+            expected = f"{field} is {type(poison).__name__}, expected a list"
+            assert any(expected in p for p in problems), (
+                f"{field}={poison!r} was not reported by type: {problems}"
+            )
+
+    # AND THE THREE THE FLAG PATH READS MUST NOT FABRICATE. This is the half
+    # that retires the FABRICATES bucket: a str is never iterated into
+    # characters, a dict never into keys.
+    for field in backlog_store.RELATIONAL_FIELDS:
+        for poison in ("abc", {"k": 1}):
+            flags = backlog_store.file_local_flags(
+                {"items": [_item(item_id="aaaa", **{field: poison})]})
+            assert not any("names unknown id" in f for f in flags), (
+                f"{field}={poison!r} FABRICATED ids instead of being refused: "
+                f"{flags}"
+            )
+
+    control = backlog_store.file_local_flags(
+        {"items": [_item(item_id="aaaa", blocked_by=["nosuch"])]})
+    assert any("names unknown id" in p for p in control), (
+        f"control: a well-formed list produced no relational flag, so the "
+        f"absences above prove nothing: {control}"
+    )
+
+
+def test_both_date_parsers_agree_on_a_padded_stamp():
+    """ONE STORED VALUE MUST NOT GIVE TWO ANSWERS.
+
+    `as_datetime` stripped surrounding whitespace and `_as_epoch` did not, so
+    a padded stamp PARSED on the validation path and returned None on the
+    epoch path — same bytes, two verdicts, both silent. A None at the epoch
+    end disables the age line; a parse at the validation end says the file is
+    fine. Nothing reconciled them.
+
+    THE CONTROL IS 'banana' THROUGH BOTH. Without it this passes against a
+    pair of functions that timestamp everything, which agree perfectly and are
+    both wrong.
+
+    RED WHEN the two parsers diverge on leading or trailing whitespace.
+    """
+    padded = "  2026-09-03T10:00:00Z  "
+    assert backlog_store.as_datetime(padded) is not None, (
+        "the validation parser rejected a padded stamp"
+    )
+    assert backlog_store._as_epoch(padded) is not None, (
+        "the epoch parser returned None for a stamp the validator accepted — "
+        "one stored value, two answers, and the age line silently disabled"
+    )
+
+    bare = "2026-09-03T10:00:00Z"
+    assert backlog_store._as_epoch(padded) == backlog_store._as_epoch(bare), (
+        "padding changed the epoch value rather than being stripped"
+    )
+
+    for parser in (backlog_store.as_datetime, backlog_store._as_epoch):
+        assert parser("banana") is None, (
+            f"control: {parser.__name__} accepted 'banana', so agreement above "
+            f"is agreement between two functions that parse anything"
         )
