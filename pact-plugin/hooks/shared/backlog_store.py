@@ -5,7 +5,7 @@ Summary: READ side of the cross-session backlog — schema rules, file load,
          the total helper session_block() that converts every failure into a
          returned value.
 Used by: hooks/session_init.py (session_block only) and hooks/shared/backlog.py
-         (validate/load/find_for/file_local_flags, reused by the write side).
+         (validate/read_json/find_for/file_local_flags, reused by the write side).
 
 WHY THIS MODULE IS SEPARATE FROM backlog.py: the session-start read path must
 issue no subprocess and no network call, and must not carry pact-memory in its
@@ -509,7 +509,9 @@ def _resolved(path: Path) -> Path:
         return path
 
 
-def file_local_flags(data: Dict[str, Any]) -> List[str]:
+def file_local_flags(
+    data: Dict[str, Any], include_settled: bool = False
+) -> List[str]:
     """Drift visible in the file alone, with no git, tracker or store lookup.
 
     Three of the drift classes are decidable from the file's own contents, and
@@ -524,12 +526,32 @@ def file_local_flags(data: Dict[str, Any]) -> List[str]:
     EVERY relational field is read through _relation_ids, because this function
     now runs on data validate() has already REJECTED: rendering a
     non-conforming file means its fields arrive unchecked.
+
+    TWO POPULATIONS, AND THIS IS THE ONE DRIFT PRODUCER THAT NEEDS BOTH. The
+    other three take a single `live` list because every consumer inside them
+    wants live items. Here `by_id` is an ID UNIVERSE, not a work list: one
+    branch asks whether a relation names an id that EXISTS AT ALL, and the
+    blocked-by rule has to be able to FIND a settled blocker to report it.
+    Narrow `by_id` to live items and both break at once — a live item blocked
+    by a done item stops matching and is accused of naming an unknown id,
+    which is a FALSE flag replacing a correct one, and the blocked-by rule
+    becomes unreachable by construction. So `by_id` stays whole and only the
+    SUBJECTS narrow.
+
+    `include_settled` is the view, not the data. A flag against a hidden row
+    contradicts the listing beside it; against a row `--all` displays, it does
+    not. The default serves the default view.
     """
     items = _items(data)
     by_id = {item.get("id"): item for item in items if isinstance(item.get("id"), str)}
+    subjects = (
+        items
+        if include_settled
+        else [item for item in items if item.get("status") not in SETTLED]
+    )
     flags: List[str] = []
 
-    for item in items:
+    for item in subjects:
         label = _label(item)
         for field in RELATIONAL_FIELDS:
             ids, malformed = _relation_ids(item, field, label)
@@ -548,7 +570,7 @@ def file_local_flags(data: Dict[str, Any]) -> List[str]:
                         f"{blocker.get('status')} — it will not clear on its own"
                     )
 
-    for item in items:
+    for item in subjects:
         if item.get("status") != "active":
             continue
         # The malformed flags are DISCARDED here: this field was already read

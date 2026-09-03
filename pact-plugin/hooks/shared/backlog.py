@@ -722,7 +722,9 @@ def _issue_number(ref: Any) -> Optional[int]:
 # Reconcile — reports drift, repairs nothing
 # ---------------------------------------------------------------------------
 
-def reconcile(data: Dict[str, Any], store: Any = None) -> List[str]:
+def reconcile(
+    data: Dict[str, Any], store: Any = None, include_settled: bool = False
+) -> List[str]:
     """Every drift class, as a list of flags. Writes nothing, changes nothing.
 
     Drift is reported and never silently repaired: an automatic fix is the
@@ -730,7 +732,9 @@ def reconcile(data: Dict[str, Any], store: Any = None) -> List[str]:
     inference. Propose, and let the user decide.
     """
     items = _items(data)
-    flags = list(file_local_flags(data))
+    # `--all` DISPLAYS settled items, so their file-local flags contradict
+    # nothing and belong. Default False keeps the suppression the default view needs.
+    flags = list(file_local_flags(data, include_settled=include_settled))
     flags.extend(_ref_flags(items))
     flags.extend(_plan_flags(items, data.get("project_path")))
     flags.extend(_memory_flags(items, store))
@@ -1099,7 +1103,7 @@ def _handle_write_or_show(args: argparse.Namespace, path: Path) -> int:
     schema = [f"schema: {problem}" for problem in validate(data)]
 
     if args.command == "show":
-        flags = [] if args.no_reconcile else reconcile(data)
+        flags = [] if args.no_reconcile else reconcile(data, include_settled=args.all)
         print(_render(data, schema + flags, show_all=args.all))
         return _EXIT_OK
 
