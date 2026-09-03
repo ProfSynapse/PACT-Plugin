@@ -2677,7 +2677,12 @@ def test_the_boundary_table_and_the_cli_name_the_same_writes(monkeypatch):
     missing = writable - named
     assert not missing, (
         f"writable but named in NO row: {sorted(missing)}. Omission reads as "
-        f"permission — an agent consulting this table sees no rule and writes."
+        f"permission — an agent consulting this table sees no rule and writes.\n"
+        f"IF YOU JUST ADDED THAT FLAG, THIS IS AN ORDERING CONDITION AND NOT A "
+        f"BUG IN YOUR CHANGE: the CLI has it and next.md's boundary table does "
+        f"not yet. EVERY OTHER WRITABLE FIELD HAS A ROW, so yours belongs in "
+        f"one too — add it in the same commit, or land the documentation "
+        f"first."
     )
 
     # Rows 1-7 name a status VALUE as the write's target (`status` -> `active`).
@@ -2694,7 +2699,16 @@ def test_the_boundary_table_and_the_cli_name_the_same_writes(monkeypatch):
     assert not invented, (
         f"the table names {sorted(invented)}, which the CLI cannot write and "
         f"is not a subcommand. A row describing a mechanism that does not "
-        f"exist sends its reader hunting for a flag."
+        f"exist sends its reader hunting for a flag.\n"
+        f"IF YOU ARE ADDING A STATUS OR A SUBCOMMAND, THIS IS AN ORDERING "
+        f"CONDITION AND NOT A DEFECT IN YOUR ROW: the code has not landed yet. "
+        f"Land it first and this passes with no edit here — the arm reads the "
+        f"parser, not a list.\n"
+        f"  statuses the CLI accepts: {sorted(statuses)}\n"
+        f"  fields `set` can write:   {sorted(writable)}\n"
+        f"  subcommands:              {sorted(subcommands)}\n"
+        f"If your name is absent from all three and is not meant to join one, "
+        f"the row is wrong rather than early."
     )
 
 
@@ -2770,6 +2784,15 @@ def test_one_ref_shared_by_a_live_and_a_settled_item(monkeypatch):
 def test_an_all_settled_backlog_makes_no_tracker_call(monkeypatch):
     """RED WHEN the ref set is built from `items` rather than `live`.
 
+    DO NOT DELETE THIS AS REDUNDANT. Measured: it SURVIVES the half-filter
+    mutation (set reads `live`, loop reads `items`) that the shared-ref arm
+    kills, so a kill-count comparison makes it look weaker than that arm. It is
+    not weaker, it is AIMED ELSEWHERE — it kills the COARSE break, where the
+    ref set itself is unfiltered, and the shared-ref arm cannot see that one.
+    The union of the two is what protects the function. Delete this and the
+    remaining arm still passes against an implementation that queries every
+    settled ref.
+
     The positive half runs second and is not decoration: adding ONE live ref
     must restore the call, so the zero above is a filter rather than a fixture
     that never reached the resolver.
@@ -2818,6 +2841,13 @@ def test_one_memory_id_shared_by_a_live_and_a_settled_item():
 
 def test_an_all_settled_backlog_opens_no_memory_store():
     """RED WHEN `wanted` is built from `items` rather than `live`.
+
+    DO NOT DELETE THIS AS REDUNDANT. Measured: it SURVIVES the half-filter
+    mutation that the shared-id arm kills, so by kill count it reads as the
+    weaker of the pair. It is aimed elsewhere — the COARSE break, where
+    `wanted` itself is unfiltered — which the shared-id arm cannot see. Delete
+    this and the remaining arm still passes against an implementation that
+    opens the memory store for every settled item.
 
     Control second, same item live: it must flag AND must resolve, so the zero
     above cannot be a fixture that never reached the code.
