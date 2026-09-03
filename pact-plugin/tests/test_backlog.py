@@ -2940,6 +2940,9 @@ _COMMANDS_DIR = HOOKS_DIR.parent / "commands"
 # the CLI GROWING one this list has never heard of is detectable, and that is
 # the moment the blind spot is created.
 _WRITE_VERBS = ("set ", "add ")
+# Spelled counts, for the rules that lead with one. Shared by the read rule and
+# the write rule so the two cannot disagree about what FOUR means.
+_COUNT_WORDS = {1: "ONE", 2: "TWO", 3: "THREE", 4: "FOUR", 5: "FIVE", 6: "SIX"}
 # Subcommands that are not item writes: `show` reads, `repair` moves a corrupt
 # FILE aside and touches no item. Neither can appear at a work boundary.
 _NON_WRITE_SUBCOMMANDS = frozenset({"show", "repair"})
@@ -3055,14 +3058,16 @@ def _read_sites(name):
 # The two that report UNASKED. Pinned per file because a session gets them
 # whether or not anyone invokes anything.
 _UNASKED_REPORTS = ("bootstrap.md", "wrap-up.md")
-# Every command file that invokes the report. next.md is a member VIA LINE 57 —
-# `## Step 2 — Reconcile and report`, an imperative executed at that point in
-# the flow. Its OTHER backlog lines are a different nature: 28 and 152 are
-# syntax templates, and 216 invokes `repair`. Saying which line earns the
-# membership matters, because a reader grepping next.md finds several and
-# cannot otherwise tell. Stated here so the set is a DECISION rather than an
-# absence indistinguishable from an oversight — the rule it pins is written
-# beside the write rule in next.md.
+# Every command file that invokes the report. next.md earns its membership with
+# the invocation under `## Step 2 — Reconcile and report`, and NOT with its
+# other backlog lines, which invoke `set`, `add` and `repair` — none of them the
+# report verb. Which line matters, because a reader grepping next.md finds
+# several invocations and cannot otherwise tell. NAMED BY CONTENT, never by line
+# number: an earlier version of this comment cited three numbers and one of them
+# went stale inside the same commit that inserted lines above it.
+# Stated here so the set is a DECISION rather than an absence indistinguishable
+# from an oversight — the rule it pins is written beside the write rule in
+# next.md.
 _REPORT_CALL_SITES = frozenset({"bootstrap.md", "wrap-up.md", "next.md"})
 # The decision wrap-up's report must precede, quoted as it appears in the file.
 _SESSION_DECISION = "Use `AskUserQuestion` with these exact options:"
@@ -3140,13 +3145,19 @@ def test_every_backlog_report_site_is_a_choice_point():
         f"reworded or removed and this arm is reading nothing"
     )
     sentence = text.split(marker, 1)[1].split("\n\n", 1)[0]
-    stated = {name for name in _REPORT_CALL_SITES | {"orchestrate.md", "comPACT.md",
-                                                     "imPACT.md", "rePACT.md",
-                                                     "refresh.md", "pause.md",
-                                                     "peer-review.md"}
-              if f"`{name}`" in sentence}
-
+    # BOTH SIDES COME FROM THE SAME GLOB. Building this from a hardcoded name
+    # list made a new command file invisible to it: named in the sentence,
+    # absent from the literal, and the comparison passed while the rule was
+    # wrong.
+    stated = {p.name for p in _COMMANDS_DIR.glob("*.md") if f"`{p.name}`" in sentence}
     carrying = {p.name for p in _COMMANDS_DIR.glob("*.md") if _read_sites(p.name)}
+
+    # THE WORD AND THE LIST MUST AGREE — the set comparison below cannot see a
+    # fourth name added to the sentence while the word stays THREE.
+    assert _COUNT_WORDS.get(len(stated)) in marker, (
+        f"the read rule says {marker!r} but names {len(stated)} files: "
+        f"{sorted(stated)}"
+    )
     assert stated == carrying, (
         f"next.md's read rule names {sorted(stated)} but the files carrying a "
         f"report site are {sorted(carrying)}. An agent reading that rule would "
@@ -3326,8 +3337,7 @@ def test_next_md_names_exactly_the_files_that_carry_write_sites():
     # The word and the list must agree. A fifth file added to the sentence
     # while the word stays FOUR is the count-drifts-from-its-list defect, and
     # the set comparison below cannot see it.
-    words = {1: "ONE", 2: "TWO", 3: "THREE", 4: "FOUR", 5: "FIVE", 6: "SIX"}
-    assert words.get(len(claimed)) in marker, (
+    assert _COUNT_WORDS.get(len(claimed)) in marker, (
         f"the sentence says {marker!r} but names {len(claimed)} files: "
         f"{sorted(claimed)}"
     )
