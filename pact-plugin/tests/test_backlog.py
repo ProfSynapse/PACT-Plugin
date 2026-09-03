@@ -60,6 +60,26 @@ is boring and rebuildable, the questions are not.
              is ALSO named in the write table below it, so dropping one from
              the sentence leaves the section mention and the mutation survives
              against an arm that scans the section. Measured.
+  settled  THE SHIPPED DEFECT is neither of the obvious mutations. Recover
+             it verbatim: `git show 08b4f5b8^` — the ref set is built from
+             `items` with NO filter, the loop is unfiltered, and a mid-loop
+             `elif status in SETTLED: continue` sits AFTER the unverifiable
+             branch. So its ONLY symptom was a settled item with an
+             UNVERIFIABLE ref flagging and being queried; done/abandoned/closed
+             were already clean. MEASURED: it is killed by the three
+             `_ref_flags` arms and survives both `_memory_flags` arms, which is
+             correct because the revert does not touch that function.
+             A MUTATION MUST BE AT LEAST AS SUBTLE AS THE DEFECT IT STANDS IN
+             FOR — a clean one-line inversion breaks louder than the bug that
+             survived review, so it asks an easier question.
+  settled  The half-filter shape is the id/ref set reading `live` while the
+             EMITTING LOOP reads `items` — one line, not the whole filter.
+             Measured: that half-filter is killed ONLY by the two
+             cardinality-two arms (one ref, one memory id, each shared by a
+             live and a settled item). The three all-settled arms SURVIVE it,
+             because one item per ref cannot separate "filtered the loop" from
+             "filtered the set". Removing the filter entirely kills all five,
+             which is the weaker mutation and the tempting one to re-derive.
   CAS pop  The pop must move ABOVE the `return [` inside the refusal branch.
              Placed after the return it is DEAD CODE and the mutation is a
              no-op that reads as a surviving arm — twice, before I read the
@@ -211,6 +231,18 @@ afternoon.
   the FOUR/list count drifts apart    test_next_md_names_exactly_the_files_that_carry_write_sites
   a relational-id row becomes APPLY   test_the_two_unrecoverable_rows_still_ask
   the old Step 3 heading returns      test_the_two_unrecoverable_rows_still_ask
+  a writable field loses its row      test_the_boundary_table_and_the_cli_name_the_same_writes
+  a row names an unwritable field     test_the_boundary_table_and_the_cli_name_the_same_writes
+  a row names an unknown status       test_the_boundary_table_and_the_cli_name_the_same_writes
+  the CLI gains an undocumented flag  test_the_boundary_table_and_the_cli_name_the_same_writes
+  _ref_flags loop reads `items`       test_one_ref_shared_by_a_live_and_a_settled_item
+  _memory_flags loop reads `items`    test_one_memory_id_shared_by_a_live_and_a_settled_item
+  the settled filter removed          test_a_settled_item_neither_flags_nor_reaches_the_resolver
+  the settled filter removed          test_an_all_settled_backlog_makes_no_tracker_call
+  the settled filter removed          test_an_all_settled_backlog_opens_no_memory_store
+  the shipped defect, 08b4f5b8^       test_a_settled_item_neither_flags_nor_reaches_the_resolver
+  the shipped defect, 08b4f5b8^       test_one_ref_shared_by_a_live_and_a_settled_item
+  the shipped defect, 08b4f5b8^       test_an_all_settled_backlog_makes_no_tracker_call
   the accessor reverted at site two   test_a_poisoned_memory_field_crashes_neither_site
   the accessor reverted at site two   test_the_flagged_ids_are_exactly_the_ids_that_were_looked_up
   the accessor reverted at site one   test_a_poisoned_memory_field_crashes_neither_site
@@ -2581,3 +2613,224 @@ def test_the_two_unrecoverable_rows_still_ask():
             f"{flag!r} is {verdicts.get(flag)!r}, not ASK. A dropped id has no "
             f"undo path — the id WAS the record — so this row must never apply."
         )
+
+
+def _boundary_table_identifiers():
+    """Backticked identifiers in the Write column of next.md's boundary table.
+
+    The column mixes FIELD names with the one SUBCOMMAND (`add`), and row 15
+    describes an operation in prose with no backticks. Only the backticked
+    tokens are identifiers claiming to name something in the code, so only
+    those are checkable — the prose is a rule, not a reference.
+    """
+    text = _next_md().split("### When the writes happen", 1)[-1]
+    names = set()
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.split("|")]
+        if len(cells) < 5 or not cells[1].isdigit():
+            continue
+        names.update(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", cells[2]))
+    return names
+
+
+def test_the_boundary_table_and_the_cli_name_the_same_writes(monkeypatch):
+    """The table has been wrong in BOTH directions and only one is loud.
+
+    It named `touched` as though a flag wrote it (there is none) and prohibits
+    "removing an item" (no such subcommand) — INVENTION. And `title`, `note`
+    and `memory` were writable and appeared in NO ROW AT ALL — OMISSION, which
+    is the direction that reads as permission and the one that actually bit.
+
+    BOTH POPULATIONS COME FROM THE PARSER, not from a list in this file. That
+    is what makes this a check rather than a restatement, and it is the third
+    time in this arc that taking a population from outside the artifact under
+    audit is what closed the gap.
+
+    `touched` is the one legitimate identifier no flag writes: `update_item`
+    stamps it unconditionally, which is exactly what its row says. It is
+    allowed by name, so a row inventing a DIFFERENT unwritable field still
+    fails.
+
+    RED WHEN a writable field gains no row, or a row names something the CLI
+    cannot write.
+    """
+    import argparse
+
+    parser = backlog.build_parser()
+    sub = [a for a in parser._actions
+           if isinstance(a, argparse._SubParsersAction)][0]
+    subcommands = set(sub.choices)
+    writable = {
+        option.lstrip("-").replace("-", "_")
+        for action in sub.choices["set"]._actions
+        for option in action.option_strings
+        if option.startswith("--")
+    } - {"help"}
+    assert writable, "no writable flags found on `set` — this arm is vacuous"
+
+    named = _boundary_table_identifiers()
+    assert named, (
+        "no backticked identifier parsed from the boundary table — its shape "
+        "changed and both assertions below are vacuous"
+    )
+
+    missing = writable - named
+    assert not missing, (
+        f"writable but named in NO row: {sorted(missing)}. Omission reads as "
+        f"permission — an agent consulting this table sees no rule and writes."
+    )
+
+    # Rows 1-7 name a status VALUE as the write's target (`status` -> `active`).
+    # Those come from the parser too, via `--status`'s own choices, so a row
+    # naming a status the CLI does not accept fails HERE rather than at the
+    # first agent that tries it. THIS IS THE COUPLING THAT IS ABOUT TO MOVE:
+    # when `dropped` joins STATUSES a row may name it, and this arm follows
+    # without edit. A hardcoded list would have had to be remembered.
+    statuses = set(sub.choices["set"]._option_string_actions["--status"].choices or ())
+    assert statuses, "no --status choices found — the value check is vacuous"
+
+    _AUTO_MAINTAINED = {"touched"}
+    invented = named - writable - subcommands - statuses - _AUTO_MAINTAINED
+    assert not invented, (
+        f"the table names {sorted(invented)}, which the CLI cannot write and "
+        f"is not a subcommand. A row describing a mechanism that does not "
+        f"exist sends its reader hunting for a flag."
+    )
+
+
+# ---------------------------------------------------------------------------
+# SETTLED filtering: the id set and the emitting loop must read ONE list
+# ---------------------------------------------------------------------------
+
+def _recording_refs(monkeypatch, states=None):
+    """Capture every ref set `_ref_flags` asks the resolver about.
+
+    The CALL LIST is the point. A half-filtered implementation still emits the
+    right-looking flags in some fixtures while querying refs it should not, so
+    an arm that reads only the returned flags cannot see it.
+    """
+    calls = []
+
+    def fake(refs):
+        calls.append(sorted(refs))
+        return {ref: dict(states or {"state": "unverifiable", "reason": "x"})
+                for ref in refs}
+
+    monkeypatch.setattr(backlog, "resolve_refs", fake)
+    return calls
+
+
+def test_a_settled_item_neither_flags_nor_reaches_the_resolver(monkeypatch):
+    """RED WHEN the settled filter is removed from either half.
+
+    THE CONTROL IS THE SAME ITEM WITH ONE FIELD CHANGED. A byte-identical item
+    at `status=planned` MUST flag and MUST call — without it, an absent flag is
+    equally consistent with "correctly filtered" and "the fixture never reached
+    the code", which is this arc's most repeated failure.
+    """
+    for status in sorted(backlog.SETTLED):
+        calls = _recording_refs(monkeypatch)
+        flags = backlog._ref_flags([_item(status=status, ref="#1")])
+        assert flags == [], f"{status}: a settled item flagged: {flags}"
+        assert calls == [], f"{status}: a settled item reached the resolver: {calls}"
+
+    calls = _recording_refs(monkeypatch)
+    flags = backlog._ref_flags([_item(status="planned", ref="#1")])
+    assert flags, "control: a live item did not flag — every assertion above is vacuous"
+    assert calls == [["#1"]], f"control: the live item did not reach the resolver: {calls}"
+
+
+def test_one_ref_shared_by_a_live_and_a_settled_item(monkeypatch):
+    """THE ARM THAT SEPARATES THE TWO IMPLEMENTATIONS, and cardinality is all of it.
+
+    Filtering only the REF SET is not enough, because a live item keeps the
+    shared ref in that set — so the emitting loop still reaches the settled
+    item and flags it. A ONE-ITEM-PER-REF FIXTURE CANNOT TELL THE TWO APART:
+    both implementations produce one flag. Two items on ONE ref is the entire
+    arm, and the position of the settled item is chosen deliberately rather
+    than inherited from the fixture.
+
+    RED WHEN the loop reads `items` while the ref set reads `live`.
+    """
+    calls = _recording_refs(monkeypatch)
+    flags = backlog._ref_flags([
+        _item(item_id="live", title="LIVE ITEM", status="active", ref="#1"),
+        _item(item_id="gone", title="SETTLED ITEM", status="done", ref="#1"),
+    ])
+
+    assert calls == [["#1"]], (
+        f"the shared ref must still be queried via the live item: {calls}"
+    )
+    assert len(flags) == 1, f"expected exactly one flag, got {flags}"
+    assert "LIVE ITEM" in flags[0] and "SETTLED ITEM" not in flags[0], (
+        f"the flag names the settled item: {flags[0]}"
+    )
+
+
+def test_an_all_settled_backlog_makes_no_tracker_call(monkeypatch):
+    """RED WHEN the ref set is built from `items` rather than `live`.
+
+    The positive half runs second and is not decoration: adding ONE live ref
+    must restore the call, so the zero above is a filter rather than a fixture
+    that never reached the resolver.
+    """
+    calls = _recording_refs(monkeypatch)
+    backlog._ref_flags([
+        _item(item_id="aaaa", status="done", ref="#1"),
+        _item(item_id="bbbb", status="dropped", ref="#2"),
+    ])
+    assert calls == [], f"an all-settled backlog queried the tracker: {calls}"
+
+    calls = _recording_refs(monkeypatch)
+    backlog._ref_flags([
+        _item(item_id="aaaa", status="done", ref="#1"),
+        _item(item_id="cccc", status="active", ref="#3"),
+    ])
+    assert calls == [["#3"]], (
+        f"one live ref must restore the call, and must not carry the settled "
+        f"item's ref with it: {calls}"
+    )
+
+
+def test_one_memory_id_shared_by_a_live_and_a_settled_item():
+    """THE FIXTURE WHOSE ABSENCE LET THE HALF-FILTER SHIP, now pinning the fix.
+
+    Same shape as the shared-ref arm and the same reason: a live item keeps the
+    id in `wanted`, so filtering only the id set leaves the loop flagging the
+    settled item against it. CARDINALITY ONE CANNOT DISTINGUISH THE TWO.
+
+    RED WHEN the loop reads `items` while `wanted` reads `live`.
+    """
+    store = _RecordingStore()
+    flags = backlog._memory_flags([
+        _item(item_id="live", title="LIVE ITEM", status="active", memory=["mem-real"]),
+        _item(item_id="gone", title="SETTLED ITEM", status="dropped", memory=["mem-real"]),
+    ], store)
+
+    assert store.asked == ["mem-real"], (
+        f"the shared id must still be resolved via the live item: {store.asked}"
+    )
+    assert len(flags) == 1, f"expected exactly one flag, got {flags}"
+    assert "LIVE ITEM" in flags[0] and "SETTLED ITEM" not in flags[0], (
+        f"the flag names the settled item: {flags[0]}"
+    )
+
+
+def test_an_all_settled_backlog_opens_no_memory_store():
+    """RED WHEN `wanted` is built from `items` rather than `live`.
+
+    Control second, same item live: it must flag AND must resolve, so the zero
+    above cannot be a fixture that never reached the code.
+    """
+    store = _RecordingStore()
+    flags = backlog._memory_flags(
+        [_item(status="done", memory=["mem-real"]),
+         _item(item_id="bbbb", status="dropped", memory=["mem-other"])], store)
+    assert store.asked == [], f"an all-settled backlog resolved ids: {store.asked}"
+    assert flags == [], f"an all-settled backlog flagged: {flags}"
+
+    store = _RecordingStore()
+    flags = backlog._memory_flags(
+        [_item(title="LIVE", status="active", memory=["mem-real"])], store)
+    assert store.asked == ["mem-real"], "control: the live item did not resolve"
+    assert flags, "control: the live item did not flag"
