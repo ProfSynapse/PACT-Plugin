@@ -56,6 +56,10 @@ is boring and rebuildable, the questions are not.
   membership Change BOTH dereference sites, the test and the message. Leaving
              `data["items"]` in the message body kills by KeyError from the
              mutant's own shape rather than by the property.
+  next.md  Mutate the trigger SENTENCE, not the section. Every boundary file
+             is ALSO named in the write table below it, so dropping one from
+             the sentence leaves the section mention and the mutation survives
+             against an arm that scans the section. Measured.
   CAS pop  The pop must move ABOVE the `return [` inside the refusal branch.
              Placed after the return it is DEAD CODE and the mutation is a
              no-op that reads as a surviving arm — twice, before I read the
@@ -201,6 +205,12 @@ afternoon.
   a write site appears in rePACT      test_four_files_stay_at_zero_write_sites
   the write-site detector orphaned    test_four_files_stay_at_zero_write_sites
   the wrap-up write moves below       test_the_wrap_up_write_precedes_the_worktree_removal
+  a CLI subcommand goes unclassified  test_the_verb_classification_covers_every_cli_subcommand
+  a write site in an unnamed file     test_next_md_names_exactly_the_files_that_carry_write_sites
+  the sentence drops a carried file   test_next_md_names_exactly_the_files_that_carry_write_sites
+  the FOUR/list count drifts apart    test_next_md_names_exactly_the_files_that_carry_write_sites
+  a relational-id row becomes APPLY   test_the_two_unrecoverable_rows_still_ask
+  the old Step 3 heading returns      test_the_two_unrecoverable_rows_still_ask
   the accessor reverted at site two   test_a_poisoned_memory_field_crashes_neither_site
   the accessor reverted at site two   test_the_flagged_ids_are_exactly_the_ids_that_were_looked_up
   the accessor reverted at site one   test_a_poisoned_memory_field_crashes_neither_site
@@ -2329,7 +2339,15 @@ _COMMANDS_DIR = HOOKS_DIR.parent / "commands"
 # a bare `/PACT:next` mention are READS and are deliberately not members: the
 # architect's ruling is about where something FINISHED, not where the backlog
 # is consulted, and bootstrap carries a call site with zero writes.
-_WRITE_VERBS = ("set ", "add ", "remove ")
+# THE POPULATION COMES FROM THE CLI, NOT FROM THIS TUPLE — see
+# `test_the_verb_classification_covers_every_cli_subcommand`. An unknown verb
+# loose in a command file is undetectable by construction (it is unknown), but
+# the CLI GROWING one this list has never heard of is detectable, and that is
+# the moment the blind spot is created.
+_WRITE_VERBS = ("set ", "add ")
+# Subcommands that are not item writes: `show` reads, `repair` moves a corrupt
+# FILE aside and touches no item. Neither can appear at a work boundary.
+_NON_WRITE_SUBCOMMANDS = frozenset({"show", "repair"})
 
 
 def _write_sites(name):
@@ -2411,3 +2429,155 @@ def test_the_wrap_up_write_precedes_the_worktree_removal(monkeypatch):
         f"at line {removals[0]}. Every item written there is reported abandoned "
         f"from the next session onward."
     )
+
+
+def test_the_verb_classification_covers_every_cli_subcommand():
+    """`_WRITE_VERBS` is a hardcoded list, and a hardcoded list silently
+    narrows the population it filters. This takes the population from the
+    PARSER instead, which is where subcommands are actually declared.
+
+    WHAT THIS CANNOT DO, stated so nobody reads more into it: it cannot detect
+    an unknown verb sitting in a command file. Nothing can — the verb is
+    unknown. WHAT IT DOES is fail at the moment the gap is CREATED: add a
+    subcommand to the CLI without classifying it here and this reddens, so the
+    blind spot cannot open silently.
+
+    Same move that fixed the cardinality control one file over: the population
+    comes from outside the artifact under test.
+
+    RED WHEN the CLI gains or loses a subcommand without this classification
+    being updated. It already found one: `remove` was in the write list and has
+    never been a subcommand — vocabulary taken from the design table rather
+    than from the code.
+    """
+    import argparse
+
+    actions = [
+        action for action in backlog.build_parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+    ]
+    assert len(actions) == 1, f"expected one subparser group, found {len(actions)}"
+    declared = set(actions[0].choices)
+    assert declared, "the parser declares no subcommands — this arm is vacuous"
+
+    classified = {verb.strip() for verb in _WRITE_VERBS} | set(_NON_WRITE_SUBCOMMANDS)
+    assert classified == declared, (
+        f"the CLI's subcommands and this file's classification disagree. "
+        f"Only in the CLI: {sorted(declared - classified)} (unclassified — "
+        f"a write site using one is invisible to `_write_sites`). Only here: "
+        f"{sorted(classified - declared)} (dead vocabulary that can never match)."
+    )
+
+
+def _next_md():
+    return (_COMMANDS_DIR / "next.md").read_text(encoding="utf-8")
+
+
+def test_next_md_names_exactly_the_files_that_carry_write_sites():
+    """THE SEAM BETWEEN TWO LANES, and it was unpinned by both.
+
+    devops armed the seven sites that CALL this command; I armed those sites
+    and the four files ruled to ZERO. Nobody armed the command those sites
+    call. Both lanes were complete and the seam was not — `grep -rln next.md`
+    over tests/ returned nothing before this arm.
+
+    This does not pin the sentence's WORDING. It pins its CLAIM against the
+    tree: the files `next.md` says carry boundary writes must be exactly the
+    files that do. A file gaining a write site without being named here, or
+    named here without carrying one, is drift between the instruction an agent
+    reads and the repository it acts on — invisible to any arm that reads only
+    one side.
+
+    RED WHEN the sentence and the tree diverge in either direction.
+    """
+    text = _next_md()
+    # THE SENTENCE, NOT THE SECTION. Scanning the whole section counted files
+    # named in the write TABLE below it, so dropping one from the sentence left
+    # the arm green — measured, my first mutation survived for exactly that
+    # reason. The claim being pinned is the sentence's, so the slice is the
+    # sentence's paragraph: from the bolded marker to the next blank line.
+    marker = "**FOUR FILES carry boundary writes**"
+    assert marker in text, (
+        f"the trigger sentence marker {marker!r} is gone — the sentence was "
+        f"reworded and this arm is reading nothing"
+    )
+    sentence = text.split(marker, 1)[1].split("\n\n", 1)[0]
+    claimed = {name for name in
+               ("orchestrate.md", "comPACT.md", "imPACT.md", "wrap-up.md",
+                "rePACT.md", "refresh.md", "pause.md", "peer-review.md",
+                "bootstrap.md", "next.md")
+               if f"`{name}`" in sentence}
+    assert claimed, (
+        "the trigger sentence names no command file — it was restructured and "
+        "this arm is now reading nothing"
+    )
+    # The word and the list must agree. A fifth file added to the sentence
+    # while the word stays FOUR is the count-drifts-from-its-list defect, and
+    # the set comparison below cannot see it.
+    words = {1: "ONE", 2: "TWO", 3: "THREE", 4: "FOUR", 5: "FIVE", 6: "SIX"}
+    assert words.get(len(claimed)) in marker, (
+        f"the sentence says {marker!r} but names {len(claimed)} files: "
+        f"{sorted(claimed)}"
+    )
+
+    # next.md IS the command the boundary sites invoke, so its own `set`/`add`
+    # lines are usage documentation rather than call sites. A command cannot be
+    # a boundary for itself. Found by this arm on its first run — the detector
+    # counted the implementation as a caller.
+    actual = {path.name for path in sorted(_COMMANDS_DIR.glob("*.md"))
+              if path.name != "next.md" and _write_sites(path.name)}
+    assert claimed == actual, (
+        f"next.md's trigger sentence and the tree disagree. Named there: "
+        f"{sorted(claimed)}. Carrying write sites: {sorted(actual)}. "
+        f"An agent reading this command would be told the wrong file set."
+    )
+
+
+def test_the_two_unrecoverable_rows_still_ask():
+    """A dropped id is the ONE write with no undo path — the id WAS the record.
+
+    Both rows sat under a heading reading `Propose, never repair`, which made
+    them proposals by context. That heading is now `Apply the facts, ask about
+    the intent`, and the protective frame is gone: a row saying `drop the
+    dangling reference` reads as an APPLY under the new heading where it did
+    not under the old. So each row must carry its OWN verdict.
+
+    THE ROW COUNT IS ASSERTED FIRST because a table this parser cannot read
+    yields no rows, and no rows satisfies every membership check below. That
+    positive fact — that real verdicts were parsed — could only be true if the
+    table is present and shaped as expected.
+
+    RED WHEN either row reverts to APPLY, or the heading reverts and takes the
+    per-row verdicts with it.
+    """
+    text = _next_md()
+    assert "## Step 3 — Apply the facts, ask about the intent" in text, (
+        "the Step 3 heading changed; the per-row verdicts below were written "
+        "for this heading and must be re-read against a new one"
+    )
+    assert "Propose, never repair" not in text, (
+        "the old heading came back — rows written to carry their own verdict "
+        "would now also inherit one"
+    )
+
+    verdicts = {}
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.split("|")]
+        if len(cells) >= 4 and cells[2] in ("ASK", "APPLY", "NEITHER") or (
+                len(cells) >= 4 and cells[2].startswith("APPLY")):
+            verdicts[cells[1]] = cells[2]
+    assert len(verdicts) >= 8, (
+        f"parsed only {len(verdicts)} verdict rows from the Step 3 table — the "
+        f"table shape changed and the assertions below are vacuous"
+    )
+    assert "ASK" in set(verdicts.values()) and any(
+        v.startswith("APPLY") for v in verdicts.values()), (
+        "the parse found only one verdict kind, so it cannot discriminate"
+    )
+
+    for flag in ("a relational field names an unknown id",
+                 "a `memory` id no longer resolves"):
+        assert verdicts.get(flag) == "ASK", (
+            f"{flag!r} is {verdicts.get(flag)!r}, not ASK. A dropped id has no "
+            f"undo path — the id WAS the record — so this row must never apply."
+        )
