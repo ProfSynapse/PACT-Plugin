@@ -138,6 +138,54 @@ is boring and rebuildable, the questions are not.
              accessor instead un-filters site one as well, and kills by
              TypeError out of `sorted({5, "mem-real"})` — a crash in the batch
              builder, where the row claims a fabricated flag.
+  tie glob THE FIXTURE THAT CANNOT SEE IT, AND MY OWN WAS ONE. Removing
+             `sorted(` from `_scan`'s glob reddens the source pin AND NOTHING
+             ELSE — both tie arms survive it. Raw `glob()` order is a
+             deterministic function of the exact NAME SET here (indifferent to
+             creation order and to the parent directory), and whether it agrees
+             with sorted order flips between name sets with no usable pattern:
+             `aaa.json`/`zzz.json` disagree, `aaa-tie.json`/`zzz-tie.json`
+             agree. The tie fixture drew an agreeing pair, so the behavioural
+             arms are blind to the defect by luck. Renaming them would make
+             them catch it and that is exactly why the pin exists rather than
+             the rename: the detection would rest on an ordering nobody chose,
+             and a later rename-for-clarity would switch it off silently.
+  tie sort Revert `found.sort(key=lambda entry: entry[0], reverse=True)` to
+             `found.sort(reverse=True)`. Killed by three — both tie arms and
+             the tie-message pin, the last because the winner's NAME appears in
+             the byte-exact sentence. Survived by the source pin and by the
+             unequal-stamp arm, correctly: neither reads a tie outcome.
+             `reverse=False` is the mirror mutation and separates them the
+             other way — it kills the unequal-stamp arm and the rename arm and
+             LEAVES BOTH TIE ARMS GREEN, because a stable sort over equal keys
+             preserves order in either direction.
+  tie text Two mutations, two disjoint kills, which is what makes them two
+             pins rather than one. Collapsing `chosen` to the bare
+             `"most recently updated"` kills the tie-message arm alone;
+             changing that same literal kills the unequal-stamp arm alone. The
+             non-tie sentence was already correct before this round, so its pin
+             guards a REWORDING of a working message — the regression class
+             nothing else in the file would catch.
+  git scratch A SCRATCH COPY MUST BE A GIT CHECKOUT. Ten write-path arms fail
+             in a bare copytree with "the main repository root did not
+             resolve", which reads as a kill and is an environment gap — the
+             same false-kill shape as the missing `scripts/` recorded above.
+             `git init` in the scratch root restores the control to the
+             worktree's exact result. RUN THE UNMUTATED CONTROL FIRST: that is
+             what separated these ten from the one real red already standing.
+  no cause AN IDENTICAL RED SET ACROSS MUTATIONS IS NOT ALWAYS A BROKEN
+             BUILD, AND HERE THE DISCRIMINATION IS ONE LEVEL DOWN. Three
+             mutations of the duplicate sentence — re-adding the cause clause,
+             emptying the claimant join, dropping the remedy — redden the SAME
+             three arms, because the two byte-exact pins are change-detectors
+             over the whole sentence and cannot say WHICH clause moved. The
+             control is green, so the build is fine; what separates the three
+             is which ASSERTION of the no-cause arm fires, and each fires its
+             own: the cause assert, `claimants not named`, and the remedy
+             assert respectively. Measured by running that arm alone under each
+             mutation and reading the raised `E` line. A red-set diagonal was
+             the wrong instrument for this trio; the assertion identity is the
+             right one.
 
 Each arm was verified by mutating production source and confirming the NAMED
 test reddens. Every mutation listed was killed, run against an unmutated green
@@ -232,7 +280,7 @@ afternoon.
   `--ref none` made inert               test_ref_none_clears_and_an_unpassed_ref_does_not
   `--ref` clears unconditionally        test_ref_none_clears_and_an_unpassed_ref_does_not
   `_UNVERIFIABLE` collapses to None     test_an_unopenable_memory_store_is_distinct_from_an_unresolved_id
-  duplicates note WITHHOLDS its cause   test_the_duplicates_message_names_the_files_and_the_cause
+  duplicates note ASSERTS a cause       test_the_duplicates_message_reports_what_it_saw_and_claims_no_cause
   exit 3 collapses back to 2            test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY
   unreadable returns the refusal code   test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY
   `_is_newer` compares instants         test_a_memory_record_flags_only_on_a_LATER_DAY
@@ -324,7 +372,7 @@ afternoon.
   the argv regains `--no-reconcile`   test_show_reports_a_non_iterable_items_rather_than_raising
   membership simplified to `.get()`     test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
   membership reverted to `is not None`  test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses
-  the duplicates note stops naming      test_the_duplicates_message_names_the_files_and_the_cause
+  the duplicates note stops naming      test_the_duplicates_message_reports_what_it_saw_and_claims_no_cause
   the top-level type check removed      test_a_top_level_non_object_reaches_the_named_path_machinery
   the title TYPE check removed          test_a_non_string_title_is_reported_and_the_block_still_renders
   `_SLUG_CHARS` anchored on `$`         test_a_repo_slug_with_a_trailing_newline_is_refused
@@ -338,6 +386,7 @@ present are not vacuous; only enumerating the spec's properties says which
 arms are missing, and neither substitutes for the other.
 """
 import importlib.util
+import inspect
 import json
 import re
 import subprocess
@@ -966,6 +1015,343 @@ def test_a_rename_prefers_the_newer_stamp_and_reports_the_duplication(tmp_path):
     assert "2 stored backlogs record this checkout" in notice.context
 
 
+# --------------------------------------------------------------------------
+# the equal-stamp tie: what decides it, and what the report may claim
+# --------------------------------------------------------------------------
+_TIE_STAMP = "2026-09-01T00:00:00Z"
+_OLDER_STAMP = "2026-01-01T00:00:00Z"
+_RECENCY_CLAIM = "most recently updated"
+_TIE_DISCLAIMER = "not chosen by recency"
+_DUPLICATE_MARKER = "stored backlogs record this checkout"
+
+
+def _duplicate_line(notice):
+    """The one appended duplicate-claimant line, or None if none was rendered.
+
+    Returning None rather than raising is deliberate: "no line at all" is a
+    third state the message arms have to be able to name, and an arm that
+    crashes here would report a fixture fault as a property failure.
+    """
+    lines = [
+        line for line in notice.context.split("\n") if _DUPLICATE_MARKER in line
+    ]
+    assert len(lines) <= 1, (
+        f"the block carries {len(lines)} duplicate-claimant lines, so the arms "
+        f"below cannot say which one they are reading: {lines!r}"
+    )
+    return lines[0] if lines else None
+
+
+def _tie_report_diagnosis(line):
+    """WHOSE RED IS THIS. Decisive from the failure output alone.
+
+    Three states reach a failing tie-message assertion and they need
+    OPPOSITE responses, so the message names which one occurred rather than
+    leaving the reader to run the fixture themselves.
+    """
+    if line is None:
+        return (
+            "no duplicate-claimant line was rendered at all, so this fixture "
+            "did not produce two claimants and the arm measured nothing. The "
+            "fault is in the fixture or in the match rule, not in the wording."
+        )
+    if _RECENCY_CLAIM in line:
+        return (
+            f"the report still claims {_RECENCY_CLAIM!r} on a tie. THIS ARM IS "
+            "NOT WRONG AND NEEDS NO EDIT: the honesty fix in session_block's "
+            "duplicate-claimant branch is absent from this tree — reverted, "
+            "lost in a rebase, or never landed. Restore that branch. "
+            f"Received: {line!r}"
+        )
+    return (
+        "the report neither claims recency nor carries the disclaimer this arm "
+        "expects, so THIS ARM'S EXPECTATION IS WRONG rather than the code: the "
+        "wording was changed to something neither branch anticipated. Re-read "
+        f"the branch and re-pin against what it now emits. Received: {line!r}"
+    )
+
+
+def _tie_store(tmp_path, first_title, second_title):
+    """Two files, one checkout, the SAME stamp.
+
+    Returns `(project, store, titles)`, where `titles` maps each filename to
+    the item title inside it. Handing the mapping back is what lets an arm
+    DERIVE which title it expects from sorted order instead of naming one:
+    renaming a fixture here moves the expectation with it, where a literal
+    would keep comparing against a file that no longer exists.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+    store = tmp_path / "store"
+    titles = {"aaa-tie.json": first_title, "zzz-tie.json": second_title}
+    for name, title in titles.items():
+        _write(
+            store,
+            name,
+            _backlog(project, items=[_item(title=title)], updated=_TIE_STAMP),
+        )
+    return project, store, titles
+
+
+def test_the_scan_globs_the_store_in_sorted_order():
+    """A SOURCE PIN, and the two tie-outcome arms below are meaningless without it.
+
+    RED WHEN `_scan`'s glob is not wrapped in `sorted(`.
+
+    This file otherwise refuses source pins, and this one earns its place by
+    measurement rather than by argument. Raw `glob()` order here is a
+    deterministic function of the exact NAME SET — indifferent to creation
+    order, indifferent to the parent directory, stable across repeats — and
+    whether it AGREES with `sorted()` varies from one name set to the next
+    with no pattern a fixture author can predict:
+
+        aaa.json,       zzz.json        -> zzz, aaa    DISAGREES
+        aaa-tie.json,   zzz-tie.json    -> aaa, zzz    agrees
+        aaa-older.json, zzz-newer.json  -> aaa, zzz    agrees
+        aaa-newer.json, zzz-older.json  -> zzz, aaa    DISAGREES
+
+    So a fixture cannot arrange for the unsorted case to differ from the
+    sorted one. It can only get lucky — and THE ARMS BELOW GOT LUCKY THE
+    OTHER WAY. Measured: removing `sorted()` from `_scan` reddens THIS ARM
+    AND NOTHING ELSE in the file. The two tie arms survive it, because
+    `aaa-tie.json`/`zzz-tie.json` is a name set whose raw order happens to
+    agree with sorted order. Renaming those fixtures to `aaa.json`/
+    `zzz.json` would make them catch it, which is precisely why that must
+    not be relied on: the detection would rest on an undocumented ordering
+    nobody chose, and the next person to rename a fixture for clarity would
+    switch it off with nothing going red.
+
+    Without `sorted()` the tie winner is whatever enumeration hands back
+    first, so those arms agree with the code by coincidence under one set of
+    fixture names and contradict it under another. That is a FLAKY arm,
+    which is strictly worse than a brittle one: a flaky arm gets re-run and
+    passes.
+
+    `session_block` has a second sorted glob over the same directory, and it
+    cannot satisfy this pin — the population read here is `_scan`'s own
+    source and nothing else.
+
+    CEILING, stated rather than discovered later: this reads ONE line. A
+    refactor that keeps the property while splitting the call across two
+    statements reddens it. That failure is loud and its message says what to
+    re-derive, which is the trade being made.
+    """
+    source = inspect.getsource(backlog_store._scan)
+    assert source.startswith("def _scan("), (
+        "the source read here does not begin _scan, so this pin is measuring "
+        f"some other function: {source[:60]!r}"
+    )
+
+    globs = [line.strip() for line in source.split("\n") if ".glob(" in line]
+    assert len(globs) == 1, (
+        f"_scan now makes {len(globs)} glob calls rather than one: {globs!r}. "
+        "This pin reads a single line; re-derive it before trusting the tie arms."
+    )
+    assert re.search(r"sorted\(\s*\w+\.glob\(", globs[0]), (
+        f"_scan's glob is no longer wrapped in sorted(): {globs[0]!r}.\n"
+        "THIS IS NOT A STYLE PIN, AND DELETING IT SWITCHES OFF SOMETHING. "
+        "test_an_equal_stamp_tie_hands_the_win_to_the_first_file_in_sorted_"
+        "order and its swap control both derive their expected winner from "
+        "sorted() order. An unsorted glob makes those arms agree with the "
+        "code by coincidence on some filesystems and fail on others — they "
+        "stop being brittle and become flaky, and a flaky arm passes on "
+        "re-run. Restore the sorted glob, or delete those two arms with it."
+    )
+
+
+def test_an_equal_stamp_tie_hands_the_win_to_the_first_file_in_sorted_order(tmp_path):
+    """Two files record one checkout with the SAME `updated`.
+
+    RED WHEN the sort keys on the whole `(stamp, path)` tuple. The
+    comparison then falls through to element 2 and the PATH decides the tie,
+    which the criterion forbids in the same sentence as the path-LENGTH
+    tie-break the tuple lost when it shrank to two elements. MEASURED
+    against that revert: the alphabetically LAST file wins before the fix
+    and the FIRST after it. The outcome FLIPS, so this arm discriminates
+    without inspecting the sort's source.
+
+    WHAT THIS ARM DOES NOT SAY, because the distinction is the whole
+    subtlety of the criterion. It does not say the code applies an
+    alphabetical tie-break — the fixed sort applies no tie-break key at all.
+    The residual correlation with name order is the sort's STABILITY over a
+    glob that was already sorted, which is why the source pin above is a
+    precondition and not a nicety. The clause of the criterion that forbids
+    a name-based decision is carried by the REPORT, not by this outcome; the
+    message arms below are where that clause is actually tested.
+
+    The winner is DERIVED from sorted order rather than named, so renaming
+    either fixture file cannot silently point this arm at the wrong one.
+
+    WHAT IT CANNOT SEE: dropping `sorted()` from `_scan`'s glob. Measured —
+    this arm stays green through that, because these two filenames enumerate
+    in sorted order anyway. `test_the_scan_globs_the_store_in_sorted_order`
+    is the sole detector, and this arm is why it exists.
+    """
+    project, store, titles = _tie_store(tmp_path, "ALPHA", "OMEGA")
+
+    names = sorted(path.name for path in store.glob("*.json"))
+    assert set(names) == set(titles), (
+        f"the fixture did not produce the files this arm reasons about: {names!r}"
+    )
+    winner, loser = titles[names[0]], titles[names[-1]]
+
+    notice = backlog_store.session_block(str(project), backlog_dir=store)
+
+    assert winner in notice.context, (
+        f"{names[-1]} won an equal-stamp tie over {names[0]}, so element 2 of "
+        "the sort tuple — the path — decided it"
+    )
+    assert loser not in notice.context
+
+
+def test_an_equal_stamp_tie_follows_the_filename_and_not_the_contents(tmp_path):
+    """The swap control for the arm above.
+
+    A single fixture in which `aaa-tie.json` won is consistent with two
+    stories, and only one of them is the property: the POSITION decided, or
+    the contents that happened to sit under that name were the ones
+    rendered. Here the names, the stamps and the item shape are held fixed
+    and ONLY the binding of content to name is swapped. The rendered title
+    moves with the NAME, so the pick is positional.
+
+    Without this, the arm above passes for a `_scan` that simply returned
+    the file whose title sorts first, or the file written second, and
+    neither of those is what the sort does.
+    """
+    project, store, titles = _tie_store(tmp_path, "OMEGA", "ALPHA")
+
+    names = sorted(path.name for path in store.glob("*.json"))
+    assert set(names) == set(titles), (
+        f"the fixture did not produce the files this arm reasons about: {names!r}"
+    )
+    winner, loser = titles[names[0]], titles[names[-1]]
+    assert (winner, loser) == ("OMEGA", "ALPHA"), (
+        "the swap did not swap: the first-sorting name still holds the title "
+        "it held in the arm above, so this is a repeat of that arm rather "
+        f"than a control on it. Got {winner!r} under {names[0]}"
+    )
+
+    notice = backlog_store.session_block(str(project), backlog_dir=store)
+
+    assert winner in notice.context, (
+        "the tie winner tracked the CONTENT rather than the filename: the "
+        "same two names with the titles swapped rendered the other file, so "
+        "the arm above was passing for a reason other than sort position"
+    )
+    assert loser not in notice.context
+
+
+def test_the_duplicate_report_does_not_claim_recency_when_the_stamps_tie(tmp_path):
+    """The criterion's forbidding clause, which the OUTCOME cannot carry.
+
+    RED WHEN the duplicate-claimant branch describes a tie as
+    `most recently updated`. On a tie the stamps did not separate, so
+    recency chose nothing and naming it names a mechanism that did not
+    operate.
+
+    The failure message is a three-way discriminator rather than a bare
+    diff, because three states reach it and they need opposite responses:
+    the disclaimer holding is a pass, the OLD claim surviving means the
+    production fix is missing and this arm needs no edit, and neither
+    appearing means this arm's expectation is the stale one.
+    """
+    project, store, _ = _tie_store(tmp_path, "ALPHA", "OMEGA")
+
+    notice = backlog_store.session_block(str(project), backlog_dir=store)
+    line = _duplicate_line(notice)
+
+    assert (
+        line is not None
+        and _TIE_DISCLAIMER in line
+        and _RECENCY_CLAIM not in line
+    ), _tie_report_diagnosis(line)
+
+    assert line == (
+        "  2 stored backlogs record this checkout: aaa-tie.json, zzz-tie.json. "
+        "Reading aaa-tie.json (not chosen by recency \u2014 2 share the newest "
+        "stamp); run /PACT:next to reconcile them."
+    ), (
+        "the tie wording changed. The property above still holds, so this is a "
+        "REWORDING and not a regression — read the new line, confirm it still "
+        "declines to claim recency, and re-pin it here. "
+        f"Received: {line!r}"
+    )
+
+
+def test_a_newer_stamp_wins_in_either_name_order_and_the_report_says_so(tmp_path):
+    """Clause 1 must keep holding: recency decides whenever the stamps differ.
+
+    RED WHEN the fix to the tie also changed the case that was already
+    working. Both name orders are exercised in one arm rather than split
+    across two, so the pairing cannot be half-deleted: the newer file sorts
+    LAST in the first store and FIRST in the second, and it wins both times.
+
+    If this arm and the tie arm above cannot disagree, neither is
+    discriminating — which is why the fixtures differ in exactly one
+    respect, the stamps.
+
+    The non-tie sentence is pinned BYTE-EXACT. It is correct today, nothing
+    else in the suite reads it, and a silent rewording of the working case
+    is the regression this round would otherwise introduce while fixing the
+    broken one.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+
+    newer_sorts_last = tmp_path / "store-last"
+    _write(
+        newer_sorts_last,
+        "aaa-older.json",
+        _backlog(project, items=[_item(title="STALE")], updated=_OLDER_STAMP),
+    )
+    _write(
+        newer_sorts_last,
+        "zzz-newer.json",
+        _backlog(project, items=[_item(title="CURRENT")], updated=_TIE_STAMP),
+    )
+
+    newer_sorts_first = tmp_path / "store-first"
+    _write(
+        newer_sorts_first,
+        "aaa-newer.json",
+        _backlog(project, items=[_item(title="CURRENT")], updated=_TIE_STAMP),
+    )
+    _write(
+        newer_sorts_first,
+        "zzz-older.json",
+        _backlog(project, items=[_item(title="STALE")], updated=_OLDER_STAMP),
+    )
+
+    for store, expected in (
+        (
+            newer_sorts_last,
+            "  2 stored backlogs record this checkout: zzz-newer.json, "
+            "aaa-older.json. Reading zzz-newer.json (most recently updated); "
+            "run /PACT:next to reconcile them.",
+        ),
+        (
+            newer_sorts_first,
+            "  2 stored backlogs record this checkout: aaa-newer.json, "
+            "zzz-older.json. Reading aaa-newer.json (most recently updated); "
+            "run /PACT:next to reconcile them.",
+        ),
+    ):
+        notice = backlog_store.session_block(str(project), backlog_dir=store)
+
+        assert "CURRENT" in notice.context, (
+            f"the older stamp won under {store.name}, so recency stopped "
+            "deciding the case where the stamps do separate"
+        )
+        assert "STALE" not in notice.context
+        assert _duplicate_line(notice) == expected, (
+            f"the non-tie wording changed under {store.name}. This case was "
+            "already correct, so a change here is a rewording of the WORKING "
+            "message rather than a fix — confirm it was intended before "
+            "re-pinning. "
+            f"Received: {_duplicate_line(notice)!r}"
+        )
+
+
 def test_nothing_matches_on_the_filename(tmp_path):
     """The read path derives no project name at any point.
 
@@ -1384,16 +1770,52 @@ def test_an_unopenable_memory_store_is_distinct_from_an_unresolved_id(monkeypatc
     )
 
 
-def test_the_duplicates_message_names_the_files_and_the_cause(tmp_path):
-    """Two files recording one CHECKOUT names both files and the cause.
+def test_the_duplicates_message_reports_what_it_saw_and_claims_no_cause(tmp_path):
+    """Two files record one CHECKOUT: name both, point at the remedy, state
+    no cause.
 
-    REWRITTEN, not repaired: this arm previously asserted that NO cause was
-    named, which was right while an ancestor could collide with an unrelated
-    project — any cause was then false. Exact membership removes that
-    collision, so a duplicate is a rename or a double write and nothing else,
-    and withholding the determinate cause is now the defect.
+    THIRD VERSION OF THIS ARM, AND THE TWO BEFORE IT WERE EACH CORRECT UNDER
+    A PREMISE THAT LATER FAILED. Version 1 asserted that NO cause was named,
+    because under containment an ancestor repo could collide with an
+    unrelated project and any cause claim would then be false. Version 2
+    asserted the cause MUST be named, because exact membership removed that
+    collision and a duplicate was held to be "a rename or a double write and
+    nothing else". This version again requires no cause claim, and NOT for
+    version 1's reason.
 
-    RED WHEN the files stop being named or the cause is dropped again.
+    WHAT REFUTED VERSION 2: `cp backlog.json backlog-old.json` leaves two
+    files sharing a checkout root, and is neither a rename nor a double
+    write. The enumeration was not exhaustive. The CONCLUSION it supported
+    survives — one file is stale either way, and the remedy is unchanged —
+    but the message asserted the enumeration, and an unqualified cause claim
+    is simply false in that case.
+
+    THE PREMISE THIS VERSION RESTS ON, written down because the last two
+    rested on premises that were not: a message may state what this branch
+    OBSERVED and what the reader can DO, and may not state how the state
+    came about. This branch read a directory, found more than one file
+    claiming the checkout, and chose one. It never witnessed either file
+    being written. That is a boundary on what this code can see, not a claim
+    about which causes exist.
+
+    WHY THAT IS STURDIER THAN THE OTHER TWO: both earlier versions rested on
+    enumerating the ways two files can come to share a root — a set that
+    includes anything a person can type at a shell, which is why an outside
+    counterexample closed version 2. A newly discovered cause changes that
+    enumeration and changes nothing here, because the branch still did not
+    witness it.
+
+    SO WHAT WOULD MOVE THIS ARM A FOURTH TIME, since a rule that cannot name
+    its own falsifier is pinned to a premise rather than to a behaviour: the
+    branch gaining EVIDENCE of cause. If a stored file grew a provenance
+    field, or the store recorded rename events, a cause claim would be
+    witnessed rather than inferred and this rule would change. Short of
+    that, discovering a fifth way to produce duplicates is not a reason to
+    touch this arm — which is exactly what would have spared versions 1
+    and 2.
+
+    RED WHEN the claimants stop being named, the remedy is dropped, or a
+    cause claim returns.
     """
     project = tmp_path / "project"
     project.mkdir()
@@ -1404,7 +1826,20 @@ def test_the_duplicates_message_names_the_files_and_the_cause(tmp_path):
     context = backlog_store.session_block(str(project), backlog_dir=store).context
 
     assert "aaa.json" in context and "zzz.json" in context, "claimants not named"
-    assert "rename" in context.lower(), "the determinate cause was withheld"
+    assert "/PACT:next" in context, (
+        "the remedy was dropped. It is the half of this message that survived "
+        "the cause clause being refuted, and it is the only part a reader can "
+        "act on"
+    )
+    assert "rename" not in context.lower(), (
+        "the message claims a cause again. `rename` is a WITNESS for that "
+        "class and not a census of it — this arm cannot enumerate every "
+        "phrasing a cause claim might take, and the byte-exact pins on the "
+        "tie and non-tie sentences are what catch an arbitrary rewording. "
+        "What this arm adds is the rule those pins cannot state: a re-added "
+        "cause clause is NOT a wording change to confirm and re-pin, it is a "
+        "refuted claim coming back."
+    )
 
 
 def test_a_top_level_non_object_reaches_the_named_path_machinery(tmp_path):

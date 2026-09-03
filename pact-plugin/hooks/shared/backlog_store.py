@@ -341,17 +341,20 @@ def find_for(project_dir: str, backlog_dir: Path) -> Tuple[Optional[Path], List[
 
     Thin face over _scan for callers that do not need the match count.
     """
-    match, unreadable, _ = _scan(project_dir, backlog_dir)
+    match, unreadable, _, _ = _scan(project_dir, backlog_dir)
     return match, unreadable
 
 
 def _scan(
     project_dir: str, backlog_dir: Path
-) -> Tuple[Optional[Path], List[Path], List[Path]]:
+) -> Tuple[Optional[Path], List[Path], List[Path], int]:
     """Locate this project's backlog by EXACT MEMBERSHIP in the stored `roots`.
 
-    Returns the best match (or None), the files that could not be read, and
-    EVERY file that claimed this project, best first.
+    Returns the best match (or None), the files that could not be read,
+    EVERY file that claimed this project best first, and HOW MANY share the
+    newest stamp. That count is 1 exactly when recency chose the winner; above
+    1 the stamps are tied and something else did, which the caller must not
+    describe as recency.
 
     `roots` holds every checkout of the project — the main one and each
     worktree — as the writer resolved them. A file claims this session when
@@ -445,9 +448,16 @@ def _scan(
             continue
         found.append((str(data.get("updated") or ""), path))
 
-    found.sort(reverse=True)
+    # KEY ON THE STAMP ALONE. Without it the tuple comparison falls through
+    # to element 2 and the PATH decides an equal-stamp tie — the criterion
+    # forbids that in the same sentence as the path-LENGTH tie-break this
+    # sort dropped when the tuple shrank from three elements to two.
+    found.sort(key=lambda entry: entry[0], reverse=True)
     matched = [path for _, path in found]
-    return (matched[0] if matched else None), unreadable, matched
+    # COMPARING THE TOP TWO IS SUFFICIENT FOR ANY N because the list is sorted
+    # descending — a consequence of the sort, not a shortcut around it.
+    tied = sum(1 for stamp, _ in found if stamp == found[0][0])
+    return (matched[0] if matched else None), unreadable, matched, tied
 
 
 def _enclosing_checkout(path: Path) -> Optional[Path]:
@@ -788,7 +798,7 @@ def session_block(
         if not entries:
             return BacklogNotice("", "")
 
-        match, unreadable, claimants = _scan(project_dir, root)
+        match, unreadable, claimants, tied = _scan(project_dir, root)
         notes = []
         if unreadable:
             notes.append(
@@ -837,19 +847,22 @@ def session_block(
 
         block = format_block(data, context_anchor)
         if len(claimants) > 1:
-            # THE CAUSE IS NOW DETERMINATE, so name it. Under containment this
-            # sentence was silent about cause, because an ANCESTOR repo produced
-            # the same state with both files legitimate and belonging to
-            # different projects — naming a cause there would have sent a reader
-            # to merge two backlogs that must stay separate. Exact membership
-            # removes that case: two files can only share a checkout root by a
-            # rename or a double write, and both mean one file is stale.
+            # SAY ONLY WHAT THIS BRANCH WITNESSED. `tied == 1` means the stamps
+            # separated and recency really did choose; above 1 they did not, and
+            # calling the pick "most recently updated" there names a mechanism
+            # that did not operate. Which mechanism DID is deliberately unsaid:
+            # it is the sort's stability over a pre-sorted glob, an implementation
+            # detail that goes stale the moment either changes.
+            chosen = (
+                "most recently updated"
+                if tied == 1
+                else f"not chosen by recency — {tied} share the newest stamp"
+            )
             block += (
                 f"\n  {len(claimants)} stored backlogs record this checkout: "
                 + ", ".join(path.name for path in claimants)
-                + f". Reading {match.name} (most recently updated). A rename or "
-                f"a double write left the other behind; run /PACT:next to "
-                f"reconcile them."
+                + f". Reading {match.name} ({chosen}); "
+                f"run /PACT:next to reconcile them."
             )
         if notes:
             # Quiet and loud at once: the block goes only to context, the notes
