@@ -81,7 +81,11 @@ Read the output and report to the user in plain language:
 2. The next two or three `planned` items by rank.
 3. Every flag, with what you think it means.
 
-Exit code 3 means the file could not be PARSED. Report that and go to Step 5.
+Exit code 3 covers TWO causes and the message tells you which. `unparseable`
+means the bytes were read and are not a backlog — that is repairable, so go to
+Step 5. `could not be read` means the bytes never arrived at all (a permission
+bit, a directory at the path): `repair` REFUSES that case, so do NOT go to
+Step 5. Report the access problem the message names and stop.
 
 Exit code 2 is a REFUSAL, not a corruption: the file is readable and nothing was
 written. Report what the message names and fix that. Do NOT go to Step 5 — a
@@ -104,9 +108,12 @@ asks. Each row carries its own verdict; do not read one from the heading:
 
 | Flag | Verdict | What you do |
 |---|---|---|
-| ref is closed but the item is not `done` | ASK | propose marking it done, and say which close reason the tracker gave |
+| ref is closed as COMPLETED | ASK | propose marking it `done` |
+| ref was closed WITHOUT the work being done | ASK | propose `dropped`, NEVER `done`. A tracker closing a ticket as not-planned IS a decision against the work, arriving from outside — which is what `dropped` records. `done` would record the opposite of what happened, and proposing nothing leaves the item ranked forever |
+| ref is closed with NO stated reason | ASK | ask which happened; propose neither `done` nor `dropped` until they say |
 | ref is unverifiable | ASK | check the ref by hand, or clear it |
-| `blocked_by` names an item already done | ASK | propose unblocking it |
+| `blocked_by` names a SETTLED item (`done` or `dropped`) | ASK | propose unblocking it — the flag names the blocker's status, and neither will clear on its own |
+| a relational field holds non-id entries | ASK | the entries are not ids at all; ask what was meant before removing them |
 | a relational field names an unknown id | ASK | the id WAS the record, so nothing is recoverable, and a failed lookup cannot tell a mistype from a deletion |
 | two exclusive items are both `active` | ASK | propose pausing one |
 | active with no branch or worktree | ASK | confirm the work is still live |

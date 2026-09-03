@@ -1062,11 +1062,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return _handle_repair(path, args.force)
         return _handle_write_or_show(args, path)
     except BacklogFileError as exc:
-        print(
-            f"backlog is unreadable: {exc}\n"
-            f"Nothing was changed. Run `repair` to move it aside and rebuild.",
-            file=sys.stderr,
+        # THE ADVICE DEPENDS ON THE SUBCLASS, because `repair` REFUSES an
+        # unreadable file without --force. Promising a repair that declines is
+        # worse than saying nothing: the user runs it, gets exit 2, and learns
+        # only that two of our messages disagree. Exit code stays 3 for both —
+        # the distinction the caller needs is already in `exc`, so a second
+        # code would add a branch every consumer must learn for no new fact.
+        advice = (
+            "Nothing was changed. `repair` will REFUSE this — it moves aside "
+            "files it can read and found corrupt, and it never read this one. "
+            "Fix the access problem the message names, or pass --force to move "
+            "it aside unread; it is kept, not deleted."
+            if isinstance(exc, BacklogUnreadableError)
+            else "Nothing was changed. Run `repair` to move it aside and rebuild."
         )
+        print(f"backlog is unreadable: {exc}\n{advice}", file=sys.stderr)
         return _EXIT_UNREADABLE
     except BacklogWriteError as exc:
         print(f"refused: {exc}", file=sys.stderr)
