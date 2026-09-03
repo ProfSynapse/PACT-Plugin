@@ -740,13 +740,34 @@ def reconcile(data: Dict[str, Any], store: Any = None) -> List[str]:
 
 def _ref_flags(items: List[Dict[str, Any]]) -> List[str]:
     """An item with NO ref is never flagged. An item whose ref will not resolve
-    is flagged unverifiable. Absent and unresolvable are different states."""
-    refs = sorted({item["ref"] for item in items if item.get("ref")})
+    is flagged unverifiable. Absent and unresolvable are different states.
+
+    SETTLED IS FILTERED ONCE, HERE, before the resolver is called — the same
+    shape `_plan_flags` and `_memory_flags` use. A single `live` list feeds
+    both the ref set and the emitting loop, so a settled item reaches
+    neither. Filtering only the ref set would not be enough: two items can
+    share one ref, so a live item keeps that ref in the query and the loop
+    would still flag the settled one.
+    The skip used to sit inside the per-item branch chain, after the ref had
+    been queried and after the `unverifiable` branch had already fired — so a
+    settled item could still flag, and `show` printed that flag while hiding
+    the item itself, naming a title the same report had just omitted.
+    Filtering the items means settled refs are not queried either, so the
+    query stops growing with the project's whole history.
+
+    A settled item in an all-settled backlog therefore produces no tracker
+    call at all, and a broken tracker is silent. That is accepted: the states
+    this filter suppresses are ones the user already decided not to act on, so
+    nothing is lost that anyone would have used, and one live ref restores the
+    signal.
+    """
+    live = [item for item in items if item.get("status") not in SETTLED]
+    refs = sorted({item["ref"] for item in live if item.get("ref")})
     if not refs:
         return []
     states = resolve_refs(refs)
     flags = []
-    for item in items:
+    for item in live:
         ref = item.get("ref")
         if not ref:
             continue
@@ -756,11 +777,6 @@ def _ref_flags(items: List[Dict[str, Any]]) -> List[str]:
                 f"{_label(item)}: ref {ref} is unverifiable "
                 f"({state.get('reason', 'no reason given')})"
             )
-        elif item.get("status") in SETTLED:
-            # SETTLED, not just `done`: a DROPPED item whose ref closed was
-            # told "probably done", which proposes undoing the decision the
-            # status exists to record.
-            continue
         elif state.get("state") == "done":
             flags.append(
                 f"{_label(item)}: ref {ref} is closed as completed but the item "
@@ -844,25 +860,25 @@ def _memory_ids(item: Dict[str, Any]) -> List[str]:
 def _memory_flags(
     items: List[Dict[str, Any]], store: Any = None
 ) -> List[str]:
+    # Same rule as the plan pointers and the refs: a settled item's links are
+    # not drift. Measured before any filter existed here — a dropped item and
+    # a done item were both flagged for a dead memory id.
+    #
+    # ONE list, read by BOTH the id set and the loop. Filtering only the id
+    # set would not be enough: two items can share a memory id, so a live
+    # item keeps that id in `wanted` and the loop would still flag the
+    # settled one against it.
+    live = [item for item in items if item.get("status") not in SETTLED]
     wanted = sorted({
         identifier
-        # Same rule as the plan pointers: a settled item's links are not
-        # drift. Measured before this clause — a dropped item and a done
-        # item were both flagged for a dead memory id.
-        for item in items
-        if item.get("status") not in SETTLED
+        for item in live
         for identifier in _memory_ids(item)
     })
     if not wanted:
         return []
     records = resolve_memory_ids(wanted, store)
     flags = []
-    # The SAME filter as the one on `wanted`, and BOTH are needed: two items
-    # can share one memory id, so a live item keeps that id in `wanted`
-    # and this loop would still emit a flag against the settled one.
-    for item in items:
-        if item.get("status") in SETTLED:
-            continue
+    for item in live:
         for identifier in _memory_ids(item):
             record = records.get(identifier)
             if record is _UNVERIFIABLE:
