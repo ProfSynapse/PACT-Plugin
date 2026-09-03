@@ -161,9 +161,10 @@ the next reconciliation instead.
 | 11 | `ref` | — | ALWAYS asks |
 | 12 | `plan` | — | ALWAYS asks at a boundary |
 | 13 | `blocked_by`, `batch_with`, `exclusive_with` | — | ALWAYS ask |
-| 14 | removing an item | — | NEVER, at any site |
+| 14 | `title`, `note`, `memory` | — | ALWAYS ask |
+| 15 | removing an item | — | NEVER, at any site |
 
-No site writes two status rows. Rows 10-14 are here because a permissions table
+No site writes two status rows. Rows 10-15 are here because a permissions table
 that lists only what is allowed reads as though the omissions are allowed too.
 
 Not on every small action: the file's value is its stability.
