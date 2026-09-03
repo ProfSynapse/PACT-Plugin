@@ -81,11 +81,20 @@ Read the output and report to the user in plain language:
 2. The next two or three `planned` items by rank.
 3. Every flag, with what you think it means.
 
-Exit code 3 covers TWO causes and the message tells you which. `unparseable`
-means the bytes were read and are not a backlog — that is repairable, so go to
-Step 5. `could not be read` means the bytes never arrived at all (a permission
-bit, a directory at the path): `repair` REFUSES that case, so do NOT go to
-Step 5. Report the access problem the message names and stop.
+Exit code 3 means the file could not be USED, and the message says why.
+BRANCH ON ONE PHRASE:
+
+- `could not be read` — the bytes never arrived (a permission bit, a directory
+  at the path). `repair` REFUSES this. Do NOT go to Step 5: report the access
+  problem the message names and stop.
+- ANY OTHER exit-3 message — the bytes were read and are not a usable backlog
+  (`unparseable`, `top level is <type>, expected an object`, or wording not
+  listed here). All of these are repairable, so go to Step 5.
+
+Keying on the ONE refusing case rather than listing the repairable ones is
+deliberate: a message nobody anticipated then defaults to Step 5, where
+`repair` declines harmlessly if it turns out not to apply — rather than to a
+stop, which would leave a fixable backlog unfixed.
 
 Exit code 2 is a REFUSAL, not a corruption: the file is readable and nothing was
 written. Report what the message names and fix that. Do NOT go to Step 5 — a
