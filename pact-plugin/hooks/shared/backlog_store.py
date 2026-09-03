@@ -222,6 +222,20 @@ def _validate_item(item: Any, index: int, seen_ids: set) -> List[str]:
                 f"{label}: memory holds {len(memory)} ids, limit is {MEMORY_MAX_IDS}"
             )
 
+    # `ref` and `rank` are the two USER-SETTABLE fields that carried no type
+    # rule. Both degraded quietly: a non-string ref is dropped from the write
+    # side's ref query so the item gets no tracker check, and a non-numeric
+    # rank falls to _rank_key's isinstance guard and sorts last. Neither said
+    # anything. Every other field the user can set already reports, so these
+    # two were the outliers rather than the precedent.
+    ref = item.get("ref")
+    if ref is not None and not isinstance(ref, str):
+        problems.append(f"{label}: ref is {type(ref).__name__}, expected a string")
+
+    rank = item.get("rank")
+    if rank is not None and not isinstance(rank, (int, float)):
+        problems.append(f"{label}: rank is {type(rank).__name__}, expected a number")
+
     plan = item.get("plan")
     if plan is not None:
         if not isinstance(plan, str):
@@ -229,6 +243,20 @@ def _validate_item(item: Any, index: int, seen_ids: set) -> List[str]:
         elif Path(plan).is_absolute():
             problems.append(
                 f"{label}: plan {plan!r} is absolute, expected a repo-relative path"
+            )
+
+    # `added` and `touched` are dates, and the tolerance is COPIED FROM THEIR
+    # CONSUMER rather than chosen here. The write side's _as_datetime returns
+    # None both for a non-string AND for an unparseable string, and a None
+    # there silently disables the staleness check — so a type-only rule would
+    # close half the hole, leaving `touched: "banana"` exactly as quiet as
+    # `touched: 5`. A bare date and a full timestamp both pass, because both
+    # parse there; rejecting the timestamp would tighten past the consumer.
+    for field in ("added", "touched"):
+        value = item.get(field)
+        if value is not None and not _parses_as_date(value):
+            problems.append(
+                f"{label}: {field} is {value!r}, expected a date like 2026-01-31"
             )
 
     for field in RELATIONAL_FIELDS:
@@ -239,6 +267,26 @@ def _validate_item(item: Any, index: int, seen_ids: set) -> List[str]:
             )
 
     return problems
+
+
+def _parses_as_date(value: Any) -> bool:
+    """Whether the write side's _as_datetime would get a datetime out of this.
+
+    THE NORMALISATION IS DUPLICATED FROM THAT HELPER AND MUST TRACK IT. It
+    cannot be shared: _as_datetime lives on the write side, which imports this
+    module, so importing back would close a cycle. Changing what _as_datetime
+    accepts without changing this makes validate() reject a value the reader
+    handles, or pass one it cannot.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        datetime.fromisoformat(
+            value.strip().replace("Z", "+00:00").replace(" ", "T", 1)
+        )
+    except ValueError:
+        return False
+    return True
 
 
 def read_json(path: Path) -> Dict[str, Any]:
