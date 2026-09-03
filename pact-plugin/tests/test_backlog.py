@@ -60,6 +60,27 @@ is boring and rebuildable, the questions are not.
              is ALSO named in the write table below it, so dropping one from
              the sentence leaves the section mention and the mutation survives
              against an arm that scans the section. Measured.
+  scratch  MUTATE A COPY, AND RUN PYTEST *FROM* IT. Putting the scratch
+             `hooks/` on PYTHONPATH is INERT — conftest inserts the real tree
+             at sys.path[0] and wins, so the mutant never loads and EVERY ARM
+             PASSES. Proven before use by breaking `as_datetime` in the copy
+             and confirming an arm went red. The copy must also carry
+             `scripts/`: without it a CLI-subprocess arm dies with
+             ModuleNotFoundError, which reads as a kill and is an environment
+             gap. That false kill masked a real survivor for one run.
+  no-parent ARM 2 HAS NO HISTORICAL PRE-FIX STATE. Measured: at `88f7eeda`
+             the live-blocked-by-done row ALREADY emits the correct message,
+             so no committed parent produces the substitution it guards. Its
+             mutant is HAND-BUILT — move the settled filter from the subject
+             loop into `by_id`, and the blocker vanishes so the row emits
+             `blocked_by names unknown id`. A constructed mutant is honest
+             here because the failure mode is a WRONG FIX, not a past one.
+  census   THE TABLE NAMES CONDITIONS, NOT STATE LITERALS. `_ref_flags`
+             emits `abandoned`; the row says "ref was closed WITHOUT the work
+             being done". A lexical census on state names demands internals
+             leak into agent-facing prose and reports a false finding against
+             a correct table — mine did. Count the rows instead, and say that
+             a count cannot catch a row describing the wrong condition.
   path     ONE PROPERTY, TWO PATHS, AND ONLY ONE READS EACH FIELD. Asserting
              that every list-typed field reports its type through
              `file_local_flags` FAILED on `memory`, which that function does
@@ -271,6 +292,11 @@ afternoon.
   the two parsers, a6800f4d^          test_both_date_parsers_agree_on_a_padded_stamp
   the `memory` type report removed    test_every_list_typed_field_reports_its_type
   the relational type report removed  test_every_list_typed_field_reports_its_type
+  88f7eeda, the settled-subject filter    test_a_settled_subject_emits_no_file_local_flag
+  88f7eeda, include_settled absent        test_include_settled_restores_the_settled_subjects_own_flags
+  suppression moved to the blocker        test_a_live_item_blocked_by_a_settled_one_is_told_it_will_not_clear
+  bab1d9b7, the exit-3 advice             test_exit_three_gives_different_advice_for_unreadable_and_unparseable
+  bab1d9b7, the ref-outcome split         test_every_ref_flag_branch_has_a_row_in_the_step_three_table
   the accessor reverted at site two   test_a_poisoned_memory_field_crashes_neither_site
   the accessor reverted at site two   test_the_flagged_ids_are_exactly_the_ids_that_were_looked_up
   the accessor reverted at site one   test_a_poisoned_memory_field_crashes_neither_site
@@ -1299,7 +1325,10 @@ def test_show_puts_the_item_id_in_reach_of_the_agent(tmp_path, monkeypatch, caps
     backlog.save(_backlog(tmp_path, items=[_item(item_id="beef", title="FIND ME")]), path)
     monkeypatch.setattr(backlog, "store_path", lambda backlog_dir=None: path)
     monkeypatch.setattr(backlog, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(backlog, "reconcile", lambda data: [])
+    # `**_` because the caller gained `include_settled` after this stub was
+    # written. A fixed-signature stub turns a CALLER change into a red in an
+    # arm that is not about that caller — which is what happened here.
+    monkeypatch.setattr(backlog, "reconcile", lambda data, **_: [])
 
     backlog.main(["show"])
 
@@ -3132,3 +3161,191 @@ def test_both_date_parsers_agree_on_a_padded_stamp():
             f"control: {parser.__name__} accepted 'banana', so agreement above "
             f"is agreement between two functions that parse anything"
         )
+
+
+# ---------------------------------------------------------------------------
+# The external-review round. Four defects, five arms.
+# ---------------------------------------------------------------------------
+
+def _blocked_pair(blocker_status):
+    """A LIVE item blocked by one item at `blocker_status`."""
+    return [
+        _item(item_id="live", title="LIVE ITEM", status="active",
+              blocked_by=["gone"]),
+        _item(item_id="gone", title="THE BLOCKER", status=blocker_status),
+    ]
+
+
+def test_a_settled_subject_emits_no_file_local_flag():
+    """A settled item's own drift is not drift: the work is finished, so its
+    dangling relation is not something anyone will act on.
+
+    THE CONTROL IS THE SAME ITEM ONE FIELD DIFFERENT. Without a `planned`
+    fixture that MUST flag, this passes on a `file_local_flags` that returns
+    nothing at all — and the arm would be pinning silence rather than
+    suppression.
+
+    RED WHEN the settled subject filter is removed.
+    """
+    for settled in sorted(backlog_store.SETTLED):
+        flags = backlog_store.file_local_flags(
+            {"items": [_item(item_id="aaaa", status=settled,
+                             blocked_by=["nosuch"])]})
+        assert flags == [], f"a {settled} subject flagged: {flags}"
+
+    control = backlog_store.file_local_flags(
+        {"items": [_item(item_id="aaaa", status="planned",
+                         blocked_by=["nosuch"])]})
+    assert control, (
+        "control: a planned subject with the same dangling id produced no "
+        "flag, so the empties above prove nothing"
+    )
+
+
+def test_a_live_item_blocked_by_a_settled_one_is_told_it_will_not_clear():
+    """THE FAILURE MODE HERE IS SUBSTITUTION, NOT SILENCE.
+
+    A live item blocked by a DONE item is stuck forever. If the settled
+    suppression were applied to the BLOCKER rather than to the SUBJECT, this
+    row would still emit a flag — the WRONG one, `blocked_by names unknown
+    id`, a false accusation that the blocker does not exist. Any assertion
+    that counts flags, or checks a flag is non-empty, is satisfied by the
+    wrong message.
+
+    SO THE ARM ASSERTS THE RIGHT MESSAGE PRESENT AND THE WRONG ONE ABSENT.
+    Excluding the substitute is the half that catches this.
+
+    RED WHEN the suppression moves from the subject to the blocker.
+    """
+    for settled in sorted(backlog_store.SETTLED):
+        flags = backlog_store.file_local_flags({"items": _blocked_pair(settled)})
+        assert len(flags) == 1, f"{settled}: expected one flag, got {flags}"
+        assert "will not clear on its own" in flags[0], (
+            f"{settled}: the live item was not told its blocker is settled: "
+            f"{flags[0]}"
+        )
+        assert "unknown id" not in flags[0], (
+            f"{settled}: SUBSTITUTION — the blocker exists and was reported "
+            f"missing, which is a false accusation: {flags[0]}"
+        )
+
+    control = backlog_store.file_local_flags({"items": _blocked_pair("planned")})
+    assert control == [], (
+        f"control: a live blocker produced a flag, so the assertions above "
+        f"are not about settledness: {control}"
+    )
+
+
+def test_include_settled_restores_the_settled_subjects_own_flags():
+    """The seam `--all` wires to. Pinned so wiring it is a caller change
+    rather than a rediscovery.
+
+    RED WHEN the parameter is removed — the call raises TypeError, which is a
+    legitimate exception-kill because the arm's property IS that the seam
+    exists and is reachable by name.
+    """
+    data = {"items": [_item(item_id="aaaa", status="done", blocked_by=["nosuch"])]}
+
+    assert backlog_store.file_local_flags(data) == [], (
+        "the default view must still hide a settled subject's own drift"
+    )
+    restored = backlog_store.file_local_flags(data, include_settled=True)
+    assert any("names unknown id" in f for f in restored), (
+        f"include_settled=True did not restore the settled subject's flag: "
+        f"{restored}"
+    )
+
+
+def test_exit_three_gives_different_advice_for_unreadable_and_unparseable(tmp_path):
+    """BOTH STATES EXIT 3 BY DESIGN — that is a ruling, not an accident — so an
+    exit-code-only fixture passes against the unfixed code. THE DIFFERENCE IS
+    IN THE ADVICE.
+
+    `repair` REFUSES a file it never read, so telling that user to run repair
+    sends them to a command that exits 2 and teaches them only that two of our
+    messages disagree. The unparseable case is the one repair is FOR, and its
+    advice must stay plain.
+
+    THE EXIT CODES ARE ASSERTED EQUAL, deliberately: it pins that the codes do
+    NOT discriminate, which is what makes the message assertions the whole arm.
+
+    RED WHEN both branches give the same advice.
+    """
+    name = backlog.store_path().stem
+
+    unparseable = tmp_path / "unparseable"
+    _write(unparseable, f"{name}.json", "{ not json at all")
+    code_bad, out_bad = _run_cli(unparseable, "show", "--no-reconcile")
+
+    unreadable = tmp_path / "unreadable"
+    _write(unreadable, f"{name}.json", "{}")
+    (unreadable / f"{name}.json").chmod(0o000)
+    try:
+        code_unread, out_unread = _run_cli(unreadable, "show", "--no-reconcile")
+    finally:
+        (unreadable / f"{name}.json").chmod(0o644)
+
+    assert code_bad == code_unread == 3, (
+        f"both states must exit 3 by design: unparseable={code_bad}, "
+        f"unreadable={code_unread}"
+    )
+
+    assert "REFUSE" in out_unread and "--force" in out_unread, (
+        f"the unreadable case must say repair will refuse and name the force "
+        f"condition, or the user runs a command that declines: {out_unread}"
+    )
+    assert "REFUSE" not in out_bad, (
+        f"the unparseable case is what repair is FOR — its advice must stay "
+        f"plain: {out_bad}"
+    )
+    assert "repair" in out_bad, f"the unparseable case stopped offering repair: {out_bad}"
+
+
+def test_every_ref_flag_branch_has_a_row_in_the_step_three_table():
+    """A CENSUS ARM, AND ITS POPULATION IS THE POINT.
+
+    THE POPULATION IS EVERY `flags.append` INSIDE `_ref_flags`, read from the
+    SOURCE. That is a grep, not a judgement, and critically it is a property of
+    the CODE — which the table under test has no access to. Deriving the
+    population from the table is how a census arm agrees with its subject by
+    construction and can never fail.
+
+    IT COUNTS ROWS RATHER THAN MATCHING THEM BY NAME, AND THAT IS FORCED.
+    Measured: the table names the OBSERVABLE CONDITION ("ref is closed as
+    COMPLETED"), never the code's internal state literal (`abandoned`). That
+    is correct — the table is read by an agent looking at a flag, not at the
+    enum — so a lexical census on state names would demand implementation
+    names leak into agent-facing prose. My first version did exactly that and
+    reported a false finding against a table that was right.
+
+    THE LIMIT, NAMED RATHER THAN GLOSSED: a count catches the drift this arm
+    exists for — a branch added with no row, the four-versus-three shape — and
+    CANNOT catch a row that exists but describes the wrong condition. Matching
+    those is semantic and no grep reaches it.
+
+    RED WHEN a branch is added without a row, or a row is removed.
+    """
+    source = (HOOKS_DIR / "shared" / "backlog.py").read_text(encoding="utf-8")
+    body = source.split("def _ref_flags", 1)[1].split("\ndef ", 1)[0]
+
+    emitted = re.findall(r'state\.get\("state"\) == "(\w+)"', body)
+    assert body.count("flags.append") == len(emitted), (
+        f"{body.count('flags.append')} appends but {len(emitted)} state "
+        f"guards — this parse no longer matches `_ref_flags`"
+    )
+    assert len(emitted) >= 3, f"implausibly few ref-flag branches: {emitted}"
+
+    step_three = _next_md().split("## Step 3", 1)[1].split("\n## ", 1)[0]
+    rows = [line for line in step_three.splitlines()
+            if line.startswith("| ref ") or line.startswith("| ref\t")]
+    assert rows, (
+        "no `ref` rows parsed from Step 3 — the table shape changed and the "
+        "count below is vacuous"
+    )
+    assert len(rows) == len(emitted), (
+        f"`_ref_flags` emits {len(emitted)} ref outcomes {sorted(emitted)} but "
+        f"Step 3 carries {len(rows)} ref rows. A branch with no row leaves an "
+        f"agent holding a flag with no verdict; a row with no branch promises "
+        f"a verdict for a flag nobody will see.\nRows:\n  " +
+        "\n  ".join(r[:90] for r in rows)
+    )
