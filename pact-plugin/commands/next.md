@@ -34,10 +34,17 @@ is written with NO lost-update protection and nothing reports that.
 
 Two writes need no permission, and ONLY these two:
 
-- **`status`**, when you witnessed the transition — you saw the PR merge, you started
-  the work, you raised or cleared the blocker.
-- **`add`**, when you are TRANSCRIBING something the user said. Recording their words
-  is not deciding for them.
+- **A `status` transition you WITNESSED** — you saw the PR merge, you started the
+  work, you raised or cleared the blocker.
+- **Anything you are TRANSCRIBING from the user.** Recording their words is not
+  deciding for them. This covers `add`, and it covers `status` → `dropped`: the
+  user says they are not doing something, and you write it down.
+
+`dropped` is transcription and NEVER inference. You never WITNESS a decision not to
+do something — only the user can supply it. "We're not doing the rate-limit work
+after all" is a `dropped` you apply unasked. An item nobody has touched for a
+fortnight is NOT dropped: that is the staleness flag, it is your inference, and it
+ASKS.
 
 Everything else asks. Report every write you made — silent correctness is
 indistinguishable from silent breakage.
@@ -53,6 +60,20 @@ python3 "{plugin_root}/hooks/shared/backlog.py" show
 This resolves every drift class in one pass: refs against the tracker in a
 single batched query, `plan` paths against the project root, `memory` ids
 against the store, staleness, and dangling relational ids.
+
+`show` OMITS `done` AND `dropped` ITEMS BY DEFAULT and says how many it hid, on
+its own line after the last item and before the flags:
+
+```
+3 done and 1 dropped hidden (--all to show)
+```
+
+Each category is named separately rather than summed — four done items is a
+working project and four dropped items is a project that keeps abandoning
+things, and a reader needs to tell those apart. Singular per category, and a
+category absent from the line entirely at zero. Pass `--all` to see them. The
+line names its own remedy, so the flag is discoverable from the output without
+this file.
 
 Read the output and report to the user in plain language:
 
@@ -157,14 +178,15 @@ the next reconciliation instead.
 | 7 | `status` → `done` | `wrap-up.md`, inside worktree cleanup, BEFORE the worktree is removed | no — witnessed |
 | 8 | `touched` | rides every row above | not yours to write — `set` and `add` stamp it themselves and there is no flag for it |
 | 9 | `add` | wherever the user says it | no — but ONLY when transcribing their words |
-| 10 | `rank` | — | ALWAYS asks; the ordering IS the intent |
-| 11 | `ref` | — | ALWAYS asks |
-| 12 | `plan` | — | ALWAYS asks at a boundary |
-| 13 | `blocked_by`, `batch_with`, `exclusive_with` | — | ALWAYS ask |
-| 14 | `title`, `note`, `memory` | — | ALWAYS ask |
-| 15 | removing an item | — | NEVER, at any site |
+| 10 | `status` → `dropped` | wherever the user says it | no — transcription only. You never WITNESS a decision not to do something |
+| 11 | `rank` | — | ALWAYS asks; the ordering IS the intent |
+| 12 | `ref` | — | ALWAYS asks |
+| 13 | `plan` | — | ALWAYS asks at a boundary |
+| 14 | `blocked_by`, `batch_with`, `exclusive_with` | — | ALWAYS ask |
+| 15 | `title`, `note`, `memory` | — | ALWAYS ask |
+| 16 | removing an item | — | NEVER — and not a gap. The record is kept and the state is expressed with `dropped` instead |
 
-No site writes two status rows. Rows 10-15 are here because a permissions table
+No site writes two status rows. Rows 11-16 are here because a permissions table
 that lists only what is allowed reads as though the omissions are allowed too.
 
 Not on every small action: the file's value is its stability.
