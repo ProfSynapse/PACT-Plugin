@@ -182,6 +182,48 @@ class TestPopulationPrecedence:
         )
 
 
+class TestArtifactLoopShape:
+    """Step 3.5 must READ inside the per-feature loop, not after it.
+
+    THIS PINS SHAPE, NOT BEHAVIOUR, AND THE DISTINCTION IS THE POINT. The
+    skill describes a shell pipeline in prose; nothing here executes it, so
+    these arms cannot prove the pipeline works. They catch the exact
+    regression that shipped once: the read instruction sitting AFTER the
+    loop, where `$ARTIFACTS` holds only the last feature.
+
+    Behaviour was verified ONCE, by running the pipeline against a
+    two-feature journal. That was a one-time proof; this is the standing
+    guard, and it watches the instruction's structure alone.
+    """
+
+    LOOP_OPEN = 'while IFS= read -r FEATURE; do'
+    LOOP_CLOSE = 'done <<< "$FEATURES"'
+    READ_MARKER = "READ the paths HERE"
+
+    def test_read_instruction_is_inside_the_loop(self, skill_content):
+        for token in (self.LOOP_OPEN, self.LOOP_CLOSE, self.READ_MARKER):
+            assert skill_content.count(token) == 1, (
+                f"{token!r} appears {skill_content.count(token)} times; the "
+                f"offset comparison below needs each to be unambiguous."
+            )
+        opened = skill_content.find(self.LOOP_OPEN)
+        read = skill_content.find(self.READ_MARKER)
+        closed = skill_content.find(self.LOOP_CLOSE)
+        assert opened < read < closed, (
+            "The artifact READ instruction must sit INSIDE the per-feature "
+            "loop. $ARTIFACTS is overwritten each iteration, so a read placed "
+            "after the loop harvests the last feature only, discards every "
+            "other, and reports success."
+        )
+
+    def test_merge_prohibition_is_stated(self, skill_content):
+        # Load-bearing clause, so pinned verbatim: the resolved object is
+        # keyed by workflow alone, and every feature runs the same phases, so
+        # merging drops most paths while looking well-formed.
+        assert "DO NOT MERGE THE PER-FEATURE OBJECTS INTO ONE" in skill_content
+        assert "keyed by `workflow` ALONE" in skill_content
+
+
 class TestSkillFileExists:
     """Test that the skill file exists."""
 

@@ -289,7 +289,7 @@ Each phase's HANDOFF is the **distilled frame**; the phase's disk artifact (e.g.
    ```
 
    No events, or none carrying a `feature` → the set is empty, there is nothing to resolve, and that is a normal result rather than a gap.
-2. **Resolve** (masked-read-safe — uses the Step 0 `$SESSION_DIR`): call the `pact_harvest.py resolve-artifacts` subcommand ONCE PER FEATURE. It reads the `artifact_paths` events and applies the supersede-by-`(workflow, feature)`-latest-`ts` dedup for you:
+2. **Resolve AND READ, one feature at a time.** Both happen INSIDE the loop (masked-read-safe — uses the Step 0 `$SESSION_DIR`). The `resolve-artifacts` subcommand reads the `artifact_paths` events and applies the supersede-by-`(workflow, feature)`-latest-`ts` dedup for you:
 
    ```bash
    while IFS= read -r FEATURE; do
@@ -299,15 +299,21 @@ Each phase's HANDOFF is the **distilled frame**; the phase's disk artifact (e.g.
      # stdout is a single-line JSON object {workflow: [abs_path, ...]}, e.g.:
      # {"prepare":["/abs/docs/preparation/$FEATURE.md"],"architect":["/abs/docs/architecture/$FEATURE.md"]}
      # Empty (no artifacts for this feature) -> {}. Parse with json.loads, iterate keys.
+     # READ the paths HERE, and keep what you read UNDER THIS FEATURE.
    done <<< "$FEATURES"
    ```
 
+   🔴 **`$ARTIFACTS` IS OVERWRITTEN ON EVERY ITERATION AND NOTHING WARNS YOU.** Read its paths before the next iteration begins. After `done` it holds the LAST feature alone, so a read placed after the loop harvests one feature, discards every other, and reports success.
+
+   🔴 **DO NOT MERGE THE PER-FEATURE OBJECTS INTO ONE.** The object is keyed by `workflow` ALONE: the feature is consumed by the `--feature` filter and never appears in the result. Every feature runs the same phases, so two features collide on MOST of their keys, and a merge keeps one path-list per workflow while looking perfectly well-formed. Keep the results separate, keyed by feature.
+
    **Read the loop variable, never a word-split.** A feature slug can carry a space, and `for FEATURE in $FEATURES` would split one such slug into two names that resolve to nothing.
 
-   The subcommand already filters to this feature, groups by `workflow`, takes the **latest-`ts`** event per `(workflow, feature)`, and returns only the resolved set. Each `artifact_paths` event carries the **COMPLETE** path-list for its `(workflow, feature)` (a full enumeration per emit, not a delta), so the latest event is self-sufficient — the supersede never merges across events. Result (the JSON object): one path-list per `(workflow, feature)`.
-3. **Read** each path in the surviving events' `paths` lists off disk. Paths are full-absolute; read them **while the worktree is live** (the `worktree-cleanup` harvest-before-teardown guard guarantees this ordering at the single teardown chokepoint). If a path no longer resolves (file already gone — the accepted abnormal-teardown edge), skip it, note the gap, and degrade to HANDOFF-only for that artifact.
-4. **Synthesize ONE entry from BOTH sources together** (NOT verbatim, NOT a second entry). For each work unit, produce a SINGLE pact-memory entry synthesized from the HANDOFF **and** its artifact: the artifact is the fuller substance, the HANDOFF is the distilled frame. A ~19 KB artifact becomes a **richer-but-bounded** entry (a few hundred tokens of decisions/lessons informed by the full substance) — do NOT store the raw artifact. Substance flows into the entry's `context`/`decisions`; put the artifact's path in an entity `notes` field (NOT a `files` field — that field is rejected on save).
-5. **Dedup** — reuse the existing mechanism; do NOT invent a content-diff. Against existing memory: the Step 6 save-vs-update entity+topic protocol, unchanged — the synthesized HANDOFF+artifact entry enriches an existing entry exactly as a HANDOFF-only entry does. Against the HANDOFF's own content: the only new rule is **sequencing** — because step 4 synthesizes the HANDOFF and artifact into ONE entry, there is no separate artifact-entry to dedup; the single synthesis IS the dedup. (Idempotency: the existing processed-task ledger of Step 2/Step 8 extends to mark a `(workflow, feature)` artifact as read, so an incremental or consolidation re-harvest does not re-read and re-distill the same artifact.)
+   Paths are full-absolute; read them **while the worktree is live** (the `worktree-cleanup` harvest-before-teardown guard guarantees this ordering at the single teardown chokepoint). If a path no longer resolves (file already gone — the accepted abnormal-teardown edge), skip it, note the gap, and degrade to HANDOFF-only for that artifact.
+
+   The subcommand already filters to this feature, groups by `workflow`, takes the **latest-`ts`** event per `(workflow, feature)`, and returns only the resolved set. Each `artifact_paths` event carries the **COMPLETE** path-list for its `(workflow, feature)` (a full enumeration per emit, not a delta), so the latest event is self-sufficient — the supersede never merges across events. Result: one path-list per `workflow`, FOR THIS ONE FEATURE.
+3. **Synthesize ONE entry from BOTH sources together** (NOT verbatim, NOT a second entry). For each work unit, produce a SINGLE pact-memory entry synthesized from the HANDOFF **and** its artifact: the artifact is the fuller substance, the HANDOFF is the distilled frame. **A work unit is an `agent_handoff` group from Step 3, not a feature** — one feature carries many work units, so the artifacts a unit draws on are the ones you read under THAT UNIT'S feature. A ~19 KB artifact becomes a **richer-but-bounded** entry (a few hundred tokens of decisions/lessons informed by the full substance) — do NOT store the raw artifact. Substance flows into the entry's `context`/`decisions`; put the artifact's path in an entity `notes` field (NOT a `files` field — that field is rejected on save).
+4. **Dedup** — reuse the existing mechanism; do NOT invent a content-diff. Against existing memory: the Step 6 save-vs-update entity+topic protocol, unchanged — the synthesized HANDOFF+artifact entry enriches an existing entry exactly as a HANDOFF-only entry does. Against the HANDOFF's own content: the only new rule is **sequencing** — because step 3 synthesizes the HANDOFF and artifact into ONE entry, there is no separate artifact-entry to dedup; the single synthesis IS the dedup. (Idempotency: the existing processed-task ledger of Step 2/Step 8 extends to mark a `(workflow, feature)` artifact as read, so an incremental or consolidation re-harvest does not re-read and re-distill the same artifact.)
 
 ### Step 4: Extract Institutional Knowledge
 
