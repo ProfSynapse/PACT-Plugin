@@ -181,9 +181,11 @@ def checkout_roots() -> List[str]:
     right about at least itself.
 
     Deliberately NOT merged with _branch_and_worktree_names, which runs the
-    same porcelain: that caller wants raw lines including branch names, this
-    one wants resolved paths, and one helper serving both needs a mode flag.
-    Two subprocesses per write on a path the design says can afford one.
+    same porcelain: that caller reduces each `worktree` line to a BASENAME for
+    substring matching, this one resolves it to an absolute path for exact
+    membership — opposite ends of the same string, so one helper serving both
+    still needs a mode flag. It also runs a second git call this one does not
+    need. Two subprocesses per write on a path the design says can afford one.
     """
     porcelain = _run_capture(
         ["git", "-C", str(project_root()), "worktree", "list", "--porcelain"]
