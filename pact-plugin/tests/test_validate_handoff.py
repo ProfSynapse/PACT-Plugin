@@ -13,7 +13,7 @@ Tests cover:
 7. main() entry point: stdin JSON, exit codes, output format
 8. Lossless field validation (Produced, Key decisions) in structured HANDOFFs
 9. Signal-type completion bypass (AUDIT SIGNAL / audit_summary)
-10. check_lossless_fields() and is_signal_completion() unit tests
+10. check_lossless_fields() and declares_signal_completion() unit tests
 """
 import io
 import json
@@ -624,38 +624,67 @@ class TestCheckLosslessFields:
         assert result == ["Produced"]
 
 
-class TestIsSignalCompletion:
-    """Unit tests for is_signal_completion() function."""
+class TestDeclaresSignalCompletion:
+    """Unit tests for declares_signal_completion() function."""
 
     def test_audit_signal_detected(self):
-        from validate_handoff import is_signal_completion
+        from validate_handoff import declares_signal_completion
 
-        assert is_signal_completion("AUDIT SIGNAL: quality check") is True
+        assert declares_signal_completion("AUDIT SIGNAL: quality check") is True
 
     def test_audit_summary_detected(self):
-        from validate_handoff import is_signal_completion
+        from validate_handoff import declares_signal_completion
 
-        assert is_signal_completion("Stored audit_summary in metadata") is True
+        assert declares_signal_completion("Stored audit_summary in metadata") is True
 
     def test_completion_type_signal_detected(self):
-        from validate_handoff import is_signal_completion
+        from validate_handoff import declares_signal_completion
 
-        assert is_signal_completion('completion_type: "signal"') is True
+        assert declares_signal_completion('completion_type: "signal"') is True
 
     def test_normal_handoff_not_signal(self):
-        from validate_handoff import is_signal_completion
+        from validate_handoff import declares_signal_completion
 
-        assert is_signal_completion("## HANDOFF\n1. Produced: files") is False
+        assert declares_signal_completion("## HANDOFF\n1. Produced: files") is False
 
     def test_empty_string_not_signal(self):
-        from validate_handoff import is_signal_completion
+        from validate_handoff import declares_signal_completion
 
-        assert is_signal_completion("") is False
+        assert declares_signal_completion("") is False
 
     def test_case_insensitive(self):
-        from validate_handoff import is_signal_completion
+        from validate_handoff import declares_signal_completion
 
-        assert is_signal_completion("audit signal: observation") is True
+        assert declares_signal_completion("audit signal: observation") is True
+
+    def test_quoted_mention_deep_in_body_does_not_declare(self):
+        """A body that MENTIONS the token far from its opener — here while
+        DENYING it — must not suppress the HANDOFF warning. This is the
+        defect: any closing text quoting dispatch or protocol prose used to
+        disable its own check."""
+        from validate_handoff import declares_signal_completion
+
+        body = (
+            "## HANDOFF\n"
+            "1. Produced: the remedy and its arms.\n"
+            + ("Filler describing the change in detail. " * 40)
+            + "\nTo be clear, this is NOT an audit_summary and carries no "
+            "AUDIT SIGNAL; I am not a signal completion."
+        )
+        assert declares_signal_completion(body) is False
+
+    def test_assertive_auditor_opener_still_declares(self):
+        """The real auditor shape, recovered from delivered bodies: the
+        declaration sits in the opener, after an agent tag and an emoji. It
+        must keep bypassing lossless validation."""
+        from validate_handoff import declares_signal_completion
+
+        body = (
+            "[auditor\u2192team-lead] \U0001f4cb AUDIT SIGNAL: GREEN "
+            "(4 commits: d989b8f9, b04b4a1a, 47b5b295)\n\n"
+            + ("Detail about each commit follows. " * 40)
+        )
+        assert declares_signal_completion(body) is True
 
 
 class TestMainLosslessWarnings:
