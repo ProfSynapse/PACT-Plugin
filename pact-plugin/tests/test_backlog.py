@@ -4299,6 +4299,15 @@ def test_a_usage_error_and_a_refusal_exit_DIFFERENTLY(tmp_path):
     healthy, project = _cli_store(tmp_path / "healthy", [_item()])
     empty, _ = _cli_store(tmp_path / "empty", [])
     _repo(project)  # a real checkout, so `set` reaches the item lookup
+    # THE SUBPROCESS RESOLVES THE STORE NAME FROM ITS OWN CWD, not from this
+    # process, so the fixture must also exist under the name that cwd yields.
+    # Without it the CLI opens NO FILE and `set` still refuses: `load_or_create`
+    # builds an empty document in memory when the file is absent, and the lookup
+    # misses identically. The refusal row would then pass while never reaching
+    # the item lookup it is named for. The `accepted: real item` row below is
+    # what proves the file is actually read.
+    (healthy / f"{project.name}.json").write_bytes(
+        (healthy / f"{backlog.store_path().stem}.json").read_bytes())
 
     def code(store, *args, cwd):
         return subprocess.run(
@@ -4312,6 +4321,7 @@ def test_a_usage_error_and_a_refusal_exit_DIFFERENTLY(tmp_path):
         "malformed flag":      code(healthy, "--nope", cwd=project),
         "unknown subcommand":  code(empty, "bogus", cwd=project),
         "subparser operand":   code(empty, "set", cwd=outside),
+        "accepted: real item": code(healthy, "set", "a1b2", "--status", "done", cwd=project),
         "refusal: no item":    code(healthy, "set", "ffff", "--status", "done", cwd=project),
         "refusal: no root":    code(healthy, "show", cwd=outside),
         "help":                code(healthy, "--help", cwd=project),
@@ -4320,6 +4330,7 @@ def test_a_usage_error_and_a_refusal_exit_DIFFERENTLY(tmp_path):
         "malformed flag":     backlog._EXIT_USAGE,
         "unknown subcommand": backlog._EXIT_USAGE,
         "subparser operand":  backlog._EXIT_USAGE,
+        "accepted: real item": backlog._EXIT_OK,
         "refusal: no item":   backlog._EXIT_REFUSED,
         "refusal: no root":   backlog._EXIT_REFUSED,
         "help":               backlog._EXIT_OK,
