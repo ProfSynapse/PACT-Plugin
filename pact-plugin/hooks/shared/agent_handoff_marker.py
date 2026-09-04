@@ -594,10 +594,15 @@ def already_emitted(
     The `occupant` parameter is an OPAQUE sanitized string to this function:
     it is whatever discriminator the calling family derives. The agent_handoff
     family passes a COMPOSITE of its occupant term and its handoff content
-    term, built by handoff_already_emitted / handoff_unclaim, and the sibling
-    snapshot family passes a content key alone. Callers in either family MUST
-    go through their own hard-bound wrapper pair rather than call this
-    directly, so a claim and its rollback cannot derive different keys.
+    term, built by handoff_already_emitted / handoff_unclaim; the sibling
+    snapshot family passes a content key alone; and the dispatch-site family
+    passes a FIXED LITERAL, discriminating on neither term. Three families,
+    three shapes — a reader counting the shapes this parameter takes will not
+    find them all here as new families are added, so treat the list as the
+    families that exist today and the sentence above as the contract. Callers
+    in EVERY family MUST go through their own hard-bound wrapper pair rather
+    than call this directly, so a claim and its rollback cannot derive
+    different keys.
 
     Inputs are sanitized internally (idempotent for already-clean callers like
     the emitter, which pre-sanitizes task_id/team_name for its read_task_json
