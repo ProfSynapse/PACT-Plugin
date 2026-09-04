@@ -1149,10 +1149,9 @@ def test_code_phase_gate_lines_present(doc_path: Path, phrase: str):
 # A LINE-SCOPED PIN. File-wide strictly dominates line-scoped for THIS job:
 # it also catches the retired sentence reappearing on a NEW line beside the
 # corrected one, which a line-scoped check cannot see. Line-scoping is used
-# only at P30, where it buys something file-wide cannot have — the acceptance
-# line legitimately KEEPS a `TaskGet` clause (it reads `status`, which
-# TaskGet does surface), so a bare-token absence pin there would redden on
-# correct work. Different jobs, different scopes, both measured.
+# only at P30, where it buys something file-wide cannot have — it catches a
+# NEW wrong variant on the gate's own line rather than a replay of the
+# retired text. Different jobs, different scopes, both measured.
 RETIRED_GATE_INSTRUMENT_PINS = [
     (
         ORCHESTRATE,
@@ -1191,19 +1190,23 @@ def test_retired_gate_instrument_absent(doc_path: Path, retired: str):
 
 # The one case here that catches a NEW wrong variant rather than a replay of
 # the retired text. Each entry is a set of tokens that must not ALL appear on
-# the anchored line. D1 legitimately KEEPS a `TaskGet` clause (it reads
-# `status`, which TaskGet does surface), so the forbidden thing is the
-# CO-OCCURRENCE with a metadata key, not the token — a bare-token absence pin
-# would redden on correct work. D2's line legitimately carries both `TaskGet`
-# and a `metadata.` key (it names the blindness explicitly), so its forbidden
-# span is the retired instrument phrase instead.
+# the anchored line. D1's line no longer names `TaskGet` at all — the status
+# conjunct was deleted because it ran before the lead's own completion write,
+# so it could never read `completed` — and this case now guards the pairing
+# against re-introduction rather than around a legitimate use. Tightening it
+# to a bare-token absence pin is a separate judgement needing a driven red
+# and a false-positive check; it is not made here. D2's line legitimately
+# carries both `TaskGet` and a `metadata.` key (it names the blindness
+# explicitly), so its forbidden span is the retired instrument phrase instead.
 #
 # THE FORBIDDEN TOKEN IS THE `metadata.` PREFIX, NOT A KEY NAME, AND THAT IS
 # LOAD-BEARING. Keyed on `metadata.handoff` this case saw one key rather than
 # the class: naming `TaskGet` as the reader of `metadata.teachback_submit` on
 # this line passed while the identical sentence keyed on `metadata.handoff`
-# reddened. The prefix form catches every key and was measured not to redden
-# the correct line, which carries `TaskGet` and no `metadata.` token at all.
+# reddened. The prefix form catches every key and does not redden the correct
+# line, which now carries neither token. A future author who legitimately
+# names a metadata key on this line alongside `TaskGet` must update this pin
+# deliberately; that is intended behaviour, not a defect.
 GATE_LINE_FORBIDDEN_COOCCURRENCE = [
     ("**HANDOFF acceptance**", ("TaskGet", "metadata.")),
     ("**Concurrent-audit coverage check**", ("verify via TaskGet",)),
