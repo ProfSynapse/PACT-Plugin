@@ -3191,59 +3191,60 @@ class TestRecoveryFrameNamesAReadableSurface:
          JOINING defect. Dropping the trailing space of one fragment runs two
          words together in the DELIVERED text while every source line still
          reads correctly, and a grep over the source passes over exactly that.
-         Every pinned span below therefore straddles a JOIN rather than
-         sitting inside one fragment, so a lost space at that join breaks the
-         match: the first two straddle both seams around the edited fragment,
-         and the last two straddle the seams on either side of the archive
-         clause, which no span reached until they were added.
+         Each pattern below therefore spans its WHOLE member, so every join
+         in it is inside the match and a lost space at any one of them breaks
+         it — including a join that does not exist yet, since a fragment
+         spliced in later lands inside the pattern rather than between two
+         pins.
       2. A source match would give the same green if the string moved to a
          constant, or if the branch that emits it stopped firing.
 
-    WHAT THESE CANNOT CATCH: the compact frame has a refresh-pending variant
-    that substitutes a different clause after the FIRST span, and the runner
-    drives the non-refresh path only, so that span is pinned to the non-refresh
-    frame (the two archive-seam spans close before that clause and hold in
-    either). They are also blind to the SessionStart hook not being registered
-    at all — that is a platform-runtime property no in-process test reaches.
+    WHAT THESE CANNOT CATCH: they are blind to the SessionStart hook not
+    being registered at all — a platform-runtime property no in-process test
+    reaches. They do NOT pin which `_archive_clause` or `_secretary_clause`
+    variant fires, only that one of them rendered with its joins intact;
+    branch selection is a separate property and is not this arm's job.
     """
 
-    # Each span opens in the fragment BEFORE the edited one and closes in the
-    # fragment AFTER it, so both joins are inside the assertion.
+    # ONE PATTERN PER MEMBER, SPANNING EVERY SEAM IN IT, rather than a pin per
+    # seam. The property is "this member renders as one correctly-spaced
+    # sentence", and a per-seam pin cannot hold that property: it covers the
+    # seams that exist when it is written, and a fragment added later lands
+    # outside every one of them, silently. That is not hypothetical — it is
+    # how the gap here arose twice. The original arm pinned the seams around
+    # the fragment a diff had touched, leaving the archive-clause joins open,
+    # where dropping a space delivered "for prior context(if it is gone" to
+    # the agent while every case stayed green. The first repair then pinned
+    # those three joins and still left the two at the head of the member open.
+    # Measuring a seam and closing it is a treadmill; asserting the member is
+    # not.
     #
-    # THE LAST TWO COVER THE ARCHIVE-CLAUSE SEAMS, and they exist because the
-    # reason for leaving that branch uncovered discharged a different claim.
-    # The branch genuinely cannot change a byte inside the spans above — so a
-    # parametrized arm over its two VARIANTS would be vacuous, which is what
-    # that reason establishes. It does not establish that the JOINS on either
-    # side of the branch need no cover, and they are hand-maintained spaces of
-    # exactly the class these arms exist for. Measured: dropping the trailing
-    # space at the first of them delivered "for prior context(if it is gone"
-    # to the agent while every case here stayed green.
-    #
-    # Both spans are variant-INDEPENDENT: the first stops before the branch
-    # expands, and the second opens on the `)` both variants end with, so
-    # neither embeds a tmp-path or picks a branch.
-    RECOVERY_SPANS = [
+    # Interpolated spans are wildcarded so the pattern holds across both
+    # `_archive_clause` variants, both `_secretary_clause` variants and any
+    # tmp-path, while every LITERAL join stays inside the match. `\S ` at the
+    # head and `\. \S` at the tail pin the two joins against interpolations
+    # whose own text is not stable enough to assert.
+    RECOVERY_MEMBERS = [
         (
             "compact",
-            "(2) Run TaskList to find in-progress work, (3) read the task "
-            "files of in-progress tasks for details (TaskGet does not "
-            "surface metadata). Re-engage secretary:",
+            re.compile(
+                r"\S After bootstrap, recover session state: "
+                r"\(1\) Read .+? for prior context "
+                r"\(if it is gone, .+?\), "
+                r"\(2\) Run TaskList to find in-progress work, "
+                r"\(3\) read the task files of in-progress tasks for "
+                r"details \(TaskGet does not surface metadata\)\. \S"
+            ),
         ),
         (
             "clear",
-            "State recovery: (1) TaskList for current tasks, (2) read the "
-            "task files of in-progress tasks (TaskGet does not surface "
-            "metadata). Re-engage secretary:",
-        ),
-        (
-            "compact",
-            "compact-summary.txt for prior context (if it is gone, the "
-            "secretary archived it into ",
-        ),
-        (
-            "compact",
-            "), (2) Run TaskList to find in-progress work,",
+            re.compile(
+                r"\S CONTEXT CLEARED: Your context was cleared via /clear\. "
+                r"State recovery: \(1\) TaskList for current tasks, "
+                r"\(2\) read the task files of in-progress tasks "
+                r"\(TaskGet does not surface metadata\)\. "
+                r"Re-engage secretary: SendMessage\("
+            ),
         ),
     ]
 
@@ -3251,23 +3252,25 @@ class TestRecoveryFrameNamesAReadableSurface:
     RETIRED_RECOVERY_INSTRUCTION = "TaskGet on in-progress tasks"
 
     @pytest.mark.parametrize(
-        "source, span",
-        RECOVERY_SPANS,
-        ids=[f"{s}::{sp[:30]}" for s, sp in RECOVERY_SPANS],
+        "source, member",
+        RECOVERY_MEMBERS,
+        ids=[s for s, _ in RECOVERY_MEMBERS],
     )
     def test_recovery_frame_delivers_task_file_read(
-        self, monkeypatch, tmp_path, source, span
+        self, monkeypatch, tmp_path, source, member
     ):
-        """The delivered context tells the agent to read the task FILES, with
-        both joins intact."""
+        """The delivered context tells the agent to read the task FILES, and
+        the whole member renders as one correctly-spaced sentence."""
         additional, _, _ = _run_session_init_for_path(
             monkeypatch, tmp_path, source=source, team_exists=True
         )
-        assert span in additional, (
+        assert member.search(additional), (
             f"source={source!r}: the delivered additionalContext does not "
-            f"carry {span!r}. The span crosses both fragment joins, so a "
-            f"lost trailing space breaks it while the source still reads "
-            f"correctly. Delivered: {additional!r}"
+            f"render the recovery member intact. Every fragment join in it "
+            f"is inside this pattern, so a lost trailing space breaks the "
+            f"match while the source still reads correctly — and so does a "
+            f"new fragment spliced in without its own space. Pattern: "
+            f"{member.pattern!r}. Delivered: {additional!r}"
         )
 
     @pytest.mark.parametrize("source", ["compact", "clear"])
