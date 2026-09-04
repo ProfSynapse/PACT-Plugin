@@ -37,7 +37,7 @@ A reply to the user that contains content the team-lead needs to act on (a block
 
 1. Check `TaskList` for tasks assigned to you (by your name)
 2. Claim your assigned task: `TaskUpdate(taskId, status="in_progress")`
-3. Read the task description — it contains your full mission (CONTEXT, MISSION, INSTRUCTIONS, GUIDELINES). If upstream tasks are referenced, read them via `TaskGet`.
+3. Read the task description — it contains your full mission (CONTEXT, MISSION, INSTRUCTIONS, GUIDELINES). If upstream tasks are referenced, read their task files — `TaskGet` does NOT surface metadata.
 4. **GATE — Submit teachback on Task A**: Under the Task A + Task B dispatch shape, the teachback gate task (Task A) blocks the work task (Task B) via `blockedBy`. Store your teachback in `metadata.teachback_submit` on Task A per the [pact-teachback](../pact-teachback/SKILL.md) skill, **notify the team-lead via `SendMessage` carrying the canonical payload (pact-teachback Step 2)**, SET `intentional_wait{reason=awaiting_lead_completion}`, and idle. **Ordering invariant**: metadata write FIRST → `SendMessage` SECOND → `intentional_wait` SET THIRD (load-bearing; see [pact-teachback §Action: store teachback now](../pact-teachback/SKILL.md#action-store-teachback-now) for rationale). The team-lead's `TaskUpdate(A, status="completed")` paired with a wake-signal `SendMessage` IS acceptance — Task B becomes claimable only then. The teachback notify is a protocol-boundary message — run the [Boundary-Drain Rule](#boundary-drain-rule) before composing it: a scope change that crossed your in-flight turn must be reflected in the teachback you submit, not discovered after acceptance.
    - **DO NOT** call `Edit`, `Write`, or `Bash` for implementation work before storing your teachback
    - See [Teachback](#teachback-conversation-verification) below for the full skill reference
@@ -372,7 +372,7 @@ TaskUpdate(taskId=taskId, metadata={
 })
 ```
 
-`since` must be tz-aware ISO-8601. A naive timestamp fails `validate_wait` and will be surfaced as malformed to any reader of the flag (team-lead `TaskGet`, audit, future consumers). Fail-loud.
+`since` must be tz-aware ISO-8601. A naive timestamp fails `validate_wait` and will be surfaced as malformed to any reader of the flag (team-lead inspection, audit, future consumers). Fail-loud.
 
 ### CLEAR — when the wait resolves
 
@@ -464,7 +464,7 @@ later inspection reflects the real duration.
 
 - **Consultant mode** (no owned `in_progress` task): the flag has no current consumer for consultants anyway.
 - **Waits < 30 seconds**: SET+CLEAR bookkeeping isn't worth it for brief waits.
-- **Completion gating**: the flag does NOT suppress the team-lead's HANDOFF-presence check. An empty or missing `metadata.handoff` will be flagged by the team-lead's `TaskGet` verification — store your HANDOFF before marking the task completed, regardless of intentional_wait state.
+- **Completion gating**: the flag does NOT suppress the team-lead's HANDOFF-presence check. An empty or missing `metadata.handoff` will be flagged by the team-lead's HANDOFF acceptance check — store your HANDOFF before marking the task completed, regardless of intentional_wait state.
 
 ## Consultant Mode
 
