@@ -3180,9 +3180,6 @@ def _read_sites(name):
     ]
 
 
-# The two that report UNASKED. Pinned per file because a session gets them
-# whether or not anyone invokes anything.
-_UNASKED_REPORTS = ("bootstrap.md", "wrap-up.md")
 # Every command file that invokes the report. next.md earns its membership with
 # the invocation under `## Step 2 — Reconcile and report`, and NOT with its
 # other backlog lines, which invoke `set`, `add` and `repair` — none of them the
@@ -3305,14 +3302,7 @@ def test_every_backlog_report_site_is_a_choice_point():
         f"(stopped reporting, or was reworded past the detector)."
     )
 
-    sites = {name: _read_sites(name) for name in _UNASKED_REPORTS}
-    missing = [name for name, found in sites.items() if not found]
-    assert not missing, (
-        f"{missing} carry no backlog read site. Either the report was removed, "
-        f"or it was reworded past a detector keyed on `backlog.py` plus "
-        f"{_REPORT_SUBCOMMAND!r}."
-    )
-
+    sites = {name: _read_sites(name) for name in sorted(_REPORT_CALL_SITES)}
     # An INVOCATION, not a mention. Prose naming the command reads identically
     # to the detector and would satisfy the presence assertion above while no
     # agent ever runs anything.
