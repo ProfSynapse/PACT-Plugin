@@ -127,6 +127,7 @@ per file and the total are recorded in the module-level comment at the
 bottom of this file.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -1196,8 +1197,15 @@ def test_retired_gate_instrument_absent(doc_path: Path, retired: str):
 # would redden on correct work. D2's line legitimately carries both `TaskGet`
 # and a `metadata.` key (it names the blindness explicitly), so its forbidden
 # span is the retired instrument phrase instead.
+#
+# THE FORBIDDEN TOKEN IS THE `metadata.` PREFIX, NOT A KEY NAME, AND THAT IS
+# LOAD-BEARING. Keyed on `metadata.handoff` this case saw one key rather than
+# the class: naming `TaskGet` as the reader of `metadata.teachback_submit` on
+# this line passed while the identical sentence keyed on `metadata.handoff`
+# reddened. The prefix form catches every key and was measured not to redden
+# the correct line, which carries `TaskGet` and no `metadata.` token at all.
 GATE_LINE_FORBIDDEN_COOCCURRENCE = [
-    ("**HANDOFF acceptance**", ("TaskGet", "metadata.handoff")),
+    ("**HANDOFF acceptance**", ("TaskGet", "metadata.")),
     ("**Concurrent-audit coverage check**", ("verify via TaskGet",)),
 ]
 
@@ -1278,6 +1286,42 @@ def test_retired_taskget_reader_clause_absent(doc_path: Path, retired: str):
 
 
 # ---------------------------------------------------------------------------
+# P31b — the two DISPATCH TEMPLATES keep their corrected instruction.
+#
+# P31 above is absence-only, so DELETING a corrected clause stays green. That
+# is tolerable at the nine sites that describe or assert — a deletion there
+# removes a claim, and the diff shows it. It is NOT tolerable at these two,
+# which are dispatch TEMPLATES: deleting the clause silently strips the
+# instruction from every dispatch subsequently written from the template,
+# which is the same blast radius as the reversion P31 does catch. Guarding
+# one direction only, against defects of equal reach, is the gap these close.
+# ---------------------------------------------------------------------------
+
+DISPATCH_TEMPLATE_PRESENCE_PINS = [
+    (ORCHESTRATOR, "read their task files first"),
+    (PLAN_MODE, "read the upstream task file first"),
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path, phrase",
+    DISPATCH_TEMPLATE_PRESENCE_PINS,
+    ids=[f"{p.name}::{ph[:34]}" for p, ph in DISPATCH_TEMPLATE_PRESENCE_PINS],
+)
+def test_dispatch_template_keeps_task_file_instruction(
+    doc_path: Path, phrase: str
+):
+    """Each dispatch template must keep telling the dispatched agent to read
+    the upstream TASK FILE. Presence rather than absence: the paired P31 case
+    catches the clause being reverted, and this catches it being removed."""
+    assert _phrase(phrase) in _normalized(doc_path), (
+        f"{doc_path.name}: dispatch template no longer instructs "
+        f"{phrase!r}. Every dispatch written from this template inherits "
+        f"its wording, so a deletion here reaches far past this file."
+    )
+
+
+# ---------------------------------------------------------------------------
 # P32 — tree-wide: no blindness claim scoped to `handoff`.
 # ---------------------------------------------------------------------------
 
@@ -1291,9 +1335,17 @@ def test_retired_taskget_reader_clause_absent(doc_path: Path, retired: str):
 # so a glob regression cannot narrow it to nothing, and it carries its own
 # positive control below: an absence result from a search with no known-present
 # term in the same run is worth nothing.
+# KEYED ON THE CONSTRUCTION, NOT ON A RENDERING, because two literals saw
+# only two of the six renderings this claim has in the tree. `does NOT surface
+# TASK metadata` is the MAJORITY form (eight of the governed lines) and is not
+# a superstring of the canonical claim, so the positive control below cannot
+# even count it, let alone police it; the lowercase form is live today in the
+# agent-teams skill. Both evaded the literals. These two patterns are a strict
+# superset of them, fire on every key and either casing, and were measured to
+# produce zero hits on the correct tree.
 NARROW_BLINDNESS_CLAIMS = [
-    "TaskGet does NOT surface metadata.handoff",
-    "TaskGet is metadata-blind for handoff content",
+    re.compile(r"TaskGet does not surface (?:task )?metadata\.\w+", re.I),
+    re.compile(r"TaskGet is metadata-blind for \w+", re.I),
 ]
 
 CANONICAL_BLINDNESS_CLAIM = "TaskGet does NOT surface metadata"
@@ -1305,18 +1357,18 @@ BLINDNESS_CONTROL_FLOOR = 10
 
 
 @pytest.mark.parametrize(
-    "narrow", NARROW_BLINDNESS_CLAIMS, ids=lambda n: n[:44]
+    "narrow", NARROW_BLINDNESS_CLAIMS, ids=lambda n: n.pattern[:44]
 )
-def test_blindness_claim_not_scoped_to_handoff_tree_wide(narrow: str):
+def test_blindness_claim_not_scoped_to_handoff_tree_wide(narrow: "re.Pattern"):
     """No instruction surface may state the metadata blindness as applying
     to `handoff` alone. Swept tree-wide with a known-present control in the
     SAME run, so a scan that has stopped matching anything reports as broken
     rather than as clean.
 
-    WHAT THIS CANNOT CATCH: it keys on two known narrow renderings. A sixth
-    site that scopes the claim to a DIFFERENT key, or in different words,
-    passes — the tree-wide population is what stops the known shapes
-    spreading, not a general claim-scope detector."""
+    WHAT THIS CANNOT CATCH: it keys on two narrowing CONSTRUCTIONS, so it
+    reaches any key and either casing, but a site that narrows the claim
+    without either construction — naming the key in a following sentence,
+    say — still passes. It is not a general claim-scope detector."""
     surfaces = _instruction_surfaces()
 
     control_hits = sum(
@@ -1332,11 +1384,12 @@ def test_blindness_claim_not_scoped_to_handoff_tree_wide(narrow: str):
     )
 
     for surface in surfaces:
-        assert _phrase(narrow) not in _normalized(surface), (
-            f"{surface.name}: blindness claim {narrow!r} is scoped to one "
-            f"key. `TaskGet` surfaces NO metadata, so a reader of this "
-            f"sentence can wrongly conclude other keys are surfaced — state "
-            f"the blindness generally."
+        hit = narrow.search(_normalized(surface))
+        assert hit is None, (
+            f"{surface.name}: blindness claim {hit.group(0)!r} is scoped to "
+            f"one key (matched {narrow.pattern!r}). `TaskGet` surfaces NO "
+            f"metadata, so a reader of this sentence can wrongly conclude "
+            f"other keys are surfaced — state the blindness generally."
         )
 
 
@@ -1447,7 +1500,8 @@ def test_blindness_claim_not_scoped_to_handoff_tree_wide(narrow: str):
 #   confirmation phrase reworded (extract)
 #                                        -> 1 failed (P25 that surface)
 #
-# METADATA-PRESENCE ARMS (P28-P32, 22 cases in this module). Every
+# METADATA-PRESENCE ARMS (P28-P32, 22 cases in this module — 20 as first
+# landed, plus the 2 P31b dispatch-template presence pins). Every
 # cardinality below was PREDICTED before the run and then measured; the one
 # deviation is recorded with its cause rather than smoothed over. Reverts are
 # source-only (`git checkout <sha>^ -- <paths>`), so the arms stay in place
@@ -1466,12 +1520,15 @@ def test_blindness_claim_not_scoped_to_handoff_tree_wide(narrow: str):
 #     a NEW variant sharing no wording with the retired sentence, and P30 is
 #     the only case that sees it.
 #   source-only revert of the class-C commit
-#                                        -> 12 failed (P31 x11, plus P32's
-#     narrow-claim case). PREDICTED 11, MEASURED 12. Cause: the narrow-5
-#     commit is LATER than the class-C commit on two shared files, so
-#     restoring them at the class-C parent also un-widens the blindness
-#     claim. Not an arm defect — an artifact of checking out an ancestor ref
-#     on a file later commits also touched.
+#                                        -> 14 failed (P31 x11, P31b x2,
+#     plus P32's narrow-claim case). Originally PREDICTED 11 and MEASURED 12:
+#     the narrow-5 commit is LATER than the class-C commit on two shared
+#     files, so restoring them at the class-C parent also un-widens the
+#     blindness claim. Not an arm defect — an artifact of checking out an
+#     ancestor ref on a file later commits also touched. The 12 -> 14 move is
+#     the two P31b pins, whose sites this commit also wrote; RE-MEASURED, not
+#     inferred from the arm count. The other four rows were re-run unchanged
+#     at 7 / 1 / 2 / 2.
 #   revert of the orphaned-label commit   -> 1 failed (P31, the
 #     HANDOFF-presence case; the two agent-teams spans pin successive states
 #     of the SAME line, so each commit reddens exactly its own)

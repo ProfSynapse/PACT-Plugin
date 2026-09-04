@@ -3191,21 +3191,38 @@ class TestRecoveryFrameNamesAReadableSurface:
          JOINING defect. Dropping the trailing space of one fragment runs two
          words together in the DELIVERED text while every source line still
          reads correctly, and a grep over the source passes over exactly that.
-         Each pinned span below therefore crosses BOTH seams — it opens inside
-         the preceding fragment and closes inside the following one, so a lost
-         space at either join breaks the match.
+         Every pinned span below therefore straddles a JOIN rather than
+         sitting inside one fragment, so a lost space at that join breaks the
+         match: the first two straddle both seams around the edited fragment,
+         and the last two straddle the seams on either side of the archive
+         clause, which no span reached until they were added.
       2. A source match would give the same green if the string moved to a
          constant, or if the branch that emits it stopped firing.
 
     WHAT THESE CANNOT CATCH: the compact frame has a refresh-pending variant
-    that substitutes a different clause after the pinned span, and the runner
-    drives the non-refresh path only, so the spans are pinned in that frame.
-    They are also blind to the SessionStart hook not being registered at all —
-    that is a platform-runtime property no in-process test reaches.
+    that substitutes a different clause after the FIRST span, and the runner
+    drives the non-refresh path only, so that span is pinned to the non-refresh
+    frame (the two archive-seam spans close before that clause and hold in
+    either). They are also blind to the SessionStart hook not being registered
+    at all — that is a platform-runtime property no in-process test reaches.
     """
 
     # Each span opens in the fragment BEFORE the edited one and closes in the
     # fragment AFTER it, so both joins are inside the assertion.
+    #
+    # THE LAST TWO COVER THE ARCHIVE-CLAUSE SEAMS, and they exist because the
+    # reason for leaving that branch uncovered discharged a different claim.
+    # The branch genuinely cannot change a byte inside the spans above — so a
+    # parametrized arm over its two VARIANTS would be vacuous, which is what
+    # that reason establishes. It does not establish that the JOINS on either
+    # side of the branch need no cover, and they are hand-maintained spaces of
+    # exactly the class these arms exist for. Measured: dropping the trailing
+    # space at the first of them delivered "for prior context(if it is gone"
+    # to the agent while every case here stayed green.
+    #
+    # Both spans are variant-INDEPENDENT: the first stops before the branch
+    # expands, and the second opens on the `)` both variants end with, so
+    # neither embeds a tmp-path or picks a branch.
     RECOVERY_SPANS = [
         (
             "compact",
@@ -3219,13 +3236,24 @@ class TestRecoveryFrameNamesAReadableSurface:
             "task files of in-progress tasks (TaskGet does not surface "
             "metadata). Re-engage secretary:",
         ),
+        (
+            "compact",
+            "compact-summary.txt for prior context (if it is gone, the "
+            "secretary archived it into ",
+        ),
+        (
+            "compact",
+            "), (2) Run TaskList to find in-progress work,",
+        ),
     ]
 
     # The retired instruction, in both its renderings.
     RETIRED_RECOVERY_INSTRUCTION = "TaskGet on in-progress tasks"
 
     @pytest.mark.parametrize(
-        "source, span", RECOVERY_SPANS, ids=[s for s, _ in RECOVERY_SPANS]
+        "source, span",
+        RECOVERY_SPANS,
+        ids=[f"{s}::{sp[:30]}" for s, sp in RECOVERY_SPANS],
     )
     def test_recovery_frame_delivers_task_file_read(
         self, monkeypatch, tmp_path, source, span
