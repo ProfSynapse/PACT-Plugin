@@ -3284,6 +3284,12 @@ def test_every_backlog_report_site_is_a_choice_point():
     # this arm with a message about prose that does not exist. Stripping the
     # marker costs nothing — `Run `python3 ...`` and `> Run `python3 ...``
     # both still fail, which is the property being guarded.
+    #
+    # IF YOU ARE HERE BECAUSE THIS FIRED ON PROSE YOU JUST WROTE: the detector
+    # matches any line carrying `backlog.py` AND the report verb, so a SENTENCE
+    # naming both trips it. That is the rule, not a bug — the arm cannot tell a
+    # sentence about the command from the command. Reword so the prose does not
+    # name `backlog.py`, which is what the surrounding paragraphs already do.
     for name, found in sites.items():
         for number, line in found:
             assert line.lstrip("> ").startswith("python3 "), (
