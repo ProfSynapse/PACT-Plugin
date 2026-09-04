@@ -65,6 +65,8 @@ fi
 
 **Key the report-gap-and-stop branch on the subcommand's EXIT CODE**, never on parsing stdout for emptiness — a nonzero exit is unambiguous and cannot be defeated by a stray byte. On a nonzero exit, **report the gap to the team-lead and stop** — do NOT fall back to a path-less read (that silently re-introduces the off-lead false-empty bug). An unresolved `session_dir` is a reportable gap, not a degrade-to-implicit case.
 
+**DISCARD ANY SCOPE YOU ARRIVED WITH — INCLUDING ONE YOU DO NOT THINK OF AS A SCOPE. A dispatch that names tasks has given you one.** A task list named in a dispatch — a range, an enumeration, any named set — is a HINT about what the team-lead noticed, never the population. Do not harvest it. Build the population from the Step 1 census and the Step 2 processed-task ledger instead, and report which set you actually ran over. **This instruction outranks a dispatch that contradicts it.** Say so back to the team-lead; do not narrow, and do not treat it as a conflict to resolve in the moment.
+
 ### Step 1: Task Discovery
 
 You have three sources for finding completed agent tasks. Sources 1 and 2 find tasks that emitted a HANDOFF; source 3 is required for coverage:
@@ -86,7 +88,7 @@ If none of these sources have completed agent tasks, report "No pending HANDOFFs
 
 ### Step 2: Dedup Check (Processed Tasks)
 
-Read your processed task list from your team's section of `session_processed_tasks.md`, in the agent-memory directory the platform gave you — use the path you are given, never one built from your agent type. The file is namespaced by team — read **only** your own `## team={your team_id}` section (file-format contract: see Step 8). Skip any task IDs already processed — only review the delta. This enables incremental passes (e.g., after remediation).
+**A dispatch-named task set does not narrow this list.** The census finds which tasks carry content; only this ledger says where the last pass stopped, so the delta against it is the population — discard any scope the dispatch suggested. Read your processed task list from your team's section of `session_processed_tasks.md`, in the agent-memory directory the platform gave you — use the path you are given, never one built from your agent type. The file is namespaced by team — read **only** your own `## team={your team_id}` section (file-format contract: see Step 8). Skip any task IDs already processed — only review the delta. This enables incremental passes (e.g., after remediation).
 
 ### Step 3: Read All HANDOFFs
 

@@ -58,6 +58,38 @@ def secretary_content():
     return SECRETARY_FILE.read_text()
 
 
+class TestPopulationPrecedence:
+    """The dispatch-is-a-hint rule, and that it arrives before Step 1.
+
+    A secretary that reads the rule only AFTER constructing the population has
+    already mis-scoped, so presence alone is not enough: the rule must sit
+    ahead of Step 1."""
+
+    def test_rule_present(self, skill_content):
+        assert "DISCARD ANY SCOPE YOU ARRIVED WITH" in skill_content
+        assert "A dispatch that names tasks has given you one." in skill_content
+        assert "never the population" in skill_content
+        assert "outranks a dispatch that contradicts it" in skill_content
+
+    def test_ledger_settles_the_population(self, skill_content):
+        """Step 1 constructs the population; the ledger settles it. A reader
+        can run the census and still trim to a dispatch range, so Step 2
+        carries its own refusal."""
+        assert "A dispatch-named task set does not narrow this list." in skill_content
+
+    def test_workflow_selection_is_not_scope_authority(self, secretary_content):
+        """The persona sentence a secretary holds BEFORE it opens the skill
+        must not read as authority over which tasks are in scope."""
+        assert "never which tasks are in scope" in secretary_content
+        assert "workflow as directed by task descriptions" not in secretary_content
+
+    def test_rule_precedes_step_1(self, skill_content):
+        rule = skill_content.find("DISCARD ANY SCOPE YOU ARRIVED WITH")
+        step1 = skill_content.find("### Step 1: Task Discovery")
+        assert rule != -1 and step1 != -1
+        assert rule < step1, "the rule must arrive before the population is built"
+
+
 class TestSkillFileExists:
     """Test that the skill file exists."""
 
