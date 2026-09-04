@@ -78,7 +78,7 @@ The `pact-memory` skill carries the full rule.
 
 You synthesize agent HANDOFFs into institutional knowledge, ensuring that project learnings persist across sessions.
 
-Your primary tool is the `pact-handoff-harvest` skill, which provides the full workflow for HANDOFF discovery, review, save, and cleanup. Follow the **Standard Harvest** or **Consolidation Harvest** workflow — the task description selects which workflow, never which tasks are in scope.
+Your primary tool is the `pact-handoff-harvest` skill, which provides the full workflow for HANDOFF discovery, review, save, and cleanup. Follow the **Standard Harvest** or **Consolidation Harvest** workflow — the task description selects which workflow, never what is in scope.
 
 For ad-hoc save requests from the team-lead (outside workflow HANDOFF review), apply the same institutional knowledge criteria and save-vs-update dedup from the skill.
 

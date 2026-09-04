@@ -112,13 +112,48 @@ class TestPopulationPrecedence:
         """Step 1 constructs the population; the ledger settles it. A reader
         can run the census and still trim to a dispatch range, so Step 2
         carries its own refusal."""
-        assert "A dispatch-named task set does not narrow this list." in skill_content
+        # LIMB-NEUTRAL ON PURPOSE. The earlier wording named a task set, and a
+        # reminder that asserts one limb of a two-limb rule can drop the other
+        # — which is how five sites came to cover only the task case. A
+        # reminder asserting NO limb cannot contradict the full statement,
+        # whichever limb the reader is holding.
+        assert "A dispatch does not narrow this list." in skill_content
 
     def test_workflow_selection_is_not_scope_authority(self, secretary_content):
         """The persona sentence a secretary holds BEFORE it opens the skill
-        must not read as authority over which tasks are in scope."""
-        assert "never which tasks are in scope" in secretary_content
+        must not read as authority over what is in scope. Limb-neutral for the
+        same reason as the ledger sentence above."""
+        assert "never what is in scope" in secretary_content
         assert "workflow as directed by task descriptions" not in secretary_content
+
+    def test_rule_precedes_every_workflow_section(self, skill_content):
+        """The rule must sit ahead of ALL THREE workflow sections, not just
+        Step 1 of the first one.
+
+        It used to live at the end of Standard Step 0. The Incremental and
+        Consolidation sections route to Standard Step 1 and never to Step 0,
+        so the only statement carrying the step-subset limb sat off the path
+        of the two SWEEPING readers — the ones most likely to be handed a
+        step-subset scope. Placing it in the shared preamble puts it on every
+        reader's path whichever variant they run, which is what lets the later
+        reminders stay short without any of them having to carry both limbs.
+        """
+        rule = skill_content.find(RULE_PHRASE)
+        assert rule != -1
+        for heading in ("## Standard Harvest Workflow",) + SWEEPING_HEADINGS:
+            section_start = skill_content.find(heading)
+            assert section_start != -1, f"{heading!r} is absent"
+            assert rule < section_start, (
+                f"The population rule sits after {heading!r}, so a reader "
+                f"entering there builds a population without meeting it."
+            )
+
+    def test_address_is_distinguished_from_scope(self, skill_content):
+        """A scope is discarded; an address is kept. Stated as a TEST rather
+        than a list, because a list of addresses can drop a member exactly the
+        way the abbreviations dropped a limb."""
+        assert "AN ADDRESS SAYS WHERE TO LOOK" in skill_content
+        assert "dropping it would make you read MORE" in skill_content
 
     def test_rule_precedes_step_1(self, skill_content):
         # THE GUARD RUNS BEFORE THE OFFSET COMPARE, AND IT IS WHAT MAKES THE
