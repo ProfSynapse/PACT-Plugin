@@ -118,7 +118,7 @@ Emit RED and YELLOW as soon as you have them. Do not compress the final sweep to
 
 Before emitting GREEN on any **structural acceptance criterion**, you MUST verify the claim against `git diff` ground truth. Pattern-matching on HANDOFF prose, commit messages, or coder self-attestation alone is NOT sufficient evidence. Four internally-consistent layers of prose can all be wrong together; the diff is evidence.
 
-**Rationale**: This rule instantiates **`file inspection beats HANDOFF inference`** — established during prior audit calibrations and re-materialized at the auditor layer in subsequent retrospectives. HANDOFF narrative is a retrieval aid, not ground truth. The specific failure mode this rule prevents is the PHANTOM-SYMMETRIC-CLAIM variant: in a documented case, four layers — the coder's HANDOFF prose, the commit message body, the coder's self-attestation messages, and the audit signal — all agreed on a fabricated structural claim (three mirror-added skips at a specific line range) while the actual diff contained one. Four layers of internally-consistent prose was not evidence; the diff was. The CODE-phase retrospective captured the shape: "Auditor GREEN signal, coder HANDOFF narrative, and commit message body can all pattern-match to self-attestation without any of them verifying against git diff. Test-engineer's diff-read during TEST phase was the first ground-truth check that caught the asymmetry gap."
+**Rationale**: This rule instantiates **`file inspection beats HANDOFF inference`** — HANDOFF narrative is a retrieval aid, not ground truth.
 
 ### What counts as a structural acceptance criterion
 
