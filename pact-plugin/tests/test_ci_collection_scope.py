@@ -485,3 +485,41 @@ class TestMatrixAndProseAgreeOnTheVersionSet:
             f"sets are the same set by construction. Update whichever side "
             f"you did not just edit."
         )
+
+
+def test_no_second_checkout_sits_inside_the_collection_root():
+    """A checkout under `pact-plugin/` makes pytest collect a SECOND copy.
+
+    Same defect as the rest of this module and the opposite direction: there a
+    scoped invocation collected too little, here an extra checkout collects too
+    much. Both move the only number a reader has, and this one moves it the way
+    that looks like good news — every total roughly DOUBLES, and a doubled
+    green reads as a bigger, healthier suite rather than an error.
+
+    NOTHING ELSE WE RUN CATCHES IT. Count-versus-expectation does not fire,
+    because nobody carries a reference value precise enough. Collecting twice
+    and comparing scopes does not fire either: the extra copy inflates both
+    sides identically.
+
+    A `.git` entry is the tell for both shapes that cause it — a linked
+    worktree writes a `.git` FILE, a clone a `.git` DIRECTORY — and neither
+    belongs under the package. Near-missed for real: a `git worktree add` run
+    from the wrong directory landed one here.
+
+    CEILING, and it is why this reads the filesystem rather than
+    `git worktree list`: that command knows only worktrees of THIS repository,
+    so it is blind to a stray clone. It also cannot run where git is absent.
+    This check fires mostly on a developer's machine — CI checks out fresh and
+    has nothing nested — which is the right place, because that is where the
+    mistake is made and where the misleading total gets believed.
+
+    RED WHEN any second checkout appears under the plugin root.
+    """
+    root = _plugin_root()
+    nested = sorted(str(path.relative_to(root)) for path in root.rglob(".git"))
+    assert nested == [], (
+        f"a second checkout sits inside the collection root: {nested}. pytest "
+        f"collects it as well, so every total below is roughly doubled and the "
+        f"run looks healthier than the real suite. Move or remove it, then "
+        f"re-run before trusting any count from this session."
+    )

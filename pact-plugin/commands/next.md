@@ -100,6 +100,12 @@ Exit code 2 is a REFUSAL, not a corruption: the file is readable and nothing was
 written. Report what the message names and fix that. Do NOT go to Step 5 — a
 readable file must never be repaired.
 
+Exit code 64 is a USAGE error: the command line was malformed, so the tool never
+ran. Nothing was read and nothing was written, so the backlog says nothing about
+this. Fix the invocation the message names and run it again — a global flag such
+as `--backlog-dir` must come BEFORE the subcommand. Do NOT go to Step 5, and do
+NOT report it as a refusal.
+
 A file that parses but breaks a schema rule reports as `schema:` flags and
 still renders. Fix the field the flag names.
 
@@ -170,6 +176,20 @@ written rather than quietly adjusted:
 - `plan` is repo-relative.
 - `memory` holds at most 5 record ids.
 - An item with no `ref` is fully supported and is never second-class.
+
+### Where the report happens, and which files carry it
+
+**THREE FILES carry a backlog report**: `bootstrap.md`, `wrap-up.md` and
+`next.md`. Naming the files rather than the occasions is deliberate — a file is
+checkable, an occasion is not.
+
+A report belongs where the user is choosing WHAT TO DO NEXT: at session start,
+before the session decision, and in this command. It does not belong where an
+already-chosen item is being executed, or where one artifact is being judged —
+those are occasions to write a witnessed transition, not to re-read the list.
+
+Two of the three report without being asked, so they are the session's bookends;
+this command's report happens because the user invoked it.
 
 ### When the writes happen, and which they are
 

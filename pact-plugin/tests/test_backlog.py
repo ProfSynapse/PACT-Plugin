@@ -105,8 +105,10 @@ is boring and rebuildable, the questions are not.
              poisoned ref: no exception, SURVIVES — `{5}` is a one-element set
              and `sorted()` never compares. Arm 2 with `5`: 0 names, SURVIVES
              — `git -C 5` fails for the wrong reason. The real fixtures kill:
-             two items raise TypeError, and `"."` returns 221 names from the
-             WRONG repository.
+             two items raise TypeError, and `"."` returns names from the
+             WRONG repository. NO COUNT HERE ON PURPOSE: it was measured
+             against a return shape that has since changed, and a figure in
+             durable prose rots on every change to what it counts.
   settled  THE SHIPPED DEFECT is neither of the obvious mutations. Recover
              it verbatim: `git show 08b4f5b8^` — the ref set is built from
              `items` with NO filter, the loop is unfiltered, and a mid-loop
@@ -328,6 +330,21 @@ afternoon.
   the CAS comparison removed          test_a_refused_write_preserves_the_first_writers_data_and_stays_armed
   the baseline popped on refusal      test_a_refused_write_preserves_the_first_writers_data_and_stays_armed
   the query drops `stateReason`       test_the_query_requests_every_field_the_outcome_logic_reads
+  bootstrap loses its read site       test_every_backlog_report_site_is_a_choice_point
+  wrap-up loses its read site         test_every_backlog_report_site_is_a_choice_point
+  a report site uses a NON-reporting verb  test_every_backlog_report_site_is_a_choice_point
+  a fourth file gains a report site   test_every_backlog_report_site_is_a_choice_point
+  next.md loses its own report site   test_every_backlog_report_site_is_a_choice_point
+  the wrap-up report moves below the ask   test_every_backlog_report_site_is_a_choice_point
+  the report verb is renamed in the CLI    test_the_verb_classification_covers_every_cli_subcommand
+  the report verb becomes a write verb     test_the_verb_classification_covers_every_cli_subcommand
+  a rule sentence names a ghost file        test_every_backlog_report_site_is_a_choice_point
+  a report site gains a hedged lead-in      test_every_backlog_report_site_is_a_choice_point
+  the write rule names a ghost file         test_next_md_names_exactly_the_files_that_carry_write_sites
+  usage errors collide with refusals again  test_a_usage_error_and_a_refusal_exit_DIFFERENTLY
+  the read-only clause drops from step 8   test_every_backlog_report_site_is_a_choice_point
+  the read rule and the tree disagree      test_every_backlog_report_site_is_a_choice_point
+  the read rule is reworded away entirely  test_every_backlog_report_site_is_a_choice_point
   a write site appears in rePACT      test_four_files_stay_at_zero_write_sites
   the write-site detector orphaned    test_four_files_stay_at_zero_write_sites
   the wrap-up write moves below       test_the_wrap_up_write_precedes_the_worktree_removal
@@ -432,6 +449,12 @@ def _backlog(project_path, items=None, project="demo", updated="2026-09-01T00:00
         "updated": updated,
         "items": items if items is not None else [_item()],
     }
+
+
+# Older than `_STALE_AFTER`, for arms about the abandoned-work LINKAGE. That
+# heuristic exempts recently-touched items, and `_item`'s default `touched` is
+# recent, so without this those arms stop reaching the linkage they name.
+_OLD = "2020-01-01"
 
 
 def _item(item_id="a1b2", title="An item", status="planned", rank=1, **fields):
@@ -1651,7 +1674,8 @@ def test_the_git_calls_are_anchored_to_the_project(monkeypatch, tmp_path):
         return ""
 
     monkeypatch.setattr(backlog, "_run_capture", fake_capture)
-    backlog._abandoned_flags([_item(status="active", ref="#1")], str(tmp_path))
+    backlog._abandoned_flags(
+        [_item(status="active", ref="#1", touched=_OLD)], str(tmp_path))
 
     assert seen, "no git command was issued at all"
     for command in seen:
@@ -2132,12 +2156,77 @@ def test_the_abandoned_heuristic_reads_real_branches(tmp_path, monkeypatch):
     repo = _repo(tmp_path / "repo", branch="feat/1234-thing")
     monkeypatch.setattr(backlog, "project_root", lambda: repo)
 
-    carried = backlog._abandoned_flags([_item(status="active", ref="#1234")], str(repo))
+    carried = backlog._abandoned_flags(
+        [_item(status="active", ref="#1234", touched=_OLD)], str(repo))
     assert carried == [], f"a ref carried by a branch was flagged: {carried}"
 
-    orphan = backlog._abandoned_flags([_item(status="active", ref="#9999")], str(repo))
+    # A CONTROL PROVING GIT RAN. Both git calls failing returns None, which
+    # `_abandoned_flags` reads as no-flags — so a STARVED negative is
+    # indistinguishable from a real one. Without this, transient git failure
+    # under load fails the orphan assertion with exactly `[]` while the carried
+    # assertion above passes VACUOUSLY, which is how it presented in the field.
+    assert backlog._branch_and_worktree_names(str(repo)) is not None, \
+        "git did not run — the negative below would be vacuous"
+
+    orphan = backlog._abandoned_flags(
+        [_item(status="active", ref="#9999", touched=_OLD)], str(repo))
     assert len(orphan) == 1, f"an unreferenced ref did not flag: {orphan}"
     assert "9999" in orphan[0]
+
+
+def test_a_recently_touched_item_is_not_abandoned_but_an_old_one_still_is(tmp_path, monkeypatch):
+    """Recency exempts; age does not. BOTH halves, because the first alone is
+    satisfied by a heuristic that simply stopped flagging.
+
+    The linkage only sees a branch carrying the ref's digits, and this project
+    names plenty of branches without them — so live work on such a branch read
+    as abandoned. Recency is the exemption because abandonment means neglect.
+
+    RED WHEN the recency filter is removed (the fresh item flags again), and
+    RED WHEN it is widened to exempt everything (the old item stops flagging).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    repo = _repo(tmp_path / "repo", branch="no-digits-here")
+    monkeypatch.setattr(backlog, "project_root", lambda: repo)
+
+    def flags(days_ago):
+        touched = (datetime.now(timezone.utc) - timedelta(days=days_ago)).date().isoformat()
+        return backlog._abandoned_flags(
+            [_item(status="active", ref="#9999", touched=touched)], str(repo)
+        )
+
+    assert flags(0) == [], "an item touched today was reported abandoned"
+    assert len(flags(365)) == 1, (
+        "an item untouched for a year stopped flagging, so the exemption is "
+        "not discriminating — it switched the heuristic off"
+    )
+
+
+def test_the_abandoned_heuristic_ignores_shas_and_path_components(tmp_path, monkeypatch):
+    """A ref colliding with the porcelain's NON-NAME text must still flag.
+
+    `git worktree list --porcelain` carries `HEAD <sha>` (once per worktree) and
+    absolute paths beside the branch names. The match is a substring test, so a
+    ref whose digits appear in chance hex or in a parent directory was "found"
+    and the item was NOT flagged — suppressing the only output this heuristic
+    produces, with nothing to show it was suppressed.
+
+    The path is the deterministic half of that exposure, so it is what this
+    builds; the sha half is the same defect through the same line and needs no
+    second fixture.
+
+    RED WHEN the raw porcelain lines are matched again instead of names.
+    """
+    repo = _repo(tmp_path / "9999" / "repo", branch="feat/1-thing")
+    monkeypatch.setattr(backlog, "project_root", lambda: repo)
+    assert "9999" in str(repo), "fixture no longer places the token in the path"
+
+    flags = backlog._abandoned_flags(
+        [_item(status="active", ref="#9999", touched=_OLD)], str(repo))
+    assert len(flags) == 1, (
+        f"a ref matching only a PATH COMPONENT was treated as carried: {flags}"
+    )
 
 
 def test_staleness_flags_at_the_threshold_not_before(monkeypatch):
@@ -2929,9 +3018,47 @@ _COMMANDS_DIR = HOOKS_DIR.parent / "commands"
 # the CLI GROWING one this list has never heard of is detectable, and that is
 # the moment the blind spot is created.
 _WRITE_VERBS = ("set ", "add ")
+# Spelled counts, for the rules that lead with one. Shared by the read rule and
+# the write rule so the two cannot disagree about what FOUR means.
+_COUNT_WORDS = {1: "ONE", 2: "TWO", 3: "THREE", 4: "FOUR", 5: "FIVE", 6: "SIX"}
+# A command file named in a rule sentence. Scoped to a `*.md` token so an
+# ordinary backticked word cannot match; measured, both sentences name nothing
+# else. Deriving from the SENTENCE rather than from the directory is what makes
+# a name with no file behind it visible — a glob simply never yields one, so
+# the sentence could list a ghost while the count stayed green.
+_NAMED_FILE = re.compile(r"`([A-Za-z0-9_-]+\.md)`")
+
+
+def _files_named_in(sentence):
+    """Command files a rule sentence names. Every one must exist."""
+    names = set(_NAMED_FILE.findall(sentence))
+    missing = sorted(name for name in names if not (_COMMANDS_DIR / name).exists())
+    assert not missing, (
+        f"the rule names {missing}, which do not exist in {_COMMANDS_DIR.name}/. "
+        f"An agent is told to look at a file that is not there, and every count "
+        f"below it is off by the number of ghosts."
+    )
+    return names
 # Subcommands that are not item writes: `show` reads, `repair` moves a corrupt
 # FILE aside and touches no item. Neither can appear at a work boundary.
 _NON_WRITE_SUBCOMMANDS = frozenset({"show", "repair"})
+# The ONE subcommand that REPORTS the backlog, and it is deliberately NOT the
+# frozenset above. That set answers "is this a write?"; a read site asks "does
+# this REPORT?", and only `show` answers it — `repair` is a non-write that
+# reports nothing. Keying a read detector on the non-write set widens it every
+# time a future non-write subcommand is classified, with nothing going red at
+# the moment the guarantee weakens. Measured: with the set as the population, a
+# file whose only call was `repair` satisfied the read-site arm below. The
+# coupling to the CLI is kept explicitly instead, in
+# test_the_verb_classification_covers_every_cli_subcommand.
+#
+# The runtime half of this property is PROSE: bootstrap.md step 5 and
+# wrap-up.md section 8 each tell the agent not to run `repair` at a report call
+# site. This constant is the suite-side half. Deliberately NOT pinned to that
+# wording — the sentence has no checkable property beyond its own presence, so
+# pinning it buys a brittle red on any reword and catches nothing. If you change
+# what this enforces, read those two sections.
+_REPORT_SUBCOMMAND = "show"
 
 
 def _write_sites(name):
@@ -2948,9 +3075,13 @@ def test_four_files_stay_at_zero_write_sites(monkeypatch):
     """Those four zeros are the ARCHITECT's RESULTS, not omissions.
 
     rePACT sits below backlog-item granularity; refresh and pause have
-    "nothing has finished" as their entry condition; peer-review does merge but
-    hands to wrap-up unconditionally, so wrap-up's site already covers that
-    path and a second one would be two things to keep in step.
+    "nothing has finished" as their entry condition; peer-review does merge, and
+    a write site there would not cover the case that motivates one — an
+    out-of-band merge runs no PACT command at all, so it reaches neither
+    peer-review nor wrap-up. next.md classifies that case as unwitnessed by
+    definition and routes it to reconciliation, which is the coverage; a second
+    write site would buy only a narrow window and cost two things to keep in
+    step.
 
     THE POSITIVE HALF RUNS FIRST AND IT IS NOT DECORATION. An absence proves
     nothing about a detector that matches nothing, and `_write_sites` keys on
@@ -2959,10 +3090,12 @@ def test_four_files_stay_at_zero_write_sites(monkeypatch):
     detector finds the sites that DO exist is the only thing that makes the
     zeros mean anything.
 
-    THIS ARM PINS A RULING, NOT AN INDEPENDENT FINDING. Its correctness rests
-    on peer-review reaching wrap-up on every merge path — the architect flagged
-    that as the ruling they most wanted a second read on. If a path merges
-    without reaching wrap-up, this arm is pinning a GAP.
+    THIS ARM PINS A RULING, NOT AN INDEPENDENT FINDING, and the second read it
+    asked for has been done. The answer: it is NOT pinning a gap. The original
+    reason was wrong — a handoff to wrap-up is a subsequent action rather than a
+    guarantee, so "peer-review hands to wrap-up" would not have licensed the
+    zero. The verdict survives on reconciliation coverage instead, as stated
+    above, which holds for every merge path including the ones no command sees.
 
     RED WHEN a write site is added to a file the ruling put at zero.
     """
@@ -3015,6 +3148,237 @@ def test_the_wrap_up_write_precedes_the_worktree_removal(monkeypatch):
     )
 
 
+# Sentence-initial words that make the fence below them an ILLUSTRATION or a
+# CONDITIONAL rather than a step. Measured against both survivors and six
+# rewordings: it catches `If the session-start block reported drift flags, run:`
+# and `For reference, the backlog report is produced by:` while passing
+# `Always run`, `First, run`, `Report the backlog`, and an imperative that
+# merely CONTAINS a condition (`Run the report. If there are no flags, ...`).
+# It is a check on the lead-in's GRAMMATICAL FORM, not on its wording — a
+# reword stays green as long as it still opens with an instruction.
+_HEDGED_OPENERS = ("If ", "When ", "Unless ", "Optionally", "For reference",
+                   "Example", "Note:")
+
+
+def _lead_in(name, number):
+    """The nearest non-blank, non-fence line above an invocation."""
+    lines = (_COMMANDS_DIR / name).read_text(encoding="utf-8").splitlines()
+    for line in reversed(lines[:number - 1]):
+        stripped = line.strip().lstrip("> ")
+        if stripped and not stripped.startswith("```"):
+            return stripped
+    return ""
+
+
+def _read_sites(name):
+    """Lines in one command file that invoke the backlog's REPORT verb."""
+    text = (_COMMANDS_DIR / name).read_text(encoding="utf-8")
+    return [
+        (number, line.strip())
+        for number, line in enumerate(text.splitlines(), 1)
+        if "backlog.py" in line and f" {_REPORT_SUBCOMMAND}" in line
+    ]
+
+
+# Every command file that invokes the report. next.md earns its membership with
+# the invocation under `## Step 2 — Reconcile and report`, and NOT with its
+# other backlog lines, which invoke `set`, `add` and `repair` — none of them the
+# report verb. Which line matters, because a reader grepping next.md finds
+# several invocations and cannot otherwise tell. NAMED BY CONTENT, never by line
+# number: an earlier version of this comment cited three numbers and one of them
+# went stale inside the same commit that inserted lines above it.
+# Stated here so the set is a DECISION rather than an absence indistinguishable
+# from an oversight — the rule it pins is written beside the write rule in
+# next.md.
+_REPORT_CALL_SITES = frozenset({"bootstrap.md", "wrap-up.md", "next.md"})
+# The decision wrap-up's report must precede, quoted as it appears in the file.
+_SESSION_DECISION = "Use `AskUserQuestion` with these exact options:"
+# The clause that makes section 8's missing write-site enumeration safe.
+_READ_ONLY_PROHIBITION = "READ-ONLY in your hands"
+
+
+def test_every_backlog_report_site_is_a_choice_point():
+    """Every report site, censused; the two that report UNASKED, pinned per file.
+
+    THE RULE THIS PINS IS WRITTEN IN next.md, beside the write rule, and this
+    arm is the check rather than the statement of it: a report belongs where the
+    user is choosing WHAT TO DO NEXT — not where they are executing an item
+    already chosen, and not where they are judging one artifact. Three files
+    qualify and all three carry a site.
+
+    An earlier version of this docstring was the only place the population
+    existed, and that is why a third member stayed invisible for a whole review:
+    when the enumeration IS the policy, a missed member contradicts nothing.
+
+    AUTOMATIC surfacing happens in exactly one place: `session_init` is the only
+    hook that reads `backlog_store`, so nothing reports at session END without
+    being asked. That is why bootstrap's and wrap-up's sites are pinned
+    individually — a session gets those two whether or not anyone invokes
+    anything. It is NOT a claim that they are the only call sites: `next.md`
+    carries a third, run when a user invokes the command.
+
+    THE NEIGHBOURING ARM'S POSITIVE HALF DOES NOT TRANSFER, and copying it here
+    would be cargo cult. `test_four_files_stay_at_zero_write_sites` asserts an
+    ABSENCE, which an orphaned detector satisfies forever — hence its positive
+    half. This asserts a PRESENCE, so the same orphaning reddens it directly.
+
+    BUT ORPHANING IS NOT THE ONLY ROUTE TO VACUITY, and assuming it was is what
+    let a survivor through review. A detector can be fully live, match a real
+    invocation, and certify nothing, when the POPULATION it matches contains a
+    member that does not do the thing: keyed on `_NON_WRITE_SUBCOMMANDS`, a file
+    whose only call was `repair` satisfied this arm while reporting nothing.
+    Hence `_REPORT_SUBCOMMAND`. The other two guards the inverted direction
+    needs are a detector loose enough to match a PROSE MENTION, and one that
+    cannot tell this call site from the step 6 write. Both are asserted below.
+
+    The invocation test is per LINE, which is what makes widening to three files
+    safe: next.md's report invocation sits under `## Step 2 — Reconcile and
+    report`, while its other backlog lines invoke `set`, `add` and `repair` —
+    none of them the report verb. One file carries both natures. The write side
+    can only exclude a whole FILE, and does. NAMED BY CONTENT, never by line
+    number: an earlier version of this paragraph cited three, and one of them
+    had already drifted by two commits.
+
+    THE LEAD-IN IS PINNED TOO, by grammatical FORM rather than by wording. A
+    command line is a command whether or not an agent is told to run it, so
+    demoting `Run the backlog report unconditionally:` to `If there are flags,
+    run:` or to `For reference:` would stop the report without touching the
+    fence. `_HEDGED_OPENERS` catches both. It is not a prose pin: a rewording
+    stays green as long as it still opens with an instruction, verified against
+    `Always run`, `First, run`, `Report the backlog`, and an imperative that
+    merely CONTAINS a condition.
+
+    CEILING, stated rather than discovered later, and it is now narrow. Two
+    edges. `_lead_in` reads only the NEAREST non-blank, non-fence line above the
+    fence, so a hedge placed two lines up is invisible. And `When the session
+    ends, run the report:` REDDENS — judged correct rather than a false
+    positive, because that lead-in does make the invocation conditional on a
+    state, but it is the nearest thing to a false positive this guard has and a
+    future reader meeting that red should know it was deliberate.
+
+    The disjointness assertion is vacuously true if wrap-up carries no write
+    site at all. Measured: that state reddens BOTH neighbours, so its
+    non-vacuity is guaranteed there rather than here.
+
+    RED WHEN either file loses its report site, when a file gains or loses one
+    outside the census, when a site is prose rather than an invocation, when one
+    line counts as both a read and a write, when a report is introduced by a
+    conditional or illustrative lead-in, or when wrap-up's report drifts below
+    the session decision.
+    """
+    # THE POPULATION, DERIVED FROM THE TREE rather than asserted. A fourth file
+    # gaining a report site, or next.md losing its own, is drift either way.
+    # THE STATED RULE AND THE TREE MUST AGREE, the same seam
+    # test_next_md_names_exactly_the_files_that_carry_write_sites pins for the
+    # write side. Without this the rule in next.md and the census here are two
+    # independent claims that can drift apart, which is the state this arm was
+    # written in and the reason a third member went unnoticed.
+    marker = "**THREE FILES carry a backlog report**"
+    text = _next_md()
+    assert marker in text, (
+        f"the read rule's marker {marker!r} is gone from next.md — the rule was "
+        f"reworded or removed and this arm is reading nothing"
+    )
+    sentence = text.split(marker, 1)[1].split("\n\n", 1)[0]
+    stated = _files_named_in(sentence)
+    carrying = {p.name for p in _COMMANDS_DIR.glob("*.md") if _read_sites(p.name)}
+
+    # THE WORD AND THE LIST MUST AGREE — the set comparison below cannot see a
+    # fourth name added to the sentence while the word stays THREE.
+    assert _COUNT_WORDS.get(len(stated)) in marker, (
+        f"the read rule says {marker!r} but names {len(stated)} files: "
+        f"{sorted(stated)}"
+    )
+    assert stated == carrying, (
+        f"next.md's read rule names {sorted(stated)} but the files carrying a "
+        f"report site are {sorted(carrying)}. An agent reading that rule would "
+        f"be told the wrong file set."
+    )
+    assert carrying == set(_REPORT_CALL_SITES), (
+        f"the files invoking `backlog.py {_REPORT_SUBCOMMAND}` are "
+        f"{sorted(carrying)}, not {sorted(_REPORT_CALL_SITES)}. Gained: "
+        f"{sorted(carrying - _REPORT_CALL_SITES)} (report the backlog and is "
+        f"pinned nowhere). Lost: {sorted(_REPORT_CALL_SITES - carrying)} "
+        f"(stopped reporting, or was reworded past the detector)."
+    )
+
+    sites = {name: _read_sites(name) for name in sorted(_REPORT_CALL_SITES)}
+    # An INVOCATION, not a mention. Prose naming the command reads identically
+    # to the detector and would satisfy the presence assertion above while no
+    # agent ever runs anything.
+    # A BLOCKQUOTED COMMAND IS STILL A COMMAND. `_write_sites` already matches
+    # the blockquoted write at wrap-up.md:191, so requiring a bare `python3 `
+    # here made the two detectors disagree about the same file: moving this
+    # read into a blockquote to match section 6's style would have reddened
+    # this arm with a message about prose that does not exist. Stripping the
+    # marker costs nothing — `Run `python3 ...`` and `> Run `python3 ...``
+    # both still fail, which is the property being guarded.
+    #
+    # IF YOU ARE HERE BECAUSE THIS FIRED ON PROSE YOU JUST WROTE: the detector
+    # matches any line carrying `backlog.py` AND the report verb, so a SENTENCE
+    # naming both trips it. That is the rule, not a bug — the arm cannot tell a
+    # sentence about the command from the command. Reword so the prose does not
+    # name `backlog.py`, which is what the surrounding paragraphs already do.
+    for name, found in sites.items():
+        for number, line in found:
+            assert line.lstrip("> ").startswith("python3 "), (
+                f"{name}:{number} matches the detector but is not an "
+                f"invocation, so this arm would pass on prose alone: {line!r}"
+            )
+            # AN INSTRUCTION, NOT AN ILLUSTRATION. The line is a command either
+            # way; what decides whether an agent RUNS it is the sentence above
+            # the fence. Demoting that sentence to a condition or to a reference
+            # stops the report without touching the command, which is how both
+            # survivors got past an earlier version of this arm.
+            lead = _lead_in(name, number)
+            assert not lead.startswith(_HEDGED_OPENERS), (
+                f"{name}:{number} is introduced by {lead!r}, which makes the "
+                f"report conditional or illustrative. The command is unchanged "
+                f"and the report stops happening."
+            )
+
+    # DISJOINT from the write sites. A detector that also matched the step 6
+    # write would report wrap-up as covered on the strength of the very line
+    # the architect's ruling is about.
+    overlap = {n for n, _ in sites["wrap-up.md"]} & {n for n, _ in _write_sites("wrap-up.md")}
+    assert not overlap, (
+        f"wrap-up.md line(s) {sorted(overlap)} count as BOTH a read and a "
+        f"write site, so this arm cannot say which one it found"
+    )
+
+    # POSITION, not presence — the same property `test_the_wrap_up_write_
+    # precedes_the_worktree_removal` pins for the write, and for the same
+    # reason: a report appended below the decision is present and useless,
+    # because the choice it exists to inform has already been made.
+    lines = (_COMMANDS_DIR / "wrap-up.md").read_text(encoding="utf-8").splitlines()
+    decisions = [n for n, line in enumerate(lines, 1) if _SESSION_DECISION in line]
+    assert len(decisions) == 1, (
+        f"expected exactly one session decision matching {_SESSION_DECISION!r}, "
+        f"found {decisions} — the ordering assertion below cannot be read "
+        f"against several"
+    )
+    last_report = max(n for n, _ in sites["wrap-up.md"])
+    assert last_report < decisions[0], (
+        f"wrap-up's backlog report is at line {last_report}, BELOW the session "
+        f"decision at line {decisions[0]}. The user chooses before the report "
+        f"they were meant to read it against ever renders."
+    )
+
+    # WHAT LICENSES THE ABSENCE OF A WRITE-SITE ENUMERATION AT THIS CALL SITE.
+    # Section 8 does not list which writes are forbidden; it does not need to,
+    # because an agent believing the framing sentence does not write, and one
+    # disbelieving it is stopped by this prohibition. Both roads end in the same
+    # action ONLY while this sentence exists. Dropping it for brevity re-arms
+    # the defect silently, so its presence is pinned here. A short distinctive
+    # phrase, not the sentence: a rewording should not redden, a deletion must.
+    assert _READ_ONLY_PROHIBITION in "\n".join(lines), (
+        f"wrap-up.md no longer carries {_READ_ONLY_PROHIBITION!r}. That clause "
+        f"is what makes the missing write-site enumeration at this call site "
+        f"safe; without it an agent that doubts the framing has nothing "
+        f"stopping it correcting a flag in place."
+    )
+
+
 def test_the_verb_classification_covers_every_cli_subcommand():
     """`_WRITE_VERBS` is a hardcoded list, and a hardcoded list silently
     narrows the population it filters. This takes the population from the
@@ -3029,10 +3393,16 @@ def test_the_verb_classification_covers_every_cli_subcommand():
     Same move that fixed the cardinality control one file over: the population
     comes from outside the artifact under test.
 
+    IT ALSO CARRIES THE READ DETECTOR'S COUPLING, so a rename of the report verb
+    reddens here rather than silently orphaning `_read_sites`, and so the report
+    verb cannot also be classified as a write verb — a union cannot see a verb
+    classified both ways, which is why that one is asserted separately.
+
     RED WHEN the CLI gains or loses a subcommand without this classification
-    being updated. It already found one: `remove` was in the write list and has
-    never been a subcommand — vocabulary taken from the design table rather
-    than from the code.
+    being updated, when the report verb stops being declared by the CLI, or when
+    it is classified as a write verb as well. It already found one: `remove` was
+    in the write list and has never been a subcommand — vocabulary taken from
+    the design table rather than from the code.
     """
     import argparse
 
@@ -3043,6 +3413,22 @@ def test_the_verb_classification_covers_every_cli_subcommand():
     assert len(actions) == 1, f"expected one subparser group, found {len(actions)}"
     declared = set(actions[0].choices)
     assert declared, "the parser declares no subcommands — this arm is vacuous"
+
+    # THE READ DETECTOR'S COUPLING TO THE PARSER LIVES HERE, so that renaming
+    # `show` reddens rather than silently orphaning `_read_sites`.
+    assert _REPORT_SUBCOMMAND in declared, (
+        f"the reporting subcommand {_REPORT_SUBCOMMAND!r} is no longer declared "
+        f"by the CLI, so `_read_sites` matches nothing and every report-site "
+        f"assertion is vacuous. Declared: {sorted(declared)}."
+    )
+    # THE MIRROR, and nothing else catches it AT THE CLASSIFICATION. Measured:
+    # making the report verb a write verb too reddens three downstream arms with
+    # messages about overlapping sites, and leaves THIS arm green, because a
+    # union cannot see a verb classified both ways.
+    assert _REPORT_SUBCOMMAND not in {verb.strip() for verb in _WRITE_VERBS}, (
+        f"{_REPORT_SUBCOMMAND!r} is classified as BOTH the report verb and a "
+        f"write verb, so every report site also counts as a boundary write"
+    )
 
     classified = {verb.strip() for verb in _WRITE_VERBS} | set(_NON_WRITE_SUBCOMMANDS)
     assert classified == declared, (
@@ -3086,11 +3472,7 @@ def test_next_md_names_exactly_the_files_that_carry_write_sites():
         f"reworded and this arm is reading nothing"
     )
     sentence = text.split(marker, 1)[1].split("\n\n", 1)[0]
-    claimed = {name for name in
-               ("orchestrate.md", "comPACT.md", "imPACT.md", "wrap-up.md",
-                "rePACT.md", "refresh.md", "pause.md", "peer-review.md",
-                "bootstrap.md", "next.md")
-               if f"`{name}`" in sentence}
+    claimed = _files_named_in(sentence)
     assert claimed, (
         "the trigger sentence names no command file — it was restructured and "
         "this arm is now reading nothing"
@@ -3098,8 +3480,7 @@ def test_next_md_names_exactly_the_files_that_carry_write_sites():
     # The word and the list must agree. A fifth file added to the sentence
     # while the word stays FOUR is the count-drifts-from-its-list defect, and
     # the set comparison below cannot see it.
-    words = {1: "ONE", 2: "TWO", 3: "THREE", 4: "FOUR", 5: "FIVE", 6: "SIX"}
-    assert words.get(len(claimed)) in marker, (
+    assert _COUNT_WORDS.get(len(claimed)) in marker, (
         f"the sentence says {marker!r} but names {len(claimed)} files: "
         f"{sorted(claimed)}"
     )
@@ -3430,6 +3811,13 @@ def _cli_store(tmp_path, items, **top):
     payload = _backlog(project, items=items)
     payload.update(top)
     _write(store, f"{backlog.store_path().stem}.json", payload)
+    # AND under the name a subprocess run with `cwd=project` resolves. The id
+    # comes from the CWD OF THE PROCESS THAT RESOLVES IT, so a caller passing
+    # `cwd=` otherwise gets a store the CLI never opens — and `load_or_create`
+    # synthesises an empty document, so a lookup refuses identically and the
+    # arm passes without ever reading the fixture. Written here rather than at
+    # the one caller that needed it: every caller routes through this.
+    _write(store, f"{project.name}.json", payload)
     return store, project
 
 
@@ -3469,8 +3857,10 @@ def test_a_relative_project_path_yields_no_branch_names():
     `git -C 5` fails and the heuristic returns nothing — safe BY ACCIDENT — so
     a `5` fixture passes against the unfixed code. `"."` passes every type
     check and makes git answer about the CURRENT WORKING DIRECTORY's repo:
-    devops measured 221 branch and worktree names belonging to the wrong
-    project, which is the misleading-flags outcome.
+    measured: branch and worktree names belonging to the wrong project, which
+    is the misleading-flags outcome. The count that stood here was taken when
+    the helper returned raw porcelain lines and rotted when that shape changed;
+    the danger is answering about the wrong repository, at any magnitude.
 
     RED WHEN the absolute-string guard is removed. The control is the second
     assertion: an ABSOLUTE path must still return a list, or this arm would
@@ -3946,3 +4336,79 @@ def test_a_two_sided_exclusive_pair_flags_once_in_either_visit_order():
             f"{label}: a two-sided link must flag ONCE, not once per side: "
             f"{exclusive}"
         )
+
+
+def test_a_usage_error_and_a_refusal_exit_DIFFERENTLY(tmp_path):
+    """ONE RUN, VARIED INPUTS, BOTH CODES — and that is the whole design.
+
+    The defect was ONE code meaning two things: argparse's default 2 collided
+    with `_EXIT_REFUSED`, so a mistyped command was indistinguishable from a
+    real refusal. Two separate arms — one asserting usage returns 64, one
+    asserting a refusal returns 2 — would BOTH pass against a collapsed axis,
+    because each could find an input satisfying it in isolation. What cannot
+    survive a collapse is a single run producing both codes from inputs that
+    differ only in the factor under test. So the table below is asserted whole.
+
+    THE STORE STATE IS VARIED ON PURPOSE. The condition that hid this was
+    SAMENESS ACROSS VARIED INPUTS: five malformed invocations returned 2 against
+    five different store states, which read as five real refusals. An arm
+    covering one store state cannot reproduce that.
+
+    The subparser row is the inheritance path — `add_subparsers` builds children
+    with `parser_class` defaulting to `type(self)`, so a child parser must carry
+    the override too. That was verified by reading; this runs it.
+
+    RED WHEN usage and refusal share a code again, in either direction.
+    """
+    script = str((HOOKS_DIR / "shared" / "backlog.py").resolve())
+    healthy, project = _cli_store(tmp_path / "healthy", [_item()])
+    empty, _ = _cli_store(tmp_path / "empty", [])
+    _repo(project)  # a real checkout, so `set` reaches the item lookup
+
+    def code(store, *args, cwd):
+        return subprocess.run(
+            [sys.executable, script, "--backlog-dir", str(store), *args],
+            capture_output=True, text=True, cwd=str(cwd)).returncode
+
+    outside = tmp_path / "not_a_repo"
+    outside.mkdir()
+
+    observed = {
+        "malformed flag":      code(healthy, "--nope", cwd=project),
+        "unknown subcommand":  code(empty, "bogus", cwd=project),
+        "subparser operand":   code(empty, "set", cwd=outside),
+        "accepted: real item": code(healthy, "set", "a1b2", "--status", "done", cwd=project),
+        "refusal: no item":    code(healthy, "set", "ffff", "--status", "done", cwd=project),
+        "refusal: no root":    code(healthy, "show", cwd=outside),
+        "help":                code(healthy, "--help", cwd=project),
+    }
+    assert observed == {
+        "malformed flag":     backlog._EXIT_USAGE,
+        "unknown subcommand": backlog._EXIT_USAGE,
+        "subparser operand":  backlog._EXIT_USAGE,
+        "accepted: real item": backlog._EXIT_OK,
+        "refusal: no item":   backlog._EXIT_REFUSED,
+        "refusal: no root":   backlog._EXIT_REFUSED,
+        "help":               backlog._EXIT_OK,
+    }, f"exit codes moved: {observed}"
+
+    # THE TWO REFUSALS MUST REFUSE FOR DIFFERENT REASONS. `accepted: real item`
+    # proves the subprocess reads the fixture, but only under `cwd=project`; it
+    # says nothing about the `cwd=outside` row, and exit 2 is reachable from
+    # several conditions. Without this a change routing both refusals through
+    # one cause leaves every code above unchanged. Fragments, not whole
+    # sentences, so a reworded message survives.
+    def stderr(store, *args, cwd):
+        return subprocess.run(
+            [sys.executable, script, "--backlog-dir", str(store), *args],
+            capture_output=True, text=True, cwd=str(cwd)).stderr
+    assert "no item with id" in stderr(healthy, "set", "ffff", "--status", "done", cwd=project)
+    assert "did not resolve" in stderr(healthy, "show", cwd=outside)
+
+    # THE SEPARATION ITSELF, stated rather than implied by the table above: a
+    # later change routing everything through one code would still satisfy a
+    # row-by-row reading of a weaker arm.
+    assert observed["malformed flag"] != observed["refusal: no item"], (
+        "a malformed invocation and a real refusal exit with the SAME code "
+        f"({observed['malformed flag']}); the two are indistinguishable again"
+    )

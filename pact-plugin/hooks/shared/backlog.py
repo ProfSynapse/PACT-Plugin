@@ -69,6 +69,14 @@ _EXIT_REFUSED = 2
 # alternative was to have the caller read the message text, which is the
 # substring routing this design refuses everywhere else.
 _EXIT_UNREADABLE = 3
+# A MALFORMED COMMAND LINE IS NOT A REFUSAL, and sharing argparse's default 2
+# with `_EXIT_REFUSED` made the two indistinguishable: a mistyped invocation
+# reported as the tool declining. Measured: `--backlog-dir` placed after the
+# subcommand returned 2 across five different store states, reading as five
+# real refusals. 64 is EX_USAGE from sysexits.h, the BSD convention for exactly
+# this; it collides with none of 0/2/3 and sits below the 126-255 range shells
+# reserve for not-executable, not-found and signal deaths.
+_EXIT_USAGE = 64
 
 # An `active` item untouched for longer than this is reported as stale.
 _STALE_AFTER = timedelta(days=14)
@@ -173,9 +181,11 @@ def checkout_roots() -> List[str]:
     right about at least itself.
 
     Deliberately NOT merged with _branch_and_worktree_names, which runs the
-    same porcelain: that caller wants raw lines including branch names, this
-    one wants resolved paths, and one helper serving both needs a mode flag.
-    Two subprocesses per write on a path the design says can afford one.
+    same porcelain: that caller reduces each `worktree` line to a BASENAME for
+    substring matching, this one resolves it to an absolute path for exact
+    membership — opposite ends of the same string, so one helper serving both
+    still needs a mode flag. It also runs a second git call this one does not
+    need. Two subprocesses per write on a path the design says can afford one.
     """
     porcelain = _run_capture(
         ["git", "-C", str(project_root()), "worktree", "list", "--porcelain"]
@@ -947,7 +957,23 @@ def _abandoned_flags(
     from reconcile the way _plan_flags already receives it, rather than calling
     project_root(), which raises and would turn a drift report into a refusal.
     """
-    tracked = [item for item in items if item.get("status") == "active" and item.get("ref")]
+    # A RECENTLY TOUCHED ITEM IS NOT ABANDONED, whatever its branch is called.
+    # The linkage below only sees a branch that carries the ref's digits, and
+    # a branch named without its issue number reads as no branch at all. Where
+    # that naming is common — and in some repositories it is the majority —
+    # live work reports as abandoned. `_STALE_AFTER` already encodes this
+    # notion of neglect; a second threshold would be a second thing to keep in
+    # step. Filtered HERE rather than in the loop below so the early return
+    # still spares the git calls when nothing qualifies.
+    cutoff = (datetime.now(timezone.utc) - _STALE_AFTER).date()
+    tracked = []
+    for item in items:
+        if item.get("status") != "active" or not item.get("ref"):
+            continue
+        touched = as_datetime(item.get("touched"))
+        if touched is not None and touched.date() >= cutoff:
+            continue
+        tracked.append(item)
     if not tracked:
         return []
     # ponytail: the linkage is the ref's digits appearing in a branch or
@@ -983,16 +1009,40 @@ def _branch_and_worktree_names(project_path: Any = None) -> Optional[List[str]]:
     worktrees = _run_capture(["git", *at, "worktree", "list", "--porcelain"])
     if branches is None and worktrees is None:
         return None
-    return f"{branches or ''}\n{worktrees or ''}".splitlines()
+    # NAMES ONLY. The porcelain also carries `HEAD <sha>` — once PER WORKTREE —
+    # and absolute paths, and the caller matches by SUBSTRING. So a ref's digits
+    # could be satisfied by chance hex or by a parent directory, the token was
+    # "found", and the abandoned-work flag this heuristic exists to emit was
+    # silently suppressed. `detached`, `locked`, `bare` and `prunable` carry no
+    # name and drop out with them.
+    names = (branches or "").splitlines()
+    for line in (worktrees or "").splitlines():
+        if line.startswith("worktree "):
+            names.append(Path(line[len("worktree "):]).name)
+        elif line.startswith("branch "):
+            names.append(line[len("branch "):].removeprefix("refs/heads/"))
+    return names
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
+class _UsageErrorParser(argparse.ArgumentParser):
+    """Exits `_EXIT_USAGE` on a malformed command line, not argparse's default 2.
+
+    Subclassed rather than caught in `main()` so the code is carried by the
+    parser itself: `add_subparsers` propagates this class to every subparser,
+    and a caller holding `build_parser()` gets it too.
+    """
+
+    def error(self, message):
+        self.exit(_EXIT_USAGE, f"{self.format_usage()}{self.prog}: error: {message}\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument grammar, separated so it is testable without running anything."""
-    parser = argparse.ArgumentParser(
+    parser = _UsageErrorParser(
         description="PACT cross-session backlog — the user's ordered intent, "
         "reconciled against git, the tracker and pact-memory.",
     )
