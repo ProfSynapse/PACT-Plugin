@@ -130,17 +130,19 @@ The feature-level CalibrationRecord above coexists with per-dispatch variety sta
 {
   "variety": {
     "novelty":               1-4,
-    "novelty_rationale":     "<1-sentence: why this score for THIS dispatch's novelty>",
+    "novelty_rationale":     "<1-sentence: why this score for THIS dispatch's novelty — shape only, not the hypothesis>",
     "scope":                 1-4,
-    "scope_rationale":       "<1-sentence: why this score for THIS dispatch's scope>",
+    "scope_rationale":       "<1-sentence: why this score for THIS dispatch's scope — shape only, not the hypothesis>",
     "uncertainty":           1-4,
-    "uncertainty_rationale": "<1-sentence: why this score for THIS dispatch's uncertainty>",
+    "uncertainty_rationale": "<1-sentence: why this score for THIS dispatch's uncertainty — shape only, not the hypothesis>",
     "risk":                  1-4,
-    "risk_rationale":        "<1-sentence: why this score for THIS dispatch's risk>",
+    "risk_rationale":        "<1-sentence: why this score for THIS dispatch's risk — shape only, not the hypothesis>",
     "total":                 4-16
   }
 }
 ```
+
+> **The teammate reads these rationales BEFORE it starts work.** Describe only the SHAPE of the work — its novelty, breadth, unknowns and exposure. Do not write the dispatch's hypothesis, its expected answer, or the reasoning that produced it. Where a dispatch's value depends on the teammate NOT knowing something, the rationales must not disclose it.
 
 > The canonical total key is `total`. The lifecycle hook's band resolver additionally tolerates non-canonical `score` / top-level `variety_score`, or the sum of the four dimension scores, as fallbacks for stamps seen in the field — but orchestrators MUST stamp `total`. A resolvable `total` is taken at face value before the resolver reaches the dimension-sum fallback. So a `total` that disagrees with its four dimension scores is used as stated. No check reports that disagreement, at read time or at write time.
 

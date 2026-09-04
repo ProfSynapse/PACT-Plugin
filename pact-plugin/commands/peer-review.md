@@ -171,13 +171,13 @@ B_id = TaskCreate(
     metadata={
         "variety": {
             "novelty":               N,
-            "novelty_rationale":     "<1-sentence: why this score for THIS dispatch's novelty>",
+            "novelty_rationale":     "<1-sentence: why this score for THIS dispatch's novelty — shape only, not the hypothesis>",
             "scope":                 N,
-            "scope_rationale":       "<1-sentence: why this score for THIS dispatch's scope>",
+            "scope_rationale":       "<1-sentence: why this score for THIS dispatch's scope — shape only, not the hypothesis>",
             "uncertainty":           N,
-            "uncertainty_rationale": "<1-sentence: why this score for THIS dispatch's uncertainty>",
+            "uncertainty_rationale": "<1-sentence: why this score for THIS dispatch's uncertainty — shape only, not the hypothesis>",
             "risk":                  N,
-            "risk_rationale":        "<1-sentence: why this score for THIS dispatch's risk>",
+            "risk_rationale":        "<1-sentence: why this score for THIS dispatch's risk — shape only, not the hypothesis>",
             "total":                 N
         }
     }
@@ -200,13 +200,13 @@ The `Agent()` `prompt` does NOT change shape — the Teachback-Gated Dispatch is
      {
        "variety": {
          "novelty":               N,
-         "novelty_rationale":     "<1-sentence: why this score for THIS dispatch's novelty>",
+         "novelty_rationale":     "<1-sentence: why this score for THIS dispatch's novelty — shape only, not the hypothesis>",
          "scope":                 N,
-         "scope_rationale":       "<1-sentence: why this score for THIS dispatch's scope>",
+         "scope_rationale":       "<1-sentence: why this score for THIS dispatch's scope — shape only, not the hypothesis>",
          "uncertainty":           N,
-         "uncertainty_rationale": "<1-sentence: why this score for THIS dispatch's uncertainty>",
+         "uncertainty_rationale": "<1-sentence: why this score for THIS dispatch's uncertainty — shape only, not the hypothesis>",
          "risk":                  N,
-         "risk_rationale":        "<1-sentence: why this score for THIS dispatch's risk>",
+         "risk_rationale":        "<1-sentence: why this score for THIS dispatch's risk — shape only, not the hypothesis>",
          "total":                 N
        }
      }
