@@ -216,6 +216,8 @@ The lead reviews `variety_acknowledgment` as part of teachback acceptance per [p
 
 - **`"yes"`**: standard teachback acceptance; lead marks Task A completed + sends paired wake-signal `SendMessage`.
 - **`"no"` or `"concern"`**: lead has two corrective options before acceptance:
+  - **EXCEPTION — a withheld stamp**: when Task B's rationales read `WITHHELD: ignorance-dependent dispatch` and the `concern` names that withholding, take NEITHER option — accept the teachback and leave the stamp as written. This overrides the preference for orchestrator-side correction: the teammate's flag is correct BY CONSTRUCTION here, and re-stamping writes the hypothesis the withholding exists to keep out of the task.
+
   - *Orchestrator-side correction* (preferred when teammate's flag is correct): re-stamp `metadata.variety` on Task B via `TaskUpdate` with refined per-dimension rationales, THEN accept the teachback. The teammate's acknowledgment becomes part of the audit trail; no rejection needed.
 
     > ⚠️ To re-stamp, RE-SEND THE FULL `variety` OBJECT in ONE `TaskUpdate` call, and include each field you did not revise, unchanged. A write that names `variety` REPLACES the whole object, and it erases each field you omit. It reports no error. Then read the task file back and enumerate the keys of `metadata.variety`.
