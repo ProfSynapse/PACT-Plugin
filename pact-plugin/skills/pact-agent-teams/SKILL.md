@@ -464,7 +464,7 @@ later inspection reflects the real duration.
 
 - **Consultant mode** (no owned `in_progress` task): the flag has no current consumer for consultants anyway.
 - **Waits < 30 seconds**: SET+CLEAR bookkeeping isn't worth it for brief waits.
-- **Completion gating**: the flag does NOT suppress the team-lead's HANDOFF-presence check. An empty or missing `metadata.handoff` will be flagged by the team-lead's HANDOFF acceptance check — store your HANDOFF before marking the task completed, regardless of intentional_wait state.
+- **Completion gating**: the flag does NOT suppress the team-lead's HANDOFF acceptance check — an empty or missing `metadata.handoff` is flagged there regardless of intentional_wait state. Store your HANDOFF before marking the task completed.
 
 ## Consultant Mode
 
