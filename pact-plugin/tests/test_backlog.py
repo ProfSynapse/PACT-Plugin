@@ -4363,6 +4363,19 @@ def test_a_usage_error_and_a_refusal_exit_DIFFERENTLY(tmp_path):
         "help":               backlog._EXIT_OK,
     }, f"exit codes moved: {observed}"
 
+    # THE TWO REFUSALS MUST REFUSE FOR DIFFERENT REASONS. `accepted: real item`
+    # proves the subprocess reads the fixture, but only under `cwd=project`; it
+    # says nothing about the `cwd=outside` row, and exit 2 is reachable from
+    # several conditions. Without this a change routing both refusals through
+    # one cause leaves every code above unchanged. Fragments, not whole
+    # sentences, so a reworded message survives.
+    def stderr(store, *args, cwd):
+        return subprocess.run(
+            [sys.executable, script, "--backlog-dir", str(store), *args],
+            capture_output=True, text=True, cwd=str(cwd)).stderr
+    assert "no item with id" in stderr(healthy, "set", "ffff", "--status", "done", cwd=project)
+    assert "did not resolve" in stderr(healthy, "show", cwd=outside)
+
     # THE SEPARATION ITSELF, stated rather than implied by the table above: a
     # later change routing everything through one code would still satisfy a
     # row-by-row reading of a weaker arm.
