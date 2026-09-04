@@ -68,3 +68,36 @@ def test_schema_block_states_the_rule_in_both_mirror_halves():
         text = path.read_text(encoding="utf-8")
         assert _RULE in text, f"{path.name}: rule absent"
         assert "must not disclose it" in text, f"{path.name}: not-knowing clause absent"
+
+TEACHBACK_SKILL = PLUGIN / "skills" / "pact-teachback" / "SKILL.md"
+
+# The three surfaces that state when a teammate may read the rationales.
+_ORDERING_SITES = (VARIETY, PROTOCOLS, TEACHBACK_SKILL)
+
+
+def test_all_three_surfaces_state_the_same_read_ordering():
+    """The split read is stated at three sites; two of three is worse than none.
+
+    WHAT THIS CANNOT DO, and it is the point of the arm rather than a caveat:
+    it cannot check that a teammate OBEYS the ordering. That happens at runtime
+    in another agent. A phrase pin passes on a violated ordering. What it does
+    check is the failure this change could actually introduce — one surface
+    updated and another left stating the old rule.
+    """
+    for path in _ORDERING_SITES:
+        text = path.read_text(encoding="utf-8")
+        assert "ONLY AFTER" in text, f"{path.name}: read-ordering clause absent"
+        assert "cannot be un-read" in text, f"{path.name}: required-not-preferred force absent"
+
+def test_ignorance_dependent_seats_are_not_asked_for_acknowledgment():
+    """The carve-out that closes the founding case, in both mirror halves.
+
+    The split read alone does not close it: a teammate reading rationales
+    after composing its understanding has still read them before the WORK.
+    For a seat whose value is not knowing, the field is omitted entirely.
+    """
+    for path in (VARIETY, PROTOCOLS):
+        text = path.read_text(encoding="utf-8")
+        assert "do not ask that seat for `variety_acknowledgment`" in text, (
+            f"{path.name}: omission carve-out absent"
+        )

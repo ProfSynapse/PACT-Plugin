@@ -994,6 +994,8 @@ The wrap-up retrospective's Q5 reports the CALIBRATION DELTA — the feature-lev
 
 The teammate becomes the peer reviewer of the orchestrator's variety scoring. The teachback canonical schema includes a required `variety_acknowledgment` sub-field stored alongside the 4 existing teachback fields:
 
+> **Where a dispatch's value depends on the teammate NOT knowing something, do not ask that seat for `variety_acknowledgment`.** Stamp the scores, omit the request, and the teammate supplies no such field. The rationales cannot be judged without being read, and for that seat reading them is the harm the dispatch exists to avoid.
+
 ```
 "variety_acknowledgment": {
   "rationale_articulates_this_dispatch": "yes" | "no" | "concern",
@@ -1003,7 +1005,7 @@ The teammate becomes the peer reviewer of the orchestrator's variety scoring. Th
 
 **Teammate workflow** (extends pact-teachback skill's Step 1 metadata write):
 
-1. After claiming Task A and reading the task description, the teammate reads `metadata.variety` on Task B (resolved via `Task A.blocks[0]`) BEFORE composing the teachback_submit payload.
+1. After claiming Task A and reading the task description, the teammate reads the four SCORES of `metadata.variety` on Task B (resolved via `Task A.blocks[0]`). **The `*_rationale` strings are read ONLY AFTER `understanding`, `most_likely_wrong`, `least_confident_item` and `first_action` are composed. This ordering is required, not preferred: those four fields need no rationale to write, and a rationale read earlier cannot be un-read.**
 2. Teammate judges each of the four per-dimension rationales against THIS dispatch's actual work — does `novelty_rationale` articulate why THIS dispatch is novel, or does it copy feature-level language? Same check for `scope_rationale`, `uncertainty_rationale`, `risk_rationale`.
 3. Teammate records the judgment in `metadata.teachback_submit.variety_acknowledgment`:
    - `"yes"` — all four rationales articulate THIS dispatch's complexity; `concern` field omitted or empty.
