@@ -178,6 +178,7 @@ B_id = TaskCreate(
             "uncertainty_rationale": "<1-sentence: the shape of this dispatch's uncertainty — never what you expect to find>",
             "risk":                  N,
             "risk_rationale":        "<1-sentence: the shape of this dispatch's risk — never what you expect to find>",
+            # Ignorance-dependent dispatch: stamp all four `*_rationale` as "WITHHELD: ignorance-dependent dispatch" — real scores, no prose.
             "total":                 N
         }
     }
@@ -207,6 +208,7 @@ The `Agent()` `prompt` does NOT change shape — the Teachback-Gated Dispatch is
          "uncertainty_rationale": "<1-sentence: the shape of this dispatch's uncertainty — never what you expect to find>",
          "risk":                  N,
          "risk_rationale":        "<1-sentence: the shape of this dispatch's risk — never what you expect to find>",
+            # Ignorance-dependent dispatch: stamp all four `*_rationale` as "WITHHELD: ignorance-dependent dispatch" — real scores, no prose.
          "total":                 N
        }
      }

@@ -994,7 +994,7 @@ The wrap-up retrospective's Q5 reports the CALIBRATION DELTA — the feature-lev
 
 The teammate becomes the peer reviewer of the orchestrator's variety scoring. The teachback canonical schema includes a required `variety_acknowledgment` sub-field stored alongside the 4 existing teachback fields:
 
-> **Where a dispatch's value depends on the teammate NOT knowing something, do not ask that seat for `variety_acknowledgment`.** Stamp the scores, omit the request, and the teammate supplies no such field. The rationales cannot be judged without being read, and for that seat reading them is the harm the dispatch exists to avoid.
+> **Where a dispatch's value depends on the teammate NOT knowing something, stamp every `*_rationale` as `WITHHELD: ignorance-dependent dispatch` and nothing else.** The scores stay real. A rationale that was never written cannot be read, and the seat still files `variety_acknowledgment` — `concern`, naming the withholding — so no required field is missing.
 
 ```
 "variety_acknowledgment": {

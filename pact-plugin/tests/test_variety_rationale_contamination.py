@@ -89,15 +89,30 @@ def test_all_three_surfaces_state_the_same_read_ordering():
         assert "ONLY AFTER" in text, f"{path.name}: read-ordering clause absent"
         assert "cannot be un-read" in text, f"{path.name}: required-not-preferred force absent"
 
-def test_ignorance_dependent_seats_are_not_asked_for_acknowledgment():
-    """The carve-out that closes the founding case, in both mirror halves.
+def test_ignorance_dependent_dispatches_stamp_the_withheld_sentinel():
+    """The writer-side fix, at the protocol pair AND every writer surface.
 
-    The split read alone does not close it: a teammate reading rationales
-    after composing its understanding has still read them before the WORK.
-    For a seat whose value is not knowing, the field is omitted entirely.
+    RETARGETED, not extended: the previous form pinned "do not ask that seat
+    for variety_acknowledgment", which the hook denies — that field is in
+    TEACHBACK_REQUIRED_FIELDS and its absence raises. The sentinel satisfies
+    the hook (four keys, four non-empty strings, content unconstrained) and
+    discloses nothing, because nothing was written.
     """
+    sentinel = "WITHHELD: ignorance-dependent dispatch"
     for path in (VARIETY, PROTOCOLS):
         text = path.read_text(encoding="utf-8")
-        assert "do not ask that seat for `variety_acknowledgment`" in text, (
-            f"{path.name}: omission carve-out absent"
+        assert sentinel in text, f"{path.name}: sentinel rule absent"
+        assert "do not ask that seat" not in text, (
+            f"{path.name}: superseded carve-out still present — it and the "
+            f"sentinel rule contradict each other"
         )
+    writers = sorted(PLUGIN.glob("commands/*.md"))
+    shown = [p.name for p in writers if sentinel in p.read_text(encoding="utf-8")]
+    assert len(shown) == 5, f"sentinel shown at {shown}, expected all five templates"
+
+    # The seat must be able to tell DELIBERATE from BROKEN. Without this the
+    # honest `concern` is "these are empty, please re-stamp" — and that
+    # round-trip ends in real prose, reopening the leak the sentinel closes.
+    seat = TEACHBACK_SKILL.read_text(encoding="utf-8")
+    assert sentinel in seat, "teachback skill: seat cannot recognise the sentinel"
+    assert "do NOT ask for a re-stamp" in seat, "teachback skill: re-stamp trap open"
