@@ -115,7 +115,8 @@ def test_the_clause_extraction_stops_at_the_clause():
 
     Broken once while renumbering this list, and caught only by hand.
     """
-    assert "spawn the reviewer" not in _clause(), (
-        "the clause extraction now runs past the clause into the spawn step, so "
-        "the token rows above no longer prove those words are IN the clause"
+    assert _clause().rstrip().endswith("does not close it."), (
+        "the clause extraction no longer ends at the clause's last sentence, so "
+        "the token rows above no longer prove those words are IN the clause. It "
+        "has either run past the clause or been truncated inside it."
     )
