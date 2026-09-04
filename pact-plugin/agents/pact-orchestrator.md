@@ -457,7 +457,7 @@ Use the same iterate-by-name pattern for any other team-lead-to-many signal (`pl
 | After dispatching agent | Teammate self-claims Task B via `TaskUpdate(taskId, status="in_progress")` **before any implementation tool-use** once it unblocks; the team-lead does NOT pre-set `in_progress` |
 | Teachback submitted (Task A) | Validate the payload carried by the notify `SendMessage` per §12 Teachback Review (the raw JSON read is the deferred audit), then Acceptance two-call atomic pair (§12) auto-unblocks Task B |
 | HANDOFF submitted (Task B) | Accept on the payload carried by the notify `SendMessage` (`TaskGet` is metadata-blind; the raw JSON read is the deferred audit), then Acceptance two-call atomic pair (§12) — `TaskUpdate(taskId, status="completed")` then the paired wake-signal `SendMessage` (`TaskUpdate` FIRST) |
-| Reading agent's full HANDOFF | `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" \| jq .metadata.handoff` (on-demand, raw JSON; `TaskGet` does NOT surface metadata.handoff) |
+| Reading agent's full HANDOFF | `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" \| jq .metadata.handoff` (on-demand, raw JSON; `TaskGet` does NOT surface metadata) |
 | Creating downstream phase task | Include upstream task IDs in description for chain-read |
 | Agent reports blocker | `TaskCreate(subject: "BLOCKER: ...", metadata={"type": "blocker"})` then `TaskUpdate(agent_taskId, addBlockedBy: [blocker_taskId])`. **`metadata.type` is required** — `agent_handoff_emitter.py` inline-checks `metadata.type in ("blocker", "algedonic")` and SUPPRESSES journal emission for signal tasks; `shared/task_utils.py` and `shared/session_resume.py` use the same literal to CATEGORIZE signal tasks for recovery display. The subject prefix has no special meaning. |
 | Agent reports algedonic signal | `TaskCreate(subject: "[HALT\|ALERT]: ...", metadata={"type": "algedonic", "level": "halt"\|"alert", "category": "..."})` then amplify scope via `addBlockedBy` on phase/feature task. |
@@ -502,7 +502,7 @@ Teammate self-completion carve-outs (predicate-witnessed): signal-tasks (`metada
 
 An auditor dispatch carries `completion_type: "signal"` with NO `type` key, so it does NOT satisfy the signal-task predicate above and is NOT predicate-witnessed — auditors self-complete as documented practice, not as an exemption. Do NOT add `metadata.type` to an auditor dispatch to make it fit the predicate: that would silently move those dispatches out of the Q5 coverage denominator.
 
-**`TaskGet` metadata-blindness reminder**: `TaskGet` does NOT surface `metadata.handoff`. Accept on the payload carried by the notify `SendMessage`; the raw read is the deferred audit — a missing or diverging disk copy is an integrity finding, never a skipped acceptance.
+**`TaskGet` metadata-blindness reminder**: `TaskGet` does NOT surface metadata. Accept on the payload carried by the notify `SendMessage`; the raw read is the deferred audit — a missing or diverging disk copy is an integrity finding, never a skipped acceptance.
 
 **You MUST `Read(file_path="../protocols/pact-completion-authority.md")` before answering** whenever you detect a TEACHBACK or HANDOFF arrival, a rejection cycle, or any teammate idle on `awaiting_lead_completion`.
 

@@ -2156,7 +2156,7 @@ The canonical predicate `is_self_complete_exempt(task, team_name)` in `shared/in
 |---|---|---|
 | imPACT termination | `metadata.terminated == true` | You force-complete an unrecoverable agent's task via `TaskStop` + `TaskUpdate(status="completed", metadata={"terminated": true, "reason": "..."})`. See [imPACT.md](../commands/imPACT.md). The `terminated` marker is recognized directly by audit/inspection; `is_self_complete_exempt` does NOT cover this surface (the team-lead writes status=completed directly). |
 
-**`TaskGet` metadata-blindness reminder**: `TaskGet` does NOT surface `metadata.handoff`. Read directly:
+**`TaskGet` metadata-blindness reminder**: `TaskGet` does NOT surface metadata. Read directly:
 
 ```
 cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff
