@@ -100,6 +100,12 @@ Exit code 2 is a REFUSAL, not a corruption: the file is readable and nothing was
 written. Report what the message names and fix that. Do NOT go to Step 5 — a
 readable file must never be repaired.
 
+Exit code 64 is a USAGE error: the command line was malformed, so the tool never
+ran. Nothing was read and nothing was written, so the backlog says nothing about
+this. Fix the invocation the message names and run it again — a global flag such
+as `--backlog-dir` must come BEFORE the subcommand. Do NOT go to Step 5, and do
+NOT report it as a refusal.
+
 A file that parses but breaks a schema rule reports as `schema:` flags and
 still renders. Fix the field the flag names.
 

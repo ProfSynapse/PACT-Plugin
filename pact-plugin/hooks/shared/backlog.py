@@ -69,6 +69,14 @@ _EXIT_REFUSED = 2
 # alternative was to have the caller read the message text, which is the
 # substring routing this design refuses everywhere else.
 _EXIT_UNREADABLE = 3
+# A MALFORMED COMMAND LINE IS NOT A REFUSAL, and sharing argparse's default 2
+# with `_EXIT_REFUSED` made the two indistinguishable: a mistyped invocation
+# reported as the tool declining. Measured: `--backlog-dir` placed after the
+# subcommand returned 2 across five different store states, reading as five
+# real refusals. 64 is EX_USAGE from sysexits.h, the BSD convention for exactly
+# this; it collides with none of 0/2/3 and sits below the 126-255 range shells
+# reserve for not-executable, not-found and signal deaths.
+_EXIT_USAGE = 64
 
 # An `active` item untouched for longer than this is reported as stale.
 _STALE_AFTER = timedelta(days=14)
@@ -990,9 +998,21 @@ def _branch_and_worktree_names(project_path: Any = None) -> Optional[List[str]]:
 # CLI
 # ---------------------------------------------------------------------------
 
+class _UsageErrorParser(argparse.ArgumentParser):
+    """Exits `_EXIT_USAGE` on a malformed command line, not argparse's default 2.
+
+    Subclassed rather than caught in `main()` so the code is carried by the
+    parser itself: `add_subparsers` propagates this class to every subparser,
+    and a caller holding `build_parser()` gets it too.
+    """
+
+    def error(self, message):
+        self.exit(_EXIT_USAGE, f"{self.format_usage()}{self.prog}: error: {message}\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument grammar, separated so it is testable without running anything."""
-    parser = argparse.ArgumentParser(
+    parser = _UsageErrorParser(
         description="PACT cross-session backlog — the user's ordered intent, "
         "reconciled against git, the tracker and pact-memory.",
     )
