@@ -115,8 +115,14 @@ def test_the_clause_extraction_stops_at_the_clause():
 
     Broken once while renumbering this list, and caught only by hand.
     """
-    assert _clause().rstrip().endswith("does not close it."), (
-        "the clause extraction no longer ends at the clause's last sentence, so "
-        "the token rows above no longer prove those words are IN the clause. It "
-        "has either run past the clause or been truncated inside it."
+    clause = _clause().rstrip()
+    assert re.search(r"\s\d+\.\s", clause) is None, (
+        "the clause extraction has run PAST the clause and swallowed a numbered "
+        "step, so every token row above can now be satisfied by another "
+        "instruction's words. Restore the blank line after the clause."
+    )
+    assert clause.endswith("."), (
+        "the clause extraction is TRUNCATED — it stops mid-sentence, so the "
+        "token rows above are searching only part of the clause. Look for a "
+        "blank line introduced inside it."
     )
