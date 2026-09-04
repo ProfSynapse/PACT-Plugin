@@ -64,7 +64,11 @@ LOSSLESS_FIELDS = {
     },
 }
 
-# Signal-type completions (e.g., pact-auditor) use audit_summary, not HANDOFF format
+# Signal-type completions (e.g., pact-auditor) use audit_summary, not HANDOFF format.
+# Matched only in the OPENING of the closing text: a signal completion DECLARES
+# itself up front, while dispatch text and protocol prose QUOTE these tokens deep
+# in the body — including text denying them, which used to disable the warning.
+SIGNAL_DECLARATION_HEAD_CHARS = 200
 SIGNAL_COMPLETION_PATTERNS = [
     r"AUDIT\s+SIGNAL",
     r"audit_summary",
@@ -101,21 +105,29 @@ HANDOFF_ELEMENTS = {
 }
 
 
-def is_signal_completion(transcript: str) -> bool:
+def declares_signal_completion(transcript: str) -> bool:
     """
-    Check if transcript represents a signal-type completion (e.g., pact-auditor).
+    Check if the closing text OPENS by declaring a signal-type completion.
 
-    Signal-type completions use audit_summary in task metadata rather than
-    the standard HANDOFF format, so lossless field validation does not apply.
+    Reads PROSE, not structured data — unlike `is_signal_task` in
+    shared/agent_handoff_marker.py, which reads `metadata["type"]`. Task
+    metadata is not available at SubagentStop, so this is a text heuristic and
+    its name says so.
+
+    Only the first SIGNAL_DECLARATION_HEAD_CHARS are searched: a signal
+    completion declares itself in its opener, while a mention deeper in the
+    body is a quotation of dispatch or protocol text and must not suppress the
+    warning.
 
     Args:
-        transcript: The agent's complete output/transcript
+        transcript: The agent's closing text (`last_assistant_message`)
 
     Returns:
-        True if this is a signal-type completion
+        True if the opener declares a signal-type completion
     """
+    head = transcript[:SIGNAL_DECLARATION_HEAD_CHARS]
     for pattern in SIGNAL_COMPLETION_PATTERNS:
-        if re.search(pattern, transcript, re.IGNORECASE):
+        if re.search(pattern, head, re.IGNORECASE):
             return True
     return False
 
@@ -173,7 +185,7 @@ def validate_handoff(transcript: str) -> tuple:
     # If there's an explicit handoff section, validate lossless fields
     if has_handoff_section:
         # Signal-type completions skip lossless validation
-        if is_signal_completion(transcript):
+        if declares_signal_completion(transcript):
             return True, [], []
 
         lossless_missing = check_lossless_fields(transcript)

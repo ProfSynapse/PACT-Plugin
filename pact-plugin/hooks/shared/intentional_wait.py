@@ -3,7 +3,7 @@ Location: pact-plugin/hooks/shared/intentional_wait.py
 Summary: `intentional_wait` metadata schema — the teammate-facing contract
          for signalling a legitimate wait on an in_progress task (teachback
          approval, inter-commit hold, peer reply, etc.). Also the canonical
-         self-complete-exemption predicate for team-lead-side TaskGet inspection
+         self-complete-exemption predicate for team-lead-side task-file inspection
          and audit tooling.
 Used by: teammate-authored metadata on Task records, team-lead inspection,
          audit tooling, and the PostToolUse advisory gate
@@ -360,7 +360,7 @@ def is_self_complete_exempt(
     (conservative — never silently exempt).
 
     Read by the PostToolUse advisory gate `task_lifecycle_gate.py` (the
-    `self_completion` advisory) as well as team-lead-side TaskGet inspection,
+    `self_completion` advisory) as well as team-lead-side task-file inspection,
     audit tooling, and future consumers. That gate is advisory-only — it
     cannot DENY; on a non-exempt self-completion it emits an advisory + a
     `completion_disputed` writeback. No hook BLOCKS on it and the exemption

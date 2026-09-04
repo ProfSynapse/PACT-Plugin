@@ -72,7 +72,7 @@ The auditor emits RED and YELLOW as soon as it has them, and does not compress t
 
 Before emitting GREEN on any **structural acceptance criterion**, the auditor MUST verify the claim against `git diff` ground truth. Pattern-matching on HANDOFF prose, commit messages, or coder self-attestation alone is NOT sufficient evidence. Four internally-consistent layers of prose can all be wrong together; the diff is evidence.
 
-**Rationale**: This instantiates the general rule **`file inspection beats HANDOFF inference`**, established during prior audit calibrations and re-materialized at the auditor layer in subsequent retrospectives: "Auditor GREEN signal, coder HANDOFF narrative, and commit message body can all pattern-match to self-attestation without any of them verifying against git diff." HANDOFF narrative is a retrieval aid, not ground truth. The specific failure mode this rule prevents is the PHANTOM-SYMMETRIC-CLAIM variant: in a documented case, four layers — the coder's HANDOFF prose, the commit message body, the coder's self-attestation messages, and the audit signal — all agreed on a fabricated structural claim (three mirror-added skips at a specific line range) while the actual diff contained one.
+**Rationale**: This instantiates the general rule **`file inspection beats HANDOFF inference`** — HANDOFF narrative is a retrieval aid, not ground truth.
 
 **Structural ACs** (diff-verifiable): countable or locatable artifacts — "all files in one commit", "N skips at lines Y–Z", "function `foo` untouched", "helper extracted into a new file", "added after the existing imports block". If the AC contains a count, a line range, a path, or a touched/untouched/added/removed verb, it is structural.
 
@@ -132,7 +132,7 @@ The auditor uses signal-based completion rather than standard HANDOFF:
 1. Task is created with `metadata: {"completion_type": "signal"}`
 2. Auditor stores final signal as `metadata.audit_summary` via `TaskUpdate`
 3. Auditor marks task completed
-4. Completion gate accepts `audit_summary` as the completion artifact (the `audit_summary` field in task metadata; no hook validates it; the team-lead verifies presence directly via `TaskGet`).
+4. Completion gate accepts `audit_summary` as the completion artifact (the `audit_summary` field in task metadata; the team-lead confirms presence by reading the task file — `TaskGet` does NOT surface metadata).
 
 **audit_summary format**:
 ```json
@@ -154,7 +154,7 @@ Treat absence as a prompt to act, not to conclude. Before dispatching TEST, conf
 
 The team-lead retains the authority to override an auditor verdict (a `TaskUpdate` that rewrites `audit_summary`), and that override is made safe rather than blocked. When a lead `TaskUpdate` overwrites an auditor-authored verdict, the lifecycle gate preserves the auditor's original to `metadata.audit_summary_authored`, routes the lead's value to `metadata.lead_close_note`, and emits an `audit_summary_overwrite` advisory (severity-escalated when the override lowers the verdict, e.g. RED→GREEN). The verdict is therefore never silently lost; a consumer reading the authoritative auditor signal should prefer `metadata.audit_summary_authored` when present. This front-line discipline (never overwrite on inferred silence) reduces how often the gate fires — the gate is the durable backstop, not a substitute for the discipline.
 
-**Reading the verdict**: to READ an auditor's verdict, prefer `metadata.audit_summary_authored` (the durable mirror written at auditor-author time) over `metadata.audit_summary` — a lead close/overwrite may have replaced `audit_summary` with a lead-authored value, and the mirror survives it. Fall back to `audit_summary` only if no mirror exists. (Today no code consumer reads the verdict VALUE — `validate_handoff` keys on `audit_summary` PRESENCE, not its content — so this is guidance for the team-lead and any future value-consumer.)
+**Reading the verdict**: to READ an auditor's verdict, prefer `metadata.audit_summary_authored` (the durable mirror written at auditor-author time) over `metadata.audit_summary` — a lead close/overwrite may have replaced `audit_summary` with a lead-authored value, and the mirror survives it. Fall back to `audit_summary` only if no mirror exists. (Today no code consumer reads the verdict VALUE — `validate_handoff` keys on the `audit_summary` token appearing in the completion transcript, not on the field — so this is guidance for the team-lead and any future value-consumer.)
 
 ### Algedonic Escalation
 

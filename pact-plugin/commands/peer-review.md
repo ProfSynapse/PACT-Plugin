@@ -195,7 +195,7 @@ The `Agent()` `prompt` does NOT change shape — the Teachback-Gated Dispatch is
 1. `TaskCreate(subject="{reviewer-type}: TEACHBACK for review of {feature}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
 2. `TaskCreate(subject="{reviewer-type}: review {feature}", description=<see below>, metadata=<see below>)` — Task B.
    - Task B's `description` carries the review mission: "Review this PR. Focus: [domain-specific review criteria]…"
-   - Task B's `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema):
+   - Task B's `metadata` carries per-dispatch variety stamping per pact-variety.md (4-rationale schema):
      ```json
      {
        "variety": {

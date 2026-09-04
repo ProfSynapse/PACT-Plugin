@@ -470,7 +470,7 @@ When a phase is skipped but a coder encounters a decision that would have been h
 **Dispatch `pact-preparer`** — follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
 
 1. `TaskCreate(subject="preparer: TEACHBACK for {feature}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="preparer: research {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
+2. `TaskCreate(subject="preparer: research {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (4-rationale schema); the wiring write below is denied without it.
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
      - CONTEXT: [task description, plan sections (if any)]
      - MISSION: [research mission]
@@ -578,7 +578,7 @@ When detection fires (score >= threshold), follow the evaluation response protoc
 **Dispatch `pact-architect`** — follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
 
 1. `TaskCreate(subject="architect: TEACHBACK for {feature}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="architect: design {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
+2. `TaskCreate(subject="architect: design {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (4-rationale schema); the wiring write below is denied without it.
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
      - CONTEXT: [task description, where to find PREPARE outputs (e.g., "Read `docs/preparation/{feature}.md`"), plan sections (if any), plan reference]
      - MISSION: [design mission]
@@ -714,7 +714,7 @@ JSON
 **Dispatch coder(s)** — for each coder needed, follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
 
 1. `TaskCreate(subject="{coder-type}: TEACHBACK for {scope}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="{coder-type}: implement {scope}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
+2. `TaskCreate(subject="{coder-type}: implement {scope}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (4-rationale schema); the wiring write below is denied without it.
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
      - CONTEXT: Where to find ARCHITECT outputs (e.g., "Read `docs/architecture/{feature}.md`"), plan sections (if any), plan reference. (NOTE: Do not read the phase output files yourself or paste their content into the task description.)
      - MISSION: [implementation mission]
@@ -806,8 +806,8 @@ JSON
   {"workflow": "code-auditor", "feature": "{feature}", "paths": ["{absolute_decision_log_path}"]}
 JSON
   ```
-- [ ] **Primary HANDOFF-presence check**: on receiving each Task-complete `SendMessage`, verify via `TaskGet` — confirm status=completed AND metadata.handoff populated/non-empty. If missing, `SendMessage` the agent to complete HANDOFF before downstream dispatch proceeds.
-- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — `metadata.audit_summary` is present (verify via `TaskGet`), OR an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
+- [ ] **HANDOFF acceptance**: on receiving each Task-complete `SendMessage`, accept on the HANDOFF payload the notify carries. If the notify carries no HANDOFF payload, `SendMessage` the agent to submit one before downstream dispatch proceeds. The disk copy is the deferred audit, not the acceptance surface — see [pact-completion-authority.md §Read-Trigger Precondition](../protocols/pact-completion-authority.md#read-trigger-precondition) point 4 for the audit, the integrity finding and the repair.
+- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — the auditor task's file carries `metadata.audit_summary` OR `metadata.audit_summary_authored` (`cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq '.metadata | has("audit_summary") or has("audit_summary_authored")'`; `TaskGet` does NOT surface metadata), OR an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
 - [ ] **Process coder HANDOFFs** (dispatch once no auditor task is `pending` or `in_progress` — a contamination ordering, NOT a verdict wait):
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",
@@ -869,7 +869,7 @@ Execute the [CONSOLIDATE Phase protocol](../protocols/pact-scope-phases.md#conso
 **Dispatch `pact-test-engineer`** — follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
 
 1. `TaskCreate(subject="test-engineer: TEACHBACK for {feature}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="test-engineer: test {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
+2. `TaskCreate(subject="test-engineer: test {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (4-rationale schema); the wiring write below is denied without it.
    - Task B's `description` content (CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per §13):
      - CONTEXT: [task description, coder task references (e.g., "Coder tasks: #{id1}, #{id2} — read their task files for implementation decisions and flagged uncertainties"), plan sections (if any), plan reference]
      - MISSION: [testing mission]

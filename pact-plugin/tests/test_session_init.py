@@ -3170,6 +3170,127 @@ def _run_session_init_for_path(
     return additional, 0, 0
 
 
+class TestRecoveryFrameNamesAReadableSurface:
+    """The two recovery frames must instruct a read that returns something.
+
+    Both frames tell a recovering agent how to get its in-progress work back,
+    and both used to say `TaskGet on in-progress tasks` — an instruction that
+    returns subject / status / owner and NO metadata, on precisely the paths
+    where metadata is what the reader needs.
+
+    THESE ARMS ASSERT ON THE CAPTURED `additionalContext`, NOT ON THE SOURCE
+    LINE, and nothing here is assembled by the test. `_run_session_init_for_path`
+    drives the real `main()` over patched stdin and parses the JSON the hook
+    prints to stdout, so the string under assertion is the string the harness
+    would deliver.
+
+    A source-text search cannot do this job, for two independent reasons:
+
+      1. The instruction is built from implicitly-concatenated f-string
+         fragments joined into one blob, so the defect it is exposed to is a
+         JOINING defect. Dropping the trailing space of one fragment runs two
+         words together in the DELIVERED text while every source line still
+         reads correctly, and a grep over the source passes over exactly that.
+         Each pattern below therefore spans its WHOLE member, so every join
+         in it is inside the match and a lost space at any one of them breaks
+         it — including a join that does not exist yet, since a fragment
+         spliced in later lands inside the pattern rather than between two
+         pins.
+      2. A source match would give the same green if the string moved to a
+         constant, or if the branch that emits it stopped firing.
+
+    WHAT THESE CANNOT CATCH: they are blind to the SessionStart hook not
+    being registered at all — a platform-runtime property no in-process test
+    reaches. They do NOT pin which `_archive_clause` or `_secretary_clause`
+    variant fires, only that one of them rendered with its joins intact;
+    branch selection is a separate property and is not this arm's job.
+    """
+
+    # ONE PATTERN PER MEMBER, SPANNING EVERY SEAM IN IT, rather than a pin per
+    # seam. The property is "this member renders as one correctly-spaced
+    # sentence", and a per-seam pin cannot hold that property: it covers the
+    # seams that exist when it is written, and a fragment added later lands
+    # outside every one of them, silently. That is not hypothetical — it is
+    # how the gap here arose twice. The original arm pinned the seams around
+    # the fragment a diff had touched, leaving the archive-clause joins open,
+    # where dropping a space delivered "for prior context(if it is gone" to
+    # the agent while every case stayed green. The first repair then pinned
+    # those three joins and still left the two at the head of the member open.
+    # Measuring a seam and closing it is a treadmill; asserting the member is
+    # not.
+    #
+    # Interpolated spans are wildcarded so the pattern holds across both
+    # `_archive_clause` variants, both `_secretary_clause` variants and any
+    # tmp-path, while every LITERAL join stays inside the match. `\S ` at the
+    # head and `\. \S` at the tail pin the two joins against interpolations
+    # whose own text is not stable enough to assert.
+    RECOVERY_MEMBERS = [
+        (
+            "compact",
+            re.compile(
+                r"\S After bootstrap, recover session state: "
+                r"\(1\) Read .+? for prior context "
+                r"\(if it is gone, .+?\), "
+                r"\(2\) Run TaskList to find in-progress work, "
+                r"\(3\) read the task files of in-progress tasks for "
+                r"details \(TaskGet does not surface metadata\)\. \S"
+            ),
+        ),
+        (
+            "clear",
+            re.compile(
+                r"\S CONTEXT CLEARED: Your context was cleared via /clear\. "
+                r"State recovery: \(1\) TaskList for current tasks, "
+                r"\(2\) read the task files of in-progress tasks "
+                r"\(TaskGet does not surface metadata\)\. "
+                r"Re-engage secretary: SendMessage\("
+            ),
+        ),
+    ]
+
+    # The retired instruction, in both its renderings.
+    RETIRED_RECOVERY_INSTRUCTION = "TaskGet on in-progress tasks"
+
+    @pytest.mark.parametrize(
+        "source, member",
+        RECOVERY_MEMBERS,
+        ids=[s for s, _ in RECOVERY_MEMBERS],
+    )
+    def test_recovery_frame_delivers_task_file_read(
+        self, monkeypatch, tmp_path, source, member
+    ):
+        """The delivered context tells the agent to read the task FILES, and
+        the whole member renders as one correctly-spaced sentence."""
+        additional, _, _ = _run_session_init_for_path(
+            monkeypatch, tmp_path, source=source, team_exists=True
+        )
+        assert member.search(additional), (
+            f"source={source!r}: the delivered additionalContext does not "
+            f"render the recovery member intact. Every fragment join in it "
+            f"is inside this pattern, so a lost trailing space breaks the "
+            f"match while the source still reads correctly — and so does a "
+            f"new fragment spliced in without its own space. Pattern: "
+            f"{member.pattern!r}. Delivered: {additional!r}"
+        )
+
+    @pytest.mark.parametrize("source", ["compact", "clear"])
+    def test_recovery_frame_drops_retired_taskget_instruction(
+        self, monkeypatch, tmp_path, source
+    ):
+        """The retired instruction must not reach the agent. Paired with the
+        presence arm above: presence alone stays green if the retired
+        sentence is re-added alongside the corrected one."""
+        additional, _, _ = _run_session_init_for_path(
+            monkeypatch, tmp_path, source=source, team_exists=True
+        )
+        assert self.RETIRED_RECOVERY_INSTRUCTION not in additional, (
+            f"source={source!r}: the delivered additionalContext instructs "
+            f"{self.RETIRED_RECOVERY_INSTRUCTION!r}. `TaskGet` returns no "
+            f"metadata, and these are the recovery paths where metadata is "
+            f"what the reader needs. Delivered: {additional!r}"
+        )
+
+
 class TestUpdateClaudeMdNotCalled:
     """The legacy update_claude_md symbol is gone from session_init."""
 

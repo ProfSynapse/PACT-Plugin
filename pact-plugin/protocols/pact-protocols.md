@@ -1124,7 +1124,7 @@ Carve-outs apply across all workflows: signal-tasks (blocker + algedonic), sessi
 |------|----------|----------|
 | Misunderstanding | Wrong output, no errors | Teachback correction + corrected context |
 | Derailment | Loops on same error | Fresh agent, different framing |
-| Discontinuity | Lost/stale context | Reconstruct from memory/`TaskGet` |
+| Discontinuity | Lost/stale context | Reconstruct from memory/task files |
 | Absence | Insufficient upstream output | Redo prior phase |
 
 ---
@@ -2009,7 +2009,7 @@ The auditor emits RED and YELLOW as soon as it has them, and does not compress t
 
 Before emitting GREEN on any **structural acceptance criterion**, the auditor MUST verify the claim against `git diff` ground truth. Pattern-matching on HANDOFF prose, commit messages, or coder self-attestation alone is NOT sufficient evidence. Four internally-consistent layers of prose can all be wrong together; the diff is evidence.
 
-**Rationale**: This instantiates the general rule **`file inspection beats HANDOFF inference`**, established during prior audit calibrations and re-materialized at the auditor layer in subsequent retrospectives: "Auditor GREEN signal, coder HANDOFF narrative, and commit message body can all pattern-match to self-attestation without any of them verifying against git diff." HANDOFF narrative is a retrieval aid, not ground truth. The specific failure mode this rule prevents is the PHANTOM-SYMMETRIC-CLAIM variant: in a documented case, four layers — the coder's HANDOFF prose, the commit message body, the coder's self-attestation messages, and the audit signal — all agreed on a fabricated structural claim (three mirror-added skips at a specific line range) while the actual diff contained one.
+**Rationale**: This instantiates the general rule **`file inspection beats HANDOFF inference`** — HANDOFF narrative is a retrieval aid, not ground truth.
 
 **Structural ACs** (diff-verifiable): countable or locatable artifacts — "all files in one commit", "N skips at lines Y–Z", "function `foo` untouched", "helper extracted into a new file", "added after the existing imports block". If the AC contains a count, a line range, a path, or a touched/untouched/added/removed verb, it is structural.
 
@@ -2069,7 +2069,7 @@ The auditor uses signal-based completion rather than standard HANDOFF:
 1. Task is created with `metadata: {"completion_type": "signal"}`
 2. Auditor stores final signal as `metadata.audit_summary` via `TaskUpdate`
 3. Auditor marks task completed
-4. Completion gate accepts `audit_summary` as the completion artifact (the `audit_summary` field in task metadata; no hook validates it; the team-lead verifies presence directly via `TaskGet`).
+4. Completion gate accepts `audit_summary` as the completion artifact (the `audit_summary` field in task metadata; the team-lead confirms presence by reading the task file — `TaskGet` does NOT surface metadata).
 
 **audit_summary format**:
 ```json
@@ -2091,7 +2091,7 @@ Treat absence as a prompt to act, not to conclude. Before dispatching TEST, conf
 
 The team-lead retains the authority to override an auditor verdict (a `TaskUpdate` that rewrites `audit_summary`), and that override is made safe rather than blocked. When a lead `TaskUpdate` overwrites an auditor-authored verdict, the lifecycle gate preserves the auditor's original to `metadata.audit_summary_authored`, routes the lead's value to `metadata.lead_close_note`, and emits an `audit_summary_overwrite` advisory (severity-escalated when the override lowers the verdict, e.g. RED→GREEN). The verdict is therefore never silently lost; a consumer reading the authoritative auditor signal should prefer `metadata.audit_summary_authored` when present. This front-line discipline (never overwrite on inferred silence) reduces how often the gate fires — the gate is the durable backstop, not a substitute for the discipline.
 
-**Reading the verdict**: to READ an auditor's verdict, prefer `metadata.audit_summary_authored` (the durable mirror written at auditor-author time) over `metadata.audit_summary` — a lead close/overwrite may have replaced `audit_summary` with a lead-authored value, and the mirror survives it. Fall back to `audit_summary` only if no mirror exists. (Today no code consumer reads the verdict VALUE — `validate_handoff` keys on `audit_summary` PRESENCE, not its content — so this is guidance for the team-lead and any future value-consumer.)
+**Reading the verdict**: to READ an auditor's verdict, prefer `metadata.audit_summary_authored` (the durable mirror written at auditor-author time) over `metadata.audit_summary` — a lead close/overwrite may have replaced `audit_summary` with a lead-authored value, and the mirror survives it. Fall back to `audit_summary` only if no mirror exists. (Today no code consumer reads the verdict VALUE — `validate_handoff` keys on the `audit_summary` token appearing in the completion transcript, not on the field — so this is guidance for the team-lead and any future value-consumer.)
 
 ### Algedonic Escalation
 
@@ -2146,7 +2146,7 @@ Both calls are **required**, and the ordering matches Acceptance for the same re
 | Signal-tasks | `metadata.completion_type == "signal"` AND `metadata.type ∈ {"blocker", "algedonic"}` | Blocker- and algedonic-signal tasks self-complete; the task IS the signal, no HANDOFF to judge. Auditor observation tasks carry `completion_type="signal"` with NO `metadata.type`, so this predicate does not witness them — they self-complete as documented practice in the Concurrent Audit Protocol, not as a predicate-witnessed exemption. Do NOT add `metadata.type` to an auditor dispatch to make it fit the predicate; the carve-out set is a policy surface, not a template detail. |
 | Secretary session briefing + memory-save | Owner's team-config `agentType` ∈ `SELF_COMPLETE_EXEMPT_AGENT_TYPES` (currently `{pact-secretary}`) | Secretary self-completes its session-briefing deliverable (`secretary: deliver session briefing`) as the final act of delivering the briefing, and its memory-save tasks; team-lead has no acceptance criteria for the secretary's own briefing or memory bookkeeping. Self-completion does not end the secretary's role (it stays alive as consultant + harvester). Resolved via team-config lookup on `member.agentType`, so the carve-out applies regardless of spawn name (`session-secretary`, etc.). |
 
-The canonical predicate `is_self_complete_exempt(task, team_name)` in `shared/intentional_wait.py` witnesses ONLY these two surfaces. It is a pure function read by the PostToolUse advisory gate `task_lifecycle_gate.py` (advisory-only — it cannot DENY; it emits a `self_completion` advisory + a `completion_disputed` writeback when a non-exempt teammate self-completes) as well as by your `TaskGet` inspection and audit tooling. No hook BLOCKS on it; the exemption is not enforced (nothing forces an exempt teammate to self-complete — that remains instruction-level). Pass `team_name` (read from session context) to get accurate exemption signal for surface 1; surface 2 is independent of `team_name`.
+The canonical predicate `is_self_complete_exempt(task, team_name)` in `shared/intentional_wait.py` witnesses ONLY these two surfaces. It is a pure function read by the PostToolUse advisory gate `task_lifecycle_gate.py` (advisory-only — it cannot DENY; it emits a `self_completion` advisory + a `completion_disputed` writeback when a non-exempt teammate self-completes) as well as by your own inspection of the task file and audit tooling. No hook BLOCKS on it; the exemption is not enforced (nothing forces an exempt teammate to self-complete — that remains instruction-level). Pass `team_name` (read from session context) to get accurate exemption signal for surface 1; surface 2 is independent of `team_name`.
 
 **Related (dispatch surface)**: `member.agentType="pact-secretary"` also gets a dispatch carve-out — no TEACHBACK (single-task dispatch). Second agentType-keyed carve-out, parallel to `SELF_COMPLETE_EXEMPT_AGENT_TYPES` (completion, above); two frozensets, two behavioral surfaces, fully decoupled. See `agents/pact-orchestrator.md` §11 + `commands/bootstrap.md`.
 
@@ -2156,7 +2156,7 @@ The canonical predicate `is_self_complete_exempt(task, team_name)` in `shared/in
 |---|---|---|
 | imPACT termination | `metadata.terminated == true` | You force-complete an unrecoverable agent's task via `TaskStop` + `TaskUpdate(status="completed", metadata={"terminated": true, "reason": "..."})`. See [imPACT.md](../commands/imPACT.md). The `terminated` marker is recognized directly by audit/inspection; `is_self_complete_exempt` does NOT cover this surface (the team-lead writes status=completed directly). |
 
-**`TaskGet` metadata-blindness reminder**: `TaskGet` does NOT surface `metadata.handoff`. Read directly:
+**`TaskGet` metadata-blindness reminder**: `TaskGet` does NOT surface metadata. Read directly:
 
 ```
 cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff
@@ -2554,7 +2554,7 @@ Claude Code compaction has three durability mechanisms for orchestrator content:
 
 ### Malformed-Stdin Failure Log
 
-When `session_init.py` receives malformed or incomplete stdin (invalid JSON, missing `session_id`, non-string `session_id`, empty/whitespace `session_id`, or an `unknown-*` sentinel), the R3 gate drops the per-session journal anchor to avoid creating an unreapable `unknown-{hex}/` directory. The failure is instead recorded in a global bounded ring buffer at `{config_dir}/pact-sessions/_session_init_failures.log` (100-entry cap, JSONL, fail-open). When debugging session start failures that produce no per-session directory — especially failures in teammate sessions whose first-message context is never seen by the user — inspect this log with `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/pact-sessions/_session_init_failures.log" | tail -20`. Each entry records a UTC timestamp, classification (`malformed_json` / `missing_session_id` / `non_string_session_id` / `empty_session_id` / `sentinel_session_id` / `other`), truncated error text (≤200 chars), cwd, and source.
+When `session_init.py` receives malformed or incomplete stdin (invalid JSON, missing `session_id`, non-string `session_id`, empty/whitespace `session_id`, or an `unknown-*` sentinel), the stdin-validation gate drops the per-session journal anchor to avoid creating an unreapable `unknown-{hex}/` directory. The failure is instead recorded in a global bounded ring buffer at `{config_dir}/pact-sessions/_session_init_failures.log` (100-entry cap, JSONL, fail-open). When debugging session start failures that produce no per-session directory — especially failures in teammate sessions whose first-message context is never seen by the user — inspect this log with `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/pact-sessions/_session_init_failures.log" | tail -20`. Each entry records a UTC timestamp, classification (`malformed_json` / `missing_session_id` / `non_string_session_id` / `empty_session_id` / `sentinel_session_id` / `other`), truncated error text (≤200 chars), cwd, and source.
 
 ---
 

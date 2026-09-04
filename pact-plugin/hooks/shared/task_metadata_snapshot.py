@@ -91,7 +91,7 @@ SNAPSHOT_EXCLUDE: frozenset[str] = frozenset({"handoff"})
 # Keys whose WRITE (TaskCreate/TaskUpdate delta) triggers an immediate
 # whole-payload mirror — the open-task-consumed class that a status-blind
 # whole-store drain destroys while load-bearing (mid-arc readers consume
-# these via TaskGet while the task is still open). The fire predicate is
+# these from the task file while the task is still open). The fire predicate is
 # targeted-key-in-delta; the payload is always the full overlay (never a
 # projection), so cross-seam content-hash dedup stays coherent with the
 # completion-time seams. Disjoint from SNAPSHOT_EXCLUDE by test-pinned

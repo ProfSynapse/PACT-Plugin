@@ -133,7 +133,7 @@ This runs a mini-orchestration:
         └── /PACT:rePACT ← NOT ALLOWED
 ```
 
-> **Design rationale**: V3 repurposed rePACT as the single-level executor for sub-scopes dispatched by ATOMIZE. Level 2 nesting is unreachable by design -- scope detection is bypassed within sub-scopes, so a sub-scope cannot trigger further decomposition.
+> **Why the limit holds**: scope detection is bypassed within sub-scopes, so a sub-scope cannot trigger further decomposition — level 2 is unreachable rather than merely forbidden.
 
 If you hit the nesting limit:
 - Simplify the sub-task and use `/PACT:comPACT`
@@ -264,7 +264,7 @@ TaskUpdate(A_id, addBlocks=[B_id])
 For each specialist needed, follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
 
 1. `TaskCreate(subject="{scope-prefixed-name}: TEACHBACK for {sub-task}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="{scope-prefixed-name}: implement {sub-task}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
+2. `TaskCreate(subject="{scope-prefixed-name}: implement {sub-task}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (4-rationale schema); the wiring write below is denied without it.
    - Task B's `description` carries the implementation mission: "[full CONTEXT/MISSION/INSTRUCTIONS/GUIDELINES]"
 3. `TaskUpdate(A_id, owner="{scope-prefixed-name}", addBlocks=[B_id])`
 4. `TaskUpdate(B_id, owner="{scope-prefixed-name}", addBlockedBy=[A_id])`

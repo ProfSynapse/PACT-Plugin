@@ -1841,7 +1841,7 @@ def main():
                     f'(1) Read {_summary_path} for prior context '
                     f'{_archive_clause}, '
                     f'(2) Run TaskList to find in-progress work, '
-                    f'(3) TaskGet on in-progress tasks for details. '
+                    f'(3) read the task files of in-progress tasks for details (TaskGet does not surface metadata). '
                     f'{_secretary_clause}'
                 ))
                 # Secondary-layer (#444): append POST-COMPACTION CHECKPOINT block
@@ -1884,7 +1884,7 @@ def main():
                     f'CONTEXT CLEARED: Your context was cleared via /clear. '
                     f'State recovery: '
                     f'(1) TaskList for current tasks, '
-                    f'(2) TaskGet on in-progress tasks. '
+                    f'(2) read the task files of in-progress tasks (TaskGet does not surface metadata). '
                     f"Re-engage secretary: SendMessage(to='secretary', "
                     f"message='Context cleared: deliver fresh briefing with current project state.')."
                 ))

@@ -237,8 +237,8 @@ The teachback gate is lightweight ("understanding-confirm" with no implementatio
 **Dispatch each consultant** — for each consultant, follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
 
 1. `TaskCreate(subject="{specialist}: TEACHBACK for plan consultation on {feature}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="{specialist}: plan consultation for {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (D11 4-rationale schema); the wiring write below is denied without it.
-   - Task B's `description` is "PLANNING CONSULTATION ONLY — No implementation.\n\nFIRST claim this task (`TaskUpdate` status=in_progress) before beginning the consultation — pre-assigned to you but still pending; you flip it, not the lead.\n\nTask: {task description}\n\n[full template content from above]\n\nIf upstream context is referenced, read it first by using `TaskGet` tool."
+2. `TaskCreate(subject="{specialist}: plan consultation for {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (4-rationale schema); the wiring write below is denied without it.
+   - Task B's `description` is "PLANNING CONSULTATION ONLY — No implementation.\n\nFIRST claim this task (`TaskUpdate` status=in_progress) before beginning the consultation — pre-assigned to you but still pending; you flip it, not the lead.\n\nTask: {task description}\n\n[full template content from above]\n\nIf upstream context is referenced, read the upstream task file first — `TaskGet` does NOT surface metadata."
 3. `TaskUpdate(A_id, owner="{specialist-name}", addBlocks=[B_id])`
 4. `TaskUpdate(B_id, owner="{specialist-name}", addBlockedBy=[A_id])`
 5. Spawn the consultant with the canonical dispatch form:
