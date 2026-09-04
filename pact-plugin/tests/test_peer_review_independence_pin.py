@@ -106,3 +106,16 @@ def test_the_harvest_paragraph_points_at_the_clause():
         "clause, so a reader of it meets one channel and concludes that is the "
         "one to watch"
     )
+
+
+def test_the_clause_extraction_stops_at_the_clause():
+    """`_clause()` reads anchor-to-blank-line, so losing the blank line after
+    the clause silently widens every token row above into the next step — the
+    co-occurrence asserts would then pass on words that live elsewhere.
+
+    Broken once while renumbering this list, and caught only by hand.
+    """
+    assert "spawn the reviewer" not in _clause(), (
+        "the clause extraction now runs past the clause into the spawn step, so "
+        "the token rows above no longer prove those words are IN the clause"
+    )
