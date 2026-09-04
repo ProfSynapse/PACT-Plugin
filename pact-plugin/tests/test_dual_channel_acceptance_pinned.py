@@ -1049,6 +1049,289 @@ def test_retired_pointer_format_absent_tree_wide(pointer: str):
 
 
 # ---------------------------------------------------------------------------
+# P28-P32 — metadata-presence: every named reader must be one that can read.
+#
+# The contract: an instruction surface must not name `TaskGet` as the reader
+# of a `metadata.*` key, because `TaskGet` surfaces subject / status / owner /
+# description / blocks / blockedBy and NOT metadata. Before these cases the
+# two CODE-phase gate lines were pinned by nothing at all (measured with a
+# live two-file control), so both could be reverted with the suite green.
+# ---------------------------------------------------------------------------
+
+PLAN_MODE = PLUGIN_ROOT / "commands" / "plan-mode.md"
+IMPACT = PLUGIN_ROOT / "commands" / "imPACT.md"
+WORKFLOWS = PLUGIN_ROOT / "protocols" / "pact-workflows.md"
+
+
+def _unique_line_containing(doc_path: Path, marker: str) -> str:
+    """Return the ONE normalized line of ``doc_path`` carrying ``marker``.
+
+    Exactly-once is asserted before the line is used, and the marker is a
+    bold checklist label rather than a content prefix. Selecting a line by
+    content prefix is the trap this file's arc measured: two blocks whose
+    first seventy characters are identical, and a prefix match picks one at
+    random and fails silently. A label that matches twice means the anchor
+    stopped identifying a single site, so the location is refused rather
+    than guessed at."""
+    hits = [
+        line for line in _raw(doc_path).splitlines()
+        if _phrase(marker) in _phrase(line)
+    ]
+    assert len(hits) == 1, (
+        f"{doc_path.name}: line anchor {marker!r} matched {len(hits)} lines "
+        f"(want exactly 1). The line-scoped gate pins below cannot identify "
+        f"their site through an ambiguous or absent anchor — fix the anchor "
+        f"before trusting them."
+    )
+    return _phrase(hits[0])
+
+
+# ---------------------------------------------------------------------------
+# P28 — the two CODE-phase gate lines carry their new acceptance/coverage text.
+# ---------------------------------------------------------------------------
+
+# D1 is an ACCEPTANCE site (it decides about a payload already in the lead's
+# context) and D2 a COVERAGE site (it decides whether an event happened
+# elsewhere), so they get different spans. D2's span requires BOTH key names:
+# a lead `TaskUpdate` that overwrites an auditor-authored verdict routes the
+# lead's value to `lead_close_note` and preserves the original at
+# `audit_summary_authored`, so a coverage check reading only `audit_summary`
+# asks the wrong key after a lead close.
+GATE_PRESENCE_PINS = [
+    (
+        ORCHESTRATE,
+        "**HANDOFF acceptance**: on receiving each Task-complete "
+        "SendMessage, accept on the HANDOFF payload the notify carries",
+    ),
+    (
+        ORCHESTRATE,
+        "The disk copy is the deferred audit, not the acceptance surface",
+    ),
+    (
+        ORCHESTRATE,
+        "metadata.audit_summary OR metadata.audit_summary_authored",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path, phrase",
+    GATE_PRESENCE_PINS,
+    ids=[f"{p.name}::{ph[:44]}" for p, ph in GATE_PRESENCE_PINS],
+)
+def test_code_phase_gate_lines_present(doc_path: Path, phrase: str):
+    """Both CODE-phase gate lines must keep naming a surface their instrument
+    can actually read — the notify-carried payload for acceptance, the task
+    file's two audit keys for coverage.
+
+    WHAT THIS CANNOT CATCH: presence alone is the phantom-green shape. A
+    correct sentence can be ADDED while the broken one stays, and every case
+    here still passes. P29 and P30 are the other half and must not be
+    dropped as redundant."""
+    assert _phrase(phrase) in _normalized(doc_path), (
+        f"{doc_path.name}: CODE-phase gate phrase {phrase!r} not found. The "
+        f"gate must name a readable surface; if reworded intentionally, "
+        f"update this pin in lockstep with the P29/P30 absence guards."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P29 — the retired gate instruments stay retired (file-wide absence).
+# ---------------------------------------------------------------------------
+
+# Both spans are the verbatim pre-change text. Pinning the real retired
+# sentence rather than one authored to match the pin is what makes a revert
+# the mutation these cases answer to: a mutant written to fit its own pin
+# proves the pin matches itself and nothing else.
+RETIRED_GATE_INSTRUMENT_PINS = [
+    (
+        ORCHESTRATE,
+        "verify via TaskGet — confirm status=completed AND "
+        "metadata.handoff populated/non-empty",
+    ),
+    (
+        ORCHESTRATE,
+        "metadata.audit_summary is present (verify via TaskGet)",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path, retired",
+    RETIRED_GATE_INSTRUMENT_PINS,
+    ids=[f"{p.name}::not-{r[:38]}" for p, r in RETIRED_GATE_INSTRUMENT_PINS],
+)
+def test_retired_gate_instrument_absent(doc_path: Path, retired: str):
+    """Neither gate may go back to reading task metadata through `TaskGet`.
+    File-wide rather than line-scoped on purpose: the retired sentence is
+    wrong wherever it appears, and a file-wide sweep also catches it being
+    re-added on a NEW line beside the corrected one — which a line-scoped
+    check would miss."""
+    assert _phrase(retired) not in _normalized(doc_path), (
+        f"{doc_path.name}: retired gate instrument {retired!r} present. "
+        f"`TaskGet` does not surface metadata, so this check cannot "
+        f"evaluate; the acceptance surface is the notify-carried payload "
+        f"and the coverage surface is the task file."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P30 — line-scoped: the gate line must not name TaskGet as a metadata reader.
+# ---------------------------------------------------------------------------
+
+# The one case here that catches a NEW wrong variant rather than a replay of
+# the retired text. Each entry is a set of tokens that must not ALL appear on
+# the anchored line. D1 legitimately KEEPS a `TaskGet` clause (it reads
+# `status`, which TaskGet does surface), so the forbidden thing is the
+# CO-OCCURRENCE with a metadata key, not the token — a bare-token absence pin
+# would redden on correct work. D2's line legitimately carries both `TaskGet`
+# and a `metadata.` key (it names the blindness explicitly), so its forbidden
+# span is the retired instrument phrase instead.
+GATE_LINE_FORBIDDEN_COOCCURRENCE = [
+    ("**HANDOFF acceptance**", ("TaskGet", "metadata.handoff")),
+    ("**Concurrent-audit coverage check**", ("verify via TaskGet",)),
+]
+
+
+@pytest.mark.parametrize(
+    "label, forbidden",
+    GATE_LINE_FORBIDDEN_COOCCURRENCE,
+    ids=[lbl.strip("*") for lbl, _ in GATE_LINE_FORBIDDEN_COOCCURRENCE],
+)
+def test_gate_line_does_not_name_taskget_as_metadata_reader(
+    label: str, forbidden: tuple
+):
+    """On the gate's own line, `TaskGet` must not be named as the reader of
+    a metadata key. Scoped to the anchored line so a future rewording that
+    re-imports the disk read is caught even when it shares none of the
+    retired sentence's wording.
+
+    WHAT THIS CANNOT CATCH: it is blind to the same defect on any OTHER line
+    of the file, and blind to the line being deleted outright — P28 and P29
+    cover those two directions."""
+    line = _unique_line_containing(ORCHESTRATE, label)
+    present = [tok for tok in forbidden if _phrase(tok) in line]
+    assert len(present) < len(forbidden), (
+        f"orchestrate.md: the {label} line names {present!r} together. "
+        f"`TaskGet` surfaces status, not metadata — a metadata key on this "
+        f"line must be read from the task file or carried by the notify."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P31 — per-site: retired reader-naming clauses stay retired.
+# ---------------------------------------------------------------------------
+
+# Every span is the verbatim pre-change clause, so each case answers to a
+# revert of the commit that changed it. Two spans on the agent-teams skill
+# cover successive states of the SAME line: the first is the state before
+# the reader was swapped, the second the state before the resulting orphaned
+# label was collapsed — reverting either commit reddens exactly one.
+RETIRED_TASKGET_READER_PINS = [
+    (AGENT_TEAMS_SKILL,
+     "If upstream tasks are referenced, read them via TaskGet."),
+    (ORCHESTRATOR,
+     "If upstream task references are provided, read them via TaskGet first."),
+    (PLAN_MODE,
+     "If upstream context is referenced, read it first by using TaskGet tool."),
+    (AGENT_TEAMS_SKILL,
+     "any reader of the flag (team-lead TaskGet, audit, future consumers)"),
+    (AGENT_TEAMS_SKILL,
+     "will be flagged by the team-lead's TaskGet verification"),
+    (AGENT_TEAMS_SKILL,
+     "the team-lead's HANDOFF-presence check"),
+    (COMPLETION_AUTHORITY,
+     "as well as by your TaskGet inspection and audit tooling"),
+    (PROTOCOLS_SSOT,
+     "as well as by your TaskGet inspection and audit tooling"),
+    (IMPACT, "Reconstruct from memory + TaskGet chain"),
+    (WORKFLOWS, "Reconstruct from memory/TaskGet"),
+    (PROTOCOLS_SSOT, "Reconstruct from memory/TaskGet"),
+]
+
+
+@pytest.mark.parametrize(
+    "doc_path, retired",
+    RETIRED_TASKGET_READER_PINS,
+    ids=[f"{p.name}::not-{r[:38]}" for p, r in RETIRED_TASKGET_READER_PINS],
+)
+def test_retired_taskget_reader_clause_absent(doc_path: Path, retired: str):
+    """No surface may instruct a read of upstream task content through
+    `TaskGet`, or describe a mechanism as reading metadata with it. The two
+    mirrored surfaces each carry their own case: a lockstep revert of an
+    extract and its SSOT region keeps the byte-mirror gate green, so a single
+    witness on one side would miss the pair moving together."""
+    assert _phrase(retired) not in _normalized(doc_path), (
+        f"{doc_path.name}: retired reader-naming clause {retired!r} "
+        f"present. `TaskGet` does NOT surface metadata — name the task file "
+        f"read, or name the property rather than the instrument."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P32 — tree-wide: no blindness claim scoped to `handoff`.
+# ---------------------------------------------------------------------------
+
+# TREE-WIDE, NOT PER-SITE, and that is the whole design. A per-site arm goes
+# green the moment a sixth narrow claim appears in a NEW file, which is
+# exactly how this class spread: five surfaces stated the blindness correctly
+# but scoped it to one key, and a reader of any of them can conclude the
+# other keys ARE surfaced. Blindness is total across keys.
+#
+# The sweep inherits INSTRUCTION_SURFACE_FLOOR through _instruction_surfaces()
+# so a glob regression cannot narrow it to nothing, and it carries its own
+# positive control below: an absence result from a search with no known-present
+# term in the same run is worth nothing.
+NARROW_BLINDNESS_CLAIMS = [
+    "TaskGet does NOT surface metadata.handoff",
+    "TaskGet is metadata-blind for handoff content",
+]
+
+CANONICAL_BLINDNESS_CLAIM = "TaskGet does NOT surface metadata"
+
+# Measured 12 surfaces carrying the canonical form. The floor sits below the
+# measurement so ordinary editing does not redden it, and above zero so a
+# normalization or glob failure that silently matches nothing does.
+BLINDNESS_CONTROL_FLOOR = 10
+
+
+@pytest.mark.parametrize(
+    "narrow", NARROW_BLINDNESS_CLAIMS, ids=lambda n: n[:44]
+)
+def test_blindness_claim_not_scoped_to_handoff_tree_wide(narrow: str):
+    """No instruction surface may state the metadata blindness as applying
+    to `handoff` alone. Swept tree-wide with a known-present control in the
+    SAME run, so a scan that has stopped matching anything reports as broken
+    rather than as clean.
+
+    WHAT THIS CANNOT CATCH: it keys on two known narrow renderings. A sixth
+    site that scopes the claim to a DIFFERENT key, or in different words,
+    passes — the tree-wide population is what stops the known shapes
+    spreading, not a general claim-scope detector."""
+    surfaces = _instruction_surfaces()
+
+    control_hits = sum(
+        1 for s in surfaces
+        if _phrase(CANONICAL_BLINDNESS_CLAIM) in _normalized(s)
+    )
+    assert control_hits >= BLINDNESS_CONTROL_FLOOR, (
+        f"positive control failed: the canonical blindness claim "
+        f"{CANONICAL_BLINDNESS_CLAIM!r} was found on only {control_hits} of "
+        f"{len(surfaces)} surfaces (floor {BLINDNESS_CONTROL_FLOOR}). The "
+        f"absence result below is not trustworthy until this passes — a "
+        f"scan matching nothing reports every claim as absent."
+    )
+
+    for surface in surfaces:
+        assert _phrase(narrow) not in _normalized(surface), (
+            f"{surface.name}: blindness claim {narrow!r} is scoped to one "
+            f"key. `TaskGet` surfaces NO metadata, so a reader of this "
+            f"sentence can wrongly conclude other keys are surfaced — state "
+            f"the blindness generally."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Counter-test flip-set record (measured in TEMP COPIES of the plugin
 # tree; see module docstring). Each edited file restored individually to
 # its pre-change state (git show e2afa3e5:<path> over the copy), module
@@ -1154,4 +1437,41 @@ def test_retired_pointer_format_absent_tree_wide(pointer: str):
 #     surfaces that previously had the pointers)
 #   confirmation phrase reworded (extract)
 #                                        -> 1 failed (P25 that surface)
+#
+# METADATA-PRESENCE ARMS (P28-P32, 22 cases in this module). Every
+# cardinality below was PREDICTED before the run and then measured; the one
+# deviation is recorded with its cause rather than smoothed over. Reverts are
+# source-only (`git checkout <sha>^ -- <paths>`), so the arms stay in place
+# and the retired text is the real pre-change text rather than a mutant
+# authored to match its own pin.
+#
+#   revert of the gate-line commit (both lines)
+#                                        -> 7 failed (P28 x3, P29 x2,
+#     P30 x2). NOTE WHICH ASSERTION FIRES: P30's acceptance case reddens on
+#     the ANCHOR assert (the label is reverted too, so the line anchor
+#     matches 0 lines), NOT on the co-occurrence assert. The co-occurrence
+#     assert is exercised only by the targeted mutation below.
+#   TaskGet named as reader of metadata.handoff on the acceptance line,
+#     label left intact                   -> 1 failed (P30 acceptance case,
+#     on `assert 2 < 2`). P28 and P29 stay GREEN on this real defect — it is
+#     a NEW variant sharing no wording with the retired sentence, and P30 is
+#     the only case that sees it.
+#   source-only revert of the class-C commit
+#                                        -> 12 failed (P31 x11, plus P32's
+#     narrow-claim case). PREDICTED 11, MEASURED 12. Cause: the narrow-5
+#     commit is LATER than the class-C commit on two shared files, so
+#     restoring them at the class-C parent also un-widens the blindness
+#     claim. Not an arm defect — an artifact of checking out an ancestor ref
+#     on a file later commits also touched.
+#   revert of the orphaned-label commit   -> 1 failed (P31, the
+#     HANDOFF-presence case; the two agent-teams spans pin successive states
+#     of the SAME line, so each commit reddens exactly its own)
+#   source-only revert of the narrow-5 commit
+#                                        -> 2 failed (P32 x2; the positive
+#     control still passes, since the narrow form contains the canonical one)
+#   P32's positive control pointed at a phrase absent from the tree
+#                                        -> both P32 cases fail ON THE
+#     CONTROL assert, reporting 0 of 70 surfaces against a floor of 10. An
+#     instrument check, not a tree mutation: it proves the control fires, so
+#     a sweep that has stopped matching reports as broken rather than clean.
 # ---------------------------------------------------------------------------
