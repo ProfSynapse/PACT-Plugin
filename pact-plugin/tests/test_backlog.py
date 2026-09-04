@@ -451,6 +451,12 @@ def _backlog(project_path, items=None, project="demo", updated="2026-09-01T00:00
     }
 
 
+# Older than `_STALE_AFTER`, for arms about the abandoned-work LINKAGE. That
+# heuristic exempts recently-touched items, and `_item`'s default `touched` is
+# recent, so without this those arms stop reaching the linkage they name.
+_OLD = "2020-01-01"
+
+
 def _item(item_id="a1b2", title="An item", status="planned", rank=1, **fields):
     item = {
         "id": item_id,
@@ -1668,7 +1674,8 @@ def test_the_git_calls_are_anchored_to_the_project(monkeypatch, tmp_path):
         return ""
 
     monkeypatch.setattr(backlog, "_run_capture", fake_capture)
-    backlog._abandoned_flags([_item(status="active", ref="#1")], str(tmp_path))
+    backlog._abandoned_flags(
+        [_item(status="active", ref="#1", touched=_OLD)], str(tmp_path))
 
     assert seen, "no git command was issued at all"
     for command in seen:
@@ -2149,7 +2156,8 @@ def test_the_abandoned_heuristic_reads_real_branches(tmp_path, monkeypatch):
     repo = _repo(tmp_path / "repo", branch="feat/1234-thing")
     monkeypatch.setattr(backlog, "project_root", lambda: repo)
 
-    carried = backlog._abandoned_flags([_item(status="active", ref="#1234")], str(repo))
+    carried = backlog._abandoned_flags(
+        [_item(status="active", ref="#1234", touched=_OLD)], str(repo))
     assert carried == [], f"a ref carried by a branch was flagged: {carried}"
 
     # A CONTROL PROVING GIT RAN. Both git calls failing returns None, which
@@ -2160,9 +2168,39 @@ def test_the_abandoned_heuristic_reads_real_branches(tmp_path, monkeypatch):
     assert backlog._branch_and_worktree_names(str(repo)) is not None, \
         "git did not run — the negative below would be vacuous"
 
-    orphan = backlog._abandoned_flags([_item(status="active", ref="#9999")], str(repo))
+    orphan = backlog._abandoned_flags(
+        [_item(status="active", ref="#9999", touched=_OLD)], str(repo))
     assert len(orphan) == 1, f"an unreferenced ref did not flag: {orphan}"
     assert "9999" in orphan[0]
+
+
+def test_a_recently_touched_item_is_not_abandoned_but_an_old_one_still_is(tmp_path, monkeypatch):
+    """Recency exempts; age does not. BOTH halves, because the first alone is
+    satisfied by a heuristic that simply stopped flagging.
+
+    The linkage only sees a branch carrying the ref's digits, and this project
+    names plenty of branches without them — so live work on such a branch read
+    as abandoned. Recency is the exemption because abandonment means neglect.
+
+    RED WHEN the recency filter is removed (the fresh item flags again), and
+    RED WHEN it is widened to exempt everything (the old item stops flagging).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    repo = _repo(tmp_path / "repo", branch="no-digits-here")
+    monkeypatch.setattr(backlog, "project_root", lambda: repo)
+
+    def flags(days_ago):
+        touched = (datetime.now(timezone.utc) - timedelta(days=days_ago)).date().isoformat()
+        return backlog._abandoned_flags(
+            [_item(status="active", ref="#9999", touched=touched)], str(repo)
+        )
+
+    assert flags(0) == [], "an item touched today was reported abandoned"
+    assert len(flags(365)) == 1, (
+        "an item untouched for a year stopped flagging, so the exemption is "
+        "not discriminating — it switched the heuristic off"
+    )
 
 
 def test_the_abandoned_heuristic_ignores_shas_and_path_components(tmp_path, monkeypatch):
@@ -2184,7 +2222,8 @@ def test_the_abandoned_heuristic_ignores_shas_and_path_components(tmp_path, monk
     monkeypatch.setattr(backlog, "project_root", lambda: repo)
     assert "9999" in str(repo), "fixture no longer places the token in the path"
 
-    flags = backlog._abandoned_flags([_item(status="active", ref="#9999")], str(repo))
+    flags = backlog._abandoned_flags(
+        [_item(status="active", ref="#9999", touched=_OLD)], str(repo))
     assert len(flags) == 1, (
         f"a ref matching only a PATH COMPONENT was treated as carried: {flags}"
     )

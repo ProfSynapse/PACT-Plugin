@@ -957,7 +957,23 @@ def _abandoned_flags(
     from reconcile the way _plan_flags already receives it, rather than calling
     project_root(), which raises and would turn a drift report into a refusal.
     """
-    tracked = [item for item in items if item.get("status") == "active" and item.get("ref")]
+    # A RECENTLY TOUCHED ITEM IS NOT ABANDONED, whatever its branch is called.
+    # The linkage below only sees a branch that carries the ref's digits, and
+    # a branch named without its issue number reads as no branch at all. Where
+    # that naming is common — and in some repositories it is the majority —
+    # live work reports as abandoned. `_STALE_AFTER` already encodes this
+    # notion of neglect; a second threshold would be a second thing to keep in
+    # step. Filtered HERE rather than in the loop below so the early return
+    # still spares the git calls when nothing qualifies.
+    cutoff = (datetime.now(timezone.utc) - _STALE_AFTER).date()
+    tracked = []
+    for item in items:
+        if item.get("status") != "active" or not item.get("ref"):
+            continue
+        touched = as_datetime(item.get("touched"))
+        if touched is not None and touched.date() >= cutoff:
+            continue
+        tracked.append(item)
     if not tracked:
         return []
     # ponytail: the linkage is the ref's digits appearing in a branch or
