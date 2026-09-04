@@ -36,12 +36,16 @@ Assertion strategy (CI-robust — NOT exact-ms; design §7.2)
 ----------------------------------------------------------
 Two mutually reinforcing assertions per case:
 
-* **Absolute wall-clock ceiling** (PRIMARY discriminator). Bounded/linear is
-  ~0.06–0.18 s at N=4000 here; a 4–5x-slower CI box stays well under the
-  ceiling. The unbounded/quadratic form is ~1.8 s (gh detect) to ~7.3 s (gh
-  read) at N=4000. The ceiling sits an order of magnitude clear of linear and below
-  quadratic, so it cannot flap on a slow machine yet still trips on a
-  regression.
+* **Absolute wall-clock ceiling** (PRIMARY discriminator). The unbounded/quadratic
+  form is ~1.8 s (gh detect) to ~7.3 s (gh read) at N=4000. The ceiling sits
+  clear of linear and below quadratic, so it cannot flap on a slow machine yet
+  still trips on a regression.
+
+  BOUNDED COSTS ARE QUOTED AT ``N_LARGE`` BELOW, NOT AT N=4000. Every figure
+  in this module once described N=4000 while the arms ran at 8000, which
+  understated one of them ~30x and makes a ceiling look safer than it is. Each
+  per-case comment now carries its measured ``t_large`` and the margin that
+  follows from it.
 * **Scaling ratio** ``t(2N)/t(N) < 3.0`` across one doubling. Linear ≈ 2.0,
   quadratic ≈ 4.0; 3.0 is the midpoint. ``best-of-K`` minimum timing suppresses
   upward scheduler/GC noise (a slow sample never lowers the min).
@@ -92,8 +96,12 @@ _K = 5
 # Linear ~2.0x per doubling; quadratic ~4.0x. 3.0 is the midpoint.
 RATIO_CEILING = 3.0
 
-# Per-case absolute ceilings. The git/detect bank's quadratic is ~6 s at N=4000,
-# so 2.0 s is generous yet trips hard on regression.
+# Per-case absolute ceilings. The git/detect bank's quadratic is ~6 s at N=4000
+# and 60.7 s at N_LARGE (measured under the counter-factual revert), so 2.0 s
+# trips hard on regression.
+# MEASURED t_large at N_LARGE=8000, across quiet / 10 / 24 busy procs / two
+# concurrent full-suite runs: is_dangerous 286-435 ms (4.6x of room),
+# detect 375-619 ms (3.2x). Both hold.
 _CEIL_GIT = 2.0
 
 
@@ -114,7 +122,12 @@ def _best_time(fn, arg, k=_K):
 # `{0,K}`->`*`): is_dangerous ~7.3 s at N=4000 (2.0 s ceiling fine), but
 # detect_command_operation_type only ~1.8 s (two gh-prefix classifier patterns,
 # not the ~21-pattern read bank) — so detect/gh gets a TIGHTER 1.0 s ceiling
-# (per-surface ceiling calibration). Bounded: ~0.08 s / ~0.02 s.
+# (per-surface ceiling calibration).
+# MEASURED t_large at N_LARGE=8000, same four load levels: is_dangerous
+# 214-363 ms against 2.0 s (5.5x of room), detect 221-373 ms against 1.0 s
+# (2.7x — the tightest margin in this module, and it holds). The `~0.08 s /
+# ~0.02 s` this replaced was an N=4000 figure; the detect half understated
+# N_LARGE by ~15x.
 _CEIL_GH_READ = 2.0
 _CEIL_GH_DETECT = 1.0
 
@@ -125,7 +138,28 @@ _CEIL_GH_DETECT = 1.0
 # (ratio < 3.0): a future nested-quantifier regression in the push patterns would
 # trip it. It is GREEN-stays-GREEN — reverting the `{0,32}` push bound keeps it
 # linear, so there is NO perf counter-test-RED for it; the bound's non-vacuity is
-# the >K-RESIDUAL FLIP in TestFlagTokenBoundary, not a perf revert. Bounded ~6 ms.
+# the >K-RESIDUAL FLIP in TestFlagTokenBoundary, not a perf revert.
+#
+# THE RATIO ASSERTION IS DISABLED FOR THIS CASE (ratio ceiling None below), and
+# the reason is that it is the ONE arm here that can produce a false red and
+# cannot produce a true one. VERIFIED, not inferred: reverting both global-flag
+# bounds `{0,32}`->`*` reds `detect_command_operation_type/git` at 60.7 s against
+# its 2.0 s ceiling and leaves BOTH push cases green — so the counter-factual
+# that exists for git/gh does not reach these, exactly as the paragraph above
+# says. What remains is a guard against a hypothetical future nested-quantifier
+# regression, and the absolute ceiling below guards the same hypothetical with
+# far more room:
+#
+#   MEASURED at N_LARGE=8000, 38 reps per case across four load levels (quiet;
+#   10 and 24 busy procs on 10 cores; two concurrent full-suite pytest runs;
+#   and a 2M-object live heap): ratio med 1.99, MAX 2.79 against a 3.0 ceiling
+#   — 1.07x of room. t_large med 175-310 ms against the 1.0 s ceiling below —
+#   3.3x of room. Neither is counter-testable today; keeping the one that will
+#   not false-fire and dropping the one that will is the whole trade.
+#
+# The `~6 ms` this comment used to claim was stale by the N doubling above and
+# understated the real figure by ~30x, which makes the absolute ceiling look far
+# safer than it is. Measured numbers, with their N, replace it.
 _CEIL_PUSHWALK = 1.0
 
 # `_VALUE_TOKEN` HAS NO ARM IN THIS LADDER, AND THE ATTEMPT IS RECORDED SO IT IS
@@ -158,24 +192,26 @@ def _measure_scaling(fn, build):
     return t_small, t_large
 
 
-# (id, function, witness builder build(N)->str, absolute-ceiling-seconds)
+# (id, function, witness builder build(N)->str, absolute-ceiling-seconds,
+#  ratio-ceiling or None to skip the ratio assertion — None ONLY where the case
+#  has no quadratic counter-factual, so the ratio can false-red but never true-red)
 _CASES = [
-    ("is_dangerous_command/git", is_dangerous_command, lambda n: "git x " * n, _CEIL_GIT),
-    ("detect_command_operation_type/git", detect_command_operation_type, lambda n: "git x " * n, _CEIL_GIT),
+    ("is_dangerous_command/git", is_dangerous_command, lambda n: "git x " * n, _CEIL_GIT, RATIO_CEILING),
+    ("detect_command_operation_type/git", detect_command_operation_type, lambda n: "git x " * n, _CEIL_GIT, RATIO_CEILING),
     # --- remediation additions (PR #1003) ---
-    ("is_dangerous_command/gh", is_dangerous_command, lambda n: "gh x " * n, _CEIL_GH_READ),
-    ("detect_command_operation_type/gh", detect_command_operation_type, lambda n: "gh x " * n, _CEIL_GH_DETECT),
-    ("is_dangerous_command/push-flag-walk", is_dangerous_command, lambda n: "git push " + "-x " * n, _CEIL_PUSHWALK),
-    ("detect_command_operation_type/push-flag-walk", detect_command_operation_type, lambda n: "git push " + "-x " * n, _CEIL_PUSHWALK),
+    ("is_dangerous_command/gh", is_dangerous_command, lambda n: "gh x " * n, _CEIL_GH_READ, RATIO_CEILING),
+    ("detect_command_operation_type/gh", detect_command_operation_type, lambda n: "gh x " * n, _CEIL_GH_DETECT, RATIO_CEILING),
+    ("is_dangerous_command/push-flag-walk", is_dangerous_command, lambda n: "git push " + "-x " * n, _CEIL_PUSHWALK, None),
+    ("detect_command_operation_type/push-flag-walk", detect_command_operation_type, lambda n: "git push " + "-x " * n, _CEIL_PUSHWALK, None),
 ]
 
 
 @pytest.mark.parametrize(
-    "fn,build,abs_ceiling",
-    [(fn, build, ceil) for (_id, fn, build, ceil) in _CASES],
+    "fn,build,abs_ceiling,ratio_ceiling",
+    [(fn, build, ceil, rceil) for (_id, fn, build, ceil, rceil) in _CASES],
     ids=[c[0] for c in _CASES],
 )
-def test_global_flag_prefix_scaling_is_subquadratic(fn, build, abs_ceiling):
+def test_global_flag_prefix_scaling_is_subquadratic(fn, build, abs_ceiling, ratio_ceiling):
     """The bounded global-flag prefixes / push-flag walk must scale
     sub-quadratically on the worst-case witness through both detection paths,
     the gh prefix (review m-3), and the push-flag walk
@@ -195,11 +231,13 @@ def test_global_flag_prefix_scaling_is_subquadratic(fn, build, abs_ceiling):
     )
 
     # REINFORCING: scaling ratio across one doubling (linear ~2.0, quadratic ~4.0).
-    assert ratio < RATIO_CEILING, (
-        f"{fn.__name__} on {witness!r}: t({N_LARGE})/t({N_SMALL}) = {ratio:.2f} "
-        f">= {RATIO_CEILING} — quadratic scaling regression "
-        f"(t_small={t_small * 1000:.1f} ms, t_large={t_large * 1000:.1f} ms)?"
-    )
+    # Skipped where ratio_ceiling is None — see the `_CEIL_PUSHWALK` note.
+    if ratio_ceiling is not None:
+        assert ratio < ratio_ceiling, (
+            f"{fn.__name__} on {witness!r}: t({N_LARGE})/t({N_SMALL}) = {ratio:.2f} "
+            f">= {ratio_ceiling} — quadratic scaling regression "
+            f"(t_small={t_small * 1000:.1f} ms, t_large={t_large * 1000:.1f} ms)?"
+        )
 
 
 # ---------------------------------------------------------------------------
