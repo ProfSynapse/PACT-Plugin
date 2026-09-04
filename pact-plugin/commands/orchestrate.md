@@ -806,8 +806,8 @@ JSON
   {"workflow": "code-auditor", "feature": "{feature}", "paths": ["{absolute_decision_log_path}"]}
 JSON
   ```
-- [ ] **Primary HANDOFF-presence check**: on receiving each Task-complete `SendMessage`, verify via `TaskGet` — confirm status=completed AND metadata.handoff populated/non-empty. If missing, `SendMessage` the agent to complete HANDOFF before downstream dispatch proceeds.
-- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — `metadata.audit_summary` is present (verify via `TaskGet`), OR an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
+- [ ] **HANDOFF acceptance**: on receiving each Task-complete `SendMessage`, accept on the HANDOFF payload the notify carries, and confirm `status=completed` via `TaskGet`. If the notify carries no HANDOFF payload, `SendMessage` the agent to submit one before downstream dispatch proceeds. The disk copy is the deferred audit, not the acceptance surface — see [pact-completion-authority.md §Read-Trigger Precondition](../protocols/pact-completion-authority.md#read-trigger-precondition) point 4 for the audit, the integrity finding and the repair.
+- [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — the auditor task's file carries `metadata.audit_summary` OR `metadata.audit_summary_authored` (`cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq '.metadata | has("audit_summary") or has("audit_summary_authored")'`; `TaskGet` does NOT surface metadata), OR an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
 - [ ] **Process coder HANDOFFs** (dispatch once no auditor task is `pending` or `in_progress` — a contamination ordering, NOT a verdict wait):
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",
