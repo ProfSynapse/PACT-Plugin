@@ -97,13 +97,13 @@ B_id = TaskCreate(
     metadata={
         "variety": {
             "novelty":               N,
-            "novelty_rationale":     "<1-sentence: why this score for THIS dispatch's novelty — shape only, not the hypothesis>",
+            "novelty_rationale":     "<1-sentence: the shape of this dispatch's novelty — never what you expect to find>",
             "scope":                 N,
-            "scope_rationale":       "<1-sentence: why this score for THIS dispatch's scope — shape only, not the hypothesis>",
+            "scope_rationale":       "<1-sentence: the shape of this dispatch's scope — never what you expect to find>",
             "uncertainty":           N,
-            "uncertainty_rationale": "<1-sentence: why this score for THIS dispatch's uncertainty — shape only, not the hypothesis>",
+            "uncertainty_rationale": "<1-sentence: the shape of this dispatch's uncertainty — never what you expect to find>",
             "risk":                  N,
-            "risk_rationale":        "<1-sentence: why this score for THIS dispatch's risk — shape only, not the hypothesis>",
+            "risk_rationale":        "<1-sentence: the shape of this dispatch's risk — never what you expect to find>",
             "total":                 N
         }
     }

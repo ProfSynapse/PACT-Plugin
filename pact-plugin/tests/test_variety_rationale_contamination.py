@@ -19,7 +19,7 @@ VARIETY = PLUGIN / "protocols" / "pact-variety.md"
 PROTOCOLS = PLUGIN / "protocols" / "pact-protocols.md"
 
 # A placeholder a lead fills in. The suffix is the constraint; a bare one is the defect.
-_PLACEHOLDER = re.compile(r"why this score for THIS dispatch's (?:novelty|scope|uncertainty|risk)>")
+_PLACEHOLDER = re.compile(r"why this score for THIS dispatch's (?:novelty|scope|uncertainty|risk)")
 
 _RULE = "Do not write the dispatch's hypothesis, its expected answer, or the reasoning that produced it."
 
@@ -31,24 +31,32 @@ def _surfaces():
 def test_no_bare_rationale_placeholder_survives():
     """Every writer-side placeholder carries the constraint inline.
 
-    A bare placeholder is one a lead reads while composing without being told
-    what must not go in it.
+    "why this score" solicits causal reasoning, and the honest causal answer is
+    often the belief itself — so the prompt must not ask it at all.
     """
     bare = {
         p.relative_to(PLUGIN).as_posix(): len(_PLACEHOLDER.findall(p.read_text(encoding="utf-8")))
         for p in _surfaces()
     }
     offenders = {k: v for k, v in bare.items() if v}
-    assert not offenders, f"bare rationale placeholders: {offenders}"
+    assert not offenders, f"causal-prompt rationale placeholders: {offenders}"
 
 
 def test_constraint_reaches_the_writer():
     """Non-vacuity: the population is non-empty and does carry placeholders.
 
     Without this, the arm above passes on a glob that matches nothing.
+
+    THE FLOOR IS ARBITRARY HEADROOM, NOT A DERIVED COUNT. Its only job is to
+    prove the glob is live. It is deliberately far below the real population
+    so that legitimately removing a template or consolidating a dispatch block
+    does not redden it — this file pins that no placeholder solicits causal
+    reasoning, not how many placeholders exist. Do not tighten it to track the
+    census: a count that carries no meaning teaches the next reader that it
+    does.
     """
     suffixed = sum(
-        t.count("shape only, not the hypothesis")
+        t.count("never what you expect to find")
         for t in (p.read_text(encoding="utf-8") for p in _surfaces())
     )
     assert suffixed >= 20, f"expected the placeholder population, found {suffixed}"
