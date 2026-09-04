@@ -2150,9 +2150,42 @@ def test_the_abandoned_heuristic_reads_real_branches(tmp_path, monkeypatch):
     carried = backlog._abandoned_flags([_item(status="active", ref="#1234")], str(repo))
     assert carried == [], f"a ref carried by a branch was flagged: {carried}"
 
+    # A CONTROL PROVING GIT RAN. Both git calls failing returns None, which
+    # `_abandoned_flags` reads as no-flags — so a STARVED negative is
+    # indistinguishable from a real one. Without this, transient git failure
+    # under load fails the orphan assertion with exactly `[]` while the carried
+    # assertion above passes VACUOUSLY, which is how it presented in the field.
+    assert backlog._branch_and_worktree_names(str(repo)) is not None, \
+        "git did not run — the negative below would be vacuous"
+
     orphan = backlog._abandoned_flags([_item(status="active", ref="#9999")], str(repo))
     assert len(orphan) == 1, f"an unreferenced ref did not flag: {orphan}"
     assert "9999" in orphan[0]
+
+
+def test_the_abandoned_heuristic_ignores_shas_and_path_components(tmp_path, monkeypatch):
+    """A ref colliding with the porcelain's NON-NAME text must still flag.
+
+    `git worktree list --porcelain` carries `HEAD <sha>` (once per worktree) and
+    absolute paths beside the branch names. The match is a substring test, so a
+    ref whose digits appear in chance hex or in a parent directory was "found"
+    and the item was NOT flagged — suppressing the only output this heuristic
+    produces, with nothing to show it was suppressed.
+
+    The path is the deterministic half of that exposure, so it is what this
+    builds; the sha half is the same defect through the same line and needs no
+    second fixture.
+
+    RED WHEN the raw porcelain lines are matched again instead of names.
+    """
+    repo = _repo(tmp_path / "9999" / "repo", branch="feat/1-thing")
+    monkeypatch.setattr(backlog, "project_root", lambda: repo)
+    assert "9999" in str(repo), "fixture no longer places the token in the path"
+
+    flags = backlog._abandoned_flags([_item(status="active", ref="#9999")], str(repo))
+    assert len(flags) == 1, (
+        f"a ref matching only a PATH COMPONENT was treated as carried: {flags}"
+    )
 
 
 def test_staleness_flags_at_the_threshold_not_before(monkeypatch):

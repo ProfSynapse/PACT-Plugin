@@ -991,7 +991,19 @@ def _branch_and_worktree_names(project_path: Any = None) -> Optional[List[str]]:
     worktrees = _run_capture(["git", *at, "worktree", "list", "--porcelain"])
     if branches is None and worktrees is None:
         return None
-    return f"{branches or ''}\n{worktrees or ''}".splitlines()
+    # NAMES ONLY. The porcelain also carries `HEAD <sha>` — once PER WORKTREE —
+    # and absolute paths, and the caller matches by SUBSTRING. So a ref's digits
+    # could be satisfied by chance hex or by a parent directory, the token was
+    # "found", and the abandoned-work flag this heuristic exists to emit was
+    # silently suppressed. `detached`, `locked`, `bare` and `prunable` carry no
+    # name and drop out with them.
+    names = (branches or "").splitlines()
+    for line in (worktrees or "").splitlines():
+        if line.startswith("worktree "):
+            names.append(Path(line[len("worktree "):]).name)
+        elif line.startswith("branch "):
+            names.append(line[len("branch "):].removeprefix("refs/heads/"))
+    return names
 
 
 # ---------------------------------------------------------------------------
