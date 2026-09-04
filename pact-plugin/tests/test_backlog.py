@@ -105,8 +105,10 @@ is boring and rebuildable, the questions are not.
              poisoned ref: no exception, SURVIVES — `{5}` is a one-element set
              and `sorted()` never compares. Arm 2 with `5`: 0 names, SURVIVES
              — `git -C 5` fails for the wrong reason. The real fixtures kill:
-             two items raise TypeError, and `"."` returns 221 names from the
-             WRONG repository.
+             two items raise TypeError, and `"."` returns names from the
+             WRONG repository. NO COUNT HERE ON PURPOSE: it was measured
+             against a return shape that has since changed, and a figure in
+             durable prose rots on every change to what it counts.
   settled  THE SHIPPED DEFECT is neither of the obvious mutations. Recover
              it verbatim: `git show 08b4f5b8^` — the ref set is built from
              `items` with NO filter, the loop is unfiltered, and a mid-loop
@@ -3194,17 +3196,29 @@ def test_every_backlog_report_site_is_a_choice_point():
     cannot tell this call site from the step 6 write. Both are asserted below.
 
     The invocation test is per LINE, which is what makes widening to three files
-    safe: next.md's line 57 is an imperative and its 28 and 152 are syntax
-    templates, and one file can carry both natures. The write side can only
-    exclude a whole FILE, and does.
+    safe: next.md's report invocation sits under `## Step 2 — Reconcile and
+    report`, while its other backlog lines invoke `set`, `add` and `repair` —
+    none of them the report verb. One file carries both natures. The write side
+    can only exclude a whole FILE, and does. NAMED BY CONTENT, never by line
+    number: an earlier version of this paragraph cited three, and one of them
+    had already drifted by two commits.
 
-    CEILING, stated rather than discovered later. This pins a COMMAND LINE and
-    its POSITION. It cannot see whether an agent is TOLD to run it: the sentence
-    above the fence is unpinned, so demoting `Run the backlog report
-    unconditionally:` to `If there are flags, run:` or to `For reference:`
-    leaves this arm green while the report stops happening. Measured, twice.
-    Pinning that would mean pinning prose, which this file refuses elsewhere for
-    good reason — so it is a ceiling and not a gap to be quietly closed.
+    THE LEAD-IN IS PINNED TOO, by grammatical FORM rather than by wording. A
+    command line is a command whether or not an agent is told to run it, so
+    demoting `Run the backlog report unconditionally:` to `If there are flags,
+    run:` or to `For reference:` would stop the report without touching the
+    fence. `_HEDGED_OPENERS` catches both. It is not a prose pin: a rewording
+    stays green as long as it still opens with an instruction, verified against
+    `Always run`, `First, run`, `Report the backlog`, and an imperative that
+    merely CONTAINS a condition.
+
+    CEILING, stated rather than discovered later, and it is now narrow. Two
+    edges. `_lead_in` reads only the NEAREST non-blank, non-fence line above the
+    fence, so a hedge placed two lines up is invisible. And `When the session
+    ends, run the report:` REDDENS — judged correct rather than a false
+    positive, because that lead-in does make the invocation conditional on a
+    state, but it is the nearest thing to a false positive this guard has and a
+    future reader meeting that red should know it was deliberate.
 
     The disjointness assertion is vacuously true if wrap-up carries no write
     site at all. Measured: that state reddens BOTH neighbours, so its
@@ -3212,8 +3226,9 @@ def test_every_backlog_report_site_is_a_choice_point():
 
     RED WHEN either file loses its report site, when a file gains or loses one
     outside the census, when a site is prose rather than an invocation, when one
-    line counts as both a read and a write, or when wrap-up's report drifts
-    below the session decision.
+    line counts as both a read and a write, when a report is introduced by a
+    conditional or illustrative lead-in, or when wrap-up's report drifts below
+    the session decision.
     """
     # THE POPULATION, DERIVED FROM THE TREE rather than asserted. A fourth file
     # gaining a report site, or next.md losing its own, is drift either way.
@@ -3343,10 +3358,16 @@ def test_the_verb_classification_covers_every_cli_subcommand():
     Same move that fixed the cardinality control one file over: the population
     comes from outside the artifact under test.
 
+    IT ALSO CARRIES THE READ DETECTOR'S COUPLING, so a rename of the report verb
+    reddens here rather than silently orphaning `_read_sites`, and so the report
+    verb cannot also be classified as a write verb — a union cannot see a verb
+    classified both ways, which is why that one is asserted separately.
+
     RED WHEN the CLI gains or loses a subcommand without this classification
-    being updated. It already found one: `remove` was in the write list and has
-    never been a subcommand — vocabulary taken from the design table rather
-    than from the code.
+    being updated, when the report verb stops being declared by the CLI, or when
+    it is classified as a write verb as well. It already found one: `remove` was
+    in the write list and has never been a subcommand — vocabulary taken from
+    the design table rather than from the code.
     """
     import argparse
 
@@ -3794,8 +3815,10 @@ def test_a_relative_project_path_yields_no_branch_names():
     `git -C 5` fails and the heuristic returns nothing — safe BY ACCIDENT — so
     a `5` fixture passes against the unfixed code. `"."` passes every type
     check and makes git answer about the CURRENT WORKING DIRECTORY's repo:
-    devops measured 221 branch and worktree names belonging to the wrong
-    project, which is the misleading-flags outcome.
+    measured: branch and worktree names belonging to the wrong project, which
+    is the misleading-flags outcome. The count that stood here was taken when
+    the helper returned raw porcelain lines and rotted when that shape changed;
+    the danger is answering about the wrong repository, at any magnitude.
 
     RED WHEN the absolute-string guard is removed. The control is the second
     assertion: an ABSOLUTE path must still return a list, or this arm would
