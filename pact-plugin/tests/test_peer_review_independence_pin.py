@@ -40,6 +40,14 @@ def _clause() -> str:
     ("agent-memory", "the channel being named"),
     ("spawn", "why ordering cannot fix it"),
     ("different", "the lever that buys independence"),
+    ("index", "the surface that arrives unsought — a reader who takes 'store' to "
+              "mean the files concludes that opening none is safe"),
+    ("compare", "the imperative; the nouns above survive a rewrite that drops it"),
+    ("state", "the disclosure the orchestrator owes when the types match"),
+    ("dispatch", "the action the different-type lever attaches to"),
+    ("secretary", "the query a decisive cross-check must omit — `dispatch` and "
+                  "`different` both survive this sentence's deletion, so the two "
+                  "tokens nearest it cannot detect its loss"),
 ])
 def test_clause_keeps_its_load_bearing_parts(token, lost):
     assert token in _clause(), (
@@ -62,3 +70,39 @@ def test_the_clause_states_the_limitation_rather_than_blocking():
             f"the clause now {forbidden!r}s same-type review, which breaks the "
             f"standard flow this file's selection table prescribes"
         )
+
+
+def test_the_clause_precedes_the_spawn_template():
+    """An imperative about choosing `subagent_type` must sit where that choice
+    is made. Placed after the dispatch procedure it contradicts its own section
+    heading, which describes what happens once reviewers have reported.
+
+    The clause pin above locates by anchor and is position-blind, so a move
+    costs it nothing — which is why position needs its own assertion.
+    """
+    text = PEER_REVIEW.read_text(encoding="utf-8")
+    anchor = text.find(ANCHOR)
+    template = text.find("\nAgent(\n")
+    assert anchor != -1 and template != -1, "anchor or spawn template missing"
+    assert anchor < template, (
+        "the REVIEWER-MEMORY-CHANNEL clause now sits AFTER the Agent( spawn "
+        "template. The instruction tells the orchestrator to compare types "
+        "before dispatching, so it belongs before the call that dispatches."
+    )
+
+
+def test_the_harvest_paragraph_points_at_the_clause():
+    """The Working Memory paragraph describes a remedy that covers one surface.
+    Left alone it reads as complete, which is the defect this clause exists to
+    fix, so it must carry a cross-reference onward.
+
+    Keyed on the anchor NAME occurring a second time rather than on the pointer's
+    wording, so any rephrasing that still names the clause passes and only
+    dropping the reference fails.
+    """
+    text = PEER_REVIEW.read_text(encoding="utf-8")
+    assert text.count("REVIEWER-MEMORY-CHANNEL") >= 2, (
+        "the harvest paragraph no longer points at the REVIEWER-MEMORY-CHANNEL "
+        "clause, so a reader of it meets one channel and concludes that is the "
+        "one to watch"
+    )

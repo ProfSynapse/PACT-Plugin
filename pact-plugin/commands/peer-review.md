@@ -215,6 +215,9 @@ The `Agent()` `prompt` does NOT change shape — the Teachback-Gated Dispatch is
 4. `TaskUpdate(B_id, owner="{reviewer-name}", addBlockedBy=[A_id])`
 5. Spawn the reviewer with the canonical dispatch form. The `prompt` MUST lead with the `YOUR PACT ROLE: teammate ({reviewer-name})` marker on its own line so routing detects the teammate spawn (team protocol + teachback content arrive via spawn-time skills frontmatter; the registration first-action is the sole per-prompt directive — it must explicitly invoke its skill because skill bodies are not preloaded):
 
+<!-- ANCHOR-STABLE: REVIEWER-MEMORY-CHANNEL -->
+Before dispatching, compare each reviewer's `subagent_type` against the builder's. Persistent agent-memory is keyed by agent TYPE, so a reviewer of the same type loads at spawn the same store the builder has been writing to — its index arrives in context whether or not the reviewer opens a file, and it is pulled on creation rather than pushed mid-session, which is why no ordering avoids it and the harvest hold below does not reach it. Where the types match, state that limitation in the reviewer's `metadata.handoff` instead of claiming independence. Where a cross-check must be decisive, dispatch it to a DIFFERENT type, and leave the secretary query out of that dispatch — pact-memory is shared per project, so a type swap alone does not close it.
+
 ```
 Agent(
   name="{reviewer-name}",
@@ -248,8 +251,8 @@ TaskUpdate(taskId, owner="secretary")
 
 This is the **primary memory trigger** — fires unconditionally, after the reviewers report. Do NOT move it back to reviewer dispatch: the harvest writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context, so running it alongside reviewers puts this arc's conclusions into the context of the agents whose value is reaching conclusions independently of them.
 
-<!-- ANCHOR-STABLE: REVIEWER-MEMORY-CHANNEL -->
-Sequencing does not cover the second channel. Before dispatching reviewers, compare each reviewer's `subagent_type` against the builder's. Persistent agent-memory is keyed by agent TYPE, so a reviewer of the same type loads at spawn the same store the builder has been writing to — pulled on creation rather than pushed mid-session, which is why no ordering avoids it and the hold above does not reach it. Where the types match, state that limitation in the review record instead of claiming independence. Where a cross-check must be decisive, dispatch it to a DIFFERENT type.
+Reviewer independence has a second surface that this ordering does not touch: see the
+REVIEWER-MEMORY-CHANNEL clause at step 5.
 
 ### Reviewer Teachback
 
