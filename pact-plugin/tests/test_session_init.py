@@ -3170,6 +3170,96 @@ def _run_session_init_for_path(
     return additional, 0, 0
 
 
+class TestRecoveryFrameNamesAReadableSurface:
+    """The two recovery frames must instruct a read that returns something.
+
+    Both frames tell a recovering agent how to get its in-progress work back,
+    and both used to say `TaskGet on in-progress tasks` — an instruction that
+    returns subject / status / owner and NO metadata, on precisely the paths
+    where metadata is what the reader needs.
+
+    THESE ARMS ASSERT ON THE CAPTURED `additionalContext`, NOT ON THE SOURCE
+    LINE, and nothing here is assembled by the test. `_run_session_init_for_path`
+    drives the real `main()` over patched stdin and parses the JSON the hook
+    prints to stdout, so the string under assertion is the string the harness
+    would deliver.
+
+    A source-text search cannot do this job, for two independent reasons:
+
+      1. The instruction is built from implicitly-concatenated f-string
+         fragments joined into one blob, so the defect it is exposed to is a
+         JOINING defect. Dropping the trailing space of one fragment runs two
+         words together in the DELIVERED text while every source line still
+         reads correctly, and a grep over the source passes over exactly that.
+         Each pinned span below therefore crosses BOTH seams — it opens inside
+         the preceding fragment and closes inside the following one, so a lost
+         space at either join breaks the match.
+      2. A source match would give the same green if the string moved to a
+         constant, or if the branch that emits it stopped firing.
+
+    WHAT THESE CANNOT CATCH: the compact frame has a refresh-pending variant
+    that substitutes a different clause after the pinned span, and the runner
+    drives the non-refresh path only, so the spans are pinned in that frame.
+    They are also blind to the SessionStart hook not being registered at all —
+    that is a platform-runtime property no in-process test reaches.
+    """
+
+    # Each span opens in the fragment BEFORE the edited one and closes in the
+    # fragment AFTER it, so both joins are inside the assertion.
+    RECOVERY_SPANS = [
+        (
+            "compact",
+            "(2) Run TaskList to find in-progress work, (3) read the task "
+            "files of in-progress tasks for details (TaskGet does not "
+            "surface metadata). Re-engage secretary:",
+        ),
+        (
+            "clear",
+            "State recovery: (1) TaskList for current tasks, (2) read the "
+            "task files of in-progress tasks (TaskGet does not surface "
+            "metadata). Re-engage secretary:",
+        ),
+    ]
+
+    # The retired instruction, in both its renderings.
+    RETIRED_RECOVERY_INSTRUCTION = "TaskGet on in-progress tasks"
+
+    @pytest.mark.parametrize(
+        "source, span", RECOVERY_SPANS, ids=[s for s, _ in RECOVERY_SPANS]
+    )
+    def test_recovery_frame_delivers_task_file_read(
+        self, monkeypatch, tmp_path, source, span
+    ):
+        """The delivered context tells the agent to read the task FILES, with
+        both joins intact."""
+        additional, _, _ = _run_session_init_for_path(
+            monkeypatch, tmp_path, source=source, team_exists=True
+        )
+        assert span in additional, (
+            f"source={source!r}: the delivered additionalContext does not "
+            f"carry {span!r}. The span crosses both fragment joins, so a "
+            f"lost trailing space breaks it while the source still reads "
+            f"correctly. Delivered: {additional!r}"
+        )
+
+    @pytest.mark.parametrize("source", ["compact", "clear"])
+    def test_recovery_frame_drops_retired_taskget_instruction(
+        self, monkeypatch, tmp_path, source
+    ):
+        """The retired instruction must not reach the agent. Paired with the
+        presence arm above: presence alone stays green if the retired
+        sentence is re-added alongside the corrected one."""
+        additional, _, _ = _run_session_init_for_path(
+            monkeypatch, tmp_path, source=source, team_exists=True
+        )
+        assert self.RETIRED_RECOVERY_INSTRUCTION not in additional, (
+            f"source={source!r}: the delivered additionalContext instructs "
+            f"{self.RETIRED_RECOVERY_INSTRUCTION!r}. `TaskGet` returns no "
+            f"metadata, and these are the recovery paths where metadata is "
+            f"what the reader needs. Delivered: {additional!r}"
+        )
+
+
 class TestUpdateClaudeMdNotCalled:
     """The legacy update_claude_md symbol is gone from session_init."""
 

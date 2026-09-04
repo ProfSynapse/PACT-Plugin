@@ -1143,6 +1143,15 @@ def test_code_phase_gate_lines_present(doc_path: Path, phrase: str):
 # sentence rather than one authored to match the pin is what makes a revert
 # the mutation these cases answer to: a mutant written to fit its own pin
 # proves the pin matches itself and nothing else.
+#
+# FILE-WIDE HERE IS DELIBERATE, AND IT IS NOT AN OVERSIGHT TO "FIX" BACK TO
+# A LINE-SCOPED PIN. File-wide strictly dominates line-scoped for THIS job:
+# it also catches the retired sentence reappearing on a NEW line beside the
+# corrected one, which a line-scoped check cannot see. Line-scoping is used
+# only at P30, where it buys something file-wide cannot have — the acceptance
+# line legitimately KEEPS a `TaskGet` clause (it reads `status`, which
+# TaskGet does surface), so a bare-token absence pin there would redden on
+# correct work. Different jobs, different scopes, both measured.
 RETIRED_GATE_INSTRUMENT_PINS = [
     (
         ORCHESTRATE,
