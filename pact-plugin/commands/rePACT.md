@@ -133,7 +133,7 @@ This runs a mini-orchestration:
         └── /PACT:rePACT ← NOT ALLOWED
 ```
 
-> **Design rationale**: V3 repurposed rePACT as the single-level executor for sub-scopes dispatched by ATOMIZE. Level 2 nesting is unreachable by design -- scope detection is bypassed within sub-scopes, so a sub-scope cannot trigger further decomposition.
+> **Why the limit holds**: scope detection is bypassed within sub-scopes, so a sub-scope cannot trigger further decomposition — level 2 is unreachable rather than merely forbidden.
 
 If you hit the nesting limit:
 - Simplify the sub-task and use `/PACT:comPACT`
