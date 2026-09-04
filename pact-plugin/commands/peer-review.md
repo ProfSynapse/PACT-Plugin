@@ -248,6 +248,9 @@ TaskUpdate(taskId, owner="secretary")
 
 This is the **primary memory trigger** — fires unconditionally, after the reviewers report. Do NOT move it back to reviewer dispatch: the harvest writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context, so running it alongside reviewers puts this arc's conclusions into the context of the agents whose value is reaching conclusions independently of them.
 
+<!-- ANCHOR-STABLE: REVIEWER-MEMORY-CHANNEL -->
+Sequencing does not cover the second channel. Before dispatching reviewers, compare each reviewer's `subagent_type` against the builder's. Persistent agent-memory is keyed by agent TYPE, so a reviewer of the same type loads at spawn the same store the builder has been writing to — pulled on creation rather than pushed mid-session, which is why no ordering avoids it and the hold above does not reach it. Where the types match, state that limitation in the review record instead of claiming independence. Where a cross-check must be decisive, dispatch it to a DIFFERENT type.
+
 ### Reviewer Teachback
 
 Each reviewer should state their understanding of the PR's intent before diving into review. This catches cases where a reviewer misunderstands the purpose and produces irrelevant findings.
