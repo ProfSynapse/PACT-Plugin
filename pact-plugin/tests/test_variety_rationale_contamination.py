@@ -400,8 +400,15 @@ def test_withholding_acknowledgments_are_excluded_from_the_cargo_cult_rate():
     sentinel = "WITHHELD: ignorance-dependent dispatch"
     text = WRAP_UP.read_text(encoding="utf-8")
     assert sentinel in text, "wrap-up: aggregator has no literal to match on"
-    assert "excluded from BOTH terms" in text, (
-        "wrap-up: exclusion does not reach both numerator and denominator"
+    # BOTH TERMS, pinned STRUCTURALLY rather than as a phrase. An earlier form
+    # of this assertion pinned the words "excluded from BOTH terms" and went RED
+    # on a legitimate rewording of that sentence — the exact fragility that makes
+    # prose a bad pin. The property is real while the denominator derives from
+    # the same list the rate counts, so filtering that list covers both at once.
+    assert "total_teachbacks = len(flags)" in text, (
+        "wrap-up: the denominator no longer derives from `flags`, so filtering "
+        "the comprehension stops covering both terms — both-terms is structural "
+        "ONLY while the rate and the denominator come off the same list"
     )
     assert "counts as a REAL SIGNAL" in text, (
         "wrap-up: failure direction unstated — an unmatched withholding ack must "
@@ -416,3 +423,66 @@ def test_withholding_acknowledgments_are_excluded_from_the_cargo_cult_rate():
         "teachback skill: seat is not required to emit the literal the "
         "aggregator matches on — the join is broken at the writing end"
     )
+
+
+def test_withholding_exclusion_is_executable_where_it_is_stated():
+    """The exclusion must sit where the field it keys on still exists.
+
+    THE DEFECT THIS PINS WAS SHIPPED: the rate is computed from `flags`, a list
+    comprehension that keeps the flag VALUE and discards `concern`; the
+    exclusion keyed on `concern` was stated AFTER it. An executor following the
+    instruction in order had already thrown the field away. Same class as the
+    split-read instruction whose only command printed what it told you not to
+    read — an instruction its own named instrument cannot perform.
+
+    PINS EXPRESSIONS, NOT PROSE. The three assertions name a comprehension
+    condition, a dotted metadata path, and a literal — identifiers a rewording
+    does not touch. An arm checking the ORDER of two SENTENCES would go green
+    the first time someone legitimately rephrased one, which is why the check is
+    "the filter is inside the expression" rather than "clause A precedes B".
+    """
+    wrap_up = WRAP_UP.read_text(encoding="utf-8")
+    sentinel = "WITHHELD: ignorance-dependent dispatch"
+
+    # The comprehension that builds `flags` is the LAST point holding `concern`.
+    start = wrap_up.find("flags = [")
+    assert start != -1, (
+        "wrap-up: the `flags = [` comprehension is gone — this arm's subject no "
+        "longer exists, so re-derive it rather than letting it pass on a miss"
+    )
+    end = wrap_up.find("]`", start)
+    assert end != -1, "wrap-up: `flags` comprehension is unterminated"
+    comprehension = wrap_up[start:end]
+    assert sentinel in comprehension, (
+        "wrap-up: the withholding exclusion is NOT inside the `flags` "
+        "comprehension. Wherever it is stated instead, `concern` has already "
+        "been discarded by this expression and the exclusion cannot be performed"
+    )
+
+    # The fallback reads a different source and has no earlier step to move to,
+    # so the READ itself must carry the sibling field.
+    assert "variety_acknowledgment.concern" in wrap_up, (
+        "wrap-up: the fallback path reads the flag without its `concern` "
+        "sibling, so nothing on that path can be excluded on"
+    )
+
+    # The full spec a reader is SENT to must carry the rule, in both mirrors.
+    # SECTION-SCOPED, not file-scoped: the sentinel ALREADY appears elsewhere in
+    # both files (the lead-side re-stamp exception), so a file-level `in` check
+    # is satisfied by that other occurrence and cannot see this section lose it.
+    # Measured — a file-level form of this assertion passed while the section
+    # had been stripped.
+    heading = "#### Variety Acknowledgment Signal"
+    for spec in (VARIETY, PROTOCOLS):
+        body = spec.read_text(encoding="utf-8")
+        start = body.find(heading)
+        assert start != -1, (
+            f"{spec.name}: the aggregation spec section is gone — re-derive this "
+            f"check rather than letting it pass on a missing heading"
+        )
+        end = body.find("\n---", start)
+        section = body[start:end if end != -1 else len(body)]
+        assert sentinel in section, (
+            f"{spec.name}: the aggregation spec section omits the exclusion, so "
+            f"a reader sent here for the rule meets no exclusion"
+        )
