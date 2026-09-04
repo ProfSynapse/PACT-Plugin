@@ -116,7 +116,7 @@ TaskUpdate(taskId, metadata={"teachback_submit": {
 }})
 ```
 
-Read Task B's four variety SCORES (via Task A's `blocks[0]`) when needed; read the `*_rationale` strings ONLY AFTER composing the other four fields above. **Required: a rationale read earlier cannot be un-read.** — `TaskGet` is metadata-blind, so read the task file: `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.variety`. Judge each of the four per-dimension rationales against THIS dispatch's complexity and record `yes` / `no` / `concern`; when not `yes`, name the smell in `concern`. Full review workflow: [`protocols/pact-variety.md` §Variety Calibration Record](../../protocols/pact-variety.md#variety-calibration-record).
+Read Task B's four variety SCORES (via Task A's `blocks[0]`) when needed; read the `*_rationale` strings ONLY AFTER composing the other four fields above. **Required: a rationale read earlier cannot be un-read.** — `TaskGet` is metadata-blind, so read the task file: `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.variety`. Judge each of the four per-dimension rationales against THIS dispatch's complexity and record `yes` / `no` / `concern`; when not `yes`, name the smell in `concern`. **A rationale reading `WITHHELD: ignorance-dependent dispatch` is deliberate, not malformed — record `concern` naming the withholding and do NOT ask for a re-stamp.** Full review workflow: [`protocols/pact-variety.md` §Variety Calibration Record](../../protocols/pact-variety.md#variety-calibration-record).
 
 **Step 2 — notify the team-lead** (carrying the canonical payload verbatim):
 
