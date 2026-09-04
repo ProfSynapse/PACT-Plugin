@@ -39,6 +39,9 @@ Exit codes:
   2 -- nothing was reported. Either a precondition failed before the scan, or
        the scan ran and the report could not be written. The caller is left
        without a report either way, and that outcome is all the code carries.
+  64 -- the command line was malformed, so nothing ran. Fix the invocation the
+       message names. Separate from 2 because argparse exits 2 by default,
+       which made a mistyped command indistinguishable from a refusal.
 """
 from __future__ import annotations
 
@@ -423,8 +426,27 @@ def as_dict(result: Scan) -> dict:
     }
 
 
+# A malformed command line is not a REFUSAL. argparse exits 2 by default and
+# this script already returns 2 for "REFUSED", so the two were indistinguishable
+# to a caller. 64 is EX_USAGE from sysexits.h; it matches backlog.py's split and
+# sits below the 126-255 range shells reserve.
+_EXIT_USAGE = 64
+
+
+class _UsageErrorParser(argparse.ArgumentParser):
+    """Exits `_EXIT_USAGE` on a malformed command line, not argparse's 2.
+
+    Subclassed rather than caught in `main()` so the code rides the parser: a
+    caller holding `build_parser()` gets it without going through `main`.
+    """
+
+    def error(self, message):
+        self.exit(_EXIT_USAGE, "{0}{1}: error: {2}\n".format(
+            self.format_usage(), self.prog, message))
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    parser = _UsageErrorParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("directory", help="one agent-memory directory to scan (no default)")
     parser.add_argument("--report", help="write the findings to this JSON file")
     parser.add_argument("--quiet", action="store_true", help="suppress the text report")

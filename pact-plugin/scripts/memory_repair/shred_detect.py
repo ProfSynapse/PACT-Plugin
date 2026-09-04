@@ -57,6 +57,9 @@ Exit codes:
      annotates and the caller decides.
   2  the no-writer precondition failed, or the file is absent, or the table
      is absent. Nothing was scanned.
+  64 the command line was malformed, so nothing ran. Fix the invocation the
+     message names. Separate from 2 because argparse exits 2 by default,
+     which made a mistyped command indistinguishable from a refusal.
 <!-- PACT_STORE_BAR_BEGIN -->
 **STORE ACCESS.** A memory operation (save, search, get, list, update or
 delete a record) goes through the pact-memory CLI. YOU DO NOT SELECT A
@@ -453,8 +456,27 @@ def render_text(report: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# A malformed command line is not a REFUSAL. argparse exits 2 by default and
+# this script already returns 2 for "REFUSED", so the two were indistinguishable
+# to a caller. 64 is EX_USAGE from sysexits.h; it matches backlog.py's split and
+# sits below the 126-255 range shells reserve.
+_EXIT_USAGE = 64
+
+
+class _UsageErrorParser(argparse.ArgumentParser):
+    """Exits `_EXIT_USAGE` on a malformed command line, not argparse's 2.
+
+    Subclassed rather than caught in `main()` so the code rides the parser: a
+    caller holding `build_parser()` gets it without going through `main`.
+    """
+
+    def error(self, message):
+        self.exit(_EXIT_USAGE, "{0}{1}: error: {2}\n".format(
+            self.format_usage(), self.prog, message))
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _UsageErrorParser(
         prog="shred_detect",
         description=(
             "Report memory records whose list fields hold shredded prose. "

@@ -627,3 +627,38 @@ def test_following_the_warnings_own_advice_does_not_lose_leaves(tmp_path):
     lost = renamed("ARCHIVE_t.md")
     assert [p.name for p in lost.archive_only] == ["feedback_g.md"]
     assert mr.emit_edit(lost) is None, "and nothing is offered to restore it"
+
+
+def test_a_usage_error_and_a_refusal_exit_DIFFERENTLY(tmp_path):
+    """ONE RUN, VARIED INPUTS, BOTH CODES — and that is the whole design.
+
+    argparse exits 2 by default and this script returns 2 for REFUSED, so a
+    mistyped invocation was indistinguishable from a declined one. Two separate
+    arms — one asserting usage returns 64, one asserting a refusal returns 2 —
+    would BOTH pass against a collapsed axis, because each finds an input
+    satisfying it in isolation. So the table is asserted whole.
+
+    RED WHEN usage and refusal share a code again, in either direction.
+    """
+    def code(argv):
+        try:
+            return mr.main(argv)
+        except SystemExit as exc:
+            return exc.code
+
+    observed = {
+        "malformed flag":  code(["--nope", str(tmp_path)]),
+        "missing operand": code([]),
+        "refusal: absent": code([str(tmp_path / "not_here")]),
+    }
+    assert observed == {
+        "malformed flag":  mr._EXIT_USAGE,
+        "missing operand": mr._EXIT_USAGE,
+        "refusal: absent": 2,
+    }, "exit codes moved: {0}".format(observed)
+
+    # The separation itself, stated rather than implied: routing everything
+    # through one code would still satisfy a row-by-row reading.
+    assert observed["malformed flag"] != observed["refusal: absent"], (
+        "a mistyped command and a declined one are indistinguishable to a caller"
+    )
