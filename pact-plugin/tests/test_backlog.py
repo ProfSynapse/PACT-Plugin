@@ -336,6 +336,10 @@ afternoon.
   the wrap-up report moves below the ask   test_every_backlog_report_site_is_a_choice_point
   the report verb is renamed in the CLI    test_the_verb_classification_covers_every_cli_subcommand
   the report verb becomes a write verb     test_the_verb_classification_covers_every_cli_subcommand
+  a rule sentence names a ghost file        test_every_backlog_report_site_is_a_choice_point
+  a report site gains a hedged lead-in      test_every_backlog_report_site_is_a_choice_point
+  the write rule names a ghost file         test_next_md_names_exactly_the_files_that_carry_write_sites
+  usage errors collide with refusals again  test_a_usage_error_and_a_refusal_exit_DIFFERENTLY
   the read-only clause drops from step 8   test_every_backlog_report_site_is_a_choice_point
   the read rule and the tree disagree      test_every_backlog_report_site_is_a_choice_point
   the read rule is reworded away entirely  test_every_backlog_report_site_is_a_choice_point
@@ -2943,6 +2947,24 @@ _WRITE_VERBS = ("set ", "add ")
 # Spelled counts, for the rules that lead with one. Shared by the read rule and
 # the write rule so the two cannot disagree about what FOUR means.
 _COUNT_WORDS = {1: "ONE", 2: "TWO", 3: "THREE", 4: "FOUR", 5: "FIVE", 6: "SIX"}
+# A command file named in a rule sentence. Scoped to a `*.md` token so an
+# ordinary backticked word cannot match; measured, both sentences name nothing
+# else. Deriving from the SENTENCE rather than from the directory is what makes
+# a name with no file behind it visible — a glob simply never yields one, so
+# the sentence could list a ghost while the count stayed green.
+_NAMED_FILE = re.compile(r"`([A-Za-z0-9_-]+\.md)`")
+
+
+def _files_named_in(sentence):
+    """Command files a rule sentence names. Every one must exist."""
+    names = set(_NAMED_FILE.findall(sentence))
+    missing = sorted(name for name in names if not (_COMMANDS_DIR / name).exists())
+    assert not missing, (
+        f"the rule names {missing}, which do not exist in {_COMMANDS_DIR.name}/. "
+        f"An agent is told to look at a file that is not there, and every count "
+        f"below it is off by the number of ghosts."
+    )
+    return names
 # Subcommands that are not item writes: `show` reads, `repair` moves a corrupt
 # FILE aside and touches no item. Neither can appear at a work boundary.
 _NON_WRITE_SUBCOMMANDS = frozenset({"show", "repair"})
@@ -2955,6 +2977,13 @@ _NON_WRITE_SUBCOMMANDS = frozenset({"show", "repair"})
 # file whose only call was `repair` satisfied the read-site arm below. The
 # coupling to the CLI is kept explicitly instead, in
 # test_the_verb_classification_covers_every_cli_subcommand.
+#
+# The runtime half of this property is PROSE: bootstrap.md step 5 and
+# wrap-up.md section 8 each tell the agent not to run `repair` at a report call
+# site. This constant is the suite-side half. Deliberately NOT pinned to that
+# wording — the sentence has no checkable property beyond its own presence, so
+# pinning it buys a brittle red on any reword and catches nothing. If you change
+# what this enforces, read those two sections.
 _REPORT_SUBCOMMAND = "show"
 
 
@@ -3043,6 +3072,28 @@ def test_the_wrap_up_write_precedes_the_worktree_removal(monkeypatch):
         f"at line {removals[0]}. Every item written there is reported abandoned "
         f"from the next session onward."
     )
+
+
+# Sentence-initial words that make the fence below them an ILLUSTRATION or a
+# CONDITIONAL rather than a step. Measured against both survivors and six
+# rewordings: it catches `If the session-start block reported drift flags, run:`
+# and `For reference, the backlog report is produced by:` while passing
+# `Always run`, `First, run`, `Report the backlog`, and an imperative that
+# merely CONTAINS a condition (`Run the report. If there are no flags, ...`).
+# It is a check on the lead-in's GRAMMATICAL FORM, not on its wording — a
+# reword stays green as long as it still opens with an instruction.
+_HEDGED_OPENERS = ("If ", "When ", "Unless ", "Optionally", "For reference",
+                   "Example", "Note:")
+
+
+def _lead_in(name, number):
+    """The nearest non-blank, non-fence line above an invocation."""
+    lines = (_COMMANDS_DIR / name).read_text(encoding="utf-8").splitlines()
+    for line in reversed(lines[:number - 1]):
+        stripped = line.strip().lstrip("> ")
+        if stripped and not stripped.startswith("```"):
+            return stripped
+    return ""
 
 
 def _read_sites(name):
@@ -3145,11 +3196,7 @@ def test_every_backlog_report_site_is_a_choice_point():
         f"reworded or removed and this arm is reading nothing"
     )
     sentence = text.split(marker, 1)[1].split("\n\n", 1)[0]
-    # BOTH SIDES COME FROM THE SAME GLOB. Building this from a hardcoded name
-    # list made a new command file invisible to it: named in the sentence,
-    # absent from the literal, and the comparison passed while the rule was
-    # wrong.
-    stated = {p.name for p in _COMMANDS_DIR.glob("*.md") if f"`{p.name}`" in sentence}
+    stated = _files_named_in(sentence)
     carrying = {p.name for p in _COMMANDS_DIR.glob("*.md") if _read_sites(p.name)}
 
     # THE WORD AND THE LIST MUST AGREE — the set comparison below cannot see a
@@ -3194,6 +3241,17 @@ def test_every_backlog_report_site_is_a_choice_point():
             assert line.lstrip("> ").startswith("python3 "), (
                 f"{name}:{number} matches the detector but is not an "
                 f"invocation, so this arm would pass on prose alone: {line!r}"
+            )
+            # AN INSTRUCTION, NOT AN ILLUSTRATION. The line is a command either
+            # way; what decides whether an agent RUNS it is the sentence above
+            # the fence. Demoting that sentence to a condition or to a reference
+            # stops the report without touching the command, which is how both
+            # survivors got past an earlier version of this arm.
+            lead = _lead_in(name, number)
+            assert not lead.startswith(_HEDGED_OPENERS), (
+                f"{name}:{number} is introduced by {lead!r}, which makes the "
+                f"report conditional or illustrative. The command is unchanged "
+                f"and the report stops happening."
             )
 
     # DISJOINT from the write sites. A detector that also matched the step 6
@@ -3325,12 +3383,7 @@ def test_next_md_names_exactly_the_files_that_carry_write_sites():
         f"reworded and this arm is reading nothing"
     )
     sentence = text.split(marker, 1)[1].split("\n\n", 1)[0]
-    # BOTH SIDES COME FROM THE SAME GLOB, as on the read rule. A hardcoded
-    # candidate list makes a file named in the sentence but absent from the
-    # literal invisible, so the comparison passes while the rule is wrong.
-    # Measured: with the literal, a new command file named here and carrying no
-    # write site was not noticed.
-    claimed = {p.name for p in _COMMANDS_DIR.glob("*.md") if f"`{p.name}`" in sentence}
+    claimed = _files_named_in(sentence)
     assert claimed, (
         "the trigger sentence names no command file — it was restructured and "
         "this arm is now reading nothing"
@@ -4185,3 +4238,64 @@ def test_a_two_sided_exclusive_pair_flags_once_in_either_visit_order():
             f"{label}: a two-sided link must flag ONCE, not once per side: "
             f"{exclusive}"
         )
+
+
+def test_a_usage_error_and_a_refusal_exit_DIFFERENTLY(tmp_path):
+    """ONE RUN, VARIED INPUTS, BOTH CODES — and that is the whole design.
+
+    The defect was ONE code meaning two things: argparse's default 2 collided
+    with `_EXIT_REFUSED`, so a mistyped command was indistinguishable from a
+    real refusal. Two separate arms — one asserting usage returns 64, one
+    asserting a refusal returns 2 — would BOTH pass against a collapsed axis,
+    because each could find an input satisfying it in isolation. What cannot
+    survive a collapse is a single run producing both codes from inputs that
+    differ only in the factor under test. So the table below is asserted whole.
+
+    THE STORE STATE IS VARIED ON PURPOSE. The condition that hid this was
+    SAMENESS ACROSS VARIED INPUTS: five malformed invocations returned 2 against
+    five different store states, which read as five real refusals. An arm
+    covering one store state cannot reproduce that.
+
+    The subparser row is the inheritance path — `add_subparsers` builds children
+    with `parser_class` defaulting to `type(self)`, so a child parser must carry
+    the override too. That was verified by reading; this runs it.
+
+    RED WHEN usage and refusal share a code again, in either direction.
+    """
+    script = str((HOOKS_DIR / "shared" / "backlog.py").resolve())
+    healthy, project = _cli_store(tmp_path / "healthy", [_item()])
+    empty, _ = _cli_store(tmp_path / "empty", [])
+    _repo(project)  # a real checkout, so `set` reaches the item lookup
+
+    def code(store, *args, cwd):
+        return subprocess.run(
+            [sys.executable, script, "--backlog-dir", str(store), *args],
+            capture_output=True, text=True, cwd=str(cwd)).returncode
+
+    outside = tmp_path / "not_a_repo"
+    outside.mkdir()
+
+    observed = {
+        "malformed flag":      code(healthy, "--nope", cwd=project),
+        "unknown subcommand":  code(empty, "bogus", cwd=project),
+        "subparser operand":   code(empty, "set", cwd=outside),
+        "refusal: no item":    code(healthy, "set", "ffff", "--status", "done", cwd=project),
+        "refusal: no root":    code(healthy, "show", cwd=outside),
+        "help":                code(healthy, "--help", cwd=project),
+    }
+    assert observed == {
+        "malformed flag":     backlog._EXIT_USAGE,
+        "unknown subcommand": backlog._EXIT_USAGE,
+        "subparser operand":  backlog._EXIT_USAGE,
+        "refusal: no item":   backlog._EXIT_REFUSED,
+        "refusal: no root":   backlog._EXIT_REFUSED,
+        "help":               backlog._EXIT_OK,
+    }, f"exit codes moved: {observed}"
+
+    # THE SEPARATION ITSELF, stated rather than implied by the table above: a
+    # later change routing everything through one code would still satisfy a
+    # row-by-row reading of a weaker arm.
+    assert observed["malformed flag"] != observed["refusal: no item"], (
+        "a malformed invocation and a real refusal exit with the SAME code "
+        f"({observed['malformed flag']}); the two are indistinguishable again"
+    )
