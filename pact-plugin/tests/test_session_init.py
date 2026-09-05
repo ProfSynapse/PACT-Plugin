@@ -2341,6 +2341,26 @@ class TestExtractPrevSessionDirDualLocation:
 
         assert _extract_prev_session_dir("") is None
 
+    def test_absent_session_dir_line_falls_through_to_derived_path(
+        self, tmp_path, monkeypatch
+    ):
+        """A Session-dir line naming a directory that is no longer there
+        yields the path derived from the Resume line and the resolved slug."""
+        from session_init import _extract_prev_session_dir
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+        sid = "cccccccc-1111-2222-3333-444444444444"
+        sessions_root = (tmp_path / "home") / ".claude" / "pact-sessions"
+        absent = str(sessions_root / "old-name" / sid)
+        (tmp_path / "CLAUDE.md").write_text(
+            self._make_content(sid, absent), encoding="utf-8"
+        )
+
+        result = _extract_prev_session_dir(str(tmp_path))
+
+        assert result == str(sessions_root / tmp_path.name / sid)
+        assert result != absent
+
     def test_reads_dot_claude_when_only_dot_claude_exists(self, tmp_path, monkeypatch):
         """Reads .claude/CLAUDE.md when it is the only location present."""
         from session_init import _extract_prev_session_dir
@@ -2356,6 +2376,7 @@ class TestExtractPrevSessionDirDualLocation:
             (tmp_path / "home") / ".claude" / "pact-sessions"
             / "PACT-Plugin" / "aaaaaaaa-1111-2222-3333-444444444444"
         )
+        Path(expected).mkdir(parents=True)
         (dot_claude_dir / "CLAUDE.md").write_text(
             self._make_content("aaaaaaaa-1111-2222-3333-444444444444", expected),
             encoding="utf-8",
@@ -2377,6 +2398,7 @@ class TestExtractPrevSessionDirDualLocation:
             (tmp_path / "home") / ".claude" / "pact-sessions"
             / "PACT-Plugin" / "bbbbbbbb-1111-2222-3333-444444444444"
         )
+        Path(expected).mkdir(parents=True)
         (tmp_path / "CLAUDE.md").write_text(
             self._make_content("bbbbbbbb-1111-2222-3333-444444444444", expected),
             encoding="utf-8",
@@ -2403,6 +2425,8 @@ class TestExtractPrevSessionDirDualLocation:
         legacy = str(
             sessions_root / "PACT-Plugin" / "dddddddd-1111-2222-3333-444444444444"
         )
+        Path(preferred).mkdir(parents=True)
+        Path(legacy).mkdir(parents=True)
 
         (dot_claude_dir / "CLAUDE.md").write_text(
             self._make_content(
@@ -7069,15 +7093,39 @@ class TestAdoptOldSlugSessionDir:
         assert (old / "session-journal.jsonl").exists()
         assert not new.exists()
 
+    def test_symlink_at_old_slot_is_left_alone(self, tmp_path, monkeypatch):
+        from session_init import _adopt_old_slug_session_dir
+        import os
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _real, link = self._linked_project(tmp_path)
+        old, new = self._dirs(tmp_path)
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        (target / "session-journal.jsonl").write_text("ELSEWHERE\n")
+        old.parent.mkdir(parents=True)
+        old.symlink_to(target, target_is_directory=True)
+
+        assert _adopt_old_slug_session_dir(self._SID, str(link)) is False
+        assert old.is_symlink()
+        assert not os.path.lexists(new)
+
     def test_main_adopts_before_any_writer_creates_the_new_dir(self, tmp_path, monkeypatch):
-        """Through main() on resume: the journal is at the new slot afterwards
-        and the old slot is gone, so the adoption ran before the writers."""
+        """Through main() on resume with a ROOT compact summary present: the
+        archive block would create the new slot to drain it, so the journal
+        landing there and the root summary being drained together prove the
+        adoption ran first."""
         from session_init import main
+        from shared.constants import get_compact_summary_path
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _real, link = self._linked_project(tmp_path)
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
         old, new = self._seed_old(tmp_path)
+        root_summary = get_compact_summary_path()
+        root_summary.parent.mkdir(parents=True, exist_ok=True)
+        root_summary.write_text("STALE ROOT SUMMARY\n")
+        assert str(root_summary).startswith(str(tmp_path))
         stdin_data = _stdin_payload(source="resume", session_id=self._SID)
 
         with patch("session_init.setup_plugin_symlinks", return_value=None), \
@@ -7096,3 +7144,4 @@ class TestAdoptOldSlugSessionDir:
         journal = (new / "session-journal.jsonl").read_text()
         assert journal.startswith('{"type":"session_start"}\n')
         assert not old.exists()
+        assert not root_summary.exists()
