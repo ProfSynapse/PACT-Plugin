@@ -1098,10 +1098,21 @@ class PACTMemory:
         Stateless: the newest MAX_WORKING_MEMORIES records of this project
         replace whatever the section holds. Returns the ids projected, newest
         first, when the file was written; [] otherwise. `last_sync_status`
-        carries the outcome as for save(); `empty` means this project has no
-        records and the file was not touched.
+        carries the outcome as for save(); `empty` means nothing was
+        projected -- no project id resolved, or the project has no records --
+        and the file was not touched.
         """
         self._last_sync_status = None
+        if self._project_id is None:
+            # REFUSE BEFORE THE QUERY, NOT AFTER IT. `list_memories` applies
+            # its `project_id = ?` condition only when the id is non-None, so
+            # passing None selects the newest records of EVERY project, and
+            # this method would write those foreign records over this file's
+            # section. A project with no id has no records, so `empty` is the
+            # correct answer on its own terms. The envelope's `project_id`
+            # reports the None beside it, which is what makes it diagnosable.
+            self._last_sync_status = SyncResult.EMPTY
+            return []
         records = self.list(limit=MAX_WORKING_MEMORIES)
         payload = [r.to_dict() for r in records]
         try:

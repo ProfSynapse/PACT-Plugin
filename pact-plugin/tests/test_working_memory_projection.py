@@ -24,6 +24,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "skills", "pact-memory"))
 
 import scripts.working_memory as wm  # noqa: E402
+from scripts.memory_api import PACTMemory  # noqa: E402
 from scripts.working_memory import (  # noqa: E402
     MAX_WORKING_MEMORIES,
     WORKING_MEMORY_TOKEN_BUDGET,
@@ -357,3 +358,48 @@ class TestSyncVerbReachesTheGuards:
         assert (result["sync_status"], result["projected"], result["memory_ids"]) == (
             "refused", 0, [])
         assert (project / "CLAUDE.md").read_bytes() == before
+
+
+class TestSyncRefusesAProjectWithNoId:
+    """`sync` with no project id projects NOTHING rather than everything.
+
+    `list_memories` applies its `project_id = ?` condition only when the id
+    is non-None, so a None reaching that query selects the newest records of
+    EVERY project, and `sync` would write those foreign records over this
+    file's section. The guard answers `empty` before the query runs, which is
+    also the right answer on its own terms: a project with no id has no
+    records of its own to project.
+    """
+
+    def test_a_none_project_id_projects_nothing_and_touches_nothing(
+        self, memory_store, tmp_path, monkeypatch
+    ):
+        target = _seed(tmp_path)
+        project = target.parent
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+        db = memory_store("no-project.db")
+
+        # THE STORE MUST HOLD A RECORD UNDER SOME OTHER ID, or a green arm
+        # would prove only that the store was empty. This is the record an
+        # unfiltered query would find and project.
+        stocked = PACTMemory(db_path=db)
+        assert stocked.project_id is not None
+        stocked.save({"context": "a record saved under a resolved project"},
+                     sync_to_claude=False)
+
+        memory = PACTMemory(db_path=db)
+        memory._project_id = None
+        before = target.read_bytes()
+
+        # `claude_md_root` bounds the write: with the guard removed, the
+        # projection lands on this tmp project's file, which is what the
+        # byte comparison below catches. It cannot reach a file outside it.
+        projected = memory.sync(claude_md_root=project)
+
+        # THE FILE FIRST, because it is the harm. The envelope assertions
+        # below would also catch the regression, but they would catch it
+        # before this line ran and so would not show that foreign records
+        # reached the file.
+        assert target.read_bytes() == before
+        assert projected == []
+        assert memory.last_sync_status == "empty"
