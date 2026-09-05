@@ -672,6 +672,49 @@ class TestSearchMemoriesByText:
         from scripts.database import search_memories_by_text
         assert search_memories_by_text(db_conn, "nonexistent") == []
 
+    def test_records_sharing_a_created_at_come_newest_inserted_first(self, db_conn):
+        """This pins the DIRECTION of the `rowid` tiebreak, not its presence.
+
+        MEASURED DETECTION SET, so nobody has to re-run the ablation. Deleting
+        `, rowid DESC` does NOT redden this arm: SQLite already emits tied rows
+        in reverse rowid order under this plan, so the clause and its absence
+        are indistinguishable through the query's public behaviour. Changing it
+        to `rowid ASC` DOES redden it. So the clause's role as insurance -- for
+        a tie between rows the schema DEFAULT wrote -- stays UNTESTED, and it
+        stays untested for a reason internal to this query rather than because
+        anyone judged it unnecessary. No arm can cover it while removal and
+        presence produce the same rows.
+
+        THAT IS THE MUTATION WORTH CATCHING. An index can satisfy `rowid ASC`
+        and can never fully satisfy `rowid DESC`, so anyone optimising this
+        query's sort has a standing reason to flip the direction, and DESC is
+        what makes a projection match the order the saves went in.
+
+        The shared stamp is set by direct SQL because that is the only way to
+        reach the clause. `create_memory` stamps microsecond ISO and ignores a
+        caller's value, so saves cannot tie; in production a tie is reachable
+        only from a row the schema DEFAULT wrote.
+        """
+        from scripts.database import create_memory, search_memories_by_text
+        ids = [create_memory(db_conn, {"context": f"tied probe {i}"})
+               for i in range(3)]
+        db_conn.execute("UPDATE memories SET created_at = '2026-01-01 00:00:00'")
+        db_conn.commit()
+
+        # THE TIE IS A PRECONDITION AND IS ASSERTED, NOT ASSUMED. Distinct
+        # stamps produce this same expected order under `created_at DESC`
+        # alone, so a backdate that silently did nothing would leave the arm
+        # green while exercising no tie at all.
+        stamps = {r[0] for r in db_conn.execute("SELECT created_at FROM memories")}
+        assert len(stamps) == 1, f"the rows must tie; got {sorted(stamps)}"
+
+        found = [r["id"] for r in search_memories_by_text(db_conn, "tied probe")]
+
+        assert found == list(reversed(ids)), (
+            "tied rows must come back newest-inserted first; got the order "
+            f"{found} for insertion order {ids}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Maintenance
