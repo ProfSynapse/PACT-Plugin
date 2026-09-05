@@ -73,7 +73,7 @@ _SKILL_BULLET = re.compile(r"\*\*(\w+) Harvest\*\*[^\n]*?\(([^)]*)\)")
 # phrase each one owns. A rewrite that drops the phrase empties the extraction
 # and trips the non-empty guard rather than passing.
 _CONSOLIDATION_CLAIMS = {
-    "persona exemption paragraph": (PERSONA, "EXEMPT and must run"),
+    "persona propagation paragraph": (PERSONA, "may appear only at a boundary"),
     "skill consolidation trigger": (SKILL, "This is the deep-clean pass"),
 }
 

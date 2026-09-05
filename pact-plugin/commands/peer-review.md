@@ -251,7 +251,7 @@ TaskCreate(subject="secretary: harvest pending HANDOFFs (primary trigger, pre-me
 TaskUpdate(taskId, owner="secretary")
 ```
 
-This is the **primary memory trigger** — fires unconditionally, after the reviewers report. Do NOT move it back to reviewer dispatch: the harvest writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context, so running it alongside reviewers puts this arc's conclusions into the context of the agents whose value is reaching conclusions independently of them.
+This is the **primary memory trigger** — fires unconditionally, after the reviewers report, and stays quiet: it banks the HANDOFFs to the store and writes no Working Memory block, because remediation after this point dispatches reviewers again and an agent inherits the block as it stood when it spawned. The block is rebuilt after the merge decision (`orchestrate` step 8) and at session end.
 
 Reviewer independence has a second surface that this ordering does not touch: see the
 REVIEWER-MEMORY-CHANNEL clause.
