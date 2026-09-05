@@ -303,7 +303,8 @@ class TestSyncVerbReachesTheGuards:
 
         result = _run_cli(env, tmp_path, "sync", "--db-path", str(stocked_store))
 
-        assert result == {"sync_status": "refused", "projected": 0, "memory_ids": []}
+        assert (result["sync_status"], result["projected"], result["memory_ids"]) == (
+            "refused", 0, [])
         assert (project / "CLAUDE.md").read_bytes() == before
 
     def test_a_declared_root_permits_the_write(
@@ -353,5 +354,6 @@ class TestSyncVerbReachesTheGuards:
 
         result = _run_cli(env, project, "sync", "--db-path", str(db))
 
-        assert result == {"sync_status": "refused", "projected": 0, "memory_ids": []}
+        assert (result["sync_status"], result["projected"], result["memory_ids"]) == (
+            "refused", 0, [])
         assert (project / "CLAUDE.md").read_bytes() == before

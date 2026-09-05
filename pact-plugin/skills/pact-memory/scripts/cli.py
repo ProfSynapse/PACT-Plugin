@@ -742,7 +742,8 @@ def cmd_sync(args, db_path=None):
     records. The envelope is total: `sync_status` names the outcome in every
     case, and `projected` is 0 with `memory_ids` [] on every outcome but
     `wrote`. `empty` means the project has no records and the file was not
-    touched.
+    touched. `project_id` is the id the records were selected under, so an
+    `empty` can be checked against the project the caller expected.
     """
     memory = PACTMemory(db_path=db_path)
     sync_kwargs = {}
@@ -754,6 +755,7 @@ def cmd_sync(args, db_path=None):
         "sync_status": memory.last_sync_status,
         "projected": len(memory_ids),
         "memory_ids": memory_ids,
+        "project_id": memory.project_id,
     })
 
 

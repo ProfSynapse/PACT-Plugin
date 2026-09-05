@@ -3622,12 +3622,20 @@ class TestCliSyncSubprocess:
             "--claude-md-root", str(project), "--db-path", str(cli_db),
         )
 
+    def _project_id(self, cli_script_path, project, cli_db):
+        """The id `status` reports under the same env: the envelope's
+        `project_id` is pinned by agreement with it, not by a literal."""
+        return self._run(cli_script_path, project, "status", "--db-path", str(cli_db))["project_id"]
+
     def test_a_project_with_no_records_is_empty_and_untouched(
         self, cli_script_path, cli_db, project
     ):
         before = (project / "CLAUDE.md").read_bytes()
         result = self._sync(cli_script_path, project, cli_db)
-        assert result == {"sync_status": "empty", "projected": 0, "memory_ids": []}
+        expected_id = self._project_id(cli_script_path, project, cli_db)
+        assert expected_id, "status reported no project id; the agreement pin below is vacuous"
+        assert result == {"sync_status": "empty", "projected": 0, "memory_ids": [],
+                          "project_id": expected_id}
         assert (project / "CLAUDE.md").read_bytes() == before
 
     def test_sync_projects_the_records_under_their_own_dates(
@@ -3642,6 +3650,7 @@ class TestCliSyncSubprocess:
 
         assert result["sync_status"] == "wrote" and result["projected"] == 2
         assert result["memory_ids"] == [newer, older]
+        assert result["project_id"] == self._project_id(cli_script_path, project, cli_db)
         text = (project / "CLAUDE.md").read_text(encoding="utf-8")
         assert _working_memory_headers(text) == ["2026-09-02 09:30", "2026-09-01 08:00"]
         assert "newer save" in text and "older save" in text
