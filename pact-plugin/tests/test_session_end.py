@@ -34,6 +34,18 @@ class TestGetProjectSlug:
         with patch("session_end.get_project_dir", return_value="/Users/example/Sites/my-project"):
             assert get_project_slug() == "my-project"
 
+    def test_symlinked_project_dir_names_the_target(self, tmp_path):
+        """The reaper scans the slug the session was written under: the
+        resolved basename, so a symlinked launch dir does not orphan it."""
+        from session_end import get_project_slug
+
+        real = tmp_path / "real-project"
+        real.mkdir()
+        link = tmp_path / "link-name"
+        link.symlink_to(real, target_is_directory=True)
+        with patch("session_end.get_project_dir", return_value=str(link)):
+            assert get_project_slug() == "real-project"
+
     def test_returns_empty_when_no_project_dir(self):
         from session_end import get_project_slug
 

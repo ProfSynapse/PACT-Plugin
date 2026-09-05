@@ -108,6 +108,7 @@ BOOTSTRAP_MARKER_NAME = "bootstrap-complete"
 # shared.pact_context, but these re-exports allow `from shared import get_team_name`.
 from .pact_context import (
     _build_session_path as build_session_path,
+    project_slug,
     get_pact_context,
     get_team_name,
     get_session_id,
@@ -173,6 +174,7 @@ __all__ = [
     "OVERRIDE_COMMENT_RE",
     "BOOTSTRAP_MARKER_NAME",
     "build_session_path",
+    "project_slug",
     "get_pact_context",
     "get_team_name",
     "get_session_id",

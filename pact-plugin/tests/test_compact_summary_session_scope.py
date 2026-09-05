@@ -224,6 +224,29 @@ class TestLegacyDrainTwoPass:
         assert len(archives) == 1
         assert archives[0].read_text(encoding="utf-8") == "LEGACY SENTINEL"
 
+    def test_symlinked_project_dir_drains_under_target_basename(
+        self, tmp_path, monkeypatch
+    ):
+        """The drain lands where the session's own writers land: under the
+        resolved project basename, never the symlink's name."""
+        from session_init import _archive_stale_compact_summary
+        from shared.constants import get_compact_summary_path
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+        real = tmp_path / "real-project"
+        real.mkdir()
+        link = tmp_path / "link-name"
+        link.symlink_to(real, target_is_directory=True)
+        root = get_compact_summary_path()
+        root.parent.mkdir(parents=True, exist_ok=True)
+        root.write_text("LEGACY SENTINEL", encoding="utf-8")
+
+        _archive_stale_compact_summary(_SID_A, str(link))
+
+        dest_dir = tmp_path / "cfg" / "pact-sessions" / "real-project" / _SID_A
+        assert len(list(dest_dir.glob("compact-summary-*.txt"))) == 1
+        assert not (tmp_path / "cfg" / "pact-sessions" / "link-name").exists()
+
 
 class TestDegradationIsLossFree:
     """Degradation pin: an unidentified frame's bytes exist SOMEWHERE under

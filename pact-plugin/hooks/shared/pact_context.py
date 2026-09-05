@@ -46,9 +46,8 @@ _UNSAFE_SLUG_CHARS_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
 # Session-scoped context file path, set by init().
 # When None, get_pact_context() returns _EMPTY_CONTEXT (no file to read).
-# Note: pact_session.py (in skills/pact-memory/scripts/) mirrors this logic
-# with a dynamic _context_file_path() function because skill scripts can't
-# import from hooks/shared/.
+# Note: pact_session.py (in skills/pact-memory/scripts/) composes the same
+# path in its own _context_file_path(), importing project_slug from here.
 _context_path: Path | None = None
 
 # Module-level cache: populated on first get_pact_context() call.
@@ -181,6 +180,31 @@ def _build_session_path(slug: str, session_id: str) -> Path:
     return candidate
 
 
+def project_slug(project_dir: str) -> str:
+    """Return the session slug for ``project_dir``: the basename of the
+    RESOLVED directory, so a project launched through a symlink takes its
+    target's name.
+
+    Single derivation for every session-scoped path (``init``,
+    ``get_session_dir``, ``reconstruct_session_dir``,
+    ``resolve_compact_summary_path``, ``build_context_cache``, and the
+    session_init / session_end / pact_session callers). The pact-memory
+    project id and the backlog key resolve the same way, so the three names
+    for one project agree.
+
+    Empty input returns "" (``Path("").resolve()`` is the CWD, and the slug
+    of no project must not become the CWD's name). When ``resolve()``
+    raises, fall back to the unresolved basename so an unresolvable path
+    keeps its previous slug. Never raises.
+    """
+    if not project_dir:
+        return ""
+    try:
+        return Path(project_dir).resolve().name
+    except (OSError, RuntimeError):
+        return Path(project_dir).name
+
+
 def resolve_compact_summary_path(input_data: dict) -> Path:
     """Where this frame's compact summary is written. TOTAL.
 
@@ -190,7 +214,7 @@ def resolve_compact_summary_path(input_data: dict) -> Path:
     never None: whoever loses the bytes loses the only copy, so degradation
     must re-home them, not drop them.
 
-    Composes ``_build_session_path(Path(project_dir).name, session_id)``
+    Composes ``_build_session_path(project_slug(project_dir), session_id)``
     (inheriting slug sanitization + traversal guard) with
     ``COMPACT_SUMMARY_NAME``; falls back to ``get_compact_summary_path()``.
     Reads ``CLAUDE_PROJECT_DIR`` from env inside the function, mirroring
@@ -208,7 +232,7 @@ def resolve_compact_summary_path(input_data: dict) -> Path:
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
     if session_id and project_dir:
         return (
-            _build_session_path(Path(project_dir).name, str(session_id))
+            _build_session_path(project_slug(project_dir), str(session_id))
             / COMPACT_SUMMARY_NAME
         )
     return get_compact_summary_path()
@@ -246,7 +270,8 @@ def init(input_data: dict) -> None:
     session-scoped context file path:
         ~/.claude/pact-sessions/{project-slug}/{session-id}/pact-session-context.json
 
-    Where project-slug is Path(project_dir).name (e.g., "PACT-Plugin").
+    Where project-slug is project_slug(project_dir): the resolved
+    directory's basename (e.g., "PACT-Plugin").
 
     If session_id or project_dir is unavailable, leaves _context_path as None.
     Readers will return _EMPTY_CONTEXT without attempting any file I/O.
@@ -283,7 +308,7 @@ def init(input_data: dict) -> None:
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
 
     if session_id and project_dir:
-        slug = Path(project_dir).name
+        slug = project_slug(project_dir)
         _context_path = (
             _build_session_path(slug, session_id) / "pact-session-context.json"
         )
@@ -977,7 +1002,7 @@ def get_session_dir() -> str:
     project_dir = get_project_dir()
     if not session_id or not project_dir:
         return ""
-    slug = Path(project_dir).name
+    slug = project_slug(project_dir)
     return str(_build_session_path(slug, session_id))
 
 
@@ -996,7 +1021,7 @@ def reconstruct_session_dir(project_dir: str, session_id: str) -> str:
 
       - session_id: sanitized via _UNSAFE_SLUG_CHARS_RE (mirrors the substitution
         init() applies to the id before building the context path).
-      - slug: derived as Path(project_dir).name and sanitized + traversal-guarded
+      - slug: derived by project_slug() and sanitized + traversal-guarded
         inside _build_session_path (the single source of truth for the slug leg).
 
     Routing BOTH axes through the writer's derivation (the regex for the id, the
@@ -1018,7 +1043,7 @@ def reconstruct_session_dir(project_dir: str, session_id: str) -> str:
     if not project_dir or not session_id:
         return ""
     safe_id = _UNSAFE_SLUG_CHARS_RE.sub("_", str(session_id))
-    slug = Path(project_dir).name
+    slug = project_slug(project_dir)
     return str(_build_session_path(slug, safe_id))
 
 
@@ -1540,7 +1565,7 @@ def build_context_cache(
     if _context_path is not None:
         target = _context_path
     elif session_id and project_dir:
-        slug = Path(project_dir).name
+        slug = project_slug(project_dir)
         target = (
             _build_session_path(slug, session_id) / "pact-session-context.json"
         )

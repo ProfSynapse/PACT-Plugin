@@ -116,7 +116,7 @@ init() ordering:
 
 Session-scoped path E2E:
 65. write_context → init → get_team_name full session-scoped cycle
-66. Session-scoped path uses Path(project_dir).name as slug
+66. Session-scoped path uses the resolved project dir's basename as slug
 
 pact_session.py path:
 67. _context_file_path returns session-scoped path when both args provided
@@ -397,6 +397,103 @@ class TestGetSessionDir:
         pact_context(session_id="", project_dir="")
 
         assert get_session_dir() == ""
+
+
+class TestProjectSlug:
+    """The session slug is the RESOLVED project directory's basename.
+
+    One helper, project_slug(), feeds every session-path derivation, so a
+    project launched through a symlinked directory names the same slug the
+    pact-memory project id and the backlog key already use: the target's
+    basename, never the link's.
+    """
+
+    @staticmethod
+    def _linked_project(tmp_path):
+        real = tmp_path / "real-project"
+        real.mkdir()
+        link = tmp_path / "link-name"
+        link.symlink_to(real, target_is_directory=True)
+        return real, link
+
+    def test_symlinked_dir_yields_target_basename(self, tmp_path):
+        from shared.pact_context import project_slug
+
+        _real, link = self._linked_project(tmp_path)
+        assert project_slug(str(link)) == "real-project"
+
+    def test_plain_dir_keeps_own_basename(self, tmp_path):
+        from shared.pact_context import project_slug
+
+        plain = tmp_path / "plain-project"
+        plain.mkdir()
+        assert project_slug(str(plain)) == "plain-project"
+
+    def test_empty_input_is_empty_not_cwd(self):
+        """Path('').resolve() is the CWD; the slug of nothing is nothing."""
+        from shared.pact_context import project_slug
+
+        assert project_slug("") == ""
+
+    def test_unresolvable_path_keeps_unresolved_basename(self, monkeypatch):
+        from shared.pact_context import project_slug
+
+        def _raise(self, *args, **kwargs):
+            raise OSError("resolve refused")
+
+        monkeypatch.setattr(Path, "resolve", _raise)
+        assert project_slug("/nowhere/link-name") == "link-name"
+
+    def test_get_session_dir_uses_target_basename(self, pact_context, tmp_path):
+        from shared.pact_context import get_session_dir
+
+        _real, link = self._linked_project(tmp_path)
+        pact_context(session_id="sid-1", project_dir=str(link))
+
+        result = get_session_dir()
+        assert result.endswith("pact-sessions/real-project/sid-1")
+        assert "/link-name/" not in result
+
+    def test_reconstruct_session_dir_uses_target_basename(self, tmp_path):
+        from shared.pact_context import reconstruct_session_dir
+
+        _real, link = self._linked_project(tmp_path)
+        result = reconstruct_session_dir(str(link), "sid-2")
+        assert result.endswith("pact-sessions/real-project/sid-2")
+        assert "/link-name/" not in result
+
+    def test_resolve_compact_summary_path_uses_target_basename(
+        self, tmp_path, monkeypatch
+    ):
+        from shared.pact_context import resolve_compact_summary_path
+
+        _real, link = self._linked_project(tmp_path)
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
+        result = str(resolve_compact_summary_path({"session_id": "sid-3"}))
+        assert "pact-sessions/real-project/sid-3/" in result
+        assert "/link-name/" not in result
+
+    def test_init_uses_target_basename(self, tmp_path, monkeypatch):
+        import shared.pact_context as ctx_module
+
+        _real, link = self._linked_project(tmp_path)
+        monkeypatch.setattr(ctx_module, "_context_path", None)
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
+        ctx_module.init({"session_id": "sid-4"})
+        result = str(ctx_module._context_path)
+        assert "pact-sessions/real-project/sid-4/" in result
+        assert "/link-name/" not in result
+
+    def test_build_context_cache_uses_target_basename(self, tmp_path, monkeypatch):
+        import shared.pact_context as ctx_module
+
+        _real, link = self._linked_project(tmp_path)
+        monkeypatch.setattr(ctx_module, "_context_path", None)
+        target, _context = ctx_module.build_context_cache(
+            "session-abcd1234", "sid-5", str(link)
+        )
+        assert "pact-sessions/real-project/sid-5/" in str(target)
+        assert "/link-name/" not in str(target)
 
 
 class TestInit:
@@ -1665,7 +1762,7 @@ class TestSessionScopedPathE2E:
         assert ctx_module.get_project_dir() == project_dir
 
     def test_session_scoped_path_uses_project_dir_name_as_slug(self, monkeypatch, tmp_path):
-        """Slug should be Path(project_dir).name, not the full path."""
+        """Slug should be the project dir's basename, not the full path."""
         import shared.pact_context as ctx_module
 
         monkeypatch.setattr(ctx_module, "_context_path", None)
@@ -1706,6 +1803,20 @@ class TestPactSessionPath:
             / "PACT-Plugin" / "abc-session-123" / "pact-session-context.json"
         )
         assert result == expected
+
+    def test_symlinked_project_dir_uses_target_basename(self, monkeypatch, tmp_path):
+        """The skill-script path agrees with the hook slug for a symlinked dir."""
+        from scripts.pact_session import _context_file_path
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        real = tmp_path / "real-project"
+        real.mkdir()
+        link = tmp_path / "link-name"
+        link.symlink_to(real, target_is_directory=True)
+
+        result = str(_context_file_path("sid-6", str(link)))
+        assert "pact-sessions/real-project/sid-6/" in result
+        assert "/link-name/" not in result
 
     def test_returns_none_when_args_missing(self, monkeypatch, tmp_path):
         """_context_file_path with missing args should return None."""

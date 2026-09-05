@@ -35,7 +35,12 @@ if str(_hooks_dir) not in sys.path:
 from shared.error_output import hook_error_json
 from shared import check_pr_state
 import shared.pact_context as pact_context
-from shared.pact_context import get_project_dir, get_session_id, get_team_name
+from shared.pact_context import (
+    get_project_dir,
+    get_session_id,
+    get_team_name,
+    project_slug,
+)
 from shared.session_journal import (
     append_event,
     make_event,
@@ -53,11 +58,9 @@ _SUPPRESS_OUTPUT = json.dumps({"suppressOutput": True})
 
 
 def get_project_slug() -> str:
-    """Derive project slug from session context (basename of project_dir)."""
-    project_dir = get_project_dir()
-    if project_dir:
-        return Path(project_dir).name
-    return ""
+    """Derive project slug from session context (resolved basename of
+    project_dir, via the shared derivation every session path uses)."""
+    return project_slug(get_project_dir())
 
 
 def check_unpaused_pr(

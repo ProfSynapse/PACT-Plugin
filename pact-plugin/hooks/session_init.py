@@ -78,7 +78,12 @@ from pin_caps import (  # noqa: F401
     parse_pins,
 )
 
-from shared import BOOTSTRAP_MARKER_NAME, SESSION_ID_CONTROL_CHARS_RE, build_session_path
+from shared import (
+    BOOTSTRAP_MARKER_NAME,
+    SESSION_ID_CONTROL_CHARS_RE,
+    build_session_path,
+    project_slug,
+)
 from shared.constants import (
     COMPACT_SUMMARY_ARCHIVE_PREFIX,
     COMPACT_SUMMARY_NAME,
@@ -564,8 +569,8 @@ def _extract_prev_session_dir(project_dir: str) -> str | None:
         )
         if resume_match:
             session_id = resume_match.group(1)
-            # Use project root basename (not worktree) for slug
-            slug = Path(project_dir).name
+            # Same slug derivation as every session path: the resolved dir.
+            slug = project_slug(project_dir)
             derived = str(
                 get_claude_config_dir() / "pact-sessions" / slug / session_id
             )
@@ -803,7 +808,7 @@ def _stale_summary_destination(session_id: str, project_dir: str) -> Path:
     """
     if session_id and project_dir:
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-        return build_session_path(Path(project_dir).name, str(session_id)) / (
+        return build_session_path(project_slug(project_dir), str(session_id)) / (
             f"{_ROOT_DRAINED_SUMMARY_PREFIX}{stamp}.txt"
         )
     return get_compact_summary_path().parent / COMPACT_SUMMARY_ORPHAN_NAME
@@ -866,7 +871,7 @@ def _archive_own_dir_stale_summary(session_id: str, project_dir: str) -> None:
         return
     try:
         summary = (
-            build_session_path(Path(project_dir).name, str(session_id))
+            build_session_path(project_slug(project_dir), str(session_id))
             / COMPACT_SUMMARY_NAME
         )
         if not summary.exists():
@@ -1202,7 +1207,7 @@ def main():
         if is_marker_reset:
             reset_session_id = input_data.get("session_id", "")
             if reset_session_id and project_dir:
-                slug = Path(project_dir).name
+                slug = project_slug(project_dir)
                 session_path = build_session_path(slug, str(reset_session_id))
                 _clear_bootstrap_marker(session_path)
 
