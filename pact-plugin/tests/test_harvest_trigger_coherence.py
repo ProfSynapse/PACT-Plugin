@@ -2,8 +2,8 @@
 
 COVERED, and this list is the scope — an enumeration not on it is not gated:
 the orchestrator persona's trigger rows, the harvest skill's variant bullets,
-the persona's Consolidation exemption paragraph, and the skill's Consolidation
-trigger sentence. Each is compared against the dispatch sites, never against
+the persona's propagation paragraph, and the skill's Consolidation trigger
+sentence. Each is compared against the dispatch sites, never against
 another prose surface: completing one of these lists is what shortens the
 others, so chaining them would route that pressure into the oracle.
 
@@ -69,9 +69,18 @@ _DISPATCH = re.compile(r"Follow the (\w+) Harvest workflow")
 _PERSONA_ROW = re.compile(r"→\s*(\w+) Harvest.*?`([\w-]+)`")
 _SKILL_BULLET = re.compile(r"\*\*(\w+) Harvest\*\*[^\n]*?\(([^)]*)\)")
 
-# Paragraphs claiming WHICH boundaries run a Consolidation Harvest, located by a
-# phrase each one owns. A rewrite that drops the phrase empties the extraction
-# and trips the non-empty guard rather than passing.
+# Paragraphs naming command stems, located by a phrase each one owns. A rewrite
+# that drops the phrase empties the extraction and trips the non-empty guard
+# rather than passing.
+#
+# THESE TWO CLAIM DIFFERENT PROPERTIES AND THE EQUALITY IS COINCIDENTAL. The
+# skill sentence names the boundaries that run a Consolidation Harvest. The
+# persona paragraph names the boundaries that PROPAGATE, and it counts
+# `orchestrate`'s post-review STANDARD Harvest among them; that paragraph ends
+# "never the variant's name", and the skill's own Propagation rule calls the
+# sentence "a mode, not a scope". Both yield the same four stems today only
+# because `orchestrate` is in each list for a different reason. Adding
+# propagation to a Standard boundary is a legal edit that would redden this.
 _CONSOLIDATION_CLAIMS = {
     "persona propagation paragraph": (PERSONA, "may appear only at a boundary"),
     "skill consolidation trigger": (SKILL, "This is the deep-clean pass"),
