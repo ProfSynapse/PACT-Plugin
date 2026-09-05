@@ -615,7 +615,11 @@ class TestLedgerPruneRulings:
         # Item 5 marks; only item 7 removes.
         assert "is marked for removal" in bullet
         assert "read the ids wherever they sit on that line" in bullet
-        assert "A session id is the 36-character uuid; any other shape counts as no session id" in bullet
+        assert (
+            "A session id is five lowercase-hex groups of 8-4-4-4-12 characters "
+            "joined by hyphens, the shape the session-directory reaper accepts; "
+            "any other shape counts as no session id"
+        ) in bullet
 
     def test_reaped_directory_is_completion(self, skill_content):
         bullet = _prune_bullet(skill_content)
