@@ -1630,8 +1630,10 @@ def _recover_identifier(raw: str) -> str:
 def _record_timestamp(value: Any) -> Optional[datetime]:
     """Parse a record's `created_at` as stored or as `to_dict()` emits it.
 
-    The store writes `YYYY-MM-DD HH:MM:SS`; `MemoryObject.to_dict()` emits
-    ISO-8601 with a `T`. Both parse. A value that parses as neither returns
+    The writer stores ISO-8601 with a `T`, microsecond precision and a
+    `+00:00` offset, and `MemoryObject.to_dict()` emits that form. The space
+    form `YYYY-MM-DD HH:MM:SS` reaches here only from the schema DEFAULT or
+    from direct SQL. Both parse. A value that parses as neither returns
     None so the formatter stamps the entry with now: a malformed row still
     renders, and the header that disagrees with `get` is what shows it.
     """

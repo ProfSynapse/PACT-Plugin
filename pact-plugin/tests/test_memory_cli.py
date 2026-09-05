@@ -3562,10 +3562,15 @@ _WORKING_MEMORY_SCAFFOLD = (
 
 
 def _backdate(db_path, memory_id, stamp):
-    """Set a record's `created_at` directly. The CLI strips a caller-supplied
-    `created_at` on save, and two saves in one second tie on the store's own
-    clock, so the ordering these arms assert is fixed here, in the store,
-    which is the record of truth the projection reads."""
+    """Set a record's `created_at` directly, because a save cannot.
+
+    The writer ignores a caller-supplied `created_at` and stamps its own,
+    microsecond ISO, so saves land in an order these arms cannot choose and
+    never tie. Writing the stamp here fixes the ordering in the store, which
+    is the record of truth the projection reads. Note that the stamps written
+    here are the space form, which is what the schema DEFAULT emits and not
+    what the writer emits -- an arm that needs the production form must say
+    so explicitly."""
     import sqlite3
     conn = sqlite3.connect(str(db_path))
     conn.execute("UPDATE memories SET created_at = ? WHERE id = ?", (stamp, memory_id))

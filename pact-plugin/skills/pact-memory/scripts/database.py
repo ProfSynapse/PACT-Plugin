@@ -285,6 +285,17 @@ def init_schema(conn: sqlite3.Connection) -> None:
             disagreements_resolved TEXT,
             project_id TEXT,
             session_id TEXT,
+            -- THESE DEFAULTS DISAGREE IN FORMAT WITH THE ONLY WRITER, AND A
+            -- STORE HOLDING BOTH SORTS WRONGLY IN SILENCE. `datetime('now')`
+            -- yields `YYYY-MM-DD HH:MM:SS`; create_memory yields ISO-8601
+            -- with a `T` and a `+00:00` offset. SQLite compares TEXT
+            -- bytewise and at index 10 a space (0x20) sorts below `T`
+            -- (0x54), so a default-written row ranks OLDER than a
+            -- writer-written row hours its senior. The rowid tiebreak on the
+            -- newest-first queries cannot rescue that: it is a wrong
+            -- comparison, not a tie. Unreached today, because the sole
+            -- INSERT always supplies both columns. Any new insert path must
+            -- supply them too, or change these defaults to the writer's form.
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         )
@@ -1335,8 +1346,8 @@ def list_memories(
         offset: Number of results to skip (default 0).
 
     Returns:
-        List of memory dictionaries, ordered by created_at DESC; records
-        created in the same second come newest-inserted first.
+        List of memory dictionaries, ordered by created_at DESC. Two records
+        sharing a created_at come newest-inserted first.
     """
     ensure_initialized(conn)
 
@@ -1355,8 +1366,13 @@ def list_memories(
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
 
-    # `created_at` is second-granular, so a harvest's saves tie. rowid rises
-    # with insertion, so the tiebreak is what the saves' own order was.
+    # DETERMINISM INSURANCE, NOT A TIE THIS PATH EXPECTS TO SEE. The only
+    # writer stamps `created_at` with `datetime.now(timezone.utc).isoformat()`
+    # -- microsecond precision -- so saves do not tie, not even several inside
+    # one second. What CAN tie is a row written by the schema DEFAULT, whose
+    # format differs from the writer's (see the CREATE TABLE), or a row whose
+    # stamp was set by direct SQL. rowid rises with insertion, so where a tie
+    # does arise the order is the insertion order rather than an arbitrary one.
     query += " ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
 
@@ -1413,6 +1429,13 @@ def search_memories_by_text(
         query += " AND project_id = ?"
         params.append(project_id)
 
+    # SAFE BECAUSE THIS ORDER CARRIES NO RELEVANCE, NOT BECAUSE NOTHING READS
+    # IT. Something does: the hybrid scorer's keyword-fallback branch turns a
+    # result's POSITION here into its score. But this is a substring LIKE
+    # search with no relevance signal of any kind, so the order was already
+    # pure recency, and adding the tiebreak reshuffles only records that are
+    # equally recent. Ranked search is the vector path's own ORDER BY on
+    # distance, which this does not touch.
     query += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
     params.append(limit)
 
