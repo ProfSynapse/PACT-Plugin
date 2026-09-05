@@ -23,6 +23,26 @@ ORPHAN_HEADING = "## Orphaned Handoff Recovery"
 # other.
 ORPHAN_ANCHOR = "Layer 4 fallback"
 
+# The population rule's opening phrase. It must appear ONCE: the ordering arm
+# locates the rule with `find`, which returns the FIRST occurrence, so a
+# second mention placed earlier would let the block itself sit anywhere.
+RULE_PHRASE = "DISCARD ANY SCOPE YOU ARRIVED WITH"
+
+# The two sweeping entry points. Each must POINT AT the population rule.
+# NOT `## Standard Harvest Workflow`: see `section` on why it cannot be sliced.
+SWEEPING_HEADINGS = (
+    "## Incremental Harvest Workflow",
+    "## Consolidation Harvest Workflow",
+)
+
+# The reference each sweeping section must carry. Deliberately NOT the pointer
+# sentence: the property under test is that the section REFERS to the rule, so
+# a reworded pointer must stay green and an INLINED COPY of the rule must fail.
+# Deliberately NOT "Standard Harvest rule" either — "Standard Harvest Step"
+# already appears in both sections, so that shorter phrase is one reword of
+# existing text away from being satisfied with no pointer present.
+POINTER_ANCHOR = "Standard Harvest population rule"
+
 # Call spellings that remove a file from disk. THIS LIST IS A FLOOR AND NOT
 # A PROOF OF ABSENCE: prose can authorise a removal in words no list
 # anticipates. The POSITIVE assertion carries the contract. This list catches
@@ -30,18 +50,24 @@ ORPHAN_ANCHOR = "Layer 4 fallback"
 REMOVAL_CALL_TOKENS = ("unlink", "shutil.rmtree", "os.remove", "os.rmdir", "rm -")
 
 
-def orphan_recovery_section(content):
-    """Return the Orphaned Handoff Recovery section of the skill.
+def section(content, heading):
+    """Return the slice of `content` running from `heading` to the next `## `.
 
-    The slice runs from the section heading to the next `## ` heading, or to
-    the end of the file when that section is the last one. THE SLICE RULE IS
-    THE PARAMETER OF THE ARM BELOW, so the arm asserts the slice terminated
-    correctly before it reads anything out of it.
+    Runs to the end of the file when that section is the last one. THE SLICE
+    RULE IS THE PARAMETER OF EVERY ARM THAT USES IT, so each arm asserts the
+    slice terminated correctly before it reads anything out of it.
+
+    DO NOT SLICE `## Standard Harvest Workflow` WITH THIS. That slice
+    terminates on the `## team={team_id}` file-format example inside Step 8
+    and never reaches Steps 9 or 10, so an absence read out of it would be an
+    absence from two thirds of a section. The Incremental and Consolidation
+    sections carry no interior `## ` and slice cleanly, which is why only
+    those two are sliced here.
     """
-    start = content.find(ORPHAN_HEADING)
+    start = content.find(heading)
     if start == -1:
         return ""
-    rest = content[start + len(ORPHAN_HEADING):]
+    rest = content[start + len(heading):]
     end = rest.find("\n## ")
     return rest if end == -1 else rest[:end]
 
@@ -56,6 +82,181 @@ def skill_content():
 def secretary_content():
     """Load the secretary agent definition."""
     return SECRETARY_FILE.read_text()
+
+
+class TestPopulationPrecedence:
+    """The dispatch-is-a-hint rule, and that it arrives before Step 1.
+
+    A secretary that reads the rule only AFTER constructing the population has
+    already mis-scoped, so presence alone is not enough: the rule must sit
+    ahead of Step 1."""
+
+    def test_rule_present(self, skill_content):
+        assert "DISCARD ANY SCOPE YOU ARRIVED WITH" in skill_content
+        # NOT the whole sentence. The sentence carries an EXAMPLE LIST, and a
+        # list is meant to grow: pinning it verbatim turns every future
+        # widening into a red that forces a same-commit test edit, which is
+        # how an editor learns to update pins without reading them. This
+        # substring is the AXIS the list exists to close — a dispatch can hand
+        # you a scope that names no task at all — and its removal is the
+        # regression. The general opener is pinned above and carries the claim.
+        assert "a subset of this workflow's steps" in skill_content
+        assert "never the population" in skill_content
+        # Verbatim IS right here: this is the load-bearing clause, it is short,
+        # and rewording it IS the regression. "anything" and not "a dispatch":
+        # a rule claiming precedence over one channel leaves a second channel
+        # free to contradict it, which is the defect one layer up.
+        assert "outranks anything that contradicts it" in skill_content
+
+    def test_ledger_settles_the_population(self, skill_content):
+        """Step 1 constructs the population; the ledger settles it. A reader
+        can run the census and still trim to a dispatch range, so Step 2
+        carries its own refusal."""
+        # LIMB-NEUTRAL ON PURPOSE. The earlier wording named a task set, and a
+        # reminder that asserts one limb of a two-limb rule can drop the other
+        # — which is how five sites came to cover only the task case. A
+        # reminder asserting NO limb cannot contradict the full statement,
+        # whichever limb the reader is holding.
+        assert "A dispatch does not narrow this list." in skill_content
+
+    def test_workflow_selection_is_not_scope_authority(self, secretary_content):
+        """The persona sentence a secretary holds BEFORE it opens the skill
+        must not read as authority over what is in scope. Limb-neutral for the
+        same reason as the ledger sentence above."""
+        assert "never what is in scope" in secretary_content
+        assert "workflow as directed by task descriptions" not in secretary_content
+
+    def test_rule_precedes_every_workflow_section(self, skill_content):
+        """The rule must sit ahead of ALL THREE workflow sections, not just
+        Step 1 of the first one.
+
+        It used to live at the end of Standard Step 0. The Incremental and
+        Consolidation sections route to Standard Step 1 and never to Step 0,
+        so the only statement carrying the step-subset limb sat off the path
+        of the two SWEEPING readers — the ones most likely to be handed a
+        step-subset scope. Placing it in the shared preamble puts it on every
+        reader's path whichever variant they run, which is what lets the later
+        reminders stay short without any of them having to carry both limbs.
+        """
+        rule = skill_content.find(RULE_PHRASE)
+        assert rule != -1
+        for heading in ("## Standard Harvest Workflow",) + SWEEPING_HEADINGS:
+            section_start = skill_content.find(heading)
+            assert section_start != -1, f"{heading!r} is absent"
+            assert rule < section_start, (
+                f"The population rule sits after {heading!r}, so a reader "
+                f"entering there builds a population without meeting it."
+            )
+
+    def test_address_is_distinguished_from_scope(self, skill_content):
+        """A scope is discarded; an address is kept. Stated as a TEST rather
+        than a list, because a list of addresses can drop a member exactly the
+        way the abbreviations dropped a limb."""
+        assert "AN ADDRESS SAYS WHERE TO LOOK" in skill_content
+        assert "dropping it would make you read MORE" in skill_content
+
+    def test_rule_precedes_step_1(self, skill_content):
+        # THE GUARD RUNS BEFORE THE OFFSET COMPARE, AND IT IS WHAT MAKES THE
+        # COMPARE MEAN ANYTHING. `find` returns the FIRST occurrence, so with
+        # the phrase present twice this arm tracks the earliest MENTION rather
+        # than the block. A forward pointer or a table of contents carrying
+        # the phrase ahead of Step 1 then satisfies the compare while the real
+        # block sits after Step 1 — the exact placement this arm forbids.
+        assert skill_content.count(RULE_PHRASE) == 1, (
+            f"{RULE_PHRASE!r} appears {skill_content.count(RULE_PHRASE)} "
+            f"times. The compare below uses `find`, which takes the FIRST "
+            f"occurrence, so a second mention placed earlier would let the "
+            f"rule block itself sit anywhere. State the rule once."
+        )
+        rule = skill_content.find(RULE_PHRASE)
+        step1 = skill_content.find("### Step 1: Task Discovery")
+        assert rule != -1 and step1 != -1
+        assert rule < step1, "the rule must arrive before the population is built"
+
+    @pytest.mark.parametrize("heading", SWEEPING_HEADINGS)
+    def test_sweeping_workflow_points_at_the_rule(self, skill_content, heading):
+        """Both sweeping entry points must POINT AT the population rule.
+
+        The rule lives under `## Standard Harvest Workflow`, but Incremental
+        and Consolidation are reader entry points of their own and each is a
+        SWEEPING pass, so a reader arriving at either builds a population
+        without ever meeting the rule.
+
+        THE ASSERTION IS SECTION-SCOPED, AND THAT IS THE WHOLE ARM. A
+        file-wide `in skill_content` check is green whenever the text sits
+        anywhere at all — including inside Standard, where the rule already
+        lives — so it would pass on a file with neither pointer present and
+        measure nothing.
+
+        AND IT NAMES THE REFERENCE, NOT THE POINTER SENTENCE. The property
+        under test is that the section REFERS to the rule rather than
+        restating it: a reworded pointer must stay green, and an inlined
+        second copy of the rule must fail, because a second copy is the drift
+        the pointer exists to avoid.
+        """
+        body = section(skill_content, heading)
+
+        # --- NON-VACUITY. A runaway slice could find the OTHER section's
+        # --- pointer and pass while this section carries none.
+        assert body.strip(), (
+            f"The {heading!r} section is empty or absent, so this arm would "
+            f"report on a section that is not there."
+        )
+        assert "\n## " not in body, (
+            f"The {heading!r} slice contains a later heading, so it did not "
+            f"terminate at the section boundary and may be reading another "
+            f"section's pointer."
+        )
+
+        assert POINTER_ANCHOR in body, (
+            f"The {heading!r} section does not refer to the "
+            f"{POINTER_ANCHOR!r}. This section is a reader entry point and a "
+            f"sweeping pass, so a reader who starts here builds a population "
+            f"without meeting the rule. Add a pointer, do NOT restate the "
+            f"rule here — a second copy drifts."
+        )
+
+
+class TestArtifactLoopShape:
+    """Step 3.5 must READ inside the per-feature loop, not after it.
+
+    THIS PINS SHAPE, NOT BEHAVIOUR, AND THE DISTINCTION IS THE POINT. The
+    skill describes a shell pipeline in prose; nothing here executes it, so
+    these arms cannot prove the pipeline works. They catch the exact
+    regression that shipped once: the read instruction sitting AFTER the
+    loop, where `$ARTIFACTS` holds only the last feature.
+
+    Behaviour was verified ONCE, by running the pipeline against a
+    two-feature journal. That was a one-time proof; this is the standing
+    guard, and it watches the instruction's structure alone.
+    """
+
+    LOOP_OPEN = 'while IFS= read -r FEATURE; do'
+    LOOP_CLOSE = 'done <<< "$FEATURES"'
+    READ_MARKER = "READ the paths HERE"
+
+    def test_read_instruction_is_inside_the_loop(self, skill_content):
+        for token in (self.LOOP_OPEN, self.LOOP_CLOSE, self.READ_MARKER):
+            assert skill_content.count(token) == 1, (
+                f"{token!r} appears {skill_content.count(token)} times; the "
+                f"offset comparison below needs each to be unambiguous."
+            )
+        opened = skill_content.find(self.LOOP_OPEN)
+        read = skill_content.find(self.READ_MARKER)
+        closed = skill_content.find(self.LOOP_CLOSE)
+        assert opened < read < closed, (
+            "The artifact READ instruction must sit INSIDE the per-feature "
+            "loop. $ARTIFACTS is overwritten each iteration, so a read placed "
+            "after the loop harvests the last feature only, discards every "
+            "other, and reports success."
+        )
+
+    def test_merge_prohibition_is_stated(self, skill_content):
+        # Load-bearing clause, so pinned verbatim: the resolved object is
+        # keyed by workflow alone, and every feature runs the same phases, so
+        # merging drops most paths while looking well-formed.
+        assert "DO NOT MERGE THE PER-FEATURE OBJECTS INTO ONE" in skill_content
+        assert "keyed by `workflow` ALONE" in skill_content
 
 
 class TestSkillFileExists:
@@ -241,32 +442,32 @@ class TestCriticalProtocolReferences:
         the same section. This arm deliberately does NOT repeat them. It
         carries the SECTION-SCOPED ABSENCE term, which no other arm covers.
         """
-        section = orphan_recovery_section(skill_content)
+        body = section(skill_content, ORPHAN_HEADING)
 
         # --- NON-VACUITY GUARD. Four checks, and each must pass before the
         # --- assertions below can mean anything.
-        assert section.strip(), (
+        assert body.strip(), (
             f"The {ORPHAN_HEADING!r} section is empty or absent, so the "
             f"assertions below would pass while measuring nothing. Either "
             f"the section was removed from the skill, or the slice rule in "
-            f"orphan_recovery_section no longer finds its heading."
+            f"`section` no longer finds its heading."
         )
-        assert len(section) < len(skill_content), (
+        assert len(body) < len(skill_content), (
             "The section slice is the whole file, so the scope of this arm "
             "ran away and the absence check below covers text it must not."
         )
-        assert ORPHAN_ANCHOR in section, (
+        assert ORPHAN_ANCHOR in body, (
             f"The section slice does not contain {ORPHAN_ANCHOR!r}, so it is "
             f"not the section this arm targets. Update ORPHAN_ANCHOR only "
             f"after checking the sentence moved rather than the slice."
         )
-        assert "\n## " not in section, (
+        assert "\n## " not in body, (
             "The section slice contains a later heading, so it did not "
             "terminate at the section boundary."
         )
 
         # --- POSITIVE. The contract the step carries now.
-        assert "Do NOT remove the files you read them from" in section, (
+        assert "Do NOT remove the files you read them from" in body, (
             "The Orphaned Handoff Recovery step must tell the agent to "
             "record the processed ids and to remove no file. Its absence "
             "means the step could have reverted to a removal, and either "
@@ -277,7 +478,7 @@ class TestCriticalProtocolReferences:
 
         # --- NEGATIVE. A floor, not a proof of absence.
         for token in REMOVAL_CALL_TOKENS:
-            assert token not in section, (
+            assert token not in body, (
                 f"The Orphaned Handoff Recovery step contains {token!r}, "
                 f"which removes a file. That step reads the session journal "
                 f"and the task files, and either can be the only carrier of "

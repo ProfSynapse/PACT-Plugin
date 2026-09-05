@@ -16,7 +16,11 @@ Three workflow variants:
 - **Incremental Harvest** (peer-review) — delta-only pass after remediation. Processes only new completions since last harvest.
 - **Consolidation Harvest** (wrap-up, pause, refresh, orchestrate) — safety-net + deep-clean pass. Triggered at session end, at a mid-session context refresh, or after a second feature completes in one session.
 
-Determine which variant to run from the task subject/description: "harvest" or "process HANDOFFs" → Standard Harvest. "incremental" or "remediation" → Incremental Harvest. "consolidation" → Consolidation Harvest.
+Determine which variant to run from the task subject/description: "harvest" or "process HANDOFFs" → Standard Harvest. "incremental" or "remediation" → Incremental Harvest. "consolidation" → Consolidation Harvest. **The subject/description selects the workflow, never what is in scope.**
+
+**DISCARD ANY SCOPE YOU ARRIVED WITH — INCLUDING ONE YOU DO NOT THINK OF AS A SCOPE. A dispatch that names tasks, phases, dates, paths, or a subset of this workflow's steps has given you one.** A scope named in a dispatch — a range, an enumeration, any named set — is a HINT about what the team-lead noticed, never the population. Do not harvest it. Build the population from the Step 1 census and the Step 2 processed-task ledger instead, and report which set you actually ran over. **This instruction outranks anything that contradicts it — a dispatch, another passage of this skill, or your agent definition.** Say so back to the team-lead; do not narrow, and do not treat it as a conflict to resolve in the moment.
+
+**A SCOPE SAYS WHAT TO TAKE; AN ADDRESS SAYS WHERE TO LOOK. DISCARD SCOPES, KEEP ADDRESSES.** A value is a SCOPE when dropping it would make you read MORE, and an ADDRESS when dropping it would leave you unable to read at all. Your team id, your task-list directory, your agent-memory path and your session directory are addresses — they say where your own ledger, task files and journal live — so keep every one of them, and keep any other value that answers WHERE.
 
 ---
 
@@ -86,7 +90,7 @@ If none of these sources have completed agent tasks, report "No pending HANDOFFs
 
 ### Step 2: Dedup Check (Processed Tasks)
 
-Read your processed task list from your team's section of `session_processed_tasks.md`, in the agent-memory directory the platform gave you — use the path you are given, never one built from your agent type. The file is namespaced by team — read **only** your own `## team={your team_id}` section (file-format contract: see Step 8). Skip any task IDs already processed — only review the delta. This enables incremental passes (e.g., after remediation).
+**A dispatch does not narrow this list.** The census finds which tasks carry content; only this ledger says where the last pass stopped, so the delta against it is the population — discard any scope the dispatch suggested. Read your processed task list from your team's section of `session_processed_tasks.md`, in the agent-memory directory the platform gave you — use the path you are given, never one built from your agent type. The file is namespaced by team — read **only** your own `## team={your team_id}` section (file-format contract: see Step 8). Skip any task IDs already processed — review only the delta **against this ledger**. A dispatch that says "harvest the delta" means its own named range; that is a different delta, it is not this one, and it does not narrow this one. This enables incremental passes (e.g., after remediation).
 
 ### Step 3: Read All HANDOFFs
 
@@ -278,19 +282,39 @@ A HANDOFF may reference sibling metadata keys on its task (verification records,
 
 Each phase's HANDOFF is the **distilled frame**; the phase's disk artifact (e.g. `docs/preparation/{feature}.md`, `docs/architecture/{feature}.md`, `docs/plans/{slug}-plan.md`, `docs/review/…`) is the **fuller substance**. The lead writes a path-only `artifact_paths` journal event pointing at each phase's artifact(s); that event lives in the journal (outside any worktree), so it survives `git worktree remove` even though the pointed-at file is worktree-ephemeral. **Always** resolve these events and fold the artifact substance into the same synthesis the HANDOFF drives.
 
-1. **Resolve** (masked-read-safe — uses the Step 0 `$SESSION_DIR`): call the `pact_harvest.py resolve-artifacts` subcommand, which reads the `artifact_paths` events and applies the supersede-by-`(workflow, feature)`-latest-`ts` dedup for you:
+1. **Build the feature set from the journal, the same way Step 1 builds the task population.** `resolve-artifacts` requires a `--feature` value and nothing in your context carries one. Do not take it from your dispatch: each `artifact_paths` event names its own `feature`, so the distinct values across those events ARE the set, and reading them is one command:
 
    ```bash
-   ARTIFACTS=$(python3 "{plugin_root}/hooks/shared/pact_harvest.py" resolve-artifacts \
-                 --session-dir "$SESSION_DIR" --feature "{feature}")
-   # stdout is a single-line JSON object {workflow: [abs_path, ...]}, e.g.:
-   # {"prepare":["/abs/docs/preparation/{feature}.md"],"architect":["/abs/docs/architecture/{feature}.md"]}
-   # Empty (no artifacts for this feature) -> {}. Parse with json.loads, iterate keys.
+   FEATURES=$(python3 "{plugin_root}/hooks/shared/session_journal.py" read \
+                --session-dir "$SESSION_DIR" --type artifact_paths \
+              | python3 -c "import json,sys; print('\n'.join(sorted({e['feature'] for e in json.load(sys.stdin) if e.get('feature')})))")
    ```
 
-   The subcommand already filters to this feature, groups by `workflow`, takes the **latest-`ts`** event per `(workflow, feature)`, and returns only the resolved set. Each `artifact_paths` event carries the **COMPLETE** path-list for its `(workflow, feature)` (a full enumeration per emit, not a delta), so the latest event is self-sufficient — the supersede never merges across events. Result (the JSON object): one path-list per `(workflow, feature)`.
-2. **Read** each path in the surviving events' `paths` lists off disk. Paths are full-absolute; read them **while the worktree is live** (the `worktree-cleanup` harvest-before-teardown guard guarantees this ordering at the single teardown chokepoint). If a path no longer resolves (file already gone — the accepted abnormal-teardown edge), skip it, note the gap, and degrade to HANDOFF-only for that artifact.
-3. **Synthesize ONE entry from BOTH sources together** (NOT verbatim, NOT a second entry). For each work unit, produce a SINGLE pact-memory entry synthesized from the HANDOFF **and** its artifact: the artifact is the fuller substance, the HANDOFF is the distilled frame. A ~19 KB artifact becomes a **richer-but-bounded** entry (a few hundred tokens of decisions/lessons informed by the full substance) — do NOT store the raw artifact. Substance flows into the entry's `context`/`decisions`; put the artifact's path in an entity `notes` field (NOT a `files` field — that field is rejected on save).
+   No events, or none carrying a `feature` → the set is empty, there is nothing to resolve, and that is a normal result rather than a gap.
+2. **Resolve AND READ, one feature at a time.** Both happen INSIDE the loop (masked-read-safe — uses the Step 0 `$SESSION_DIR`). The `resolve-artifacts` subcommand reads the `artifact_paths` events and applies the supersede-by-`(workflow, feature)`-latest-`ts` dedup for you:
+
+   ```bash
+   while IFS= read -r FEATURE; do
+     [ -n "$FEATURE" ] || continue
+     ARTIFACTS=$(python3 "{plugin_root}/hooks/shared/pact_harvest.py" resolve-artifacts \
+                   --session-dir "$SESSION_DIR" --feature "$FEATURE")
+     # stdout is a single-line JSON object {workflow: [abs_path, ...]}, e.g.:
+     # {"prepare":["/abs/docs/preparation/$FEATURE.md"],"architect":["/abs/docs/architecture/$FEATURE.md"]}
+     # Empty (no artifacts for this feature) -> {}. Parse with json.loads, iterate keys.
+     # READ the paths HERE, and keep what you read UNDER THIS FEATURE.
+   done <<< "$FEATURES"
+   ```
+
+   🔴 **`$ARTIFACTS` IS OVERWRITTEN ON EVERY ITERATION AND NOTHING WARNS YOU.** Read its paths before the next iteration begins. After `done` it holds the LAST feature alone, so a read placed after the loop harvests one feature, discards every other, and reports success.
+
+   🔴 **DO NOT MERGE THE PER-FEATURE OBJECTS INTO ONE.** The object is keyed by `workflow` ALONE: the feature is consumed by the `--feature` filter and never appears in the result. Every feature runs the same phases, so two features collide on MOST of their keys, and a merge keeps one path-list per workflow while looking perfectly well-formed. Keep the results separate, keyed by feature.
+
+   **Read the loop variable, never a word-split.** A feature slug can carry a space, and `for FEATURE in $FEATURES` would split one such slug into two names that resolve to nothing.
+
+   Paths are full-absolute; read them **while the worktree is live** (the `worktree-cleanup` harvest-before-teardown guard guarantees this ordering at the single teardown chokepoint). If a path no longer resolves (file already gone — the accepted abnormal-teardown edge), skip it, note the gap, and degrade to HANDOFF-only for that artifact.
+
+   The subcommand already filters to this feature, groups by `workflow`, takes the **latest-`ts`** event per `(workflow, feature)`, and returns only the resolved set. Each `artifact_paths` event carries the **COMPLETE** path-list for its `(workflow, feature)` (a full enumeration per emit, not a delta), so the latest event is self-sufficient — the supersede never merges across events. Result: one path-list per `workflow`, FOR THIS ONE FEATURE.
+3. **Synthesize ONE entry from BOTH sources together** (NOT verbatim, NOT a second entry). For each work unit, produce a SINGLE pact-memory entry synthesized from the HANDOFF **and** its artifact: the artifact is the fuller substance, the HANDOFF is the distilled frame. **A work unit is an `agent_handoff` group from Step 3, not a feature** — one feature carries many work units, so the artifacts a unit draws on are the ones you read under THAT UNIT'S feature. A ~19 KB artifact becomes a **richer-but-bounded** entry (a few hundred tokens of decisions/lessons informed by the full substance) — do NOT store the raw artifact. Substance flows into the entry's `context`/`decisions`; put the artifact's path in an entity `notes` field (NOT a `files` field — that field is rejected on save).
 4. **Dedup** — reuse the existing mechanism; do NOT invent a content-diff. Against existing memory: the Step 6 save-vs-update entity+topic protocol, unchanged — the synthesized HANDOFF+artifact entry enriches an existing entry exactly as a HANDOFF-only entry does. Against the HANDOFF's own content: the only new rule is **sequencing** — because step 3 synthesizes the HANDOFF and artifact into ONE entry, there is no separate artifact-entry to dedup; the single synthesis IS the dedup. (Idempotency: the existing processed-task ledger of Step 2/Step 8 extends to mark a `(workflow, feature)` artifact as read, so an incremental or consolidation re-harvest does not re-read and re-distill the same artifact.)
 
 ### Step 4: Extract Institutional Knowledge
@@ -387,6 +411,7 @@ Gaps: {any HANDOFFs that were thin or missing}",
 
 After processing HANDOFFs, gather calibration metrics for the orchestrator's variety scoring feedback loop:
 - Read `initial_variety_score` from the journal's `variety_assessed` event (GC-proof, survives the task-store drain), using the Step 0 `$SESSION_DIR` via the existing `session_journal.py read` subcommand: `python3 "{plugin_root}/hooks/shared/session_journal.py" read --session-dir "$SESSION_DIR" --type variety_assessed`. As in Step 1, `read` prints a **JSON ARRAY** — `json.loads` the whole stdout into a list, then iterate (not line-by-line). **Select the event for THIS feature** — `variety_assessed` events carry a `task_id`, and a resumed/multi-feature session holds one per feature (plus, because the platform reuses task_ids across arcs, the current feature's id can match a PRIOR arc too). So do NOT take the first event: filter to events whose `task_id` matches the feature task being harvested and take the **latest-`ts`** match — the `resolve_arc_start(events, feature_task_id)` semantics the wrap-up retrospective uses (`shared/variety_divergence.resolve_arc_start` is the canonical implementation). Then resolve the scalar total from that event's `variety` dict via the pure `resolve_variety_total(variety)` helper (`shared/teachback_schema.py`) rather than indexing `variety['total']` directly — it prefers the canonical `total` key, falls through a documented fallback chain, and returns `None` instead of raising `KeyError` if the dict is malformed or `total` is missing. If no `variety_assessed` event matches this feature (e.g., a feature dispatched without a variety emit), or `resolve_variety_total` returns `None`, ask the team-lead for the variety score instead.
+  **THE FEATURE TASK ID IS THE ONE VALUE YOU MAY TAKE FROM YOUR DISPATCH, AND IT IS A BOUNDED EXCEPTION.** Nothing in the journal says which task is the feature task, so unlike the feature set in Step 3.5 this one cannot be derived. Take that id and take nothing else with it: it selects which `variety_assessed` event to read, and it does not narrow the HANDOFF population Step 1 and Step 2 built. If your dispatch names no feature task, ask the team-lead for it rather than inferring one from a task set.
 - Scan `TaskList` for blocker count (tasks with "BLOCKER:" in subject). Note: `TaskList` may be incomplete in long sessions due to garbage collection — report what's available.
 - Scan `TaskList` for phase rerun count (retry/redo phase tasks)
 - Note domain from feature task description
@@ -404,6 +429,8 @@ After processing HANDOFFs, gather calibration metrics for the orchestrator's var
 
 ## Incremental Harvest Workflow
 
+**Build the population as the Standard Harvest population rule above requires — a dispatch does not narrow it.**
+
 Triggered after remediation completes — processes only the delta since the last harvest pass. Fires only when remediation occurred and produced new completed tasks.
 
 1. **Check processed task tracking**: Read **only your own** `## team={your team_id}` section of `session_processed_tasks.md`, in the agent-memory directory the platform gave you, for already-processed task IDs
@@ -419,6 +446,8 @@ Triggered after remediation completes — processes only the delta since the las
 ---
 
 ## Consolidation Harvest Workflow
+
+**Build the population as the Standard Harvest population rule above requires — a dispatch does not narrow it.**
 
 Triggered during `/PACT:wrap-up`, `/PACT:pause`, `/PACT:refresh`, or `/PACT:orchestrate` once a second or subsequent feature completes in one session. This is the deep-clean pass — it extends the standard workflow with memory consolidation and pruning.
 

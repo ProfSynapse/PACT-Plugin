@@ -674,7 +674,7 @@ DISPATCH_SITE_MARKER_NAMESPACE: str = ".dispatch_site_emitted"
 #    twice and OVER-COUNT — fabricating an un-stamped site whenever only one of
 #    the two writes carried variety, which is the coverage-0.5 failure in the
 #    harmful direction. This is the opposite choice from agent_handoff
-#    (occupant-keyed) and task_metadata_snapshot (content-keyed), where
+#    (occupant+content-keyed) and task_metadata_snapshot (content-keyed), where
 #    re-emission on a changed payload IS wanted.
 # 3. The literal is spelled out rather than abbreviated because these markers
 #    are met in a directory listing, not here: they land as `91-dispatch_site`.

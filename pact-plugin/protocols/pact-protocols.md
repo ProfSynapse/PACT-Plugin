@@ -932,17 +932,19 @@ The feature-level CalibrationRecord above coexists with per-dispatch variety sta
 {
   "variety": {
     "novelty":               1-4,
-    "novelty_rationale":     "<1-sentence: why this score for THIS dispatch's novelty>",
+    "novelty_rationale":     "<1-sentence: the shape of this dispatch's novelty — never what you expect to find>",
     "scope":                 1-4,
-    "scope_rationale":       "<1-sentence: why this score for THIS dispatch's scope>",
+    "scope_rationale":       "<1-sentence: the shape of this dispatch's scope — never what you expect to find>",
     "uncertainty":           1-4,
-    "uncertainty_rationale": "<1-sentence: why this score for THIS dispatch's uncertainty>",
+    "uncertainty_rationale": "<1-sentence: the shape of this dispatch's uncertainty — never what you expect to find>",
     "risk":                  1-4,
-    "risk_rationale":        "<1-sentence: why this score for THIS dispatch's risk>",
+    "risk_rationale":        "<1-sentence: the shape of this dispatch's risk — never what you expect to find>",
     "total":                 4-16
   }
 }
 ```
+
+> **The teammate reads these rationales BEFORE it starts work.** Describe only the SHAPE of the work — its novelty, breadth, unknowns and exposure. Do not write the dispatch's hypothesis, its expected answer, or the reasoning that produced it. Where a dispatch's value depends on the teammate NOT knowing something, the rationales must not disclose it.
 
 > The canonical total key is `total`. The lifecycle hook's band resolver additionally tolerates non-canonical `score` / top-level `variety_score`, or the sum of the four dimension scores, as fallbacks for stamps seen in the field — but orchestrators MUST stamp `total`. A resolvable `total` is taken at face value before the resolver reaches the dimension-sum fallback. So a `total` that disagrees with its four dimension scores is used as stated. No check reports that disagreement, at read time or at write time.
 
@@ -992,6 +994,8 @@ The wrap-up retrospective's Q5 reports the CALIBRATION DELTA — the feature-lev
 
 The teammate becomes the peer reviewer of the orchestrator's variety scoring. The teachback canonical schema includes a required `variety_acknowledgment` sub-field stored alongside the 4 existing teachback fields:
 
+> **Where a dispatch's value depends on the teammate NOT knowing something, stamp every `*_rationale` as `WITHHELD: ignorance-dependent dispatch` and nothing else.** The scores stay real. A rationale that was never written cannot be read, and the seat still files `variety_acknowledgment` — `concern`, naming the withholding — so no required field is missing.
+
 ```
 "variety_acknowledgment": {
   "rationale_articulates_this_dispatch": "yes" | "no" | "concern",
@@ -1001,7 +1005,7 @@ The teammate becomes the peer reviewer of the orchestrator's variety scoring. Th
 
 **Teammate workflow** (extends pact-teachback skill's Step 1 metadata write):
 
-1. After claiming Task A and reading the task description, the teammate reads `metadata.variety` on Task B (resolved via `Task A.blocks[0]`) BEFORE composing the teachback_submit payload.
+1. After claiming Task A and reading the task description, the teammate reads the four SCORES of `metadata.variety` on Task B (resolved via `Task A.blocks[0]`). **The `*_rationale` strings are read ONLY AFTER `understanding`, `most_likely_wrong`, `least_confident_item` and `first_action` are composed. This ordering is required, not preferred: those four fields need no rationale to write, and a rationale read earlier cannot be un-read.**
 2. Teammate judges each of the four per-dimension rationales against THIS dispatch's actual work — does `novelty_rationale` articulate why THIS dispatch is novel, or does it copy feature-level language? Same check for `scope_rationale`, `uncertainty_rationale`, `risk_rationale`.
 3. Teammate records the judgment in `metadata.teachback_submit.variety_acknowledgment`:
    - `"yes"` — all four rationales articulate THIS dispatch's complexity; `concern` field omitted or empty.
@@ -1014,6 +1018,8 @@ The lead reviews `variety_acknowledgment` as part of teachback acceptance per [p
 
 - **`"yes"`**: standard teachback acceptance; lead marks Task A completed + sends paired wake-signal `SendMessage`.
 - **`"no"` or `"concern"`**: lead has two corrective options before acceptance:
+  - **EXCEPTION — a withheld stamp**: when Task B's rationales read `WITHHELD: ignorance-dependent dispatch` and the `concern` names that withholding, take NEITHER option — accept the teachback and leave the stamp as written. This overrides the preference for orchestrator-side correction: the teammate's flag is correct BY CONSTRUCTION here, and re-stamping writes the hypothesis the withholding exists to keep out of the task.
+
   - *Orchestrator-side correction* (preferred when teammate's flag is correct): re-stamp `metadata.variety` on Task B via `TaskUpdate` with refined per-dimension rationales, THEN accept the teachback. The teammate's acknowledgment becomes part of the audit trail; no rejection needed.
 
     > ⚠️ To re-stamp, RE-SEND THE FULL `variety` OBJECT in ONE `TaskUpdate` call, and include each field you did not revise, unchanged. A write that names `variety` REPLACES the whole object, and it erases each field you omit. It reports no error. Then read the task file back and enumerate the keys of `metadata.variety`.
@@ -1028,6 +1034,8 @@ At wrap-up time, the secretary aggregates `variety_acknowledgment` flag rates ac
 
 - **Rate trigger**: if more than 20% of teachbacks recorded `"no"` or `"concern"`, flag the orchestrator's variety scoring as potentially miscalibrated for this session's dispatch shape.
 - **Single-no trigger**: a single `"no"` flag (stronger signal than `"concern"`) on a load-bearing dispatch surfaces the specific dispatch + smell in the retrospective, even when rate-trigger does not fire.
+
+**Withholding exclusion**: an acknowledgment whose `concern` carries the literal `WITHHELD: ignorance-dependent dispatch` is excluded from BOTH terms of the rate and from the acute-flag list. It acknowledges a dispatch whose rationales were deliberately withheld, so it judges no scoring, and every withheld dispatch produces one by construction — counted, it trips a threshold meaning "teammates flagged your scoring" on dispatches nobody judged. An acknowledgment describing a withholding WITHOUT that literal counts as a REAL SIGNAL. The exclusion must be applied where `concern` is still in hand: the flag list drops it, so an exclusion stated after that list cannot be performed.
 
 The aggregation feeds back into Learning II calibration data alongside the feature-level CalibrationRecord — per-dispatch acknowledgment rates are a leading indicator of orchestrator-side scoring drift.
 

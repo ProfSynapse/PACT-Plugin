@@ -41,6 +41,7 @@ import pytest
 
 from shared.agent_handoff_marker import (
     already_emitted,
+    handoff_already_emitted,
     is_signal_task,
     occupant_hash,
     sanitize_path_component,
@@ -273,6 +274,43 @@ class TestOccupantKeyedDedup:
 # =============================================================================
 # TOCTOU containment re-check (NEW in #880 — post-mkdir realpath/commonpath)
 # =============================================================================
+class TestContentKeyedReemit:
+    """A REVISED handoff must RE-EMIT: the handoff discriminator composes the
+    occupant term with a content term.
+
+    This pins BEHAVIOUR, not a description. It fails if anyone makes the
+    handoff marker content-blind — the shape the module's own `WHAT THIS
+    REPLACED` note describes, where the first emit for an occupant claimed the
+    marker and every later revision was suppressed for the lifespan of the
+    team, reaching no carrier and leaving no record it had been suppressed.
+
+    NON-VACUITY: the third call is the control. Without it this arm would pass
+    against a marker that dedups nothing at all, which is the opposite defect
+    and equally wrong.
+    """
+
+    def test_changed_handoff_content_re_emits(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        team, task_id = "pact-test", "5"
+        occ = occupant_hash("agent-alpha", "alpha's task")
+
+        first = handoff_already_emitted(team, task_id, occ, "content-v1")
+        changed = handoff_already_emitted(team, task_id, occ, "content-v2")
+        repeat = handoff_already_emitted(team, task_id, occ, "content-v1")
+
+        assert first is False, "first emit must win"
+        assert changed is False, (
+            "a REVISED handoff must re-emit — the discriminator carries a "
+            "content term. True here means the content term was dropped, and "
+            "every later revision of a handoff is silently suppressed."
+        )
+        assert repeat is True, (
+            "CONTROL: unchanged content must still be suppressed. False here "
+            "means the marker dedups nothing and the assertion above passes "
+            "for the wrong reason."
+        )
+
+
 class TestTocTouContainmentRecheck:
     """The post-mkdir re-check (realpath(marker_dir) must stay inside
     realpath(team_base)) closes the race window between the is_symlink()
