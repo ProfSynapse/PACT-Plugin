@@ -4726,3 +4726,19 @@ def test_an_unresolvable_project_dir_falls_back_to_its_unresolved_path(tmp_path,
     data = json.loads(written[0].read_text(encoding="utf-8"))
     assert data["project_path"] == str(link)
     assert data["roots"] == [str(link)]
+
+
+def test_an_unset_project_dir_resolves_the_root_from_the_cwd_repository(tmp_path, monkeypatch):
+    """With CLAUDE_PROJECT_DIR unset, the writer resolves git from the process
+    cwd and returns the MAIN root, so a write run from inside a checkout with
+    no env anchor still keys on the repository rather than refusing.
+
+    RED WHEN rung 1 stops passing None through to git as "use the cwd".
+    """
+    main = _repo(tmp_path / "main")
+    sub = main / "pact-plugin" / "hooks"
+    sub.mkdir(parents=True)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(sub)
+
+    assert backlog.project_root() == main.resolve()
