@@ -492,3 +492,60 @@ class TestCriticalProtocolReferences:
         assert "processed_tasks" in skill_content or "session_processed_tasks" in skill_content, (
             "Skill must reference processed task tracking for incremental dedup"
         )
+
+
+def _prune_bullet(content: str) -> str:
+    """The one Step 3 bullet that authorises removing another team's section."""
+    step = section(content, "### Step 3: Consolidate and Prune")
+    assert step, "Step 3 heading not found"
+    lines = [ln for ln in step.splitlines() if "`## team=` sections" in ln]
+    assert len(lines) == 1, "expected exactly one prune bullet in Step 3"
+    return lines[0]
+
+
+class TestLedgerPruneRulings:
+    """The ledger is shared by every secretary across every project, so the
+    prune bullet is the one instruction that can delete another instance's
+    records. Each arm pins a phrase one ruling needs; removing the phrase
+    reopens the deletion it closed."""
+
+    def test_undated_section_is_unjudgeable_not_stale(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        assert "unjudgeable, not stale" in bullet
+        # The SAME phrase as the secretary's Working Memory guard, so one grep
+        # finds both three-state sites.
+        assert "a criterion that cannot be evaluated never does" in bullet
+
+    def test_guard_phrase_is_shared_with_secretary(self, skill_content, secretary_content):
+        phrase = "a criterion that cannot be evaluated never does"
+        assert phrase in skill_content
+        assert phrase in secretary_content
+
+    def test_age_never_prunes_and_completion_is_verified(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        assert "Age never prunes" in bullet
+        assert "30 days" not in bullet
+        assert "VERIFIED" in bullet
+        # The verification names WHERE the journal is and WHICH events count.
+        assert "{config_dir}/pact-sessions/{project}/{session_id}" in bullet
+        assert "read-last" in bullet
+        assert "--type session_end" in bullet
+        assert "--type session_paused" in bullet
+        assert "session-journal.jsonl` does not exist" in bullet
+        # A close that was later resumed is not a completion: the newest
+        # completion event must postdate the newest session_start.
+        assert "--type session_start" in bullet
+        assert "later than the `ts` of the `session_start` event" in bullet
+        assert "the team is live and the section stays" in bullet
+        # The deviation clause that stops "paused might resume, so keep it".
+        assert "do not keep a section because the session might resume" in bullet
+
+    def test_report_precedes_removal(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        report = bullet.find("Before removing anything, report what you would remove")
+        assert report != -1
+        assert "each section header with its byte size" in bullet
+        assert "byte total" in bullet
+        remove = bullet.find("Then remove those sections and nothing else")
+        assert remove != -1
+        assert report < remove
