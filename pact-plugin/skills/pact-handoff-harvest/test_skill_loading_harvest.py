@@ -548,7 +548,59 @@ class TestLedgerPruneRulings:
         report = bullet.find("Before removing anything, report what you would remove")
         assert report != -1
         assert "each section header with its byte size" in bullet
-        assert "byte total" in bullet
+        assert "the section count and byte total" in bullet
         remove = bullet.find("Then remove those sections and nothing else")
         assert remove != -1
         assert report < remove
+
+    # The arms above pin the INGREDIENTS of the verification (paths, event
+    # types). A rewrite that keeps every ingredient and flips the CONSEQUENCE
+    # ("cannot verify, so remove it") kept them all green. The arms below pin
+    # the consequences. They are still substrings: an added exception clause
+    # ("skip the report when...", "unless older than a month") is invisible
+    # to every arm in this class, and only a reader catches it.
+
+    def test_failed_verification_keeps_the_section(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        # One sentence, pinned whole: splitting its two branches so that one
+        # of them removes keeps every fragment present.
+        assert (
+            "If the header carries no project or no session id, or "
+            "`{that dir}/session-journal.jsonl` does not exist, the team "
+            "cannot be verified from that section: it stays."
+        ) in bullet
+        assert "In every other verification outcome, the section stays" in bullet
+        # A null start is could-not-verify, never complete: the CLI prints the
+        # same null for a missing event, a missing journal and a mistyped type.
+        assert "the `session_start` read is non-null" in bullet
+        assert "could not verify" in bullet
+        # Pinned from its subject, so "is not later than" reddens.
+        assert "the later of their `ts` values is later than the `ts`" in bullet
+        # Pins this wording of the age rule; an age clause added ELSEWHERE in
+        # the bullet is not caught.
+        assert "however old, is not a ground for removal" in bullet
+
+    def test_two_grounds_and_own_team_only_at_wrap_up(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        assert "exactly two grounds and no other" in bullet
+        assert (
+            "(a) it is your own team's section and this Consolidation pass "
+            "runs at wrap-up"
+        ) in bullet
+        assert "never removes your own section" in bullet
+
+    def test_completion_is_per_team_and_ids_are_read_off_the_whole_line(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        assert "Completion is a property of the team" in bullet
+        assert "including siblings whose header carries no project or session id" in bullet
+        assert "read the ids wherever they sit on that line" in bullet
+
+    def test_step_8_header_carries_the_on_disk_names(self, skill_content):
+        # Step 8 writes the header Step 3 later reads as a filesystem path.
+        start = skill_content.find("### Step 8: Update Processed Task Tracking")
+        assert start != -1
+        end = skill_content.find("\n### Step 9", start)
+        assert end != -1
+        step8 = skill_content[start:end]
+        assert "exact on-disk names" in step8
+        assert "resolve-session-dir" in step8
