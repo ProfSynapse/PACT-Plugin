@@ -393,9 +393,15 @@ def cleanup_old_sessions(
     sessions_dir: str | None = None,
     max_age_days: int = _SESSION_MAX_AGE_DAYS,
     paused_max_age_days: int = _PAUSED_SESSION_MAX_AGE_DAYS,
+    old_slug: str | None = None,
 ) -> None:
     """
     Remove stale session directories, applying a dual TTL.
+
+    Sweeps the slug directory for ``project_slug`` and, when ``old_slug``
+    differs from it, that directory too with the same TTL and carrier guard:
+    a project launched through a symlink wrote earlier sessions under the
+    unresolved name, and those age out beside the resolved one.
 
     Each candidate session directory is checked against a TTL selected per
     entry: checkpointed sessions (those whose journal contains any
@@ -429,6 +435,8 @@ def cleanup_old_sessions(
         paused_max_age_days: TTL for paused sessions in days (default: 180).
             Exposed as a kwarg so tests can inject smaller values for
             boundary verification; production call sites use the default.
+        old_slug: The unresolved project basename; swept as well when it
+            differs from ``project_slug``.
     """
     if not project_slug or not current_session_id:
         return
@@ -436,7 +444,26 @@ def cleanup_old_sessions(
     if sessions_dir is None:
         sessions_dir = str(get_claude_config_dir() / "pact-sessions")
 
-    slug_dir = Path(sessions_dir) / project_slug
+    slugs = [project_slug]
+    if old_slug and old_slug != project_slug:
+        slugs.append(old_slug)
+    for slug in slugs:
+        _reap_slug_dir(
+            Path(sessions_dir) / slug,
+            current_session_id,
+            max_age_days,
+            paused_max_age_days,
+        )
+
+
+def _reap_slug_dir(
+    slug_dir: Path,
+    current_session_id: str,
+    max_age_days: int,
+    paused_max_age_days: int,
+) -> None:
+    """Sweep one slug directory on the cleanup_old_sessions contract. Never
+    raises."""
     if not slug_dir.exists():
         return
 
@@ -976,6 +1003,7 @@ def main():
         cleanup_old_sessions(
             project_slug=project_slug,
             current_session_id=current_session_id,
+            old_slug=Path(get_project_dir()).name,
         )
 
         # Clean up stale ~/.claude/teams/ and ~/.claude/tasks/ (#412 Fix B).

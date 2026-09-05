@@ -1309,6 +1309,45 @@ class TestCleanupOldSessions:
         assert (slug_dir / current_id).exists()
         assert not (slug_dir / old_id).exists()
 
+    def test_sweeps_the_old_slug_dir_beside_the_new_one(self, tmp_path):
+        """A project launched through a symlink has session dirs under both
+        the link's name and the target's name; both age out."""
+        from session_end import cleanup_old_sessions
+
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        under_old = "11111111-2222-3333-4444-555555555555"
+        under_new = "66666666-7777-8888-9999-000000000000"
+        self._create_session_dir(tmp_path / "link-name", under_old, age_days=10)
+        self._create_session_dir(tmp_path / "real-project", under_new, age_days=10)
+
+        cleanup_old_sessions(
+            project_slug="real-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+            old_slug="link-name",
+        )
+
+        assert not (tmp_path / "link-name" / under_old).exists()
+        assert not (tmp_path / "real-project" / under_new).exists()
+
+    def test_plain_project_dir_sweeps_one_slug_dir_once(self, tmp_path, monkeypatch):
+        import session_end
+
+        calls = []
+        monkeypatch.setattr(
+            session_end, "_reap_slug_dir", lambda slug_dir, *a: calls.append(slug_dir)
+        )
+        session_end.cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+            old_slug="my-project",
+        )
+
+        assert calls == [tmp_path / "my-project"]
+
     def test_skips_current_session(self, tmp_path):
         from session_end import cleanup_old_sessions
 
@@ -2415,6 +2454,7 @@ class TestMainIntegrationCleanup:
         mock_cleanup.assert_called_once_with(
             project_slug="proj",
             current_session_id="test-session",
+            old_slug="proj",
         )
 
 
