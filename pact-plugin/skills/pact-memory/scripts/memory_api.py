@@ -333,31 +333,35 @@ class PACTMemory:
             # repo root. The rewrite fires when git resolves a main repo whose
             # root differs from the env path; only a repo-root env path or a
             # non-git path (where the main anchor equals, or cannot be resolved
-            # from, the env path) keeps the original basename.
+            # from, the env path) keeps the env basename — RESOLVED, so a
+            # symlinked project dir names its target, which is the path the
+            # git branch above and the backlog writer already record. A path
+            # that will not resolve keeps its unresolved basename.
             # The local name is env_main_root, NOT main_repo_root: rebinding
             # the module-level helper's own name inside this method would make
             # it local for the whole method and raise UnboundLocalError on the
             # call itself.
+            try:
+                env_root = Path(project_dir).resolve()
+            except (OSError, RuntimeError):
+                env_root = None
             env_main_root = main_repo_root(project_dir)
-            if env_main_root is not None:
-                try:
-                    # Compare via normcase so a case-insensitive filesystem does
-                    # not fire the rewrite for paths that differ only in case
-                    # (a no-op on case-sensitive systems, where normcase is
-                    # identity).
-                    env_root = Path(project_dir).resolve()
-                except OSError:
-                    env_root = None
-                if env_root is not None and os.path.normcase(
-                    str(env_main_root)
-                ) != os.path.normcase(str(env_root)):
-                    logger.debug(
-                        "project_id detected from CLAUDE_PROJECT_DIR worktree main repo: %s",
-                        env_main_root.name,
-                    )
-                    return env_main_root.name
-            logger.debug("project_id detected from CLAUDE_PROJECT_DIR: %s", Path(project_dir).name)
-            return Path(project_dir).name
+            # Compare via normcase so a case-insensitive filesystem does not
+            # fire the rewrite for paths that differ only in case (a no-op on
+            # case-sensitive systems, where normcase is identity).
+            if (
+                env_main_root is not None
+                and env_root is not None
+                and os.path.normcase(str(env_main_root)) != os.path.normcase(str(env_root))
+            ):
+                logger.debug(
+                    "project_id detected from CLAUDE_PROJECT_DIR worktree main repo: %s",
+                    env_main_root.name,
+                )
+                return env_main_root.name
+            project_name = (env_root or Path(project_dir)).name
+            logger.debug("project_id detected from CLAUDE_PROJECT_DIR: %s", project_name)
+            return project_name
 
         # Strategy 2: Git repository root (worktree-safe)
         # main_repo_root() carries the --git-common-dir resolution and the
