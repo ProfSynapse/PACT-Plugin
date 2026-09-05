@@ -809,7 +809,7 @@ JSON
   ```
 - [ ] **HANDOFF acceptance**: on receiving each Task-complete `SendMessage`, accept on the HANDOFF payload the notify carries. If the notify carries no HANDOFF payload, `SendMessage` the agent to submit one before downstream dispatch proceeds. The disk copy is the deferred audit, not the acceptance surface — see [pact-completion-authority.md §Read-Trigger Precondition](../protocols/pact-completion-authority.md#read-trigger-precondition) point 4 for the audit, the integrity finding and the repair.
 - [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — the auditor task's file carries `metadata.audit_summary` OR `metadata.audit_summary_authored` (`cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq '.metadata | has("audit_summary") or has("audit_summary_authored")'`; `TaskGet` does NOT surface metadata), OR an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
-- [ ] **Process coder HANDOFFs** (dispatch as soon as the coders have reported; the auditor need not have finished — this harvest writes no Working Memory block):
+- [ ] **Process coder HANDOFFs** (dispatch as soon as the coders have reported; the auditor need not have finished — this harvest writes no Working Memory block, and a later harvest picks up the auditor's HANDOFF):
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",
     description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")

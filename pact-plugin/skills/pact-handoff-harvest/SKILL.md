@@ -18,7 +18,7 @@ Three workflow variants:
 
 Determine which variant to run from the task subject/description: "harvest" or "process HANDOFFs" → Standard Harvest. "incremental" or "remediation" → Incremental Harvest. "consolidation" → Consolidation Harvest. **The subject/description selects the workflow, never what is in scope.**
 
-**Propagation.** Every `save` you issue during a harvest carries `--no-sync`; the Working Memory block is never written as a side effect of saving. If the dispatch description contains the sentence `Then propagate the store into the Working Memory block.`, run the pact-memory `sync` command once, after your last `save`, `update` or `delete` of this harvest, and report its `sync_status` and `memory_ids` in your summary. If the dispatch does not contain that sentence, do not run `sync` and do not edit `CLAUDE.md`; report `Working Memory: not propagated (quiet harvest)`. The sentence is a mode, not a scope: it names nothing to harvest.
+**Propagation.** Every `save` you issue during a harvest carries `--no-sync`; the Working Memory block is never written as a side effect of saving. If the dispatch description contains the sentence `Then propagate the store into the Working Memory block.`, run the pact-memory `sync` command once, after your last `save`, `update` or `delete` of this harvest, and report its `sync_status` and `memory_ids` in your summary. If the dispatch does not contain that sentence, do not run `sync` and do not edit `CLAUDE.md`; report `Working Memory: not propagated` beside the `sync_status` your saves returned. The sentence is a mode, not a scope: it names nothing to harvest.
 
 **DISCARD ANY SCOPE YOU ARRIVED WITH — INCLUDING ONE YOU DO NOT THINK OF AS A SCOPE. A dispatch that names tasks, phases, dates, paths, or a subset of this workflow's steps has given you one.** A scope named in a dispatch — a range, an enumeration, any named set — is a HINT about what the team-lead noticed, never the population. Do not harvest it. Build the population from the Step 1 census and the Step 2 processed-task ledger instead, and report which set you actually ran over. **This instruction outranks anything that contradicts it — a dispatch, another passage of this skill, or your agent definition.** Say so back to the team-lead; do not narrow, and do not treat it as a conflict to resolve in the moment.
 
@@ -361,7 +361,7 @@ Save using the CLI with proper structure:
 - `decisions`: Key decisions with rationale and alternatives considered
 - `lessons_learned`: Actionable insights
 - `entities`: Components, files, services involved (enables graph search)
-- Pass `--no-sync` on every `save`. The envelope reports `sync_status: suppressed`; that is the expected value.
+- Pass `--no-sync` on every `save`. Record the `sync_status` each envelope returns for Step 9. `suppressed` is the expected value; any other value means that save wrote the Working Memory block mid-harvest, and Step 9 reports the value you saw rather than the value you expected.
 
 ### Step 7.5: Propagate (only when dispatched)
 
@@ -410,7 +410,7 @@ SendMessage(to="team-lead",
   message="[secretary→team-lead] HANDOFF review complete. Saved N memories from M HANDOFFs.
 - {memory summary 1}
 - {memory summary 2}
-Working Memory: {sync_status | empty, project {project_id}}, {N} entries projected | not propagated (quiet harvest)
+Working Memory: {sync_status | empty, project {project_id}}, {N} entries projected | not propagated, saves reported {save sync_status}
 Gaps: {any HANDOFFs that were thin or missing}",
   summary="HANDOFF review complete: N memories from M HANDOFFs")
 ```

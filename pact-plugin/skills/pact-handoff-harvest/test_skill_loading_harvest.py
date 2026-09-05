@@ -699,5 +699,10 @@ class TestWorkingMemoryIsAViewOfTheStore:
         assert end != -1
         spawn_step = secretary_content[start:end]
         assert "`sync`" in spawn_step
+        # The rebuild is the only write to the block, so an editor who makes it
+        # conditional silently reintroduces stale-block reads. Pin the declaration
+        # and its reason, not just the presence of the `sync` token.
+        assert "This step is unconditional" in spawn_step
+        assert "only write" in spawn_step
         assert "Remove stale entries by rewriting the Working Memory section" not in secretary_content
         assert "derived view" in secretary_content
