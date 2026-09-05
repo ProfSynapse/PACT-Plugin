@@ -1335,7 +1335,8 @@ def list_memories(
         offset: Number of results to skip (default 0).
 
     Returns:
-        List of memory dictionaries, ordered by created_at DESC.
+        List of memory dictionaries, ordered by created_at DESC; records
+        created in the same second come newest-inserted first.
     """
     ensure_initialized(conn)
 
@@ -1354,7 +1355,9 @@ def list_memories(
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
 
-    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    # `created_at` is second-granular, so a harvest's saves tie. rowid rises
+    # with insertion, so the tiebreak is what the saves' own order was.
+    query += " ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
 
     cursor = conn.execute(query, params)
@@ -1410,7 +1413,7 @@ def search_memories_by_text(
         query += " AND project_id = ?"
         params.append(project_id)
 
-    query += " ORDER BY created_at DESC LIMIT ?"
+    query += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
     params.append(limit)
 
     cursor = conn.execute(query, params)
