@@ -120,13 +120,22 @@ class TestQuietSavesThenOneSyncMatchFullSaves:
     written. Two tmp projects receive the same N records; A through full
     saves, B through `--no-sync` saves and one `sync`.
 
+    WHAT THE EQUALITY DOES NOT BOUND. The two routes share the formatter, the
+    resolver, the splice, the budget and the containment check, so this
+    compares the DELTA between them and says nothing about what they share: a
+    formatter regression moves both sides alike and passes here. The rendering
+    itself is pinned tree-wide by the `_format_memory_entry` arms in
+    `test_token_budget.py`. Do not read a green here as cover for it.
+
     NORMALISATION, and why each is legitimate. (1) Entry HEADERS are replaced
     by a placeholder on both sides. A's headers are the save-time clock; B's
-    records are backdated in the store so that N saves landing in one second
-    do not tie on `created_at` (a tie leaves `ORDER BY created_at DESC` free
-    to choose), so B's headers are the backdated stamps by construction and
-    cannot equal A's. That a projected header IS the record's `created_at`
-    is pinned elsewhere (`test_sync_projects_the_records_under_their_own_dates`).
+    records are backdated to fixed dates years from A's, so B's headers cannot
+    equal A's by construction. THE BACKDATING IS NOT BREAKING A TIE: the writer
+    stamps `created_at` to microsecond precision, so saves do not tie even
+    several inside one second, and a tie arises only from a stamp set by direct
+    SQL -- which is what `_backdate` itself does. That a projected header IS the
+    record's `created_at` is pinned elsewhere
+    (`test_sync_projects_the_records_under_their_own_dates`).
     (2) `**Memory ID**` lines are replaced by a placeholder: each store mints
     its own ids, so the two projects hold different records by construction;
     the claim is about the RENDERING of a record, not its identity, and the
@@ -167,6 +176,16 @@ class TestQuietSavesThenOneSyncMatchFullSaves:
 
         # Non-vacuity: both hold the cap, the newest N-cap records and not the
         # oldest, and the header normalisation below has something to do.
+        #
+        # THE HEADER GUARD IS CLOCK-DEPENDENT, so read it as partial. Under a
+        # formatter that ignored the record's own `created_at` both sides would
+        # render "now" and compare EQUAL, so the guard fires and this arm
+        # reddens. But a header carries only minutes: when A's surviving saves
+        # straddle a minute boundary the two lists differ anyway and that mutant
+        # passes here. It is killed off fixed dates, without a clock, by
+        # `test_a_plain_file_gains_a_section_at_its_end`,
+        # `test_one_projected_entry_leaves_no_hand_written_entry` and
+        # `test_deleting_the_newest_record_promotes_the_one_past_the_cap`.
         for text in (full, rebuilt):
             assert len(_headers(text)) == MAX_WORKING_MEMORIES
             assert len(_ID_LINE.findall(_section(text))) == MAX_WORKING_MEMORIES
@@ -245,9 +264,15 @@ class TestTheStoreIsWhatTheNextSyncShows:
         assert (other / "CLAUDE.md").read_bytes() == other_before
 
     def test_records_saved_in_the_same_second_project_newest_save_first(self, project, db):
-        """Full saves prepend in save order. A `sync` over records that tie on
-        `created_at` must keep that order, or the rebuilt block disagrees
-        with the block the saves would have written."""
+        """Full saves prepend in save order, and a `sync` over records sharing
+        a `created_at` must keep that order, or the rebuilt block disagrees
+        with the block the saves would have written.
+
+        THE TIE IS MANUFACTURED HERE, NOT OBSERVED. The writer stamps to
+        microsecond precision, so saves do not tie in production; `_backdate`
+        sets these stamps to one value by direct SQL, which is one of the two
+        ways a real tie can arise (the other is the schema default). The
+        ordering contract is worth pinning for those two, not for saves."""
         ids = [self._save(project, db, f"tied {i}", "2026-04-01 12:00:00")
                for i in range(MAX_WORKING_MEMORIES)]
         result = self._sync(project, db)
@@ -409,16 +434,23 @@ def _prose_sites():
     }
 
 
-_COUNT_MENTION = re.compile(
-    r"newest (" + "|".join(_NUMBER_WORDS.values()) + r"|\d+)\b"
-)
+_NUMBER = "|".join(_NUMBER_WORDS.values()) + r"|\d+"
+
+# BOTH WORD ORDERS. "the newest three records" and "the three newest records"
+# say the same thing, and pinning only the first reddens on a reword that
+# changes no meaning -- a false alarm is what teaches an editor to delete a
+# pin. The number still carries the check, so drift in the constant is caught
+# either way.
+_COUNT_MENTION = re.compile(rf"(?:newest ({_NUMBER})\b|\b({_NUMBER}) newest\b)")
 
 
 def _sites_disagreeing_with(count):
     accepted = {_NUMBER_WORDS[count], str(count)}
     disagreeing = []
     for name, passage in _prose_sites().items():
-        mentions = _COUNT_MENTION.findall(passage)
+        # One alternative matches per mention, so exactly one group is set.
+        mentions = [before or after
+                    for before, after in _COUNT_MENTION.findall(passage)]
         if not mentions or any(m not in accepted for m in mentions):
             disagreeing.append((name, mentions))
     return disagreeing
@@ -436,6 +468,10 @@ class TestTheReportTemplatesRenderTheProject:
     asking for a value with nowhere to put it, which no other arm would see."""
 
     def test_every_template_slot_carries_the_project(self):
+        # The comparison below is built from `_SLOT_SITES` itself, so it agrees
+        # with a census that lost a FILE. The per-file counts are pinned there;
+        # the number of files is not, so pin it here.
+        assert len(_SLOT_SITES) == 2, sorted(p.name for p in _SLOT_SITES)
         counts = {path.name: path.read_text(encoding="utf-8").count(_REPORT_SLOT)
                   for path in _SLOT_SITES}
         assert counts == {path.name: n for path, n in _SLOT_SITES.items()}
@@ -449,6 +485,20 @@ class TestTheReportTemplatesRenderTheProject:
 
 
 class TestTheProseCountIsTheConstant:
+    def test_the_census_names_every_site(self):
+        """Cardinality, because the two arms below cannot supply it. Both
+        compare against `_prose_sites()` itself, so a census that lost a site
+        agrees with itself and stays green while that site goes unchecked.
+
+        No subset check against a name constant, unlike the propagating-command
+        census this copies: those stems come from a glob and can gain a member,
+        these are authored in the dict itself, and `_slice` already fails loudly
+        on an anchor that no longer matches."""
+        sites = _prose_sites()
+        assert sites, "the prose census extracted nothing; report this as an " \
+                      "extraction failure, not as agreement"
+        assert len(sites) == 6, sorted(sites)
+
     def test_every_site_names_the_cap(self):
         assert _sites_disagreeing_with(MAX_WORKING_MEMORIES) == []
 
