@@ -365,7 +365,7 @@ Save using the CLI with proper structure:
 
 ### Step 7.5: Propagate (only when dispatched)
 
-If the dispatch carries the propagate sentence (see Propagation above), run `sync` now, once. Skip it when a later step of this harvest still has a `save`, `update` or `delete` to make: an outer workflow that nested this run propagates after its own last mutation, and a rebuild taken before that shows the store as it was, not as it ends. It rebuilds the Working Memory section from the store: the newest three records of this project, each under its own date. Record the returned `sync_status` and `memory_ids` for Step 9. On `empty`, record the envelope's `project_id` beside `sync_status`; a `project_id` that is not the project you expected is a misconfiguration to report to the team-lead, not an empty project. If the dispatch does not carry the sentence, skip this step.
+If the dispatch carries the propagate sentence (see Propagation above), run `sync` now, once. It rebuilds the Working Memory section from the store: the newest three records of this project, each under its own date. Skip it when another workflow's step sent you into this one: that workflow propagates after its own last mutation, and a rebuild taken before that shows the store as it was, not as it ends. A later `save` of your own, such as Step 10's calibration record, is not that and does not skip this step. Record the returned `sync_status` and `memory_ids` for Step 9. On `empty`, record the envelope's `project_id` beside `sync_status`; a `project_id` that is not the project you expected is a misconfiguration to report to the team-lead, not an empty project. If the dispatch does not carry the sentence, skip this step.
 
 ### Step 8: Update Processed Task Tracking
 
