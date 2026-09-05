@@ -580,14 +580,17 @@ class TestLedgerPruneRulings:
         # the bullet is not caught.
         assert "however old, is not a ground for removal" in bullet
 
-    def test_two_grounds_and_own_team_only_at_wrap_up(self, skill_content):
+    def test_single_ground_is_verified_completion(self, skill_content):
         bullet = _prune_bullet(skill_content)
-        assert "exactly two grounds and no other" in bullet
+        assert "exactly one ground and no other" in bullet
         assert (
-            "(a) it is your own team's section and this Consolidation pass "
-            "runs at wrap-up"
+            "you have VERIFIED that its team is complete by reading that "
+            "session's journal"
         ) in bullet
-        assert "never removes your own section" in bullet
+        # The dropped own-team ground must not come back under any wording.
+        assert "your own team's section" not in bullet
+        assert "never removes your own section" not in bullet
+        assert "wrap-up" not in bullet
 
     def test_completion_is_per_team_and_ids_are_read_off_the_whole_line(self, skill_content):
         bullet = _prune_bullet(skill_content)
