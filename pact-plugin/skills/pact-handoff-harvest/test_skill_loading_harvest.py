@@ -495,12 +495,20 @@ class TestCriticalProtocolReferences:
 
 
 def _prune_bullet(content: str) -> str:
-    """The one Step 3 bullet that authorises removing another team's section."""
+    """The Step 3 prune block: the one head bullet that authorises removing
+    another team's section, plus its indented sub-items, up to the next
+    top-level bullet or heading."""
     step = section(content, "### Step 3: Consolidate and Prune")
     assert step, "Step 3 heading not found"
-    lines = [ln for ln in step.splitlines() if "`## team=` sections" in ln]
-    assert len(lines) == 1, "expected exactly one prune bullet in Step 3"
-    return lines[0]
+    lines = step.splitlines()
+    heads = [i for i, ln in enumerate(lines) if "`## team=` sections" in ln]
+    assert len(heads) == 1, "expected exactly one prune bullet in Step 3"
+    block = [lines[heads[0]]]
+    for ln in lines[heads[0] + 1:]:
+        if ln.strip() and not ln[0].isspace():
+            break
+        block.append(ln)
+    return "\n".join(block)
 
 
 class TestLedgerPruneRulings:
@@ -562,13 +570,20 @@ class TestLedgerPruneRulings:
 
     def test_failed_verification_keeps_the_section(self, skill_content):
         bullet = _prune_bullet(skill_content)
-        # One sentence, pinned whole: splitting its two branches so that one
-        # of them removes keeps every fragment present.
+        # Pinned whole: a present directory with no journal is could-not-verify,
+        # and only an ABSENT directory is the reaped-and-complete case.
         assert (
-            "If the header carries no project or no session id, or "
-            "`{that dir}/session-journal.jsonl` does not exist, the team "
-            "cannot be verified from that section: it stays."
+            "If the directory exists but `{that dir}/session-journal.jsonl` "
+            "does not exist, the team cannot be verified from that section: "
+            "it stays."
         ) in bullet
+        assert (
+            "If the session directory does not exist, the platform has "
+            "reaped the session: the team is complete"
+        ) in bullet
+        # An id-less header resolves by prefix glob only on exactly one match.
+        assert "two or more matches mean the section cannot be verified: it stays" in bullet
+        assert "A `{team_id}` of any other shape with no project or session id cannot be resolved: the section stays" in bullet
         assert "In every other verification outcome, the section stays" in bullet
         # A null start is could-not-verify, never complete: the CLI prints the
         # same null for a missing event, a missing journal and a mistyped type.
