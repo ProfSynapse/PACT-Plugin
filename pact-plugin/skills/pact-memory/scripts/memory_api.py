@@ -442,11 +442,11 @@ class PACTMemory:
         is None when the embedding succeeded. This one is TOTAL: it names the
         outcome in every case, `wrote` included.
 
-        So an ABSENT `sync_status` NEVER MEANS SUCCESS. It means no save has
-        run. Reading absence as success is the exact inference this channel
-        exists to make impossible -- a refused sync and a suppressed one used
-        to be one indistinguishable silence, and treating silence as a good
-        outcome is how that silence stayed invisible.
+        So an ABSENT `sync_status` NEVER MEANS SUCCESS. It means neither a
+        save nor a sync has run. Reading absence as success is the exact
+        inference this channel exists to make impossible -- a refused sync and
+        a suppressed one used to be one indistinguishable silence, and treating
+        silence as a good outcome is how that silence stayed invisible.
         """
         return self._last_sync_status
 
