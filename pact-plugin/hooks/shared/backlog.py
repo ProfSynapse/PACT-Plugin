@@ -50,6 +50,7 @@ from shared.backlog_store import (  # noqa: E402  # follows the sys.path bootstr
     STATUSES,
     BacklogFileError,
     BacklogUnreadableError,
+    _enclosing_checkout,
     as_datetime,
     file_local_flags,
     read_json,
@@ -153,11 +154,16 @@ def project_root() -> Path:
        this project in one place: the read path is deliberately git-free and
        cannot perform this resolution itself, so the writer does it and
        records the result.
-    2. Git resolves nothing and CLAUDE_PROJECT_DIR names an existing
-       directory: that directory, resolved. This is a workspace umbrella —
-       a directory whose children are separate repositories, itself under no
-       `.git` — and it is a stable project key in its own right.
-    3. Otherwise refuse. A default would write a backlog nobody can find.
+    2. Git resolves nothing, CLAUDE_PROJECT_DIR names an existing directory,
+       and no `.git` sits at or above it: that directory, resolved. This is
+       a workspace umbrella — a directory whose children are separate
+       repositories, itself under no `.git` — and it is a stable project key
+       in its own right.
+    3. Otherwise refuse: the variable is unset, names no directory, or names
+       a directory inside a repository git could not read. Writing under a
+       checkout git failed to resolve would key a second backlog on a
+       subdirectory or worktree that every git-present session keys on the
+       main root; a default would write a backlog nobody can find.
 
     ANCHORED ON CLAUDE_PROJECT_DIR, NOT THE PROCESS CWD. Unanchored, a write run
     from another repository resolved THAT repo's root, so `checkout_roots()`
@@ -174,12 +180,21 @@ def project_root() -> Path:
     if root is not None:
         return root
     if project_dir and Path(project_dir).is_dir():
-        return Path(project_dir).resolve()
+        if _enclosing_checkout(Path(project_dir).resolve()) is None:
+            return Path(project_dir).resolve()
+        why = (
+            f"CLAUDE_PROJECT_DIR={project_dir!r} sits inside a repository git "
+            f"could not read"
+        )
+    elif project_dir:
+        why = f"CLAUDE_PROJECT_DIR={project_dir!r} does not name an existing directory"
+    else:
+        why = "CLAUDE_PROJECT_DIR is unset"
     raise BacklogWriteError(
-        "the main repository root did not resolve and CLAUDE_PROJECT_DIR does "
-        "not name an existing directory, so project_path would be wrong or "
-        "empty. Nothing was written. Set CLAUDE_PROJECT_DIR to the project "
-        "directory; a directory with no repository of its own is accepted."
+        f"the main repository root did not resolve and {why}, so project_path "
+        f"would be wrong or empty. Nothing was written. Set CLAUDE_PROJECT_DIR "
+        f"to the project directory; a directory with no repository of its own "
+        f"or above it is accepted."
     )
 
 
@@ -191,8 +206,8 @@ def checkout_roots() -> List[str]:
     another project's session. A missing entry costs that checkout a loud
     resolution failure UNLESS it sits inside a checkout that IS recorded, in
     which case the read path's enclosing-checkout rung still matches it. The
-    fallback when git cannot answer is the main root alone, which is always
-    right about at least itself.
+    fallback when git cannot answer is the project root alone, which is
+    always right about at least itself.
 
     Deliberately NOT merged with _branch_and_worktree_names, which runs the
     same porcelain: that caller reduces each `worktree` line to a BASENAME for
@@ -258,7 +273,7 @@ def load_or_create(path: Path) -> Dict[str, Any]:
         "version": SCHEMA_VERSION,
         "project": path.stem,
         # project_path stays a SIBLING of roots, not roots[0]: three consumers
-        # need the main root specifically (_plan_flags, the _abandoned_flags
+        # need the project root specifically (_plan_flags, the _abandoned_flags
         # git -C, and rename detection), and roots[0] would tie them to
         # porcelain ordering.
         "project_path": str(project_root()),
