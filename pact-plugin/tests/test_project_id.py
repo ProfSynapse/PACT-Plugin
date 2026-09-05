@@ -22,6 +22,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# The real detector, for the arms that need a real filesystem: a symlink cannot
+# be expressed through the replica-plus-mock style below. conftest.py puts
+# skills/pact-memory on sys.path.
+from scripts.memory_api import PACTMemory
+
 
 @pytest.fixture
 def clean_env_no_claude_project_dir():
@@ -133,7 +138,13 @@ def _detect_project_id_under_test():
         # repo root. The rewrite fires when git resolves a main repo whose
         # root differs from the env path; only a repo-root env path or a
         # non-git path (where the main anchor equals, or cannot be resolved
-        # from, the env path) keeps the original basename.
+        # from, the env path) keeps the env basename — RESOLVED, so a
+        # symlinked project dir names its target. A path that will not
+        # resolve keeps its unresolved basename.
+        try:
+            env_root = Path(project_dir).resolve()
+        except (OSError, RuntimeError):
+            env_root = None
         try:
             result = subprocess.run(
                 ["git", "-C", project_dir, "rev-parse", "--git-common-dir"],
@@ -150,8 +161,9 @@ def _detect_project_id_under_test():
                 # not fire the rewrite for paths that differ only in case
                 # (a no-op on case-sensitive systems, where normcase is
                 # identity).
-                env_root = Path(project_dir).resolve()
-                if os.path.normcase(str(main_repo_root)) != os.path.normcase(str(env_root)):
+                if env_root is not None and os.path.normcase(
+                    str(main_repo_root)
+                ) != os.path.normcase(str(env_root)):
                     logger.debug(
                         "project_id detected from CLAUDE_PROJECT_DIR worktree main repo: %s",
                         main_repo_root.name,
@@ -159,8 +171,9 @@ def _detect_project_id_under_test():
                     return main_repo_root.name
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
-        logger.debug("project_id detected from CLAUDE_PROJECT_DIR: %s", Path(project_dir).name)
-        return Path(project_dir).name
+        project_name = (env_root or Path(project_dir)).name
+        logger.debug("project_id detected from CLAUDE_PROJECT_DIR: %s", project_name)
+        return project_name
 
     # Strategy 2: Git repository root (worktree-safe)
     # Uses --git-common-dir instead of --show-toplevel because the latter
@@ -706,3 +719,41 @@ class TestCwdSubdirectoryDetection:
             result = _detect_project_id_under_test()
 
         assert result == "claude-dir-proj"
+
+
+class TestSymlinkedProjectDir:
+    """Strategy 1 names the directory CLAUDE_PROJECT_DIR RESOLVES TO, not the
+    link it was reached through.
+
+    The backlog writer stores the resolved path, so a link basename here and a
+    target path there split one project into two names. Real detector, real
+    filesystem, real git for the repo arm: the resolve is the thing under test.
+    """
+
+    def test_symlink_to_git_less_dir_names_the_target(self, tmp_path, monkeypatch):
+        """RED WHEN Strategy 1 returns the unresolved env basename on the
+        git-less branch."""
+        target = tmp_path / "plain-target"
+        target.mkdir()
+        link = tmp_path / "plain-link"
+        link.symlink_to(target)
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
+        assert PACTMemory._detect_project_id() == "plain-target"
+
+    def test_symlink_to_repo_root_names_the_target(self, tmp_path, monkeypatch):
+        """RED WHEN Strategy 1 returns the unresolved env basename on the
+        branch where git's main root equals the env path."""
+        target = tmp_path / "repo-target"
+        target.mkdir()
+        subprocess.run(["git", "init", "-q", str(target)], check=True, capture_output=True)
+        link = tmp_path / "repo-link"
+        link.symlink_to(target)
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
+        assert PACTMemory._detect_project_id() == "repo-target"
+
+    def test_plain_dir_keeps_its_own_basename(self, tmp_path, monkeypatch):
+        """Regression pin: resolving a path that is not a link changes nothing."""
+        plain = tmp_path / "plain-dir"
+        plain.mkdir()
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(plain))
+        assert PACTMemory._detect_project_id() == "plain-dir"

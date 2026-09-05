@@ -2697,6 +2697,9 @@ class TestExtractPrevSessionDir:
             "- Session dir: `~/.claude/pact-sessions/myproject/abc123`\n"
             "- Started: 2026-04-05\n"
         )
+        named = Path.home() / ".claude" / "pact-sessions" / "myproject" / "abc123"
+        assert str(named).startswith(str(tmp_path))
+        named.mkdir(parents=True)
 
         result = _extract_prev_session_dir(str(tmp_path))
         assert result is not None

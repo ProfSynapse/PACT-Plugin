@@ -34,6 +34,18 @@ class TestGetProjectSlug:
         with patch("session_end.get_project_dir", return_value="/Users/example/Sites/my-project"):
             assert get_project_slug() == "my-project"
 
+    def test_symlinked_project_dir_names_the_target(self, tmp_path):
+        """The reaper scans the slug the session was written under: the
+        resolved basename, so a symlinked launch dir does not orphan it."""
+        from session_end import get_project_slug
+
+        real = tmp_path / "real-project"
+        real.mkdir()
+        link = tmp_path / "link-name"
+        link.symlink_to(real, target_is_directory=True)
+        with patch("session_end.get_project_dir", return_value=str(link)):
+            assert get_project_slug() == "real-project"
+
     def test_returns_empty_when_no_project_dir(self):
         from session_end import get_project_slug
 
@@ -1297,6 +1309,90 @@ class TestCleanupOldSessions:
         assert (slug_dir / current_id).exists()
         assert not (slug_dir / old_id).exists()
 
+    def test_sweeps_the_old_slug_dir_beside_the_new_one(self, tmp_path):
+        """A project launched through a symlink has session dirs under both
+        the link's name and the target's name; both age out."""
+        from session_end import cleanup_old_sessions
+
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        under_old = "11111111-2222-3333-4444-555555555555"
+        under_new = "66666666-7777-8888-9999-000000000000"
+        self._create_session_dir(tmp_path / "link-name", under_old, age_days=10)
+        self._create_session_dir(tmp_path / "real-project", under_new, age_days=10)
+
+        cleanup_old_sessions(
+            project_slug="real-project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+            old_slug="link-name",
+        )
+
+        assert not (tmp_path / "link-name" / under_old).exists()
+        assert not (tmp_path / "real-project" / under_new).exists()
+
+    def test_raw_slugs_are_sanitised_before_the_sweep(self, tmp_path, monkeypatch):
+        """Every writer stored the sanitised name, so raw names with a dot
+        or a space must reach the same directory, once."""
+        import session_end
+
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+        self._create_session_dir(tmp_path / "my_project", old_id, age_days=10)
+        swept = []
+        real = session_end._reap_slug_dir
+        monkeypatch.setattr(
+            session_end, "_reap_slug_dir",
+            lambda slug_dir, *a: (swept.append(slug_dir), real(slug_dir, *a)),
+        )
+
+        session_end.cleanup_old_sessions(
+            project_slug="my.project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+            old_slug="my project",
+        )
+
+        assert swept == [tmp_path / "my_project"]
+        assert not (tmp_path / "my_project" / old_id).exists()
+
+    def test_dotdot_slug_never_leaves_the_sessions_root(self, tmp_path, monkeypatch):
+        import session_end
+
+        swept = []
+        monkeypatch.setattr(
+            session_end, "_reap_slug_dir", lambda slug_dir, *a: swept.append(slug_dir)
+        )
+        session_end.cleanup_old_sessions(
+            project_slug="..",
+            current_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+            old_slug="..",
+        )
+
+        # The allowlist collapses the whole run to one underscore.
+        assert swept == [tmp_path / "_"]
+        assert swept[0].resolve().is_relative_to(tmp_path.resolve())
+
+    def test_plain_project_dir_sweeps_one_slug_dir_once(self, tmp_path, monkeypatch):
+        import session_end
+
+        calls = []
+        monkeypatch.setattr(
+            session_end, "_reap_slug_dir", lambda slug_dir, *a: calls.append(slug_dir)
+        )
+        session_end.cleanup_old_sessions(
+            project_slug="my-project",
+            current_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+            old_slug="my-project",
+        )
+
+        assert calls == [tmp_path / "my-project"]
+
     def test_skips_current_session(self, tmp_path):
         from session_end import cleanup_old_sessions
 
@@ -2403,6 +2499,7 @@ class TestMainIntegrationCleanup:
         mock_cleanup.assert_called_once_with(
             project_slug="proj",
             current_session_id="test-session",
+            old_slug="proj",
         )
 
 

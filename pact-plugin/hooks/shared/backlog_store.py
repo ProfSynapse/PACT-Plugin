@@ -815,9 +815,9 @@ def session_block(
                 f"PACT backlog: {len(entries)} backlog file(s) under {root}, and "
                 f"none records {project_dir} as a checkout root. This is a "
                 f"resolution failure, NOT an empty backlog — do not treat this "
-                f"project as having no backlog. A checkout created since the "
-                f"last write is not yet recorded; /PACT:next writes, which "
-                f"records it."
+                f"project as having no backlog. Either a checkout created since "
+                f"the last write is not yet recorded, or this project has never "
+                f"held a backlog; /PACT:next writes, which records it."
             )
 
         # NON-CONFORMANCE IS NOT CORRUPTION. Corruption is "I cannot understand

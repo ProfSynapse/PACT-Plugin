@@ -218,6 +218,7 @@ class TestUpdateSessionInfo:
         session_dir = str(
             Path.home() / ".claude" / "pact-sessions" / "myproject" / "abc-123"
         )
+        Path(session_dir).mkdir(parents=True)
         result = update_session_info("abc-123", "pact-abc123", session_dir)
         assert result is not None
 

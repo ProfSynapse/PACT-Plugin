@@ -904,10 +904,11 @@ def test_the_import_closure_probe_detects_a_forbidden_import(tmp_path):
 # --------------------------------------------------------------------------
 # validation: rejected, never truncated or silently dropped
 # --------------------------------------------------------------------------
-def test_an_over_long_note_is_rejected_and_nothing_is_written(tmp_path):
+def test_an_over_long_note_is_rejected_and_nothing_is_written(tmp_path, monkeypatch):
     """RED WHEN the writer truncates. Truncation would lose the intent the
     note exists to carry, so the file must stay absent rather than gain a
     shortened note."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     path = tmp_path / "demo.json"
     data = _backlog(tmp_path, items=[_item(note="x" * 201)])
 
@@ -918,16 +919,18 @@ def test_an_over_long_note_is_rejected_and_nothing_is_written(tmp_path):
     assert not path.exists(), "a rejected backlog was written anyway"
 
 
-def test_a_note_at_the_limit_is_accepted(tmp_path):
+def test_a_note_at_the_limit_is_accepted(tmp_path, monkeypatch):
     """The boundary case. RED WHEN the comparison is off by one and rejects a
     note of exactly the permitted length."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     path = tmp_path / "demo.json"
     assert backlog.save(_backlog(tmp_path, items=[_item(note="x" * 200)]), path) == []
     assert path.exists()
 
 
-def test_a_sixth_memory_id_is_rejected_rather_than_dropped(tmp_path):
+def test_a_sixth_memory_id_is_rejected_rather_than_dropped(tmp_path, monkeypatch):
     """RED WHEN the writer keeps five and discards the sixth silently."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     path = tmp_path / "demo.json"
     ids = [f"{index:032x}" for index in range(6)]
 
@@ -937,9 +940,10 @@ def test_a_sixth_memory_id_is_rejected_rather_than_dropped(tmp_path):
     assert not path.exists()
 
 
-def test_an_absolute_plan_path_is_rejected_at_write_time(tmp_path):
+def test_an_absolute_plan_path_is_rejected_at_write_time(tmp_path, monkeypatch):
     """RED WHEN an absolute plan path is stored. An absolute path captured
     inside a worktree points into a directory `git worktree remove` deletes."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     path = tmp_path / "demo.json"
     problems = backlog.save(
         _backlog(tmp_path, items=[_item(plan="/absolute/plan.md")]), path
@@ -1790,6 +1794,7 @@ def test_show_puts_the_item_id_in_reach_of_the_agent(tmp_path, monkeypatch, caps
 
     RED WHEN the id is dropped from the rendered line.
     """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     path = tmp_path / "b.json"
     backlog.save(_backlog(tmp_path, items=[_item(item_id="beef", title="FIND ME")]), path)
     monkeypatch.setattr(backlog, "store_path", lambda backlog_dir=None: path)
@@ -2477,7 +2482,7 @@ def test_repair_moves_every_corrupt_shape_including_non_utf8(tmp_path):
         assert aside.read_bytes() == raw, f"{label}: bytes changed in the move"
 
 
-def test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place(tmp_path):
+def test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place(tmp_path, monkeypatch):
     """Refusing is half; leaving the thing in place is the other half.
 
     A returncode-only assertion passes for a guard that refuses and moves the
@@ -2493,6 +2498,7 @@ def test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place(tmp_path):
     would pass vacuously there. The directory also proves the distinction
     lives below the handler's existence check — it passes `exists()`.
     """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     readable = tmp_path / "readable.json"
     backlog.save(_backlog(tmp_path), readable)
     before = readable.read_bytes()
@@ -2515,13 +2521,14 @@ def test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place(tmp_path):
     assert unreadable.is_dir(), "a refused repair moved the directory anyway"
 
 
-def test_force_overrides_every_refusal_branch(tmp_path):
+def test_force_overrides_every_refusal_branch(tmp_path, monkeypatch):
     """The capability the user deliberately kept, pinned as kept.
 
     All three branches: readable, unreadable, and corrupt. Message ORDER is
     asserted rather than wording — the unreadable-force text is being reworded
     and pinning it would redden on a copy edit.
     """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     readable = tmp_path / "readable.json"
     backlog.save(_backlog(tmp_path), readable)
     aside, message = backlog.repair(readable, force=True)
@@ -2542,7 +2549,7 @@ def test_force_overrides_every_refusal_branch(tmp_path):
     )
 
 
-def test_the_success_message_says_only_what_was_established(tmp_path):
+def test_the_success_message_says_only_what_was_established(tmp_path, monkeypatch):
     """The caveat appears on exactly one path, and no path calls the file corrupt.
 
     THE ABSENCES ARE THE LOAD-BEARING HALF. A caveat glued to every move would
@@ -2558,6 +2565,7 @@ def test_the_success_message_says_only_what_was_established(tmp_path):
     Each case asserts the message was PRODUCED before asserting what it lacks —
     an absence assertion passes when the code never ran.
     """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     def prose(name, force=False, raw=None, as_dir=False):
         path = tmp_path / name
         if as_dir:
@@ -2929,7 +2937,7 @@ def test_the_age_line_keys_on_the_trigger_and_not_on_the_anchor(monkeypatch, tmp
     )
 
 
-def test_a_refused_write_preserves_the_first_writers_data_and_stays_armed(tmp_path):
+def test_a_refused_write_preserves_the_first_writers_data_and_stays_armed(tmp_path, monkeypatch):
     """A guard that refuses AND loses the data passes a refusal-only assertion.
 
     THE TWO WRITERS MUST DIVERGE. Two byte-identical loads give the guard
@@ -2943,6 +2951,7 @@ def test_a_refused_write_preserves_the_first_writers_data_and_stays_armed(tmp_pa
     RED WHEN the CAS is removed, when the baseline is popped on the refusal
     path, or when the refusal writes anyway.
     """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     path = tmp_path / "demo.json"
     _write(tmp_path, "demo.json", _backlog(tmp_path, items=[_item(title="ORIGINAL")]))
 
@@ -3900,7 +3909,7 @@ def test_a_non_string_ref_is_reported_by_the_schema_check(tmp_path):
     )
 
 
-def test_a_bad_field_on_one_item_locks_writes_to_every_other_item(tmp_path):
+def test_a_bad_field_on_one_item_locks_writes_to_every_other_item(tmp_path, monkeypatch):
     """THE BYSTANDER LOCK, and both halves matter.
 
     A bad `ref` on item A refuses a write to item B — the file is validated as
@@ -3911,6 +3920,7 @@ def test_a_bad_field_on_one_item_locks_writes_to_every_other_item(tmp_path):
     RED WHEN the `ref` rule is removed (the write succeeds), and RED WHEN the
     message stops naming item A.
     """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     store, _ = _cli_store(tmp_path, [
         _item(item_id="aaaa", title="THE BROKEN ONE", ref=5),
         _item(item_id="bbbb", title="THE BYSTANDER"),
@@ -4412,3 +4422,323 @@ def test_a_usage_error_and_a_refusal_exit_DIFFERENTLY(tmp_path):
         "a malformed invocation and a real refusal exit with the SAME code "
         f"({observed['malformed flag']}); the two are indistinguishable again"
     )
+
+
+# ---------------------------------------------------------------------------
+# project_root: a workspace umbrella with no git root of its own
+# ---------------------------------------------------------------------------
+
+def _umbrella(tmp_path, name="umbrella"):
+    """A git-less directory that is provably outside every checkout.
+
+    The positive control is the point: a tmp dir that happened to sit under a
+    repository would make git resolve THAT root, and every umbrella arm would
+    then exercise the repo branch while reading as the umbrella one.
+    """
+    path = tmp_path / name
+    path.mkdir()
+    memory_api = backlog._memory_api()
+    assert memory_api.main_repo_root(str(path)) is None, (
+        f"the tmp dir resolves to a repository, so it cannot stand in for an "
+        f"umbrella: {path}"
+    )
+    assert backlog_store._enclosing_checkout(path.resolve()) is None, (
+        f"a `.git` sits at or above the tmp dir, so it cannot stand in for an "
+        f"umbrella: {path}"
+    )
+    return path
+
+
+def test_an_umbrella_with_no_git_root_can_hold_a_backlog(tmp_path, monkeypatch, capsys):
+    """A directory whose children are separate repos, itself under no `.git`,
+    must key a backlog on ITSELF: show, add and set all succeed, and the
+    stored project_path and roots both equal the resolved umbrella path.
+
+    Real git throughout: the git-unresolvable branch is the thing under test,
+    so stubbing the resolver would leave nothing being tested.
+
+    RED WHEN project_root() refuses every path git cannot resolve.
+    """
+    umbrella = _umbrella(tmp_path)
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(umbrella))
+    expected = str(umbrella.resolve())
+
+    assert backlog.main(["--backlog-dir", str(store), "show", "--no-reconcile"]) == 0
+    assert list(store.iterdir()) == [], "show wrote a file"
+
+    assert backlog.main(["--backlog-dir", str(store), "add", "An umbrella item"]) == 0
+    written = store / f"{umbrella.name}.json"
+    assert written.exists(), f"add wrote nothing; store holds {list(store.iterdir())}"
+    data = json.loads(written.read_text(encoding="utf-8"))
+    assert data["project"] == umbrella.name
+    assert data["project_path"] == expected
+    assert data["roots"] == [expected]
+    item_id = data["items"][0]["id"]
+
+    assert backlog.main(
+        ["--backlog-dir", str(store), "set", item_id, "--status", "active"]) == 0
+    data = json.loads(written.read_text(encoding="utf-8"))
+    assert data["items"][0]["status"] == "active"
+    assert data["project_path"] == expected
+    assert data["roots"] == [expected]
+
+
+def test_the_umbrella_fallback_never_fires_when_git_resolves(tmp_path, monkeypatch):
+    """The env path BELOW a repo root, and a linked worktree, both keep
+    normalising to the MAIN root. A fallback that fired here would store a
+    subdirectory or a worktree as project_path and fragment the project
+    across its own checkouts.
+
+    RED WHEN project_root() prefers the env path over git's answer.
+    """
+    main = _repo(tmp_path / "main")
+    sub = main / "pact-plugin" / "hooks"
+    sub.mkdir(parents=True)
+    linked = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(linked), "-b", "wt"],
+                   check=True, capture_output=True)
+
+    for env_path in (main, sub, linked):
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(env_path))
+        assert backlog.project_root() == main.resolve(), (
+            f"CLAUDE_PROJECT_DIR={env_path} did not normalise to the main root"
+        )
+
+
+def test_an_unset_or_non_directory_project_dir_still_refuses(tmp_path, monkeypatch):
+    """The umbrella fallback needs an EXISTING DIRECTORY in CLAUDE_PROJECT_DIR.
+    With the variable unset, or naming a file, and git unable to resolve, the
+    write path refuses as before and writes nothing.
+
+    RED WHEN the fallback accepts an absent or non-directory env path.
+    """
+    store = tmp_path / "store"
+    store.mkdir()
+    real = backlog._memory_api()
+
+    class _NoGit:
+        PACTMemory = real.PACTMemory
+
+        @staticmethod
+        def main_repo_root(start=None):
+            return None
+
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.setattr(backlog, "_memory_api", lambda: _NoGit)
+    try:
+        backlog.project_root()
+    except backlog.BacklogWriteError as exc:
+        assert "CLAUDE_PROJECT_DIR" in str(exc), "the refusal names no remedy"
+        assert "unset" in str(exc), "the refusal does not say the variable is unset"
+    else:
+        raise AssertionError("an unset CLAUDE_PROJECT_DIR resolved a root")
+
+    # A file, with REAL git: `git -C <file>` cannot run there.
+    monkeypatch.setattr(backlog, "_memory_api", lambda: real)
+    not_a_dir = tmp_path / "file"
+    not_a_dir.write_text("x")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(not_a_dir))
+    try:
+        backlog.project_root()
+    except backlog.BacklogWriteError as exc:
+        assert str(not_a_dir) in str(exc), "the refusal does not echo the rejected value"
+    else:
+        raise AssertionError("a non-directory CLAUDE_PROJECT_DIR resolved a root")
+    assert backlog.main(["--backlog-dir", str(store), "add", "x"]) == 2
+    assert list(store.iterdir()) == [], "a refused write left a file behind"
+
+
+def test_an_umbrella_backlog_is_found_again_by_the_read_path(tmp_path, monkeypatch):
+    """Round trip: a backlog written from an umbrella is the one the git-free
+    read path selects for that umbrella, and NOT for a sibling umbrella.
+
+    The control is load-bearing. A reader that matched every file would pass
+    the positive half; a sibling that must NOT match pins that the match is
+    on this umbrella's recorded root and not on the store having one file.
+
+    RED WHEN the writer stores a form of the path the reader does not
+    resolve to, or when the reader stops matching a git-less root.
+    """
+    umbrella = _umbrella(tmp_path)
+    sibling = _umbrella(tmp_path, "sibling")
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(umbrella))
+    assert backlog.main(["--backlog-dir", str(store), "add", "Round trip item"]) == 0
+    written = store / f"{umbrella.name}.json"
+
+    match, unreadable = backlog_store.find_for(str(umbrella), store)
+    assert unreadable == []
+    assert match == written, f"the read path selected {match}"
+    notice = backlog_store.session_block(str(umbrella), backlog_dir=store)
+    assert "Round trip item" in notice.context
+
+    miss, _ = backlog_store.find_for(str(sibling), store)
+    assert miss is None, f"a sibling umbrella claimed the backlog: {miss}"
+
+
+def test_a_directory_inside_a_repository_git_cannot_read_still_refuses(tmp_path, monkeypatch):
+    """When git resolves nothing but a `.git` sits at or above the env path,
+    the write path refuses rather than keying a backlog on a subdirectory or
+    a linked worktree. A git outage must not mint a second identity for a
+    project that every git-present session keys on its main root.
+
+    RED WHEN the fallback accepts any existing directory once git is silent.
+    """
+    main = _repo(tmp_path / "main")
+    sub = main / "pact-plugin" / "hooks"
+    sub.mkdir(parents=True)
+    linked = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(linked), "-b", "wt"],
+                   check=True, capture_output=True)
+    store = tmp_path / "store"
+    store.mkdir()
+    real = backlog._memory_api()
+
+    class _NoGit:
+        PACTMemory = real.PACTMemory
+
+        @staticmethod
+        def main_repo_root(start=None):
+            return None
+
+    monkeypatch.setattr(backlog, "_memory_api", lambda: _NoGit)
+    for env_path in (sub, linked):
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(env_path))
+        try:
+            root = backlog.project_root()
+        except backlog.BacklogWriteError as exc:
+            assert str(env_path) in str(exc), "the refusal does not echo the path"
+            assert "repository" in str(exc)
+        else:
+            raise AssertionError(f"{env_path} did not refuse; it resolved {root}")
+        assert backlog.main(["--backlog-dir", str(store), "add", "x"]) == 2
+        assert list(store.iterdir()) == [], f"a refused write left a file: {list(store.iterdir())}"
+
+
+def test_a_symlinked_umbrella_stores_its_resolved_path(tmp_path, monkeypatch):
+    """project_path is the RESOLVED directory, never the link the session
+    opened it through, so the same umbrella reached by two names keys one
+    file on the path side.
+
+    RED WHEN the fallback stores the env path unresolved.
+    """
+    umbrella = _umbrella(tmp_path)
+    link = tmp_path / "link"
+    link.symlink_to(umbrella)
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
+
+    assert backlog.main(["--backlog-dir", str(store), "add", "Via the link"]) == 0
+    written = list(store.glob("*.json"))
+    assert len(written) == 1, written
+    data = json.loads(written[0].read_text(encoding="utf-8"))
+    assert data["project_path"] == str(umbrella.resolve())
+    assert data["roots"] == [str(umbrella.resolve())]
+
+
+def test_a_git_less_subdirectory_of_an_umbrella_is_its_own_project(tmp_path, monkeypatch):
+    """A git-less subdirectory of an umbrella keys as ITS OWN project on both
+    sides: the detector names it by its basename, the writer stores it as
+    project_path, and the read path opened there does not match the
+    umbrella's file. A containment reader would bind the subdirectory to the
+    umbrella on the path side while the name side still keyed it alone.
+    """
+    umbrella = _umbrella(tmp_path)
+    sub = umbrella / "notes"
+    sub.mkdir()
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(umbrella))
+    assert backlog.main(["--backlog-dir", str(store), "add", "Umbrella item"]) == 0
+    umbrella_file = store / f"{umbrella.name}.json"
+
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(sub))
+    assert backlog._memory_api().PACTMemory._detect_project_id() == sub.name
+    match, _ = backlog_store.find_for(str(sub), store)
+    assert match is None, f"the subdirectory matched the umbrella's file: {match}"
+
+    assert backlog.main(["--backlog-dir", str(store), "add", "Subdirectory item"]) == 0
+    own = store / f"{sub.name}.json"
+    assert own.exists(), list(store.iterdir())
+    data = json.loads(own.read_text(encoding="utf-8"))
+    assert data["project_path"] == str(sub.resolve())
+    assert data["roots"] == [str(sub.resolve())]
+    match, _ = backlog_store.find_for(str(sub), store)
+    assert match == own
+    match, _ = backlog_store.find_for(str(umbrella), store)
+    assert match == umbrella_file
+
+
+def test_a_symlinked_umbrella_is_named_after_its_resolved_path(tmp_path, monkeypatch):
+    """The file NAME and the stored project_path come from ONE directory: a
+    session that opens an umbrella through a symlink writes the file the
+    resolved directory's sessions read, not a second file named after the
+    link.
+
+    RED WHEN the detector names the link while the writer stores the target.
+    """
+    umbrella = _umbrella(tmp_path)
+    link = tmp_path / "link"
+    link.symlink_to(umbrella)
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
+
+    assert backlog.main(["--backlog-dir", str(store), "add", "Via the link"]) == 0
+    written = store / f"{umbrella.name}.json"
+    assert [p.name for p in store.iterdir()] == [written.name], list(store.iterdir())
+    data = json.loads(written.read_text(encoding="utf-8"))
+    assert data["project"] == Path(data["project_path"]).name
+
+
+def test_an_unresolvable_project_dir_falls_back_to_its_unresolved_path(tmp_path, monkeypatch):
+    """When the env path cannot be resolved, the writer stores it UNRESOLVED
+    and still exits 0, the same fallback the detector and the session-slug
+    derivation take. A raise here would traceback the CLI instead of exiting 2.
+
+    The env path is a symlink so the unresolved and resolved strings differ;
+    on a plain tmp path they are identical and the value assertion is empty.
+
+    RED WHEN rung 2 resolves without a guard.
+    """
+    umbrella = _umbrella(tmp_path)
+    link = tmp_path / "link"
+    link.symlink_to(umbrella)
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
+    original = Path.resolve
+
+    def resolve(self, *args, **kwargs):
+        if str(self) == str(link):
+            raise OSError("simulated unresolvable path")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+
+    assert backlog.main(["--backlog-dir", str(store), "add", "x"]) == 0
+    written = list(store.glob("*.json"))
+    assert len(written) == 1, written
+    data = json.loads(written[0].read_text(encoding="utf-8"))
+    assert data["project_path"] == str(link)
+    assert data["roots"] == [str(link)]
+
+
+def test_an_unset_project_dir_resolves_the_root_from_the_cwd_repository(tmp_path, monkeypatch):
+    """With CLAUDE_PROJECT_DIR unset, the writer resolves git from the process
+    cwd and returns the MAIN root, so a write run from inside a checkout with
+    no env anchor still keys on the repository rather than refusing.
+
+    RED WHEN rung 1 stops passing None through to git as "use the cwd".
+    """
+    main = _repo(tmp_path / "main")
+    sub = main / "pact-plugin" / "hooks"
+    sub.mkdir(parents=True)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(sub)
+
+    assert backlog.project_root() == main.resolve()

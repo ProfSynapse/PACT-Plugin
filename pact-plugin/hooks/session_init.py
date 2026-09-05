@@ -78,7 +78,12 @@ from pin_caps import (  # noqa: F401
     parse_pins,
 )
 
-from shared import BOOTSTRAP_MARKER_NAME, SESSION_ID_CONTROL_CHARS_RE, build_session_path
+from shared import (
+    BOOTSTRAP_MARKER_NAME,
+    SESSION_ID_CONTROL_CHARS_RE,
+    build_session_path,
+    project_slug,
+)
 from shared.constants import (
     COMPACT_SUMMARY_ARCHIVE_PREFIX,
     COMPACT_SUMMARY_NAME,
@@ -490,8 +495,10 @@ def _extract_prev_session_dir(project_dir: str) -> str | None:
     ($project_dir/.claude/CLAUDE.md preferred, $project_dir/CLAUDE.md legacy).
 
     Falls back to deriving the path from the Resume line's session_id +
-    project root basename if the Session dir line is absent (backward compat
-    with sessions that wrote team name but not session dir).
+    the resolved project slug if the Session dir line is absent (backward
+    compat with sessions that wrote team name but not session dir) or names
+    a directory that is no longer there (the line was written before the
+    directory moved to the resolved slug).
 
     Both extracted paths (primary and fallback) are validated against the
     canonical pact-sessions prefix via _validate_under_pact_sessions before
@@ -542,20 +549,25 @@ def _extract_prev_session_dir(project_dir: str) -> str | None:
                 expanded = str(Path.home() / raw[2:])
             else:
                 expanded = raw
-            return _validate_under_pact_sessions(expanded)
-
-        # The primary regex missed even though CLAUDE.md is on disk. This is
-        # usually benign (older sessions wrote only the Resume line, not the
-        # Session dir line — handled by the fallback just below), but it is
-        # also how a silent format regression would present. Log a one-line
-        # stderr warning so future drift in the SESSION_START block surfaces
-        # during testing instead of silently degrading to the fallback.
-        print(
-            "session_init: _extract_prev_session_dir regex failed on existing "
-            "CLAUDE.md, falling back to Resume-line; file may have unexpected "
-            "format",
-            file=sys.stderr,
-        )
+            validated = _validate_under_pact_sessions(expanded)
+            # A validated line naming a directory that is gone falls through
+            # to the derivation below; a rejected line still returns None.
+            if validated is None or Path(validated).is_dir():
+                return validated
+        else:
+            # The primary regex missed even though CLAUDE.md is on disk. This
+            # is usually benign (older sessions wrote only the Resume line,
+            # not the Session dir line — handled by the fallback just below),
+            # but it is also how a silent format regression would present.
+            # Log a one-line stderr warning so future drift in the
+            # SESSION_START block surfaces during testing instead of silently
+            # degrading to the fallback.
+            print(
+                "session_init: _extract_prev_session_dir regex failed on "
+                "existing CLAUDE.md, falling back to Resume-line; file may "
+                "have unexpected format",
+                file=sys.stderr,
+            )
 
         # Fallback: derive from Resume line session_id + project root basename.
         # Resume line format: "- Resume: `claude --resume <session_id>`"
@@ -564,10 +576,10 @@ def _extract_prev_session_dir(project_dir: str) -> str | None:
         )
         if resume_match:
             session_id = resume_match.group(1)
-            # Use project root basename (not worktree) for slug
-            slug = Path(project_dir).name
+            # Same slug derivation and sanitisation as every session path,
+            # so the fallback lands on the directory the writers used.
             derived = str(
-                get_claude_config_dir() / "pact-sessions" / slug / session_id
+                build_session_path(project_slug(project_dir), session_id)
             )
             return _validate_under_pact_sessions(derived)
 
@@ -771,6 +783,44 @@ def _clear_bootstrap_marker(session_path: Path) -> None:
         pass  # Fail-open: don't block session init for marker cleanup
 
 
+def _adopt_old_slug_session_dir(session_id: str, project_dir: str) -> bool:
+    """Move a session dir keyed under the UNRESOLVED project basename to the
+    slug every session path now derives, so a session launched through a
+    symlink keeps its journal across the slug change.
+
+    Runs before any writer creates the new-slug dir. Adopts only when the
+    two slugs differ, the old path is a real directory (not a symlink), and
+    the new path is absent or an empty directory. An existing non-empty
+    directory, file or symlink at the new path is left alone, never
+    clobbered or merged: the state there is what every reader already
+    trusts, and the old dir stays where the old readers can still find it.
+    Fail-open: any OSError leaves both paths as they were. Returns True iff
+    the directory moved.
+    """
+    if not session_id or not project_dir:
+        return False
+    old_slug = Path(project_dir).name
+    if not old_slug:
+        return False
+    old = build_session_path(old_slug, str(session_id))
+    new = build_session_path(project_slug(project_dir), str(session_id))
+    if old == new:
+        return False
+    try:
+        if old.is_symlink() or not old.is_dir():
+            return False
+        if new.is_symlink():
+            return False
+        if new.exists() and not (new.is_dir() and not any(new.iterdir())):
+            return False
+        new.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(old, new)
+    except OSError:
+        return False
+    print(f"session_init: adopted session dir {old} -> {new}", file=sys.stderr)
+    return True
+
+
 # Root-drained artifact prefix: what _archive_stale_compact_summary names
 # the moved ROOT-singleton bytes when it drains them into a session dir.
 # Distinct from every real archive name the plugin writes, but KEEPING the
@@ -803,7 +853,7 @@ def _stale_summary_destination(session_id: str, project_dir: str) -> Path:
     """
     if session_id and project_dir:
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-        return build_session_path(Path(project_dir).name, str(session_id)) / (
+        return build_session_path(project_slug(project_dir), str(session_id)) / (
             f"{_ROOT_DRAINED_SUMMARY_PREFIX}{stamp}.txt"
         )
     return get_compact_summary_path().parent / COMPACT_SUMMARY_ORPHAN_NAME
@@ -866,7 +916,7 @@ def _archive_own_dir_stale_summary(session_id: str, project_dir: str) -> None:
         return
     try:
         summary = (
-            build_session_path(Path(project_dir).name, str(session_id))
+            build_session_path(project_slug(project_dir), str(session_id))
             / COMPACT_SUMMARY_NAME
         )
         if not summary.exists():
@@ -1181,6 +1231,10 @@ def main():
         # cleared, for the same reason as before, but the previous code cleared
         # it BY DESTROYING the bytes, and those are the only copy. See
         # _archive_stale_compact_summary and _archive_own_dir_stale_summary.
+        # Adopt a session dir written under the unresolved project basename
+        # BEFORE any writer below can create the resolved-slug dir.
+        _adopt_old_slug_session_dir(input_data.get("session_id", ""), project_dir)
+
         if source != "compact":
             _archive_stale_compact_summary(
                 input_data.get("session_id", ""), project_dir
@@ -1202,7 +1256,7 @@ def main():
         if is_marker_reset:
             reset_session_id = input_data.get("session_id", "")
             if reset_session_id and project_dir:
-                slug = Path(project_dir).name
+                slug = project_slug(project_dir)
                 session_path = build_session_path(slug, str(reset_session_id))
                 _clear_bootstrap_marker(session_path)
 
