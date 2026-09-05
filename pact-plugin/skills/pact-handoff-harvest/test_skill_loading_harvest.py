@@ -556,6 +556,7 @@ class TestLedgerPruneRulings:
         report = bullet.find("Before removing anything, report what you would remove")
         assert report != -1
         assert "each section header with its byte size" in bullet
+        assert "its ground (verified by journal, reaped directory, or team-wide sibling)" in bullet
         assert "the section count and byte total" in bullet
         remove = bullet.find("Then remove those sections and nothing else")
         assert remove != -1
@@ -611,7 +612,10 @@ class TestLedgerPruneRulings:
         bullet = _prune_bullet(skill_content)
         assert "Completion is a property of the team" in bullet
         assert "including siblings whose header carries no project or session id" in bullet
+        # Item 5 marks; only item 7 removes.
+        assert "is marked for removal" in bullet
         assert "read the ids wherever they sit on that line" in bullet
+        assert "A session id is the 36-character uuid; any other shape counts as no session id" in bullet
 
     def test_reaped_directory_is_completion(self, skill_content):
         bullet = _prune_bullet(skill_content)
