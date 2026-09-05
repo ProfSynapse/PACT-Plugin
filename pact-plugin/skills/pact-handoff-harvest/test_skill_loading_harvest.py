@@ -537,8 +537,11 @@ class TestLedgerPruneRulings:
         assert "--type session_start" in bullet
         assert "later than the `ts` of the `session_start` event" in bullet
         assert "the team is live and the section stays" in bullet
-        # The deviation clause that stops "paused might resume, so keep it".
-        assert "do not keep a section because the session might resume" in bullet
+        # The deviation clause that stops "paused might resume, so keep it",
+        # stated against the ordering rule: speculation never keeps, an
+        # observed later start does.
+        assert "speculation that the session might resume never keeps a section" in bullet
+        assert "only an observed `session_start` later than the completion event does" in bullet
 
     def test_report_precedes_removal(self, skill_content):
         bullet = _prune_bullet(skill_content)
