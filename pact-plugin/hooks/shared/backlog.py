@@ -145,11 +145,19 @@ def store_path(backlog_dir: Optional[Path] = None) -> Path:
 
 
 def project_root() -> Path:
-    """The MAIN repo root, which is what a backlog stores as project_path.
+    """The path a backlog stores as project_path, resolved in this order:
 
-    Normalising to the main root is what puts every checkout of this project in
-    one place: the read path is deliberately git-free and cannot perform this
-    resolution itself, so the writer does it and records the result.
+    1. Git resolves a MAIN repo root from CLAUDE_PROJECT_DIR: that root. A
+       repo root, a subdirectory below one and a linked worktree all
+       normalise to the same main root, which is what puts every checkout of
+       this project in one place: the read path is deliberately git-free and
+       cannot perform this resolution itself, so the writer does it and
+       records the result.
+    2. Git resolves nothing and CLAUDE_PROJECT_DIR names an existing
+       directory: that directory, resolved. This is a workspace umbrella —
+       a directory whose children are separate repositories, itself under no
+       `.git` — and it is a stable project key in its own right.
+    3. Otherwise refuse. A default would write a backlog nobody can find.
 
     ANCHORED ON CLAUDE_PROJECT_DIR, NOT THE PROCESS CWD. Unanchored, a write run
     from another repository resolved THAT repo's root, so `checkout_roots()`
@@ -157,16 +165,22 @@ def project_root() -> Path:
     which this project's sessions stop matching their own file and the other
     project's sessions can claim it. That is the cross-project bleed the
     disambiguator exists to prevent, arriving through the writer. Same
-    precedence `_detect_project_id` uses, so the stored name and the stored
-    paths cannot disagree about which project this is.
+    precedence `_detect_project_id` uses, including the umbrella fallback, so
+    the stored name and the stored paths cannot disagree about which project
+    this is.
     """
-    root = _memory_api().main_repo_root(os.environ.get("CLAUDE_PROJECT_DIR"))
-    if root is None:
-        raise BacklogWriteError(
-            "the main repository root did not resolve, so project_path would be "
-            "wrong or empty. Nothing was written."
-        )
-    return root
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    root = _memory_api().main_repo_root(project_dir)
+    if root is not None:
+        return root
+    if project_dir and Path(project_dir).is_dir():
+        return Path(project_dir).resolve()
+    raise BacklogWriteError(
+        "the main repository root did not resolve and CLAUDE_PROJECT_DIR does "
+        "not name an existing directory, so project_path would be wrong or "
+        "empty. Nothing was written. Set CLAUDE_PROJECT_DIR to the project "
+        "directory; a directory with no repository of its own is accepted."
+    )
 
 
 def checkout_roots() -> List[str]:

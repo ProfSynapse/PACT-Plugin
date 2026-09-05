@@ -4412,3 +4412,154 @@ def test_a_usage_error_and_a_refusal_exit_DIFFERENTLY(tmp_path):
         "a malformed invocation and a real refusal exit with the SAME code "
         f"({observed['malformed flag']}); the two are indistinguishable again"
     )
+
+
+# ---------------------------------------------------------------------------
+# project_root: a workspace umbrella with no git root of its own
+# ---------------------------------------------------------------------------
+
+def _umbrella(tmp_path, name="umbrella"):
+    """A git-less directory that is provably outside every checkout.
+
+    The positive control is the point: a tmp dir that happened to sit under a
+    repository would make git resolve THAT root, and every umbrella arm would
+    then exercise the repo branch while reading as the umbrella one.
+    """
+    path = tmp_path / name
+    path.mkdir()
+    memory_api = backlog._memory_api()
+    assert memory_api.main_repo_root(str(path)) is None, (
+        f"the tmp dir resolves to a repository, so it cannot stand in for an "
+        f"umbrella: {path}"
+    )
+    return path
+
+
+def test_an_umbrella_with_no_git_root_can_hold_a_backlog(tmp_path, monkeypatch, capsys):
+    """A directory whose children are separate repos, itself under no `.git`,
+    must key a backlog on ITSELF: show, add and set all succeed, and the
+    stored project_path and roots both equal the resolved umbrella path.
+
+    Real git throughout: the git-unresolvable branch is the thing under test,
+    so stubbing the resolver would leave nothing being tested.
+
+    RED WHEN project_root() refuses every path git cannot resolve.
+    """
+    umbrella = _umbrella(tmp_path)
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(umbrella))
+    expected = str(umbrella.resolve())
+
+    assert backlog.main(["--backlog-dir", str(store), "show", "--no-reconcile"]) == 0
+    assert list(store.iterdir()) == [], "show wrote a file"
+
+    assert backlog.main(["--backlog-dir", str(store), "add", "An umbrella item"]) == 0
+    written = store / f"{umbrella.name}.json"
+    assert written.exists(), f"add wrote nothing; store holds {list(store.iterdir())}"
+    data = json.loads(written.read_text(encoding="utf-8"))
+    assert data["project"] == umbrella.name
+    assert data["project_path"] == expected
+    assert data["roots"] == [expected]
+    item_id = data["items"][0]["id"]
+
+    assert backlog.main(
+        ["--backlog-dir", str(store), "set", item_id, "--status", "active"]) == 0
+    data = json.loads(written.read_text(encoding="utf-8"))
+    assert data["items"][0]["status"] == "active"
+    assert data["project_path"] == expected
+    assert data["roots"] == [expected]
+
+
+def test_the_umbrella_fallback_never_fires_when_git_resolves(tmp_path, monkeypatch):
+    """The env path BELOW a repo root, and a linked worktree, both keep
+    normalising to the MAIN root. A fallback that fired here would store a
+    subdirectory or a worktree as project_path and fragment the project
+    across its own checkouts.
+
+    RED WHEN project_root() prefers the env path over git's answer.
+    """
+    main = _repo(tmp_path / "main")
+    sub = main / "pact-plugin" / "hooks"
+    sub.mkdir(parents=True)
+    linked = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(linked), "-b", "wt"],
+                   check=True, capture_output=True)
+
+    for env_path in (main, sub, linked):
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(env_path))
+        assert backlog.project_root() == main.resolve(), (
+            f"CLAUDE_PROJECT_DIR={env_path} did not normalise to the main root"
+        )
+
+
+def test_an_unset_or_non_directory_project_dir_still_refuses(tmp_path, monkeypatch):
+    """The umbrella fallback needs an EXISTING DIRECTORY in CLAUDE_PROJECT_DIR.
+    With the variable unset, or naming a file, and git unable to resolve, the
+    write path refuses as before and writes nothing.
+
+    RED WHEN the fallback accepts an absent or non-directory env path.
+    """
+    store = tmp_path / "store"
+    store.mkdir()
+    real = backlog._memory_api()
+
+    class _NoGit:
+        PACTMemory = real.PACTMemory
+
+        @staticmethod
+        def main_repo_root(start=None):
+            return None
+
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.setattr(backlog, "_memory_api", lambda: _NoGit)
+    try:
+        backlog.project_root()
+    except backlog.BacklogWriteError as exc:
+        assert "CLAUDE_PROJECT_DIR" in str(exc), "the refusal names no remedy"
+    else:
+        raise AssertionError("an unset CLAUDE_PROJECT_DIR resolved a root")
+
+    # A file, with REAL git: `git -C <file>` cannot run there.
+    monkeypatch.setattr(backlog, "_memory_api", lambda: real)
+    not_a_dir = tmp_path / "file"
+    not_a_dir.write_text("x")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(not_a_dir))
+    try:
+        backlog.project_root()
+    except backlog.BacklogWriteError:
+        pass
+    else:
+        raise AssertionError("a non-directory CLAUDE_PROJECT_DIR resolved a root")
+    assert backlog.main(["--backlog-dir", str(store), "add", "x"]) == 2
+    assert list(store.iterdir()) == [], "a refused write left a file behind"
+
+
+def test_an_umbrella_backlog_is_found_again_by_the_read_path(tmp_path, monkeypatch):
+    """Round trip: a backlog written from an umbrella is the one the git-free
+    read path selects for that umbrella, and NOT for a sibling umbrella.
+
+    The control is load-bearing. The read path also admits a subdirectory of
+    a recorded checkout through its enclosing-checkout rung, so a match
+    alone could be that rung rather than exact membership; a sibling that
+    must NOT match pins the mechanism.
+
+    RED WHEN the writer stores a form of the path the reader does not
+    resolve to, or when the reader stops matching a git-less root.
+    """
+    umbrella = _umbrella(tmp_path)
+    sibling = _umbrella(tmp_path, "sibling")
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(umbrella))
+    assert backlog.main(["--backlog-dir", str(store), "add", "Round trip item"]) == 0
+    written = store / f"{umbrella.name}.json"
+
+    match, unreadable = backlog_store.find_for(str(umbrella), store)
+    assert unreadable == []
+    assert match == written, f"the read path selected {match}"
+    notice = backlog_store.session_block(str(umbrella), backlog_dir=store)
+    assert "Round trip item" in notice.context
+
+    miss, _ = backlog_store.find_for(str(sibling), store)
+    assert miss is None, f"a sibling umbrella claimed the backlog: {miss}"
