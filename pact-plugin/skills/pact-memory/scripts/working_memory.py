@@ -1627,10 +1627,27 @@ def _recover_identifier(raw: str) -> str:
     return raw
 
 
+def _record_timestamp(value: Any) -> Optional[datetime]:
+    """Parse a record's `created_at` as stored or as `to_dict()` emits it.
+
+    The store writes `YYYY-MM-DD HH:MM:SS`; `MemoryObject.to_dict()` emits
+    ISO-8601 with a `T`. Both parse. A value that parses as neither returns
+    None so the formatter stamps the entry with now: a malformed row still
+    renders, and the header that disagrees with `get` is what shows it.
+    """
+    if value is None or isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
 def _format_memory_entry(
     memory: Dict[str, Any],
     files: Optional[List[str]] = None,
-    memory_id: Optional[str] = None
+    memory_id: Optional[str] = None,
+    created_at: Optional[datetime] = None,
 ) -> str:
     """
     Format a memory as a markdown entry for CLAUDE.md.
@@ -1639,13 +1656,16 @@ def _format_memory_entry(
         memory: Memory dictionary with context, goal, decisions, etc.
         files: Optional list of file paths associated with this memory.
         memory_id: Optional memory ID to include for database reference.
+        created_at: Timestamp for the entry header. None stamps the entry
+            with the current time, which is what a save does; a projection
+            from the store passes the record's own `created_at`.
 
     Returns:
         Formatted markdown string for the memory entry.
     """
     # Get date and time for header
-    now = datetime.now(timezone.utc)
-    date_str = now.strftime("%Y-%m-%d %H:%M")
+    stamp = created_at if created_at is not None else datetime.now(timezone.utc)
+    date_str = stamp.strftime("%Y-%m-%d %H:%M")
 
     lines = [f"### {date_str}"]
 
