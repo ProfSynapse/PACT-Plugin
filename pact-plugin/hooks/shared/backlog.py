@@ -51,6 +51,7 @@ from shared.backlog_store import (  # noqa: E402  # follows the sys.path bootstr
     BacklogFileError,
     BacklogUnreadableError,
     _enclosing_checkout,
+    _resolved,
     as_datetime,
     file_local_flags,
     read_json,
@@ -170,18 +171,22 @@ def project_root() -> Path:
     stored the other project's worktrees into this project's backlog — after
     which this project's sessions stop matching their own file and the other
     project's sessions can claim it. That is the cross-project bleed the
-    disambiguator exists to prevent, arriving through the writer. Same
-    precedence `_detect_project_id` uses, including the umbrella fallback, so
-    the stored name and the stored paths cannot disagree about which project
-    this is.
+    disambiguator exists to prevent, arriving through the writer. Every input
+    this function ACCEPTS is one `_detect_project_id` names from the same
+    resolved directory, so the stored name and the stored paths agree; the
+    inputs on which the two would diverge are the ones this function refuses,
+    and a refusal writes nothing.
     """
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
     root = _memory_api().main_repo_root(project_dir)
     if root is not None:
         return root
     if project_dir and Path(project_dir).is_dir():
-        if _enclosing_checkout(Path(project_dir).resolve()) is None:
-            return Path(project_dir).resolve()
+        # _resolved never raises: an unresolvable directory falls back to its
+        # unresolved path, the same fallback the detector takes for the name.
+        resolved = _resolved(Path(project_dir))
+        if _enclosing_checkout(resolved) is None:
+            return resolved
         why = (
             f"CLAUDE_PROJECT_DIR={project_dir!r} sits inside a repository git "
             f"could not read"

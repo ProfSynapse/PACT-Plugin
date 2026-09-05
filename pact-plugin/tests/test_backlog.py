@@ -4683,3 +4683,36 @@ def test_a_symlinked_umbrella_is_named_after_its_resolved_path(tmp_path, monkeyp
     assert [p.name for p in store.iterdir()] == [written.name], list(store.iterdir())
     data = json.loads(written.read_text(encoding="utf-8"))
     assert data["project"] == Path(data["project_path"]).name
+
+
+def test_an_unresolvable_project_dir_falls_back_to_its_unresolved_path(tmp_path, monkeypatch):
+    """When the env path cannot be resolved, the writer stores it UNRESOLVED
+    and still exits 0, the same fallback the detector and the session-slug
+    derivation take. A raise here would traceback the CLI instead of exiting 2.
+
+    The env path is a symlink so the unresolved and resolved strings differ;
+    on a plain tmp path they are identical and the value assertion is empty.
+
+    RED WHEN rung 2 resolves without a guard.
+    """
+    umbrella = _umbrella(tmp_path)
+    link = tmp_path / "link"
+    link.symlink_to(umbrella)
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
+    original = Path.resolve
+
+    def resolve(self, *args, **kwargs):
+        if str(self) == str(link):
+            raise OSError("simulated unresolvable path")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+
+    assert backlog.main(["--backlog-dir", str(store), "add", "x"]) == 0
+    written = list(store.glob("*.json"))
+    assert len(written) == 1, written
+    data = json.loads(written[0].read_text(encoding="utf-8"))
+    assert data["project_path"] == str(link)
+    assert data["roots"] == [str(link)]
