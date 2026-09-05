@@ -4661,3 +4661,25 @@ def test_a_git_less_subdirectory_of_an_umbrella_is_its_own_project(tmp_path, mon
     assert match == own
     match, _ = backlog_store.find_for(str(umbrella), store)
     assert match == umbrella_file
+
+
+def test_a_symlinked_umbrella_is_named_after_its_resolved_path(tmp_path, monkeypatch):
+    """The file NAME and the stored project_path come from ONE directory: a
+    session that opens an umbrella through a symlink writes the file the
+    resolved directory's sessions read, not a second file named after the
+    link.
+
+    RED WHEN the detector names the link while the writer stores the target.
+    """
+    umbrella = _umbrella(tmp_path)
+    link = tmp_path / "link"
+    link.symlink_to(umbrella)
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
+
+    assert backlog.main(["--backlog-dir", str(store), "add", "Via the link"]) == 0
+    written = store / f"{umbrella.name}.json"
+    assert [p.name for p in store.iterdir()] == [written.name], list(store.iterdir())
+    data = json.loads(written.read_text(encoding="utf-8"))
+    assert data["project"] == Path(data["project_path"]).name
