@@ -1818,6 +1818,37 @@ class TestPactSessionPath:
         assert "pact-sessions/real-project/sid-6/" in result
         assert "/link-name/" not in result
 
+    def test_dotted_project_name_lands_on_the_writers_sanitised_dir(
+        self, monkeypatch, tmp_path
+    ):
+        """The reader must look where build_session_path put the file."""
+        from scripts.pact_session import _context_file_path
+        from shared.pact_context import _build_session_path, project_slug
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        result = _context_file_path("sid-7", "/somewhere/my.project")
+
+        assert "/my_project/sid-7/" in str(result)
+        assert result == (
+            _build_session_path(project_slug("/somewhere/my.project"), "sid-7")
+            / "pact-session-context.json"
+        )
+
+    def test_disk_discovery_globs_the_sanitised_session_id(self, monkeypatch, tmp_path):
+        """An env session id with an unsafe character matches the directory
+        the writer named, not a raw pattern that matches nothing."""
+        from scripts.pact_session import _resolve_context_on_disk
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "relocated"))
+        context_file = (
+            tmp_path / "relocated" / "pact-sessions" / "proj" / "sid_8"
+            / "pact-session-context.json"
+        )
+        context_file.parent.mkdir(parents=True)
+        context_file.write_text(json.dumps({"session_id": "sid 8"}), encoding="utf-8")
+
+        assert _resolve_context_on_disk("sid 8") == "sid 8"
+
     def test_returns_none_when_args_missing(self, monkeypatch, tmp_path):
         """_context_file_path with missing args should return None."""
         from scripts.pact_session import _context_file_path

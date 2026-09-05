@@ -38,7 +38,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[3] / "hooks"))
 
 from shared.paths import get_claude_config_dir  # noqa: E402  # requires the sys.path bootstrap above
-from shared.pact_context import project_slug  # noqa: E402  # requires the sys.path bootstrap above
+from shared.pact_context import (  # noqa: E402  # requires the sys.path bootstrap above
+    _UNSAFE_SLUG_CHARS_RE,
+    _build_session_path,
+    project_slug,
+)
 
 
 def _context_file_path(session_id: str, project_dir: str) -> Path | None:
@@ -49,9 +53,9 @@ def _context_file_path(session_id: str, project_dir: str) -> Path | None:
 
     Returns the session-scoped path when both identifiers are provided:
         <config-root>/pact-sessions/{project-slug}/{session-id}/pact-session-context.json
-    where the config root is resolved by get_claude_config_dir() and project-slug
-    is project_slug(project_dir), the resolved directory's basename
-    (e.g., "PACT-Plugin").
+    built by the writers' own _build_session_path, so the slug
+    (project_slug(project_dir), the resolved directory's basename) and the
+    session id carry the same sanitisation the writer applied.
 
     Returns None when either identifier is missing — callers should treat
     this as "no context file available" and return a safe default.
@@ -62,10 +66,9 @@ def _context_file_path(session_id: str, project_dir: str) -> Path | None:
     same purpose (testable there because hooks call init() after parsing stdin).
     """
     if session_id and project_dir:
-        slug = project_slug(project_dir)
         return (
-            get_claude_config_dir() / "pact-sessions"
-            / slug / session_id / "pact-session-context.json"
+            _build_session_path(project_slug(project_dir), session_id)
+            / "pact-session-context.json"
         )
     return None
 
@@ -87,7 +90,9 @@ def _resolve_context_on_disk(env_session: str) -> str:
     """
     try:
         sessions_root = get_claude_config_dir() / "pact-sessions"
-        matches = list(sessions_root.glob(f"*/{env_session}/pact-session-context.json"))
+        # The writers collapsed unsafe characters in the id; match that name.
+        safe_session = _UNSAFE_SLUG_CHARS_RE.sub("_", env_session)
+        matches = list(sessions_root.glob(f"*/{safe_session}/pact-session-context.json"))
     except OSError:
         return ""
 
