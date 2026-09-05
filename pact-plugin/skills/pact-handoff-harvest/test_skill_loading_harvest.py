@@ -492,3 +492,166 @@ class TestCriticalProtocolReferences:
         assert "processed_tasks" in skill_content or "session_processed_tasks" in skill_content, (
             "Skill must reference processed task tracking for incremental dedup"
         )
+
+
+def _prune_bullet(content: str) -> str:
+    """The Step 3 prune block: the one head bullet that authorises removing
+    another team's section, plus its indented sub-items, up to the next
+    top-level bullet or heading."""
+    step = section(content, "### Step 3: Consolidate and Prune")
+    assert step, "Step 3 heading not found"
+    lines = step.splitlines()
+    heads = [i for i, ln in enumerate(lines) if "`## team=` sections" in ln]
+    assert len(heads) == 1, "expected exactly one prune bullet in Step 3"
+    block = [lines[heads[0]]]
+    for ln in lines[heads[0] + 1:]:
+        if ln.strip() and not ln[0].isspace():
+            break
+        block.append(ln)
+    return "\n".join(block)
+
+
+class TestLedgerPruneRulings:
+    """The ledger is shared by every secretary across every project, so the
+    prune bullet is the one instruction that can delete another instance's
+    records. Each arm pins a phrase one ruling needs; removing the phrase
+    reopens the deletion it closed."""
+
+    def test_undated_section_is_unjudgeable_not_stale(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        assert "unjudgeable, not stale" in bullet
+        # The SAME phrase as the secretary's Working Memory guard, so one grep
+        # finds both three-state sites.
+        assert "a criterion that cannot be evaluated never does" in bullet
+
+    def test_guard_phrase_is_shared_with_secretary(self, skill_content, secretary_content):
+        phrase = "a criterion that cannot be evaluated never does"
+        assert phrase in skill_content
+        assert phrase in secretary_content
+
+    def test_age_never_prunes_and_completion_is_verified(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        assert "Age never prunes" in bullet
+        assert "30 days" not in bullet
+        assert "VERIFIED" in bullet
+        # The verification names WHERE the journal is and WHICH events count.
+        assert "{config_dir}/pact-sessions/{project}/{session_id}" in bullet
+        assert "read-last" in bullet
+        assert "--type session_end" in bullet
+        assert "--type session_paused" in bullet
+        assert "session-journal.jsonl` does not exist" in bullet
+        # A close that was later resumed is not a completion: the newest
+        # completion event must postdate the newest session_start.
+        assert "--type session_start" in bullet
+        assert "later than the `ts` of the `session_start` event" in bullet
+        assert "the team is live and the section stays" in bullet
+        # The deviation clause that stops "paused might resume, so keep it",
+        # stated against the ordering rule: speculation never keeps, an
+        # observed later start does.
+        assert "speculation that the session might resume never keeps a section" in bullet
+        assert "only an observed `session_start` later than the completion event does" in bullet
+
+    def test_report_precedes_removal(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        report = bullet.find("Before removing anything, report what you would remove")
+        assert report != -1
+        assert "each section header with its byte size" in bullet
+        assert "its ground (verified by journal, reaped directory, or team-wide sibling)" in bullet
+        assert "the section count and byte total" in bullet
+        remove = bullet.find("Then remove those sections and nothing else")
+        assert remove != -1
+        assert report < remove
+
+    # The arms above pin the INGREDIENTS of the verification (paths, event
+    # types). A rewrite that keeps every ingredient and flips the CONSEQUENCE
+    # ("cannot verify, so remove it") kept them all green. The arms below pin
+    # the consequences. They are still substrings: an added exception clause
+    # ("skip the report when...", "unless older than a month") is invisible
+    # to every arm in this class, and only a reader catches it.
+
+    def test_failed_verification_keeps_the_section(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        # Pinned whole: a present directory with no journal is could-not-verify,
+        # and only an ABSENT directory is the reaped-and-complete case.
+        assert (
+            "If the directory exists but `{that dir}/session-journal.jsonl` "
+            "does not exist, the team cannot be verified from that section: "
+            "it stays."
+        ) in bullet
+        assert (
+            "If the session directory does not exist, the platform has "
+            "reaped the session: the team is complete"
+        ) in bullet
+        # An id-less header resolves by prefix glob only on exactly one match.
+        assert "two or more matches mean the section cannot be verified: it stays" in bullet
+        assert "A `{team_id}` of any other shape with no project or session id cannot be resolved: the section stays" in bullet
+        assert "In every other verification outcome, the section stays" in bullet
+        # A null start is could-not-verify, never complete: the CLI prints the
+        # same null for a missing event, a missing journal and a mistyped type.
+        assert "the `session_start` read is non-null" in bullet
+        assert "could not verify" in bullet
+        # Pinned from its subject, so "is not later than" reddens.
+        assert "the later of their `ts` values is later than the `ts`" in bullet
+        # Pins this wording of the age rule; an age clause added ELSEWHERE in
+        # the bullet is not caught.
+        assert "however old, is not a ground for removal" in bullet
+
+    def test_single_ground_is_verified_completion(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        assert "exactly one ground and no other" in bullet
+        assert (
+            "you have VERIFIED that its team is complete by reading that "
+            "session's journal"
+        ) in bullet
+        # The dropped own-team ground must not come back under any wording.
+        assert "your own team's section" not in bullet
+        assert "never removes your own section" not in bullet
+        assert "wrap-up" not in bullet
+
+    def test_completion_is_per_team_and_ids_are_read_off_the_whole_line(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        assert "Completion is a property of the team" in bullet
+        assert "including siblings whose header carries no project or session id" in bullet
+        # Item 5 marks; only item 7 removes.
+        assert "is marked for removal" in bullet
+        assert "read the ids wherever they sit on that line" in bullet
+        assert (
+            "A session id is five lowercase-hex groups of 8-4-4-4-12 characters "
+            "joined by hyphens, the shape the session-directory reaper accepts; "
+            "any other shape counts as no session id"
+        ) in bullet
+
+    def test_reaped_directory_is_completion(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        # The ground sentence and item 2 each state it; a reader who deletes
+        # one may keep the other, so both are pinned.
+        assert "or by finding that the platform has reaped that session's directory" in bullet
+        assert "the platform has reaped the session: the team is complete, go to item 5" in bullet
+
+    def test_id_less_header_resolves_only_on_exactly_one_match(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        assert "glob `{config_dir}/pact-sessions/*/XXXXXXXX-*`" in bullet
+        assert "exactly one match is the session directory, continue with it as if the header had named it" in bullet
+        assert "no match means the platform has reaped the session, go to item 5" in bullet
+
+    def test_equal_ts_is_not_later(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        assert "Equal `ts` values are not later: a tie means not complete, the section stays" in bullet
+
+    def test_sub_items_run_in_execution_order(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        heads = ["Address.", "Existence.", "Reads.", "Ordering.",
+                 "Team-wide removal.", "Report.", "Remove."]
+        positions = [bullet.find(f"**{h}**") for h in heads]
+        assert -1 not in positions, positions
+        assert positions == sorted(positions), positions
+
+    def test_step_8_header_carries_the_on_disk_names(self, skill_content):
+        # Step 8 writes the header Step 3 later reads as a filesystem path.
+        start = skill_content.find("### Step 8: Update Processed Task Tracking")
+        assert start != -1
+        end = skill_content.find("\n### Step 9", start)
+        assert end != -1
+        step8 = skill_content[start:end]
+        assert "exact on-disk names" in step8
+        assert "resolve-session-dir" in step8
