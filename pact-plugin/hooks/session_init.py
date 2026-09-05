@@ -776,6 +776,44 @@ def _clear_bootstrap_marker(session_path: Path) -> None:
         pass  # Fail-open: don't block session init for marker cleanup
 
 
+def _adopt_old_slug_session_dir(session_id: str, project_dir: str) -> bool:
+    """Move a session dir keyed under the UNRESOLVED project basename to the
+    slug every session path now derives, so a session launched through a
+    symlink keeps its journal across the slug change.
+
+    Runs before any writer creates the new-slug dir. Adopts only when the
+    two slugs differ, the old path is a real directory (not a symlink), and
+    the new path is absent or an empty directory. An existing non-empty
+    directory, file or symlink at the new path is left alone, never
+    clobbered or merged: the state there is what every reader already
+    trusts, and the old dir stays where the old readers can still find it.
+    Fail-open: any OSError leaves both paths as they were. Returns True iff
+    the directory moved.
+    """
+    if not session_id or not project_dir:
+        return False
+    old_slug = Path(project_dir).name
+    if not old_slug:
+        return False
+    old = build_session_path(old_slug, str(session_id))
+    new = build_session_path(project_slug(project_dir), str(session_id))
+    if old == new:
+        return False
+    try:
+        if old.is_symlink() or not old.is_dir():
+            return False
+        if new.is_symlink():
+            return False
+        if new.exists() and not (new.is_dir() and not any(new.iterdir())):
+            return False
+        new.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(old, new)
+    except OSError:
+        return False
+    print(f"session_init: adopted session dir {old} -> {new}", file=sys.stderr)
+    return True
+
+
 # Root-drained artifact prefix: what _archive_stale_compact_summary names
 # the moved ROOT-singleton bytes when it drains them into a session dir.
 # Distinct from every real archive name the plugin writes, but KEEPING the
@@ -1186,6 +1224,10 @@ def main():
         # cleared, for the same reason as before, but the previous code cleared
         # it BY DESTROYING the bytes, and those are the only copy. See
         # _archive_stale_compact_summary and _archive_own_dir_stale_summary.
+        # Adopt a session dir written under the unresolved project basename
+        # BEFORE any writer below can create the resolved-slug dir.
+        _adopt_old_slug_session_dir(input_data.get("session_id", ""), project_dir)
+
         if source != "compact":
             _archive_stale_compact_summary(
                 input_data.get("session_id", ""), project_dir

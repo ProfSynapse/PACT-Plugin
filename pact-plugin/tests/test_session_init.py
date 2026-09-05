@@ -6973,3 +6973,126 @@ class TestSymlinkRefreshRouting:
 
         assert "keeps the body it got at spawn" not in additional
         assert "keeps the body it got at spawn" not in system_msg
+
+
+class TestAdoptOldSlugSessionDir:
+    """A session launched through a symlink keeps its journal when the slug
+    becomes the resolved basename: session start moves the old-name folder
+    to the new-name slot, and only when the new slot is free."""
+
+    _SID = "aabb1122-0000-0000-0000-00000000ad0f"
+
+    @staticmethod
+    def _linked_project(tmp_path):
+        real = tmp_path / "real-project"
+        real.mkdir()
+        link = tmp_path / "link-name"
+        link.symlink_to(real, target_is_directory=True)
+        return real, link
+
+    def _dirs(self, tmp_path):
+        root = tmp_path / ".claude" / "pact-sessions"
+        return root / "link-name" / self._SID, root / "real-project" / self._SID
+
+    def _seed_old(self, tmp_path):
+        old, new = self._dirs(tmp_path)
+        old.mkdir(parents=True)
+        (old / "session-journal.jsonl").write_text('{"type":"session_start"}\n')
+        return old, new
+
+    def test_symlinked_project_adopts_old_dir(self, tmp_path, monkeypatch):
+        from session_init import _adopt_old_slug_session_dir
+        import os
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _real, link = self._linked_project(tmp_path)
+        old, new = self._seed_old(tmp_path)
+
+        assert _adopt_old_slug_session_dir(self._SID, str(link)) is True
+        assert (new / "session-journal.jsonl").read_text() == '{"type":"session_start"}\n'
+        assert not os.path.lexists(old)
+
+    def test_new_dir_with_content_is_never_clobbered(self, tmp_path, monkeypatch):
+        from session_init import _adopt_old_slug_session_dir
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _real, link = self._linked_project(tmp_path)
+        old, new = self._seed_old(tmp_path)
+        new.mkdir(parents=True)
+        (new / "session-journal.jsonl").write_text("NEW\n")
+
+        assert _adopt_old_slug_session_dir(self._SID, str(link)) is False
+        assert (new / "session-journal.jsonl").read_text() == "NEW\n"
+        assert (old / "session-journal.jsonl").read_text() == '{"type":"session_start"}\n'
+
+    def test_empty_new_dir_is_adopted(self, tmp_path, monkeypatch):
+        from session_init import _adopt_old_slug_session_dir
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _real, link = self._linked_project(tmp_path)
+        old, new = self._seed_old(tmp_path)
+        new.mkdir(parents=True)
+
+        assert _adopt_old_slug_session_dir(self._SID, str(link)) is True
+        assert (new / "session-journal.jsonl").read_text() == '{"type":"session_start"}\n'
+        assert not old.exists()
+
+    def test_plain_project_dir_never_renames(self, tmp_path, monkeypatch):
+        from session_init import _adopt_old_slug_session_dir
+        import os
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        plain = tmp_path / "real-project"
+        plain.mkdir()
+        session_dir = tmp_path / ".claude" / "pact-sessions" / "real-project" / self._SID
+        session_dir.mkdir(parents=True)
+        calls = []
+        monkeypatch.setattr(os, "rename", lambda *a: calls.append(a))
+
+        assert _adopt_old_slug_session_dir(self._SID, str(plain)) is False
+        assert calls == []
+        assert session_dir.is_dir()
+
+    def test_rename_failure_leaves_both_and_does_not_raise(self, tmp_path, monkeypatch):
+        from session_init import _adopt_old_slug_session_dir
+        import os
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _real, link = self._linked_project(tmp_path)
+        old, new = self._seed_old(tmp_path)
+
+        def _refuse(*_args):
+            raise OSError("rename refused")
+
+        monkeypatch.setattr(os, "rename", _refuse)
+        assert _adopt_old_slug_session_dir(self._SID, str(link)) is False
+        assert (old / "session-journal.jsonl").exists()
+        assert not new.exists()
+
+    def test_main_adopts_before_any_writer_creates_the_new_dir(self, tmp_path, monkeypatch):
+        """Through main() on resume: the journal is at the new slot afterwards
+        and the old slot is gone, so the adoption ran before the writers."""
+        from session_init import main
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _real, link = self._linked_project(tmp_path)
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
+        old, new = self._seed_old(tmp_path)
+        stdin_data = _stdin_payload(source="resume", session_id=self._SID)
+
+        with patch("session_init.setup_plugin_symlinks", return_value=None), \
+             patch("session_init.ensure_project_memory_md", return_value=None), \
+             patch("session_init.check_pinned_staleness", return_value=None), \
+             patch("session_init.update_session_info", return_value=None), \
+             patch("session_init.get_task_list", return_value=None), \
+             patch("session_init.restore_last_session", return_value=None), \
+             patch("session_init.check_resume_state", return_value=None), \
+             patch("sys.stdin", io.StringIO(stdin_data)), \
+             patch("sys.stdout", new_callable=io.StringIO):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 0
+        journal = (new / "session-journal.jsonl").read_text()
+        assert journal.startswith('{"type":"session_start"}\n')
+        assert not old.exists()
