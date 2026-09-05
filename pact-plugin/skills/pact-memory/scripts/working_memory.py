@@ -2490,7 +2490,10 @@ def sync_to_claude_md(
             before_section, section_header, after_section, existing_entries = parsed
 
             if entries is None:
-                # Format new memory entry, then prepend it to the file's own
+                # Format new memory entry, then prepend it to the file's own.
+                # A None here is a caller error; the raise lands in the
+                # handler below as FAILED, the same as any other bad input.
+                assert memory is not None, "the prepend arm needs a memory"
                 new_entry = _format_memory_entry(memory, files, memory_id)
                 all_entries = [new_entry] + existing_entries
             else:

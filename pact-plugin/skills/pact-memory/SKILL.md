@@ -233,8 +233,8 @@ Each memory can contain:
 
 | Command | Description | Output |
 |---------|-------------|--------|
-| `save <json>` | Save a memory object | `{"memory_id": "<hex>"}` |
-| `save --stdin` | Save from piped JSON | `{"memory_id": "<hex>"}` |
+| `save <json>` | Save a memory object; `--no-sync` leaves CLAUDE.md's Working Memory untouched | `{"memory_id": "<hex>", "sync_status": "..."}` |
+| `save --stdin` | Save from piped JSON | `{"memory_id": "<hex>", "sync_status": "..."}` |
 | `search <query>` | Semantic search | `[{"id": "...", "context": "...", ...}, ...]` |
 | `search <query> --limit N` | Search with limit | `[...]` (default: 5) |
 | `search <query> --current-file <path>` | Search with graph boosting | `[...]` (boosts file-related memories) |
@@ -245,6 +245,7 @@ Each memory can contain:
 | `update <id\|prefix> --stdin` | Update from piped JSON | `{"memory_id": "<hex>"}` |
 | `update <id\|prefix> <json> --replace` | Replace list fields wholesale instead of merging | `{"memory_id": "<hex>"}` |
 | `delete <id\|prefix>` | Delete a memory. Same prefix-resolution rules as `get`; ambiguous prefix is refused | `{"deleted": true, "memory_id": "<hex>"}` |
+| `sync` | Rebuild CLAUDE.md's Working Memory from this project's newest 3 memories (replaces the section; `--claude-md-root` bounds the write) | `{"sync_status": "wrote", "projected": 3, "memory_ids": [...]}` |
 | `status` | System status | `{"memory_count": N, "db_path": "...", ...}` |
 | `setup` | Initialize system | `{"status": "ready", "message": "..."}` |
 
@@ -450,6 +451,12 @@ Returns semantically similar memories. Use natural language queries.
 python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" list --limit 10
 ```
 Shows recent memories (default: 20).
+
+### Sync Command
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/cli.py" sync
+```
+The Working Memory section of CLAUDE.md is a derived view of the store. `sync` replaces it with this project's newest 3 memories, each under its own date; to change what the section shows, `update` or `delete` the record, then run `sync` again. A `sync_status` of `empty` means the project has no memories and the file was not touched.
 
 ## Best Practices
 

@@ -298,7 +298,7 @@ class TestCliArgParsing:
         assert exc_info.value.code == 2
 
     def test_dispatch_table_covers_all_subcommands(self):
-        expected = {"save", "search", "list", "get", "status", "setup", "update", "delete"}
+        expected = {"save", "search", "list", "get", "status", "setup", "update", "delete", "sync"}
         assert set(_COMMANDS.keys()) == expected
 
 
@@ -3547,3 +3547,203 @@ class TestTheExitStatusSurvivesAReaderLessPipe:
             "refusal. An argparse usage error exits 2 as well, so a bare 2 "
             f"cannot separate the two; stderr: {err_refuse[:300]!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Sync Command
+# ---------------------------------------------------------------------------
+
+_WORKING_MEMORY_SCAFFOLD = (
+    "# Probe\n\n"
+    "## Working Memory\n"
+    "<!-- Auto-managed by pact-memory skill. -->\n\n"
+    "## Pinned Context\n\nkeep me\n"
+)
+
+
+def _backdate(db_path, memory_id, stamp):
+    """Set a record's `created_at` directly. The CLI strips a caller-supplied
+    `created_at` on save, and two saves in one second tie on the store's own
+    clock, so the ordering these arms assert is fixed here, in the store,
+    which is the record of truth the projection reads."""
+    import sqlite3
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("UPDATE memories SET created_at = ? WHERE id = ?", (stamp, memory_id))
+    conn.commit()
+    conn.close()
+
+
+def _working_memory_headers(text):
+    section = text.split("## Working Memory\n", 1)[1].split("\n## ", 1)[0]
+    return [line[4:] for line in section.splitlines() if line.startswith("### ")]
+
+
+class TestCliSyncSubprocess:
+    """`sync` end to end: saves with `--no-sync`, then one `sync` writes the
+    section from the store. Every `sync` carries `--claude-md-root`, and the
+    child's `CLAUDE_PROJECT_DIR` is the same tmp project, so the anchored
+    write resolves inside its anchor."""
+
+    @pytest.fixture
+    def project(self, tmp_path):
+        root = tmp_path / "sync-project"
+        root.mkdir()
+        (root / "CLAUDE.md").write_text(_WORKING_MEMORY_SCAFFOLD, encoding="utf-8")
+        return root
+
+    def _env(self, project):
+        env = dict(os.environ)
+        env["CLAUDE_PROJECT_DIR"] = str(project)
+        return env
+
+    def _run(self, cli_script_path, project, *args):
+        proc = subprocess.run(
+            [sys.executable, cli_script_path, *args],
+            capture_output=True, text=True, timeout=120, env=self._env(project),
+        )
+        assert proc.returncode == 0, f"rc={proc.returncode}\n{proc.stderr[:600]}"
+        payload = json.loads(proc.stdout)
+        assert payload["ok"] is True, payload
+        return payload["result"]
+
+    def _save(self, cli_script_path, project, cli_db, context, stamp=None):
+        result = self._run(
+            cli_script_path, project, "save", json.dumps({"context": context}),
+            "--no-sync", "--db-path", str(cli_db),
+        )
+        assert result["sync_status"] == "suppressed", result
+        if stamp is not None:
+            _backdate(cli_db, result["memory_id"], stamp)
+        return result["memory_id"]
+
+    def _sync(self, cli_script_path, project, cli_db):
+        return self._run(
+            cli_script_path, project, "sync",
+            "--claude-md-root", str(project), "--db-path", str(cli_db),
+        )
+
+    def test_a_project_with_no_records_is_empty_and_untouched(
+        self, cli_script_path, cli_db, project
+    ):
+        before = (project / "CLAUDE.md").read_bytes()
+        result = self._sync(cli_script_path, project, cli_db)
+        assert result == {"sync_status": "empty", "projected": 0, "memory_ids": []}
+        assert (project / "CLAUDE.md").read_bytes() == before
+
+    def test_sync_projects_the_records_under_their_own_dates(
+        self, cli_script_path, cli_db, project
+    ):
+        older = self._save(cli_script_path, project, cli_db, "older save",
+                           "2026-09-01 08:00:00")
+        newer = self._save(cli_script_path, project, cli_db, "newer save",
+                           "2026-09-02 09:30:00")
+
+        result = self._sync(cli_script_path, project, cli_db)
+
+        assert result["sync_status"] == "wrote" and result["projected"] == 2
+        assert result["memory_ids"] == [newer, older]
+        text = (project / "CLAUDE.md").read_text(encoding="utf-8")
+        assert _working_memory_headers(text) == ["2026-09-02 09:30", "2026-09-01 08:00"]
+        assert "newer save" in text and "older save" in text
+        assert text.endswith("## Pinned Context\n\nkeep me\n")
+
+    def test_sync_twice_writes_the_same_bytes(
+        self, cli_script_path, cli_db, project
+    ):
+        self._save(cli_script_path, project, cli_db, "same", "2026-09-01 08:00:00")
+        first = self._sync(cli_script_path, project, cli_db)
+        after_first = (project / "CLAUDE.md").read_bytes()
+        second = self._sync(cli_script_path, project, cli_db)
+        assert first == second and second["sync_status"] == "wrote"
+        assert (project / "CLAUDE.md").read_bytes() == after_first
+
+    def test_sync_keeps_the_newest_three(self, cli_script_path, cli_db, project):
+        ids = [
+            self._save(cli_script_path, project, cli_db, f"save {i}",
+                       f"2026-09-0{i} 00:00:00")
+            for i in (1, 2, 3, 4)
+        ]
+        result = self._sync(cli_script_path, project, cli_db)
+        assert result["projected"] == 3
+        assert result["memory_ids"] == [ids[3], ids[2], ids[1]]
+        text = (project / "CLAUDE.md").read_text(encoding="utf-8")
+        assert ids[0] not in text and "save 1" not in text
+        assert _working_memory_headers(text) == [
+            "2026-09-04 00:00", "2026-09-03 00:00", "2026-09-02 00:00",
+        ]
+
+    def test_update_then_sync_shows_the_corrected_record(
+        self, cli_script_path, cli_db, project
+    ):
+        memory_id = self._save(cli_script_path, project, cli_db, "wrong text",
+                               "2026-09-01 08:00:00")
+        self._sync(cli_script_path, project, cli_db)
+        assert "wrong text" in (project / "CLAUDE.md").read_text(encoding="utf-8")
+
+        self._run(cli_script_path, project, "update", memory_id,
+                  json.dumps({"context": "corrected text"}), "--db-path", str(cli_db))
+        result = self._sync(cli_script_path, project, cli_db)
+
+        assert result["memory_ids"] == [memory_id]
+        text = (project / "CLAUDE.md").read_text(encoding="utf-8")
+        assert "corrected text" in text and "wrong text" not in text
+
+
+class TestApiSync:
+    """`PACTMemory.sync()`: the outcome channel and the returned ids."""
+
+    @pytest.fixture
+    def api_memory(self, tmp_path):
+        import sqlite3
+        db_path = tmp_path / "sync_test.db"
+        conn = sqlite3.connect(str(db_path))
+        create_test_schema(conn)
+        conn.close()
+        with patch("scripts.memory_api._ensure_ready"), \
+             patch("scripts.memory_api.sync_to_claude_md"):
+            yield PACTMemory(
+                project_id="test-project", session_id="test-session",
+                db_path=db_path,
+            ), db_path
+
+    def test_no_records_is_empty_with_no_ids(self, api_memory):
+        memory, _ = api_memory
+        assert memory.last_sync_status is None
+        assert memory.sync() == []
+        assert memory.last_sync_status == "empty"
+
+    def test_wrote_returns_the_ids_newest_first(self, api_memory):
+        from scripts.working_memory import SyncResult
+        memory, db_path = api_memory
+        older = memory.save({"context": "older"})
+        newer = memory.save({"context": "newer"})
+        _backdate(db_path, older, "2026-01-01 00:00:00")
+        _backdate(db_path, newer, "2026-01-02 00:00:00")
+
+        with patch("scripts.memory_api.project_memories_to_claude_md",
+                   return_value=SyncResult(SyncResult.WROTE)) as projector:
+            ids = memory.sync(claude_md_root=Path("/anchor"))
+
+        assert ids == [newer, older]
+        assert memory.last_sync_status == "wrote"
+        payload = projector.call_args.args[0]
+        assert [m["id"] for m in payload] == [newer, older]
+        assert payload[0]["context"] == "newer"
+        assert projector.call_args.kwargs == {"claude_md_root": Path("/anchor")}
+
+    def test_a_refusal_is_refused_with_no_ids(self, api_memory):
+        from scripts.working_memory import AmbientSyncRefused
+        memory, _ = api_memory
+        memory.save({"context": "present"})
+        with patch("scripts.memory_api.project_memories_to_claude_md",
+                   side_effect=AmbientSyncRefused("guard")):
+            assert memory.sync() == []
+        assert memory.last_sync_status == "refused"
+
+    def test_any_other_failure_is_failed_with_no_ids(self, api_memory):
+        memory, _ = api_memory
+        memory.save({"context": "present"})
+        with patch("scripts.memory_api.project_memories_to_claude_md",
+                   side_effect=RuntimeError("disk")):
+            assert memory.sync() == []
+        assert memory.last_sync_status == "failed"

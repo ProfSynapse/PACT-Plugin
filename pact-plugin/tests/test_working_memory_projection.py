@@ -6,13 +6,17 @@ Summary: Verification tests for rebuilding the Working Memory section of
          entry carries the record's own date, a save still carries now) and
          the parser that turns a stored `created_at` into that stamp.
 
-         Every write in this file goes to a file under `tmp_path`. No arm
-         resolves a CLAUDE.md ambiently.
+         Every write in this file goes to a file under `tmp_path`. The
+         child-process arms resolve ambiently on purpose, inside a declared
+         tmp project, to reach the two ambient guards.
 Used by: pytest.
 """
+import json
 import os
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -243,3 +247,111 @@ class TestProjectionRunsThroughTheSameWriteSite:
         assert raw != before, "the write did not happen"
         crlf = raw.count(b"\r\n")
         assert crlf > 0 and raw.count(b"\n") == crlf and raw.count(b"\r\r\n") == 0
+
+
+# ---------------------------------------------------------------------------
+# The `sync` verb, in a child process, against both ambient guards
+# ---------------------------------------------------------------------------
+
+_CLI = (
+    Path(__file__).resolve().parent.parent
+    / "skills" / "pact-memory" / "scripts" / "cli.py"
+)
+
+
+def _run_cli(env: dict, cwd: Path, *args: str) -> dict:
+    proc = subprocess.run(
+        [sys.executable, str(_CLI), *args],
+        env=env, cwd=str(cwd), capture_output=True, text=True, timeout=180,
+    )
+    assert proc.returncode == 0, f"rc={proc.returncode}\n{proc.stderr[:600]}"
+    payload = json.loads(proc.stdout)
+    assert payload.get("ok") is True, payload
+    return payload["result"]
+
+
+class TestSyncVerbReachesTheGuards:
+    """`cli.py sync` in a CHILD, so the two ambient refusals can fire.
+
+    In-process, `pytest` in `sys.modules` exempts both guards, so only a
+    child can show that the replace arm runs through them. The store is
+    redirected with `--db-path` in every arm, and it holds one record.
+    """
+
+    @pytest.fixture
+    def project(self, tmp_path):
+        target = _seed(tmp_path)
+        return target.parent
+
+    @pytest.fixture
+    def stocked_store(self, memory_store, tmp_path):
+        db = memory_store("probe.db")
+        env = dict(os.environ)
+        env["CLAUDE_PROJECT_DIR"] = str(tmp_path / "project")
+        _run_cli(env, tmp_path, "save", json.dumps({"context": "one record"}),
+                 "--no-sync", "--db-path", str(db))
+        return db
+
+    def test_inherited_env_without_an_anchor_is_refused(
+        self, project, stocked_store, tmp_path
+    ):
+        """First guard: PYTEST_CURRENT_TEST is set in the child, no anchor."""
+        env = dict(os.environ)
+        env["CLAUDE_PROJECT_DIR"] = str(project)
+        assert "PYTEST_CURRENT_TEST" in env
+        before = (project / "CLAUDE.md").read_bytes()
+
+        result = _run_cli(env, tmp_path, "sync", "--db-path", str(stocked_store))
+
+        assert result == {"sync_status": "refused", "projected": 0, "memory_ids": []}
+        assert (project / "CLAUDE.md").read_bytes() == before
+
+    def test_a_declared_root_permits_the_write(
+        self, project, stocked_store, tmp_path
+    ):
+        """Positive control for both refusals: same child, anchored, writes."""
+        env = dict(os.environ)
+        env["CLAUDE_PROJECT_DIR"] = str(project)
+        before = (project / "CLAUDE.md").read_bytes()
+
+        result = _run_cli(env, tmp_path, "sync", "--claude-md-root", str(project),
+                          "--db-path", str(stocked_store))
+
+        assert result["sync_status"] == "wrote", result
+        assert result["projected"] == 1 and len(result["memory_ids"]) == 1
+        after = (project / "CLAUDE.md").read_text(encoding="utf-8")
+        assert after.encode("utf-8") != before
+        assert "one record" in after
+        assert f"**Memory ID**: {result['memory_ids'][0]}" in after
+
+    def test_a_redirected_store_that_escaped_its_root_is_refused(
+        self, project, memory_store, tmp_path
+    ):
+        """Second guard, the incident shape: a built environment with no
+        PYTEST_CURRENT_TEST, a declared directory holding no CLAUDE.md, so
+        resolution continues to the working directory's file, outside it.
+
+        THE RECORD IS SAVED UNDER THE SAME DECLARED DIRECTORY. The project id
+        derives from it, and `sync` projects only this project's records; a
+        record saved under another id leaves nothing to project, and the
+        `empty` return precedes both guards. That is correct, and it would
+        make this arm pass without reaching the guard, so the store is
+        stocked under the escaping id and the envelope is pinned to `refused`.
+        """
+        escaped = tmp_path / "declared-but-empty"
+        escaped.mkdir()
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(tmp_path / "home"),
+            "CLAUDE_PROJECT_DIR": str(escaped),
+        }
+        assert "PYTEST_CURRENT_TEST" not in env
+        db = memory_store("escaped.db")
+        _run_cli(env, tmp_path, "save", json.dumps({"context": "escaping record"}),
+                 "--no-sync", "--db-path", str(db))
+        before = (project / "CLAUDE.md").read_bytes()
+
+        result = _run_cli(env, project, "sync", "--db-path", str(db))
+
+        assert result == {"sync_status": "refused", "projected": 0, "memory_ids": []}
+        assert (project / "CLAUDE.md").read_bytes() == before

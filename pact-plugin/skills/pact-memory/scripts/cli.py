@@ -735,6 +735,28 @@ def cmd_update(args, db_path=None):
     _success(result)
 
 
+def cmd_sync(args, db_path=None):
+    """Handle the 'sync' subcommand.
+
+    Rebuilds CLAUDE.md's Working Memory section from this project's newest
+    records. The envelope is total: `sync_status` names the outcome in every
+    case, and `projected` is 0 with `memory_ids` [] on every outcome but
+    `wrote`. `empty` means the project has no records and the file was not
+    touched.
+    """
+    memory = PACTMemory(db_path=db_path)
+    sync_kwargs = {}
+    claude_md_root = getattr(args, "claude_md_root", None)
+    if claude_md_root:
+        sync_kwargs["claude_md_root"] = Path(claude_md_root)
+    memory_ids = memory.sync(**sync_kwargs)
+    _success({
+        "sync_status": memory.last_sync_status,
+        "projected": len(memory_ids),
+        "memory_ids": memory_ids,
+    })
+
+
 def cmd_delete(args, db_path=None):
     """Handle the 'delete' subcommand.
 
@@ -936,6 +958,30 @@ def build_parser():
         help="Full 32-char memory ID, or a unique prefix of >= 7 characters",
     )
 
+    # sync
+    sync_parser = subparsers.add_parser(
+        "sync",
+        help="Rebuild CLAUDE.md's Working Memory from this project's newest memories",
+        description=(
+            "Replace the Working Memory section of CLAUDE.md with this "
+            "project's newest memories, each under its own date. Stateless: "
+            "the section is a view of the store, so fix a record with update "
+            "or delete and run sync again. A project with no memories reports "
+            "sync_status 'empty' and leaves the file untouched."
+        ),
+        parents=[parent],
+    )
+    sync_parser.add_argument(
+        "--claude-md-root",
+        default=None,
+        help=(
+            "Declare the directory the CLAUDE.md write must stay inside. The "
+            "write is refused if it would land outside. This does NOT choose "
+            "which CLAUDE.md is written -- resolution is unchanged -- it "
+            "bounds where the result may be."
+        ),
+    )
+
     return parser
 
 
@@ -949,6 +995,7 @@ _COMMANDS = {
     "setup": cmd_setup,
     "update": cmd_update,
     "delete": cmd_delete,
+    "sync": cmd_sync,
 }
 
 # THE COMMANDS THAT MAY BRING A STORE INTO EXISTENCE AT A CALLER PATH.
