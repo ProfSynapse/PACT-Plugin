@@ -613,6 +613,31 @@ class TestLedgerPruneRulings:
         assert "including siblings whose header carries no project or session id" in bullet
         assert "read the ids wherever they sit on that line" in bullet
 
+    def test_reaped_directory_is_completion(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        # The ground sentence and item 2 each state it; a reader who deletes
+        # one may keep the other, so both are pinned.
+        assert "or by finding that the platform has reaped that session's directory" in bullet
+        assert "the platform has reaped the session: the team is complete, go to item 5" in bullet
+
+    def test_id_less_header_resolves_only_on_exactly_one_match(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        assert "glob `{config_dir}/pact-sessions/*/XXXXXXXX-*`" in bullet
+        assert "exactly one match is the session directory, continue with it as if the header had named it" in bullet
+        assert "no match means the platform has reaped the session, go to item 5" in bullet
+
+    def test_equal_ts_is_not_later(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        assert "Equal `ts` values are not later: a tie means not complete, the section stays" in bullet
+
+    def test_sub_items_run_in_execution_order(self, skill_content):
+        bullet = _prune_bullet(skill_content)
+        heads = ["Address.", "Existence.", "Reads.", "Ordering.",
+                 "Team-wide removal.", "Report.", "Remove."]
+        positions = [bullet.find(f"**{h}**") for h in heads]
+        assert -1 not in positions, positions
+        assert positions == sorted(positions), positions
+
     def test_step_8_header_carries_the_on_disk_names(self, skill_content):
         # Step 8 writes the header Step 3 later reads as a filesystem path.
         start = skill_content.find("### Step 8: Update Processed Task Tracking")
