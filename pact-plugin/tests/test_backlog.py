@@ -904,10 +904,11 @@ def test_the_import_closure_probe_detects_a_forbidden_import(tmp_path):
 # --------------------------------------------------------------------------
 # validation: rejected, never truncated or silently dropped
 # --------------------------------------------------------------------------
-def test_an_over_long_note_is_rejected_and_nothing_is_written(tmp_path):
+def test_an_over_long_note_is_rejected_and_nothing_is_written(tmp_path, monkeypatch):
     """RED WHEN the writer truncates. Truncation would lose the intent the
     note exists to carry, so the file must stay absent rather than gain a
     shortened note."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     path = tmp_path / "demo.json"
     data = _backlog(tmp_path, items=[_item(note="x" * 201)])
 
@@ -918,16 +919,18 @@ def test_an_over_long_note_is_rejected_and_nothing_is_written(tmp_path):
     assert not path.exists(), "a rejected backlog was written anyway"
 
 
-def test_a_note_at_the_limit_is_accepted(tmp_path):
+def test_a_note_at_the_limit_is_accepted(tmp_path, monkeypatch):
     """The boundary case. RED WHEN the comparison is off by one and rejects a
     note of exactly the permitted length."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     path = tmp_path / "demo.json"
     assert backlog.save(_backlog(tmp_path, items=[_item(note="x" * 200)]), path) == []
     assert path.exists()
 
 
-def test_a_sixth_memory_id_is_rejected_rather_than_dropped(tmp_path):
+def test_a_sixth_memory_id_is_rejected_rather_than_dropped(tmp_path, monkeypatch):
     """RED WHEN the writer keeps five and discards the sixth silently."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     path = tmp_path / "demo.json"
     ids = [f"{index:032x}" for index in range(6)]
 
@@ -937,9 +940,10 @@ def test_a_sixth_memory_id_is_rejected_rather_than_dropped(tmp_path):
     assert not path.exists()
 
 
-def test_an_absolute_plan_path_is_rejected_at_write_time(tmp_path):
+def test_an_absolute_plan_path_is_rejected_at_write_time(tmp_path, monkeypatch):
     """RED WHEN an absolute plan path is stored. An absolute path captured
     inside a worktree points into a directory `git worktree remove` deletes."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     path = tmp_path / "demo.json"
     problems = backlog.save(
         _backlog(tmp_path, items=[_item(plan="/absolute/plan.md")]), path
@@ -1790,6 +1794,7 @@ def test_show_puts_the_item_id_in_reach_of_the_agent(tmp_path, monkeypatch, caps
 
     RED WHEN the id is dropped from the rendered line.
     """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     path = tmp_path / "b.json"
     backlog.save(_backlog(tmp_path, items=[_item(item_id="beef", title="FIND ME")]), path)
     monkeypatch.setattr(backlog, "store_path", lambda backlog_dir=None: path)
@@ -2477,7 +2482,7 @@ def test_repair_moves_every_corrupt_shape_including_non_utf8(tmp_path):
         assert aside.read_bytes() == raw, f"{label}: bytes changed in the move"
 
 
-def test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place(tmp_path):
+def test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place(tmp_path, monkeypatch):
     """Refusing is half; leaving the thing in place is the other half.
 
     A returncode-only assertion passes for a guard that refuses and moves the
@@ -2493,6 +2498,7 @@ def test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place(tmp_path):
     would pass vacuously there. The directory also proves the distinction
     lives below the handler's existence check — it passes `exists()`.
     """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     readable = tmp_path / "readable.json"
     backlog.save(_backlog(tmp_path), readable)
     before = readable.read_bytes()
@@ -2515,13 +2521,14 @@ def test_repair_refuses_what_it_cannot_read_and_leaves_it_in_place(tmp_path):
     assert unreadable.is_dir(), "a refused repair moved the directory anyway"
 
 
-def test_force_overrides_every_refusal_branch(tmp_path):
+def test_force_overrides_every_refusal_branch(tmp_path, monkeypatch):
     """The capability the user deliberately kept, pinned as kept.
 
     All three branches: readable, unreadable, and corrupt. Message ORDER is
     asserted rather than wording — the unreadable-force text is being reworded
     and pinning it would redden on a copy edit.
     """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     readable = tmp_path / "readable.json"
     backlog.save(_backlog(tmp_path), readable)
     aside, message = backlog.repair(readable, force=True)
@@ -2542,7 +2549,7 @@ def test_force_overrides_every_refusal_branch(tmp_path):
     )
 
 
-def test_the_success_message_says_only_what_was_established(tmp_path):
+def test_the_success_message_says_only_what_was_established(tmp_path, monkeypatch):
     """The caveat appears on exactly one path, and no path calls the file corrupt.
 
     THE ABSENCES ARE THE LOAD-BEARING HALF. A caveat glued to every move would
@@ -2558,6 +2565,7 @@ def test_the_success_message_says_only_what_was_established(tmp_path):
     Each case asserts the message was PRODUCED before asserting what it lacks —
     an absence assertion passes when the code never ran.
     """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     def prose(name, force=False, raw=None, as_dir=False):
         path = tmp_path / name
         if as_dir:
@@ -2929,7 +2937,7 @@ def test_the_age_line_keys_on_the_trigger_and_not_on_the_anchor(monkeypatch, tmp
     )
 
 
-def test_a_refused_write_preserves_the_first_writers_data_and_stays_armed(tmp_path):
+def test_a_refused_write_preserves_the_first_writers_data_and_stays_armed(tmp_path, monkeypatch):
     """A guard that refuses AND loses the data passes a refusal-only assertion.
 
     THE TWO WRITERS MUST DIVERGE. Two byte-identical loads give the guard
@@ -2943,6 +2951,7 @@ def test_a_refused_write_preserves_the_first_writers_data_and_stays_armed(tmp_pa
     RED WHEN the CAS is removed, when the baseline is popped on the refusal
     path, or when the refusal writes anyway.
     """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     path = tmp_path / "demo.json"
     _write(tmp_path, "demo.json", _backlog(tmp_path, items=[_item(title="ORIGINAL")]))
 
@@ -3900,7 +3909,7 @@ def test_a_non_string_ref_is_reported_by_the_schema_check(tmp_path):
     )
 
 
-def test_a_bad_field_on_one_item_locks_writes_to_every_other_item(tmp_path):
+def test_a_bad_field_on_one_item_locks_writes_to_every_other_item(tmp_path, monkeypatch):
     """THE BYSTANDER LOCK, and both halves matter.
 
     A bad `ref` on item A refuses a write to item B — the file is validated as
@@ -3911,6 +3920,7 @@ def test_a_bad_field_on_one_item_locks_writes_to_every_other_item(tmp_path):
     RED WHEN the `ref` rule is removed (the write succeeds), and RED WHEN the
     message stops naming item A.
     """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # the writer keys on this, never the cwd
     store, _ = _cli_store(tmp_path, [
         _item(item_id="aaaa", title="THE BROKEN ONE", ref=5),
         _item(item_id="bbbb", title="THE BYSTANDER"),
