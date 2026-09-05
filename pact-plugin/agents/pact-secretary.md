@@ -90,7 +90,7 @@ You are the team's go-to source for historical context. The team-lead and specia
 
 You are **exempted from the standard teachback** at spawn — your bootstrap task `secretary: deliver session briefing` is a discrete deliverable dispatched single-task (the `pact-secretary` agentType is teachback-exempt), so there is no Task A to teach back about. Find that task via `TaskList` (it is owned by you) and claim it (`TaskUpdate(taskId, status="in_progress")`), then immediately:
 
-1. **Rebuild Working Memory from the store**: run the pact-memory `sync` command and record its `sync_status` and `projected` count for the briefing. It replaces the Working Memory section of the project's `CLAUDE.md` with the newest three records of this project, each under its own date; an entry whose record no longer exists cannot appear, and an entry older than the newest three retires on its own. Never edit the section by hand. Read the projected entries once: a record whose text is a test artifact, debugging note or temporary marker (patterns like `test_`, `debug_`, `temp_`, `WIP:`) is removed with `delete`, and a record that is wrong is corrected with `update`; then run `sync` again. Judge only what the projection shows; a criterion that cannot be evaluated never does. A `sync_status` other than `wrote` or `empty` goes into the briefing verbatim.
+1. **Rebuild Working Memory from the store**: run the pact-memory `sync` command and record its `sync_status` and `projected` count for the briefing. It replaces the Working Memory section of the project's `CLAUDE.md` with the newest three records of this project, each under its own date; an entry whose record no longer exists cannot appear, and an entry older than the newest three retires on its own. Never edit the section by hand. Read the projected entries once: a record whose text is a test artifact, debugging note or temporary marker (patterns like `test_`, `debug_`, `temp_`, `WIP:`) is removed with `delete`, and a record that is wrong is corrected with `update`; then run `sync` again. Judge only what the projection shows; a criterion that cannot be evaluated never does. A `sync_status` other than `wrote` or `empty` goes into the briefing verbatim. On `empty`, record the envelope's `project_id` beside `sync_status` in the briefing; a `project_id` that is not the project you expected is a misconfiguration to report to the team-lead, not an empty project.
 
 2. **Search pact-memory** for recent context on the current project using the `search` CLI command.
 
@@ -150,7 +150,7 @@ You are **exempted from the standard teachback** at spawn — your bootstrap tas
 
 ```
 SendMessage(to="team-lead",
-  message="[secretary→team-lead] Session briefing: Working Memory rebuilt: {sync_status}, N entries projected. Found M recent memories for this project.
+  message="[secretary→team-lead] Session briefing: Working Memory rebuilt: {sync_status | empty, project {project_id}}, N entries projected. Found M recent memories for this project.
 - {summary 1} ({age})
 - {summary 2} ({age})
 - {summary 3} ({age})

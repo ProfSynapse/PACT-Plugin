@@ -365,7 +365,7 @@ Save using the CLI with proper structure:
 
 ### Step 7.5: Propagate (only when dispatched)
 
-If the dispatch carries the propagate sentence (see Propagation above), run `sync` now, once. It rebuilds the Working Memory section from the store: the newest three records of this project, each under its own date. Record the returned `sync_status` and `memory_ids` for Step 9. Otherwise skip this step.
+If the dispatch carries the propagate sentence (see Propagation above), run `sync` now, once. It rebuilds the Working Memory section from the store: the newest three records of this project, each under its own date. Record the returned `sync_status` and `memory_ids` for Step 9. On `empty`, record the envelope's `project_id` beside `sync_status`; a `project_id` that is not the project you expected is a misconfiguration to report to the team-lead, not an empty project. If the dispatch does not carry the sentence, skip this step.
 
 ### Step 8: Update Processed Task Tracking
 
@@ -410,7 +410,7 @@ SendMessage(to="team-lead",
   message="[secretary→team-lead] HANDOFF review complete. Saved N memories from M HANDOFFs.
 - {memory summary 1}
 - {memory summary 2}
-Working Memory: {sync_status}, {N} entries projected | not propagated (quiet harvest)
+Working Memory: {sync_status | empty, project {project_id}}, {N} entries projected | not propagated (quiet harvest)
 Gaps: {any HANDOFFs that were thin or missing}",
   summary="HANDOFF review complete: N memories from M HANDOFFs")
 ```
@@ -482,7 +482,7 @@ Review all memories saved during this session by listing recent pact-memory entr
 
 ### Step 4: Reconcile Working Memory
 
-The Working Memory section is a view of the store, rebuilt by the pact-memory `sync` command and by nothing else you run: `save --no-sync`, `update` and `delete` change the store and leave the section as it was. Fix the record, then rebuild the view: if an entry the section shows is wrong or superseded, correct or delete its record in Step 3, never the section text. If the dispatch carries the propagate sentence (every Consolidation dispatch does), run `sync` now, after the Step 3 merges and prunes, so the section shows the store as consolidated: the newest three records of this project, each under its own date, deleted records gone. Record `sync_status` and `memory_ids` for Step 6. If the dispatch does not carry the sentence, skip this step and report it in Step 6.
+The Working Memory section is a view of the store, rebuilt by the pact-memory `sync` command and by nothing else you run: `save --no-sync`, `update` and `delete` change the store and leave the section as it was. Fix the record, then rebuild the view: if an entry the section shows is wrong or superseded, correct or delete its record in Step 3, never the section text. If the dispatch carries the propagate sentence (every Consolidation dispatch does), run `sync` now, after the Step 3 merges and prunes, so the section shows the store as consolidated: the newest three records of this project, each under its own date, deleted records gone. Record `sync_status` and `memory_ids` for Step 6. On `empty`, record the envelope's `project_id` beside `sync_status`; a `project_id` that is not the project you expected is a misconfiguration to report to the team-lead, not an empty project. If the dispatch does not carry the sentence, skip this step and report it in Step 6.
 
 ### Step 5: Save Orchestration Retrospective
 
@@ -493,7 +493,7 @@ Save orchestration retrospective as calibration data (see Standard Harvest Step 
 Report consolidation results to the team-lead, including:
 - Memories consolidated (merged count)
 - Memories pruned (deleted/superseded count)
-- Working Memory: {sync_status}, {N} entries projected
+- Working Memory: {sync_status | empty, project {project_id}}, {N} entries projected
 - Calibration data saved
 - Any gaps or concerns
 
