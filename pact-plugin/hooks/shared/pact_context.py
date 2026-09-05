@@ -181,16 +181,19 @@ def _build_session_path(slug: str, session_id: str) -> Path:
 
 
 def project_slug(project_dir: str) -> str:
-    """Return the session slug for ``project_dir``: the basename of the
-    RESOLVED directory, so a project launched through a symlink takes its
-    target's name.
+    """Return the session slug for ``project_dir``: the resolved basename of
+    the directory CLAUDE_PROJECT_DIR names, so a project launched through a
+    symlink takes its target's name, as the pact-memory project id and the
+    backlog key do.
 
     Single derivation for every session-scoped path (``init``,
     ``get_session_dir``, ``reconstruct_session_dir``,
     ``resolve_compact_summary_path``, ``build_context_cache``, and the
     session_init / session_end / pact_session callers). The pact-memory
-    project id and the backlog key resolve the same way, so the three names
-    for one project agree.
+    project id and the backlog key resolve a symlink the same way and share
+    the fallback below, but the slug never normalises to a repository's main
+    root: a worktree or in-repo subdirectory session keeps its own session
+    directory.
 
     Empty input returns "" (``Path("").resolve()`` is the CWD, and the slug
     of no project must not become the CWD's name). When ``resolve()``
