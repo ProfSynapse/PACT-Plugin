@@ -1331,6 +1331,51 @@ class TestCleanupOldSessions:
         assert not (tmp_path / "link-name" / under_old).exists()
         assert not (tmp_path / "real-project" / under_new).exists()
 
+    def test_raw_slugs_are_sanitised_before_the_sweep(self, tmp_path, monkeypatch):
+        """Every writer stored the sanitised name, so raw names with a dot
+        or a space must reach the same directory, once."""
+        import session_end
+
+        current_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        old_id = "11111111-2222-3333-4444-555555555555"
+        self._create_session_dir(tmp_path / "my_project", old_id, age_days=10)
+        swept = []
+        real = session_end._reap_slug_dir
+        monkeypatch.setattr(
+            session_end, "_reap_slug_dir",
+            lambda slug_dir, *a: (swept.append(slug_dir), real(slug_dir, *a)),
+        )
+
+        session_end.cleanup_old_sessions(
+            project_slug="my.project",
+            current_session_id=current_id,
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+            old_slug="my project",
+        )
+
+        assert swept == [tmp_path / "my_project"]
+        assert not (tmp_path / "my_project" / old_id).exists()
+
+    def test_dotdot_slug_never_leaves_the_sessions_root(self, tmp_path, monkeypatch):
+        import session_end
+
+        swept = []
+        monkeypatch.setattr(
+            session_end, "_reap_slug_dir", lambda slug_dir, *a: swept.append(slug_dir)
+        )
+        session_end.cleanup_old_sessions(
+            project_slug="..",
+            current_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            sessions_dir=str(tmp_path),
+            max_age_days=7,
+            old_slug="..",
+        )
+
+        # The allowlist collapses the whole run to one underscore.
+        assert swept == [tmp_path / "_"]
+        assert swept[0].resolve().is_relative_to(tmp_path.resolve())
+
     def test_plain_project_dir_sweeps_one_slug_dir_once(self, tmp_path, monkeypatch):
         import session_end
 

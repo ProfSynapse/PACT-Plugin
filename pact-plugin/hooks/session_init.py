@@ -576,10 +576,10 @@ def _extract_prev_session_dir(project_dir: str) -> str | None:
         )
         if resume_match:
             session_id = resume_match.group(1)
-            # Same slug derivation as every session path: the resolved dir.
-            slug = project_slug(project_dir)
+            # Same slug derivation and sanitisation as every session path,
+            # so the fallback lands on the directory the writers used.
             derived = str(
-                get_claude_config_dir() / "pact-sessions" / slug / session_id
+                build_session_path(project_slug(project_dir), session_id)
             )
             return _validate_under_pact_sessions(derived)
 

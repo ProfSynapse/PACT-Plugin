@@ -2361,6 +2361,27 @@ class TestExtractPrevSessionDirDualLocation:
         assert result == str(sessions_root / tmp_path.name / sid)
         assert result != absent
 
+    def test_fallback_derives_the_sanitised_slug_dir(self, tmp_path, monkeypatch):
+        """A project whose name carries a dot lives under the sanitised slug
+        every writer uses; the fallback lands there, not on the raw name."""
+        from session_init import _extract_prev_session_dir
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+        project_dir = tmp_path / "my.project"
+        project_dir.mkdir()
+        sid = "eeeeeeee-1111-2222-3333-444444444444"
+        sessions_root = (tmp_path / "home") / ".claude" / "pact-sessions"
+        sanitised = sessions_root / "my_project" / sid
+        sanitised.mkdir(parents=True)
+        absent_raw = str(sessions_root / "my.project" / sid)
+        (project_dir / "CLAUDE.md").write_text(
+            self._make_content(sid, absent_raw), encoding="utf-8"
+        )
+
+        result = _extract_prev_session_dir(str(project_dir))
+
+        assert result == str(sanitised)
+
     def test_reads_dot_claude_when_only_dot_claude_exists(self, tmp_path, monkeypatch):
         """Reads .claude/CLAUDE.md when it is the only location present."""
         from session_init import _extract_prev_session_dir

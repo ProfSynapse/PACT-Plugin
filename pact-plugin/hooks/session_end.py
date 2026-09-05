@@ -36,6 +36,7 @@ from shared.error_output import hook_error_json
 from shared import check_pr_state
 import shared.pact_context as pact_context
 from shared.pact_context import (
+    _UNSAFE_SLUG_CHARS_RE,
     get_project_dir,
     get_session_id,
     get_team_name,
@@ -401,7 +402,9 @@ def cleanup_old_sessions(
     Sweeps the slug directory for ``project_slug`` and, when ``old_slug``
     differs from it, that directory too with the same TTL and carrier guard:
     a project launched through a symlink wrote earlier sessions under the
-    unresolved name, and those age out beside the resolved one.
+    unresolved name, and those age out beside the resolved one. Both slugs
+    pass through the writers' sanitiser first, so a raw name reaches the
+    directory the writers created and cannot name a path outside the root.
 
     Each candidate session directory is checked against a TTL selected per
     entry: checkpointed sessions (those whose journal contains any
@@ -444,9 +447,11 @@ def cleanup_old_sessions(
     if sessions_dir is None:
         sessions_dir = str(get_claude_config_dir() / "pact-sessions")
 
-    slugs = [project_slug]
-    if old_slug and old_slug != project_slug:
-        slugs.append(old_slug)
+    slugs = [_UNSAFE_SLUG_CHARS_RE.sub("_", project_slug)]
+    if old_slug:
+        safe_old = _UNSAFE_SLUG_CHARS_RE.sub("_", old_slug)
+        if safe_old != slugs[0]:
+            slugs.append(safe_old)
     for slug in slugs:
         _reap_slug_dir(
             Path(sessions_dir) / slug,
