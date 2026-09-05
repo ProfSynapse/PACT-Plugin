@@ -355,8 +355,17 @@ class TestSyncVerbReachesTheGuards:
 
         result = _run_cli(env, project, "sync", "--db-path", str(db))
 
-        assert (result["sync_status"], result["projected"], result["memory_ids"]) == (
-            "refused", 0, [])
+        # THE WHOLE ENVELOPE, so a dropped key and an added one both fail. The
+        # sibling route is pinned whole in the fidelity suite; this one was
+        # loosened to three fields when `project_id` arrived and never widened
+        # back, leaving the route where an escaped root would surface as the
+        # one route that could gain a key in silence.
+        expected_id = _run_cli(env, tmp_path, "status", "--db-path", str(db))["project_id"]
+        assert expected_id, "status reported no project id; the pin below is vacuous"
+        assert result == {
+            "sync_status": "refused", "projected": 0, "memory_ids": [],
+            "project_id": expected_id,
+        }
         assert (project / "CLAUDE.md").read_bytes() == before
 
 
