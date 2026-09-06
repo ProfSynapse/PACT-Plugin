@@ -2052,7 +2052,7 @@ def test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY(tmp_path, monkeypatch
     refusal_code = backlog.main(["set", "zzzz", "--status", "done"])
 
     assert unreadable_code == 3, f"an unparseable file exited {unreadable_code}"
-    assert refusal_code == 2, f"a refusal exited {refusal_code}"
+    assert refusal_code == backlog._EXIT_REFUSED, f"a refusal exited {refusal_code}"
     assert unreadable_code != refusal_code, (
         "repair-worthy and refused are indistinguishable to a caller"
     )
@@ -2287,7 +2287,7 @@ def test_add_refuses_a_non_list_items_and_leaves_the_file_UNCHANGED(tmp_path, mo
 
     code = backlog.main(["add", "a new item"])
 
-    assert code == 2, f"expected a refusal exit, got {code}"
+    assert code == backlog._EXIT_REFUSED, f"expected a refusal exit, got {code}"
     assert path.read_bytes() == before, "the file was rewritten by a refused add"
 
 
@@ -2331,7 +2331,7 @@ def test_an_ABSENT_item_list_is_still_allowed_while_an_explicit_null_refuses(tmp
     explicit_null = tmp_path / "null.json"
     explicit_null.write_text(json.dumps({**_backlog(tmp_path), "items": None}), encoding="utf-8")
     monkeypatch.setattr(backlog, "store_path", lambda backlog_dir=None: explicit_null)
-    assert backlog.main(["add", "another"]) == 2, "an explicit null was accepted"
+    assert backlog.main(["add", "another"]) == backlog._EXIT_REFUSED, "an explicit null was accepted"
     assert json.loads(explicit_null.read_text())["items"] is None, "a refused add rewrote the file"
 
 
@@ -2463,7 +2463,7 @@ def test_only_an_unparseable_file_reports_as_unreadable(tmp_path):
     )
     # The id must EXIST in the fixture, or the write refuses for a missing
     # item before validation is reached and the schema problem never matters.
-    assert run(non_conforming, "set", "ZZZZ", "--status", "done")[0] == 2, (
+    assert run(non_conforming, "set", "ZZZZ", "--status", "done")[0] == backlog._EXIT_REFUSED, (
         "a schema problem did not exit the refusal code on a WRITE"
     )
     assert run("{ broken", "show")[0] == 3, "an unparseable file did not report as unreadable"
@@ -3941,7 +3941,7 @@ def test_a_bad_field_on_one_item_locks_writes_to_every_other_item(tmp_path, monk
     ])
     code, out = _run_cli(store, "set", "bbbb", "--note", "a write to the bystander")
 
-    assert code == 2, f"the write to the bystander was not refused: exit {code}\n{out}"
+    assert code == backlog._EXIT_REFUSED, f"the write to the bystander was not refused: exit {code}\n{out}"
     assert "aaaa" in out, (
         f"the refusal did not name the item to fix, so the user has no route "
         f"out of it: {out}"
@@ -4366,9 +4366,12 @@ def test_a_usage_error_and_a_refusal_exit_DIFFERENTLY(tmp_path):
     """ONE RUN, VARIED INPUTS, BOTH CODES — and that is the whole design.
 
     The defect was ONE code meaning two things: argparse's default 2 collided
-    with `_EXIT_REFUSED`, so a mistyped command was indistinguishable from a
-    real refusal. Two separate arms — one asserting usage returns 64, one
-    asserting a refusal returns 2 — would BOTH pass against a collapsed axis,
+    with `_EXIT_REFUSED`, which was 2 at the time, so a mistyped command was
+    indistinguishable from a real refusal. Refusal has since moved again, off
+    2 and onto 65, for the same reason against a different producer — read the
+    codes from the constants, never from this paragraph. Two separate arms —
+    one asserting usage returns `_EXIT_USAGE`, one asserting a refusal returns
+    `_EXIT_REFUSED` — would BOTH pass against a collapsed axis,
     because each could find an input satisfying it in isolation. What cannot
     survive a collapse is a single run producing both codes from inputs that
     differ only in the factor under test. So the table below is asserted whole.
@@ -4435,6 +4438,56 @@ def test_a_usage_error_and_a_refusal_exit_DIFFERENTLY(tmp_path):
     assert observed["malformed flag"] != observed["refusal: no item"], (
         "a malformed invocation and a real refusal exit with the SAME code "
         f"({observed['malformed flag']}); the two are indistinguishable again"
+    )
+
+
+def test_a_refusal_is_distinguishable_from_a_process_that_never_ran(tmp_path):
+    """The property the exit codes exist to have, with a LIVE control.
+
+    NAMES NO NUMBER, ON PURPOSE. `_EXIT_REFUSED == 65` would be a change
+    detector: it reddens when someone moves the constant for a good reason,
+    which is the false-positive direction that teaches people to delete pins.
+    This arm permits any move and reddens only on a move onto a code something
+    else actually produces.
+
+    THE CONTROL IS THE LOAD-BEARING HALF. The colliding value is measured by
+    RUNNING a process that fails to start, not by typing 2 — a hardcoded 2
+    would compare the constant against a number someone believed, which is the
+    shape this file's other arms exist to remove. Every sibling assertion here
+    reads `backlog._EXIT_REFUSED`, so all of them pass at whatever the constant
+    holds; this is the only thing that can catch a move back onto a colliding
+    code.
+
+    BOUND, so a later reader does not take this for a general collision
+    detector: it compares against ONE producer, the interpreter. Both prior
+    collisions in this file (argparse, then the interpreter) happen to emit 2
+    today, so one control covers both by coincidence rather than by design. A
+    future producer emitting something else is invisible here.
+
+    Band membership (sysexits 64-78) is deliberately NOT asserted: that range
+    is sufficient for safety, not necessary, so pinning it would redden a
+    maintainer who leaves the band for a reason this arm knows nothing about.
+    The band is the argument for the current value and lives at the constant.
+    """
+    never_ran = subprocess.run(
+        [sys.executable, str(tmp_path / "no_such_script.py")],
+        capture_output=True, text=True,
+    ).returncode
+    assert never_ran != 0, "the control did not fail; it cannot separate anything"
+    assert backlog._EXIT_REFUSED != never_ran, (
+        f"a refusal exits {backlog._EXIT_REFUSED}, which is also what the "
+        f"interpreter returns when it cannot open a script; a process that "
+        f"never started is indistinguishable from one that declined"
+    )
+
+    codes = {
+        "ok": backlog._EXIT_OK,
+        "refused": backlog._EXIT_REFUSED,
+        "unreadable": backlog._EXIT_UNREADABLE,
+        "usage": backlog._EXIT_USAGE,
+    }
+    assert len(set(codes.values())) == len(codes), (
+        f"two of this module's verdicts share one code: {codes}"
     )
 
 
@@ -4560,7 +4613,7 @@ def test_an_unset_or_non_directory_project_dir_still_refuses(tmp_path, monkeypat
         assert str(not_a_dir) in str(exc), "the refusal does not echo the rejected value"
     else:
         raise AssertionError("a non-directory CLAUDE_PROJECT_DIR resolved a root")
-    assert backlog.main(["--backlog-dir", str(store), "add", "x"]) == 2
+    assert backlog.main(["--backlog-dir", str(store), "add", "x"]) == backlog._EXIT_REFUSED
     assert list(store.iterdir()) == [], "a refused write left a file behind"
 
 
@@ -4628,7 +4681,7 @@ def test_a_directory_inside_a_repository_git_cannot_read_still_refuses(tmp_path,
             assert "repository" in str(exc)
         else:
             raise AssertionError(f"{env_path} did not refuse; it resolved {root}")
-        assert backlog.main(["--backlog-dir", str(store), "add", "x"]) == 2
+        assert backlog.main(["--backlog-dir", str(store), "add", "x"]) == backlog._EXIT_REFUSED
         assert list(store.iterdir()) == [], f"a refused write left a file: {list(store.iterdir())}"
 
 
