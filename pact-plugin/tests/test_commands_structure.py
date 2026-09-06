@@ -1353,6 +1353,65 @@ class TestBootstrapRefreshClauses:
         assert "Check for inbound messages" in bootstrap_text
 
 
+class TestBootstrapPauseConsumptionClauses:
+    """Structural pins for bootstrap.md's PAUSED-state consumption write.
+
+    A sibling class rather than an addition to `TestBootstrapRefreshClauses`
+    above: that class is named for the refresh clauses, and a pin filed under a
+    name that does not describe it sends the next audit to the wrong place.
+
+    WHY THESE EXIST — MEASURED, NOT ASSUMED. Deleting the entire
+    `**Paused-state consumption write (fire-once)**` block from bootstrap.md
+    left the whole suite at its baseline: 15474 passed, 85 skipped, exit 0,
+    zero failures and zero errors. The refresh half of the same paragraph was
+    pinned by `test_consumption_write_template`; the pause half was pinned by
+    nothing.
+
+    THE CONSEQUENCE IS THE DANGEROUS SHAPE, not a missing feature.
+    `_pause_is_spent` in `hooks/shared/session_resume.py` works correctly and
+    is never reached, because this block is the only thing that emits the event
+    it consumes. The paused claim then never retires, and the Working Memory
+    freeze it gates loses the bounded life the mechanism is built to give it —
+    a freeze with no expiry is the neglect the freeze was designed to be
+    distinguishable from.
+
+    SCOPE, stated so a later green is not over-read: these are DELETION
+    detectors on the literals a reader must be able to copy. Each literal below
+    occurs exactly once in the file, so a red here names this block rather than
+    firing on a neighbour. A rewrite that preserves every literal while
+    changing the surrounding instruction is NOT caught, and no fragment pin
+    catches it.
+    """
+
+    @pytest.fixture
+    def bootstrap_text(self):
+        return (COMMANDS_DIR / "bootstrap.md").read_text(encoding="utf-8")
+
+    def test_pause_consumption_write_template(self, bootstrap_text):
+        """Detects: loss of the write itself, or of either condition governing
+        it. Mirrors `test_consumption_write_template` literal for literal, on
+        the paused side of the same paragraph."""
+        assert "--type session_pause_consumed" in bootstrap_text
+        assert '{"pause_ts": "{pause_ts}"}' in bootstrap_text
+        assert "pause_ts=UNAVAILABLE" in bootstrap_text
+        assert (
+            "never write a consumption event when no paused prompt surfaced"
+            in bootstrap_text
+        )
+
+    def test_every_surfaced_paused_prompt_is_retired(self, bootstrap_text):
+        """Detects: the write narrowing to the branch that resumes something.
+
+        This clause has no refresh counterpart and is the reason the pin above
+        is not sufficient on its own. The paused prompt surfaces on three
+        branches — normal, staleness-downgraded, and merged-or-closed PR — and
+        ALL THREE freeze the block, because the marker records that a claim
+        SURFACED, never that work resumed. A write narrowed to the first branch
+        leaves the other two unretirable: correct-looking, green, and a freeze
+        that never ends."""
+        assert "Write it for EVERY paused prompt that surfaces" in bootstrap_text
+
+
 # =============================================================================
 # pause.md teammate-shutdown structural pins + cross-surface termination
 # skeleton — deliberate drift detectors, anchored on stable tokens agreed
