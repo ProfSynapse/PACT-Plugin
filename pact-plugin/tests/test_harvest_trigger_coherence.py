@@ -2,10 +2,15 @@
 
 COVERED, and this list is the scope — an enumeration not on it is not gated:
 the orchestrator persona's trigger rows, the harvest skill's variant bullets,
-the persona's Consolidation exemption paragraph, and the skill's Consolidation
-trigger sentence. Each is compared against the dispatch sites, never against
-another prose surface: completing one of these lists is what shortens the
-others, so chaining them would route that pressure into the oracle.
+and the skill's Consolidation trigger sentence. Each of those is compared
+against the dispatch sites, never against another prose surface: completing one
+of these lists is what shortens the others, so chaining them would route that
+pressure into the oracle.
+
+NOT gated here, and deliberately: the persona's propagation paragraph. It claims
+which boundaries PROPAGATE, a different property from which run a Consolidation,
+and ``test_exemption_policy_tripwires.py`` compares it against the dispatches
+that carry the propagate sentence.
 
 Before adding an arm here, check whether the enumeration you are gating is
 coupled to one that is not. A partial gate over coupled lists manufactures the
@@ -72,8 +77,17 @@ _SKILL_BULLET = re.compile(r"\*\*(\w+) Harvest\*\*[^\n]*?\(([^)]*)\)")
 # Paragraphs claiming WHICH boundaries run a Consolidation Harvest, located by a
 # phrase each one owns. A rewrite that drops the phrase empties the extraction
 # and trips the non-empty guard rather than passing.
+#
+# The persona's propagation paragraph sat here and does not belong. It names the
+# boundaries that PROPAGATE, counting `orchestrate`'s post-review STANDARD
+# Harvest among them, so comparing it against Consolidation dispatchers equated
+# two properties that agree on four stems only because `orchestrate` is in each
+# list for a different reason. The repo denies the equivalence in its own words:
+# that paragraph ends "never the variant's name", and the skill's Propagation
+# rule calls the sentence "a mode, not a scope". Its correct oracle is the set of
+# dispatches carrying the sentence, which `test_exemption_policy_tripwires.py`
+# already compares it against, so removing it here loses no coverage.
 _CONSOLIDATION_CLAIMS = {
-    "persona exemption paragraph": (PERSONA, "EXEMPT and must run"),
     "skill consolidation trigger": (SKILL, "This is the deep-clean pass"),
 }
 
@@ -183,7 +197,7 @@ def _claimed_boundaries(source, marker):
     }
 
 
-class TestConsolidationExemptionMatchesTheDispatchSites:
+class TestConsolidationClaimsMatchTheDispatchSites:
     """Every Consolidation boundary must appear wherever the set is enumerated.
 
     The unit here is the BOUNDARY-NAME SET, not the (command, variant) multiset
@@ -191,11 +205,15 @@ class TestConsolidationExemptionMatchesTheDispatchSites:
     constant — every member is a Consolidation Harvest — so pairing would
     compare a padded set. And multiplicity is wrong: a command with two trigger
     rows, one Standard and one Consolidation, is named ONCE here, correctly,
-    because these paragraphs claim a property of a boundary rather than a count
+    because such a paragraph claims a property of a boundary rather than a count
     of dispatch sites.
 
-    Completing one of these lists is what shortens the others, so they are
-    asserted against the dispatch sites rather than against each other.
+    EXTRACTION, stated because this module states the trigger arm's bound and a
+    silent arm reads as an unbounded one: the claimed set is every word of the located
+    paragraph that equals a ``commands/*.md`` stem. A command named there for
+    ANY reason is therefore claimed, so a contrastive mention — "unlike
+    `peer-review`" — would redden this arm. Today the located paragraph names only
+    the boundaries it triggers, and the extraction is exact.
 
     WHAT THIS DOES NOT CATCH: the per-boundary REASON. A reason that goes stale
     while its command name stays present is invisible here.

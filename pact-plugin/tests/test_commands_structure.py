@@ -190,10 +190,10 @@ class TestAskUserQuestionOptions:
         assert "TaskStop" not in section[yes:pause], "TaskStop leaked into the continue branch"
         assert "TaskStop" not in section[pause:end], "TaskStop leaked into the pause branch"
 
-    # --- peer-review.md step 6 ---
+    # --- peer-review.md step 7 ---
 
     def test_peer_review_has_three_merge_options(self, peer_review_content):
-        """Step 6 merge authorization has 3 options."""
+        """Step 7 merge authorization has 3 options."""
         # Extract only from the merge authorization section (after "Merge Authorization")
         merge_section = peer_review_content.split("Merge Authorization")[1]
         labels = _extract_option_labels(merge_section)

@@ -809,16 +809,13 @@ JSON
   ```
 - [ ] **HANDOFF acceptance**: on receiving each Task-complete `SendMessage`, accept on the HANDOFF payload the notify carries. If the notify carries no HANDOFF payload, `SendMessage` the agent to submit one before downstream dispatch proceeds. The disk copy is the deferred audit, not the acceptance surface — see [pact-completion-authority.md §Read-Trigger Precondition](../protocols/pact-completion-authority.md#read-trigger-precondition) point 4 for the audit, the integrity finding and the repair.
 - [ ] **Concurrent-audit coverage check**: before dispatching TEST, confirm ONE of — the auditor task's file carries `metadata.audit_summary` OR `metadata.audit_summary_authored` (`cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq '.metadata | has("audit_summary") or has("audit_summary_authored")'`; `TaskGet` does NOT surface metadata), OR an audit has been dispatched against the committed artifact. If neither holds, `SendMessage` the auditor with the committed SHA, or dispatch a post-artifact audit, then proceed.
-- [ ] **Process coder HANDOFFs** (dispatch once no auditor task is `pending` or `in_progress` — a contamination ordering, NOT a verdict wait):
+- [ ] **Process coder HANDOFFs** (dispatch as soon as the coders have reported; the auditor need not have finished — this harvest writes no Working Memory block, and a later harvest picks up the auditor's HANDOFF):
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",
     description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
   TaskUpdate(taskId, owner="secretary")
   ```
-  Do not block on completion — TEST phase proceeds in parallel. Do NOT move this earlier: the harvest
-  writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live
-  agent's context, so running it alongside the auditor puts this phase's conclusions into the context
-  of the agent whose value is observing independently of them.
+  Do not block on completion — TEST phase proceeds in parallel; the harvest is quiet, so the TEST engineer inherits nothing from it.
 - [ ] **S4 Checkpoint**: Environment stable? Model aligned? Plan viable?
 
 #### Handling Complex Sub-Tasks During CODE
@@ -982,13 +979,13 @@ After you resolve a blocker, message the teammate by name. Spawn fresh if the te
 8. **Save memories from HANDOFFs** (idempotent — safe if already processed at phase boundary):
    ```
    TaskCreate(subject="secretary: harvest pending HANDOFFs (post-review)",
-     description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
+     description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Then propagate the store into the Working Memory block. Report summary when done.")
    TaskUpdate(taskId, owner="secretary")
    ```
 9. **Mid-session consolidation** (multi-feature sessions only): If this is the second or subsequent feature completed in this session, create a consolidation task to merge cross-feature knowledge:
    ```
    TaskCreate(subject="secretary: mid-session consolidation",
-     description="Multiple features completed this session. Follow the Consolidation Harvest workflow in your pact-handoff-harvest skill: review memories saved so far, consolidate related entries across features, prune superseded memories. Report summary when done.")
+     description="Multiple features completed this session. Follow the Consolidation Harvest workflow in your pact-handoff-harvest skill: review memories saved so far, consolidate related entries across features, prune superseded memories. Then propagate the store into the Working Memory block. Report summary when done.")
    TaskUpdate(taskId, owner="secretary")
    ```
    Skip for the first feature in a session — full consolidation happens during `/PACT:wrap-up`.

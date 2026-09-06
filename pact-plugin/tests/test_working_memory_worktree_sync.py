@@ -38,6 +38,7 @@ from scripts.working_memory import (
     _project_root_of,
     _resolve_display_claude_md_path,
     SyncResult,
+    project_memories_to_claude_md,
     sync_retrieved_to_claude_md,
     sync_to_claude_md,
 )
@@ -488,6 +489,9 @@ class TestBothWriteCallersAgreeOnAbsentDestinations:
             ("sync_retrieved_to_claude_md", lambda: sync_retrieved_to_claude_md(
                 [{"context": "ctx", "goal": "differential"}], "query",
                 memory_ids=["b" * 32])),
+            ("project_memories_to_claude_md", lambda: project_memories_to_claude_md(
+                [{"id": "c" * 32, "context": "ctx",
+                  "created_at": "2026-01-01 00:00:00"}])),
         ]
 
     @pytest.mark.parametrize("layout", ["flat", "absent-parents"])

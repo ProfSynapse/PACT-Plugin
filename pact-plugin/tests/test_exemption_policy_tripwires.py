@@ -14,8 +14,9 @@ twice in this area.
 NOT PINNED FOR THE DENOMINATOR — the auditor's `metadata.type` state. The
 denominator keys on `is_teachback_exempt`, which has no metadata surface, so
 that fact is irrelevant to it. It IS pinned lower down for a different
-consumer: the harvest predicate's state set depends on auditors staying
-non-exempt, which depends on that dispatch carrying no `type`.
+consumer: the harvest propagation rule keeps the Working Memory block away
+from an auditor that has not reported, which is only meaningful while auditors
+stay non-exempt, which depends on that dispatch carrying no `type`.
 """
 import ast
 import json
@@ -34,6 +35,10 @@ from shared.intentional_wait import (  # noqa: E402
     is_self_complete_exempt,
     is_teachback_exempt,
 )
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from test_harvest_trigger_coherence import _claimed_boundaries  # noqa: E402 — sibling extraction rule
 
 VARIETY_PROTOCOL = Path(__file__).parent.parent / "protocols" / "pact-variety.md"
 INTENTIONAL_WAIT_SRC = (
@@ -252,50 +257,6 @@ class TestProtocolProseNamesTheSameConstant:
         )
 
 
-CLAIM_GATE_SRC = Path(__file__).parent.parent / "hooks" / "task_claim_gate.py"
-
-
-def _derive_atomic_claim_live_states():
-    """States `task_claim_gate._atomic_claim` can put an owned task into, READ
-    FROM that function rather than restated here.
-
-    Collects the string constants of Compare/Assign statements mentioning the
-    `status` key: the `!= "pending"` no-clobber guard (pre-state) and the
-    `= "in_progress"` flip (post-state). Collecting every constant in the body
-    instead would return '.json', 'utf-8', 'tasks' and more, and filtering those
-    needs a hand-written exclusion list -- which is the hand-written list this
-    derivation exists to delete.
-
-    RAISES rather than returning a short set: a silently-narrow derivation makes
-    every arm below vacuous, which is worse than the literal it replaces.
-    """
-    fn = next(
-        (n for n in ast.walk(ast.parse(CLAIM_GATE_SRC.read_text()))
-         if isinstance(n, ast.FunctionDef) and n.name == "_atomic_claim"),
-        None,
-    )
-    if fn is None:
-        raise AssertionError("_atomic_claim not found in %s" % CLAIM_GATE_SRC)
-    states = set()
-    for node in ast.walk(fn):
-        if not isinstance(node, (ast.Compare, ast.Assign)):
-            continue
-        consts = [c.value for c in ast.walk(node)
-                  if isinstance(c, ast.Constant) and isinstance(c.value, str)]
-        if "status" in consts:
-            states.update(c for c in consts if c != "status")
-    if len(states) < 2:
-        raise AssertionError(
-            "derived %d state(s) %s from _atomic_claim; expected at least a "
-            "pre-state and a post-state. The derivation has stopped seeing the "
-            "status statements, so the harvest-predicate arm below is vacuous."
-            % (len(states), sorted(states))
-        )
-    return frozenset(states)
-
-
-ATOMIC_CLAIM_LIVE_STATES = _derive_atomic_claim_live_states()
-
 ORCHESTRATOR_PERSONA = Path(__file__).parent.parent / "agents" / "pact-orchestrator.md"
 COMMANDS_DIR = Path(__file__).parent.parent / "commands"
 
@@ -366,34 +327,67 @@ def _enclosing_block(text, offset):
     return text[start:]
 
 
-class TestAuditorLivenessPredicateCoversTheClaimGate:
-    """The harvest predicate names task states; its state set is correct only
-    because of facts in two files it never references. These arms carry that
-    coupling.
+PROPAGATE_SENTENCE = "Then propagate the store into the Working Memory block."
+PROPAGATION_PARAGRAPH_MARKER = "may appear only at a boundary"
+PROPAGATING_COMMANDS = frozenset({"orchestrate", "wrap-up", "pause", "refresh"})
+_DISPATCH_RE = re.compile(r"Follow the (\w+) Harvest workflow")
 
-    NOT COVERED, stated rather than implied: a rewording that keeps both state
-    tokens and inverts their sense ("`pending`, never `in_progress`") passes the
-    token-set arm. Pinning sentence structure instead would redden on every
-    legitimate rewrite, which is the trade taken here deliberately.
+
+def _propagating_dispatch_stems():
+    """Command stems whose harvest dispatch descriptions carry the propagate
+    sentence, one entry per carrying description (a list, so the count is
+    visible to the caller)."""
+    stems = []
+    for path in sorted(COMMANDS_DIR.glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        for literal in re.findall(r'description="((?:[^"\\]|\\.)*)"', text, re.S):
+            if _DISPATCH_RE.search(literal) and PROPAGATE_SENTENCE in literal:
+                stems.append(path.stem)
+    return stems
+
+
+class TestOnlyTheSafeBoundariesPropagateTheWorkingMemoryBlock:
+    """A harvest writes the Working Memory block only when its dispatch carries
+    the propagate sentence, and that sentence belongs only at a boundary after
+    which no independent-judgement agent spawns before a later harvest. The
+    persona paragraph states the rule and names the boundaries; the dispatch
+    sites are the fact. These arms hold the two together.
+
+    NOT COVERED, stated rather than implied: WHETHER a named boundary is in
+    fact safe. That is a claim about spawn order inside a command, which has no
+    machine-readable counterpart. These arms redden when a quiet site gains the
+    sentence or the persona stops naming a site that carries it.
     """
 
-    def test_harvest_predicate_names_every_state_the_claim_gate_can_produce(self):
-        """Reddens on BOTH states this predicate shipped in one PR:
-        `in_progress`-only and `pending`-only. Asserts the anchor exists first,
-        so deleting the line fails loudly instead of passing vacuously."""
-        lines = [
-            ln for ln in ORCHESTRATOR_PERSONA.read_text().splitlines()
-            if "no auditor task is" in ln
-        ]
-        assert len(lines) == 2, "harvest predicate anchor missing or moved: %r" % (lines,)
-        for ln in lines:
-            # states are named in the CONDITION; the trailing `(workflow)` is not one
-            condition = ln.split("\u2192")[0]
-            assert set(re.findall(r"`(\w+)`", condition)) == ATOMIC_CLAIM_LIVE_STATES, ln
+    def test_no_quiet_dispatch_carries_the_propagate_sentence(self):
+        """Reddens when a dispatch outside the propagating set gains the
+        sentence, or when the sentence vanishes from the tree (non-vacuity:
+        the count is pinned, so an empty extraction fails loudly)."""
+        carrying = _propagating_dispatch_stems()
+        assert carrying, (
+            "no harvest dispatch under %s carries %r -- either every site went "
+            "quiet or the description extraction stopped matching. Report this "
+            "as an extraction failure, not as agreement." % (COMMANDS_DIR, PROPAGATE_SENTENCE)
+        )
+        assert len(carrying) == 5, carrying
+        assert set(carrying) <= PROPAGATING_COMMANDS, sorted(set(carrying) - PROPAGATING_COMMANDS)
+
+    def test_every_propagating_site_is_named_in_the_persona_paragraph(self):
+        """Reddens when the persona paragraph names a command that does not
+        propagate, or omits one that does. Reuses the coherence test's
+        extraction rule: every bare word equal to a `commands/*.md` stem."""
+        claimed = _claimed_boundaries(ORCHESTRATOR_PERSONA, PROPAGATION_PARAGRAPH_MARKER)
+        assert claimed, (
+            "the persona paragraph located by %r named no command, or the marker "
+            "was rewritten. Report this as an extraction failure, not as agreement."
+            % PROPAGATION_PARAGRAPH_MARKER
+        )
+        assert claimed == set(_propagating_dispatch_stems())
 
     def test_auditor_shaped_task_is_not_self_complete_exempt(self):
-        """The fact the predicate rests on. Reddens if either exemption surface
-        starts admitting auditors — the dependency editor's tripwire."""
+        """The fact the propagation rule rests on: an auditor's task stays
+        live until the auditor itself reports. Reddens if either exemption
+        surface starts admitting auditors -- the dependency editor's tripwire."""
         assert "pact-auditor" not in SELF_COMPLETE_EXEMPT_AGENT_TYPES
         assert is_self_complete_exempt(
             {"owner": "auditor", "metadata": {"completion_type": "signal"}}, ""

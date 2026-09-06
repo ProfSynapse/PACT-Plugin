@@ -251,7 +251,7 @@ TaskCreate(subject="secretary: harvest pending HANDOFFs (primary trigger, pre-me
 TaskUpdate(taskId, owner="secretary")
 ```
 
-This is the **primary memory trigger** — fires unconditionally, after the reviewers report. Do NOT move it back to reviewer dispatch: the harvest writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context, so running it alongside reviewers puts this arc's conclusions into the context of the agents whose value is reaching conclusions independently of them.
+This is the **primary memory trigger** — fires unconditionally, after the reviewers report, and stays quiet: it banks the HANDOFFs to the store and writes no Working Memory block, because remediation after this point dispatches reviewers again and an agent inherits the block as it stood when it spawned. The block is rebuilt after the merge decision (`orchestrate` step 8) and at session end.
 
 Reviewer independence has a second surface that this ordering does not touch: see the
 REVIEWER-MEMORY-CHANNEL clause.
@@ -286,7 +286,7 @@ See also: [Communication Charter](../protocols/pact-communication-charter.md) fo
 ---
 
 **After all reviews complete**:
-1. Synthesize findings into a unified review summary with consolidated recommendations, written to `docs/review/`. After writing it, confirm the review doc exists on disk and is non-empty before continuing.
+1. Synthesize findings into a unified review summary with consolidated recommendations, written to `docs/review/`. The summary carries one row per reviewer `open_questions` entry with its disposition: ruled, deferred with a reason, or superseded. Having nothing to say about a question is a disposition and is recorded as one; leaving a question out is not. After writing the summary, confirm the review doc exists on disk and is non-empty before continuing.
    - **Emit `artifact_paths`**: write a path-only `artifact_paths` journal event pointing at the review doc(s) so the consolidated review is recoverable after garbage-collection independently of any HANDOFF. The review doc is the lead's own product — enumerate its absolute path(s) here, not from any HANDOFF.
      ```bash
      set -e
@@ -316,8 +316,8 @@ JSON
    - **Minor**: Optional fix for this PR
    - **Future**: Out of scope; track as GitHub issue
 
-3. Handle recommendations by severity:
-   - **No recommendations**: If the table is empty (no blocking, minor, or future items), proceed directly to step 4.
+4. Handle recommendations by severity:
+   - **No recommendations**: If the table is empty (no blocking, minor, or future items), proceed directly to step 5.
    - **Blocking**: Automatically address all blocking items:
      - Batch fixes by selecting appropriate workflow(s) based on combined scope:
        - Independent items (no shared files) → `/PACT:comPACT` (invoke concurrently, same or mixed domain)
@@ -344,7 +344,7 @@ JSON
 
        **What greedy auto-authorizes — and ONLY this** <!-- ANCHOR-STABLE: GREEDY-REVERSIBILITY -->: exactly one action class — **reversible, git-tracked auto-delegation of fixes**. Greedy batches findings into the same specialist remediation path the **Blocking** branch above already uses (`/PACT:comPACT` / `/PACT:orchestrate`); every fix lands as a revertible commit on the working branch. Greedy only changes WHO decides to dispatch a reversible fix — the orchestrator, instead of a per-finding user prompt.
 
-       **Never auto-authorized — these stay user-gated**: **merge, PR close, push, branch deletion, publish, or any other irreversible / outward-facing / destructive action**. Greedy NEVER merges, closes, or pushes on the user's behalf; reaching merge readiness (step 4) and the merge checkpoint itself are UNCHANGED — the user still approves them explicitly. Greedy scoped to reversible delegation is precisely what keeps it safe: a directive that appeared to auto-authorize an irreversible action would be correctly refused wholesale.
+       **Never auto-authorized — these stay user-gated**: **merge, PR close, push, branch deletion, publish, or any other irreversible / outward-facing / destructive action**. Greedy NEVER merges, closes, or pushes on the user's behalf; reaching merge readiness (step 5) and the merge checkpoint itself are UNCHANGED — the user still approves them explicitly. Greedy scoped to reversible delegation is precisely what keeps it safe: a directive that appeared to auto-authorize an irreversible action would be correctly refused wholesale.
 
        **Hard SACROSANCT carve-out** <!-- ANCHOR-STABLE: GREEDY-SACROSANCT -->: greedy NEVER overrides a SACROSANCT rule or an established PACT design pattern to satisfy a finding. This exclusion is ABSOLUTE — stronger than, and separate from, the "widely out of scope" soft exclusion below: a fix that is in-scope, cheap, and reversible is STILL excluded if applying it would violate SACROSANCT or an explicit design pattern.
 
@@ -367,7 +367,7 @@ JSON
 
      - Use `AskUserQuestion` tool: "Would you like to review the minor and future recommendations?"
        - Options: **Yes** (review each item) / **No** (skip to merge readiness)
-     - If **No**: Skip to step 4 directly
+     - If **No**: Skip to step 5 directly
      - If **Yes**: Continue to Step B
 
      **Step B — Preemptive Context Gathering**:
@@ -427,7 +427,7 @@ JSON
          - Group all future="Create GitHub issue" items → Create GitHub issues
        - If any items fixed (minor or future addressed now) → re-run review to verify fixes only (see Verify-Only Re-Review above)
 
-4. State merge readiness (only after ALL blocking fixes complete AND minor/future item handling is done): "Ready to merge" or "Changes requested: [specifics]"
+5. State merge readiness (only after ALL blocking fixes complete AND minor/future item handling is done AND every reviewer `open_questions` entry carries a disposition in the review doc): "Ready to merge" or "Changes requested: [specifics]"
 
    > **Non-mocked seam-integration-test gate (projects with runtime hooks).** If this PR adds or changes a runtime hook whose observable value depends on an integration seam (task-dir resolution, the real session journal/inbox, an env-keyed path, or the platform task store), it MUST include at least one test that exercises that *real* seam rather than mocking it — a mocked-only suite can stay green while the one broken seam is the one every test stubs. See the non-mocked seam-test pattern in the pact-testing-strategies skill; the seam-dependent hook set is the SSOT in `hooks/shared/hook_infra_classifier.py`. Not applicable to projects without runtime hooks.
 
@@ -441,7 +441,7 @@ JSON
 JSON
    ```
 
-5. **Calibration save**:
+6. **Calibration save**:
 
    ```
    TaskCreate(subject="secretary: save review calibration",
@@ -453,7 +453,7 @@ JSON
 
    **Verify agent task completion**: After each reviewer completes, check their task status via `TaskList`. If still "in_progress", mark it completed: `TaskUpdate(taskId, status="completed")`.
 
-6. ⚠️ **Merge Authorization Checkpoint**
+7. ⚠️ **Merge Authorization Checkpoint**
 
    Merge is irreversible. MANDATORY: always use `AskUserQuestion` to request merge authorization. Issue exactly ONE single-select `AskUserQuestion`: this single prompt is BOTH the merge decision AND the authorization — the "Yes, merge" option IS the decision. Do NOT precede it with a separate "should we merge?" question, and do NOT follow it with a second approval prompt; a normal merge is one prompt, not a re-prompt loop.
 

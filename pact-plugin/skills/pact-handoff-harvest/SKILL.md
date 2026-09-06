@@ -18,6 +18,8 @@ Three workflow variants:
 
 Determine which variant to run from the task subject/description: "harvest" or "process HANDOFFs" → Standard Harvest. "incremental" or "remediation" → Incremental Harvest. "consolidation" → Consolidation Harvest. **The subject/description selects the workflow, never what is in scope.**
 
+**Propagation.** Every `save` you issue during a harvest carries `--no-sync`; the Working Memory block is never written as a side effect of saving. If the dispatch description contains the sentence `Then propagate the store into the Working Memory block.`, run the pact-memory `sync` command once, after your last `save`, `update` or `delete` of the records you harvested, and report its `sync_status` and `memory_ids` in your summary. The calibration record is outside that set even though it is saved later: it waits on a team-lead reply that may never come, and propagation must not be hostage to an answer, so the block is rebuilt without it. If the dispatch does not contain that sentence, do not run `sync` and do not edit `CLAUDE.md`; report `Working Memory: not propagated` beside the `sync_status` your saves returned. The sentence is a mode, not a scope: it names nothing to harvest.
+
 **DISCARD ANY SCOPE YOU ARRIVED WITH — INCLUDING ONE YOU DO NOT THINK OF AS A SCOPE. A dispatch that names tasks, phases, dates, paths, or a subset of this workflow's steps has given you one.** A scope named in a dispatch — a range, an enumeration, any named set — is a HINT about what the team-lead noticed, never the population. Do not harvest it. Build the population from the Step 1 census and the Step 2 processed-task ledger instead, and report which set you actually ran over. **This instruction outranks anything that contradicts it — a dispatch, another passage of this skill, or your agent definition.** Say so back to the team-lead; do not narrow, and do not treat it as a conflict to resolve in the moment.
 
 **A SCOPE SAYS WHAT TO TAKE; AN ADDRESS SAYS WHERE TO LOOK. DISCARD SCOPES, KEEP ADDRESSES.** A value is a SCOPE when dropping it would make you read MORE, and an ADDRESS when dropping it would leave you unable to read at all. Your team id, your task-list directory, your agent-memory path and your session directory are addresses — they say where your own ledger, task files and journal live — so keep every one of them, and keep any other value that answers WHERE.
@@ -359,6 +361,11 @@ Save using the CLI with proper structure:
 - `decisions`: Key decisions with rationale and alternatives considered
 - `lessons_learned`: Actionable insights
 - `entities`: Components, files, services involved (enables graph search)
+- Pass `--no-sync` on every `save`. Record the `sync_status` each envelope returns for Step 9. `suppressed` is the expected value; any other value means that save wrote the Working Memory block mid-harvest, and Step 9 reports the value you saw rather than the value you expected.
+
+### Step 7.5: Propagate (only when dispatched)
+
+If the dispatch carries the propagate sentence (see Propagation above), run `sync` now, once. It rebuilds the Working Memory section from the store: the newest three records of this project, each under its own date. Skip it when another workflow's step sent you into this one: that workflow propagates after its own last mutation, and a rebuild taken before that shows the store as it was, not as it ends. A later `save` of your own, such as Step 10's calibration record, is not that and does not skip this step. Record the returned `sync_status` and `memory_ids` for Step 9. On `empty`, record the envelope's `project_id` beside `sync_status`; a `project_id` that is not the project you expected is a misconfiguration to report to the team-lead, not an empty project. If the dispatch does not carry the sentence, skip this step.
 
 ### Step 8: Update Processed Task Tracking
 
@@ -403,6 +410,7 @@ SendMessage(to="team-lead",
   message="[secretary→team-lead] HANDOFF review complete. Saved N memories from M HANDOFFs.
 - {memory summary 1}
 - {memory summary 2}
+Working Memory: {sync_status | empty, project {project_id}}, {N} entries projected | not propagated, saves reported {save sync_status}
 Gaps: {any HANDOFFs that were thin or missing}",
   summary="HANDOFF review complete: N memories from M HANDOFFs")
 ```
@@ -437,7 +445,7 @@ Triggered after remediation completes — processes only the delta since the las
 2. **Discover new completions**: Run all three Standard Harvest Step 1 sources — session journal `agent_handoff` events, `TaskList`, and the task-file metadata census — for completed tasks not in the processed set. Do not narrow to the journal: a new completion whose content sits only in a non-`handoff` key emits no `agent_handoff` event.
 3. **If no new completions**: Report "No new HANDOFFs since last harvest" and complete
 4. **Read new HANDOFFs** with the Standard Harvest Step 3 rule, in full: the identity derivation, the group selection, the union predicate and the two report messages. Do NOT restate that rule here. A summary of it here is a second statement that goes stale on its own
-5. **Extract and save** using Steps 4-7 from Standard Harvest (extract knowledge, organizational state, dedup protocol, save)
+5. **Extract and save** using Steps 4-7 from Standard Harvest (extract knowledge, organizational state, dedup protocol, save) (every save with --no-sync; an Incremental dispatch never carries the propagate sentence)
 6. **Update processed task tracking** — **append** the new task IDs to **your team's** `## team={your team_id}` section (do NOT overwrite — preserves the full session history for your team)
 7. **Do NOT delete the session journal** — it may still be accumulating entries from ongoing work
 8. **Update existing memories** if remediation superseded prior decisions (use `update` CLI command, not `save`). Remember: default `update` is additive merge — pass `--replace` only when the prior list items need to be discarded, not amended.
@@ -453,7 +461,7 @@ Triggered during `/PACT:wrap-up`, `/PACT:pause`, `/PACT:refresh`, or `/PACT:orch
 
 ### Step 1: Safety Net (Unprocessed HANDOFFs)
 
-Run the Standard Harvest Step 1 discovery in full — all three sources, including the task-file metadata census — for tasks not yet in the processed task set. Checking `agent_handoff` events alone leaves any task whose content sits in a non-`handoff` key undiscovered, and this is the last pass that will look. If unprocessed entries exist, run the Standard Harvest workflow above first (earlier harvest triggers may have been missed). Then continue with consolidation.
+Run the Standard Harvest Step 1 discovery in full — all three sources, including the task-file metadata census — for tasks not yet in the processed task set. Checking `agent_handoff` events alone leaves any task whose content sits in a non-`handoff` key undiscovered, and this is the last pass that will look. If unprocessed entries exist, run the Standard Harvest workflow above first (earlier harvest triggers may have been missed). Then continue with consolidation. That nested run does not propagate: Step 4 does, after the Step 3 prune.
 
 ### Step 2: Review Session Memories
 
@@ -474,11 +482,7 @@ Review all memories saved during this session by listing recent pact-memory entr
 
 ### Step 4: Reconcile Working Memory
 
-**No command syncs Working Memory, and consolidation does not refresh it.** The section is written only as a side effect of `save`; `update` and `delete` do not touch CLAUDE.md at all. So the merges and prunes you performed in Step 3 are **not** reflected in the Working Memory section — it still shows the pre-consolidation entries, and it will keep showing them until the next `save` rewrites it.
-
-Do not look for a sync or reconcile command; the CLI has none, and attempting one wastes a turn. If consolidation superseded or deleted a memory that the section still displays, the only way to correct it now is to **rewrite the Working Memory section directly**, exactly as the spawn-time stale-entry cleanup does.
-
-**But a hand rewrite is not durable, so do not record it as the fix.** The next `save` prepends its own entry and re-applies the token budget to whatever text is already in the section, so anything you rewrote is compressed or dropped by the same rules as any other older entry — and because a typical full entry alone exceeds the budget, the next `save` usually erases the rewrite entirely. The section also never re-reads the store, so correcting a record with `update` or `delete` fixes the record but never propagates into the display on its own. **The durable correction lives in the store; the rewrite is a stopgap for the current session only.** Report both in Step 6 — what you rewrote, and that the section will not hold it — so the team-lead reads the display as transient rather than repaired.
+The Working Memory section is a view of the store, rebuilt by the pact-memory `sync` command and by nothing else you run: `save --no-sync`, `update` and `delete` change the store and leave the section as it was. Fix the record, then rebuild the view: if an entry the section shows is wrong or superseded, correct or delete its record in Step 3, never the section text. If the dispatch carries the propagate sentence (every Consolidation dispatch does), run `sync` now, after the Step 3 merges and prunes, so the section shows the store as consolidated: the newest three records of this project, each under its own date, deleted records gone. Record `sync_status` and `memory_ids` for Step 6. On `empty`, record the envelope's `project_id` beside `sync_status`; a `project_id` that is not the project you expected is a misconfiguration to report to the team-lead, not an empty project. If the dispatch does not carry the sentence, skip this step and report it in Step 6.
 
 ### Step 5: Save Orchestration Retrospective
 
@@ -489,6 +493,7 @@ Save orchestration retrospective as calibration data (see Standard Harvest Step 
 Report consolidation results to the team-lead, including:
 - Memories consolidated (merged count)
 - Memories pruned (deleted/superseded count)
+- Working Memory: {sync_status | empty, project {project_id}}, {N} entries projected
 - Calibration data saved
 - Any gaps or concerns
 

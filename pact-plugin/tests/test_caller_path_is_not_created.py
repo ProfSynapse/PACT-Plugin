@@ -75,6 +75,7 @@ _MINIMAL_ARGS = {
     "status": (),
     "update": ("a" * 32, '{"context": "x"}'),
     "delete": ("a" * 32,),
+    "sync": (),
 }
 
 _NON_EXEMPT_COMMANDS = sorted(

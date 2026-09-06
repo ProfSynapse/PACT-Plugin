@@ -63,8 +63,10 @@ from .search import (
     get_search_capabilities
 )
 from .working_memory import (
+    MAX_WORKING_MEMORIES,
     AmbientSyncRefused,
     SyncResult,
+    project_memories_to_claude_md,
     sync_to_claude_md,
     sync_retrieved_to_claude_md,
 )
@@ -423,27 +425,28 @@ class PACTMemory:
 
     @property
     def last_sync_status(self) -> Optional[str]:
-        """Outcome of the most recent save()'s CLAUDE.md sync.
+        """Outcome of the most recent save() or sync() CLAUDE.md write.
 
         One of `SyncResult`'s reasons: `wrote`, `refused`, `suppressed`,
-        `unresolved`, `missing`, `failed` or `no_window`. None means no save
-        has run yet on this instance.
+        `unresolved`, `missing`, `failed` or `no_window`, plus `empty` on the
+        sync() path (this project has no records; the file was not touched).
+        None means neither has run yet on this instance.
 
-        THIS LIST IS THE REACHABLE SET AND NOT THE FULL ENUM. `empty` is a
-        reason of `SyncResult` that only the retrieved-context writer returns,
-        and no save can produce it here. A reader who takes this list for the
-        enum will look for a case that cannot arrive.
+        THIS LIST IS THE REACHABLE SET AND NOT THE FULL ENUM. `empty` never
+        arrives from a save, and `suppressed` never arrives from a sync. A
+        reader who takes this list for the enum will look for a case that
+        cannot arrive on the path they are reading.
 
         READ THIS BESIDE `last_embedding_status`, BECAUSE THE TWO DIFFER IN
         MORE THAN POLARITY. That one is PARTIAL: it reports a PROBLEM, and it
         is None when the embedding succeeded. This one is TOTAL: it names the
         outcome in every case, `wrote` included.
 
-        So an ABSENT `sync_status` NEVER MEANS SUCCESS. It means no save has
-        run. Reading absence as success is the exact inference this channel
-        exists to make impossible -- a refused sync and a suppressed one used
-        to be one indistinguishable silence, and treating silence as a good
-        outcome is how that silence stayed invisible.
+        So an ABSENT `sync_status` NEVER MEANS SUCCESS. It means neither a
+        save nor a sync has run. Reading absence as success is the exact
+        inference this channel exists to make impossible -- a refused sync and
+        a suppressed one used to be one indistinguishable silence, and treating
+        silence as a good outcome is how that silence stayed invisible.
         """
         return self._last_sync_status
 
@@ -1087,6 +1090,47 @@ class PACTMemory:
                 memories.append(memory_from_db_row(memory_dict, file_paths))
 
             return memories
+
+    @_with_store_scope
+    def sync(self, claude_md_root: Optional[Path] = None) -> List[str]:
+        """Rebuild CLAUDE.md's Working Memory section from the store.
+
+        Stateless: the newest MAX_WORKING_MEMORIES records of this project
+        replace whatever the section holds. Returns the ids projected, newest
+        first, when the file was written; [] otherwise. `last_sync_status`
+        carries the outcome as for save(); `empty` means nothing was
+        projected -- no project id resolved, or the project has no records --
+        and the file was not touched.
+        """
+        self._last_sync_status = None
+        if self._project_id is None:
+            # REFUSE BEFORE THE QUERY, NOT AFTER IT. `list_memories` applies
+            # its `project_id = ?` condition only when the id is non-None, so
+            # passing None selects the newest records of EVERY project, and
+            # this method would write those foreign records over this file's
+            # section. A project with no id has no records, so `empty` is the
+            # correct answer on its own terms. The envelope's `project_id`
+            # reports the None beside it, which is what makes it diagnosable.
+            self._last_sync_status = SyncResult.EMPTY
+            return []
+        records = self.list(limit=MAX_WORKING_MEMORIES)
+        payload = [r.to_dict() for r in records]
+        try:
+            result = project_memories_to_claude_md(
+                payload, claude_md_root=claude_md_root
+            )
+            self._last_sync_status = result.reason
+        except AmbientSyncRefused as e:
+            # Same two-handler shape as save(): the refusal is deliberate and
+            # already on the structured channel, so DEBUG, not WARNING.
+            self._last_sync_status = SyncResult.REFUSED
+            logger.debug(f"Refused to sync to CLAUDE.md: {e}")
+        except Exception as e:
+            self._last_sync_status = SyncResult.FAILED
+            logger.warning(f"Failed to sync to CLAUDE.md: {e}")
+        if self._last_sync_status != SyncResult.WROTE:
+            return []
+        return [r.id for r in records]
 
     @_with_store_scope
     def get_status(self) -> Dict[str, Any]:

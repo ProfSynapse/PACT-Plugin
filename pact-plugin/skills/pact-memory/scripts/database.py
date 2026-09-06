@@ -285,8 +285,18 @@ def init_schema(conn: sqlite3.Connection) -> None:
             disagreements_resolved TEXT,
             project_id TEXT,
             session_id TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now'))
+            -- NOT NULL AND NO DEFAULT, SO AN OMITTING INSERT FAILS RATHER
+            -- THAN INVENTING A STAMP. A default has to pick a format, and
+            -- `datetime('now')` picks a different one from the sole writer's
+            -- `datetime.now(timezone.utc).isoformat()`; TEXT compares
+            -- bytewise, so the two forms interleave wrongly and the rowid
+            -- tiebreak cannot rescue it -- a wrong comparison is not a tie.
+            -- Dropping the default alone would be worse than keeping it:
+            -- the column would take NULL, which sorts lowest, burying the
+            -- row last forever instead of merely misplacing it.
+            -- Existing stores keep the schema they were created with.
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
     """)
 
@@ -322,6 +332,47 @@ def init_schema(conn: sqlite3.Connection) -> None:
     """)
 
     # Create indexes for efficient queries
+    #
+    # BEFORE ADDING AN INDEX THAT WOULD BECOME THE SOURCE OF THE ORDERING for
+    # the two `created_at DESC, rowid DESC` queries, read the tied-rows arm in
+    # tests/test_working_memory_fidelity.py
+    # (TestTheStoreIsWhatTheNextSyncShows). It is the arm at risk: it catches
+    # DELETING the tiebreak only because of where the ordering comes from
+    # TODAY. Catching a FLIP to `rowid ASC` is not at risk anywhere, because
+    # ascending reverses descending whenever two rows tie, whatever the plan.
+    # The sibling arm in tests/test_memory_database.py
+    # (TestSearchMemoriesByText) already cannot see a deletion and says so.
+    #
+    # WHAT HAPPENS TODAY: the planner takes idx_memories_project for the
+    # filter and then SORTS through a temp b-tree, and that sorter emits tied
+    # rows in ASCENDING rowid -- the reverse of what `rowid DESC` produces. So
+    # deleting the tiebreak reverses the result and an arm goes red.
+    #
+    # WHAT AN INDEX WOULD CHANGE: once the ordering is served by an index walk
+    # instead, the tie order becomes the index's. Measured on this schema with
+    # four tied rows: under `(project_id, created_at)` -- ASCENDING, the shape
+    # someone optimising this sort would naturally write -- the query plan
+    # carries no sort at all and deleting the tiebreak returns exactly what
+    # keeping it returns, so that deletion becomes undetectable with nothing
+    # red. Under `(project_id, created_at DESC)` the deletion still reverses
+    # the result and stays detected. The index that looks tailored to a DESC
+    # order-by is the safe one; the plain ascending index is the one that
+    # silences. That is a measured example on one fixture and not a law: the
+    # planner is cost-based and may choose differently at other table sizes.
+    #
+    # idx_memories_created BELOW IS ALREADY SUCH AN ASCENDING INDEX AND
+    # SILENCES NOTHING, because the planner does not use it here -- the filter
+    # is on project_id, so idx_memories_project wins and the sort still runs.
+    # It is a near miss rather than a counterexample.
+    #
+    # WHAT SURVIVES AN INDEX EITHER WAY: TestTheTiebreakReachesTheEngine in
+    # tests/test_memory_database.py asserts the clause in the statement handed
+    # to the engine and never looks at rows, so a deletion still reddens on
+    # every plan. An index costs the output arm's deletion coverage, not all
+    # of it.
+    #
+    # This is a condition on adding an index, not a prohibition. The sort is
+    # unneeded overhead today, not forbidden forever.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at)")
@@ -1335,7 +1386,8 @@ def list_memories(
         offset: Number of results to skip (default 0).
 
     Returns:
-        List of memory dictionaries, ordered by created_at DESC.
+        List of memory dictionaries, ordered by created_at DESC. Two records
+        sharing a created_at come newest-inserted first.
     """
     ensure_initialized(conn)
 
@@ -1354,7 +1406,14 @@ def list_memories(
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
 
-    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    # DETERMINISM INSURANCE, NOT A TIE THIS PATH EXPECTS TO SEE. The only
+    # writer stamps `created_at` with `datetime.now(timezone.utc).isoformat()`
+    # -- microsecond precision -- so saves do not tie, not even several inside
+    # one second. What CAN tie is a row written by the schema DEFAULT, whose
+    # format differs from the writer's (see the CREATE TABLE), or a row whose
+    # stamp was set by direct SQL. rowid rises with insertion, so where a tie
+    # does arise the order is the insertion order rather than an arbitrary one.
+    query += " ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
 
     cursor = conn.execute(query, params)
@@ -1410,7 +1469,14 @@ def search_memories_by_text(
         query += " AND project_id = ?"
         params.append(project_id)
 
-    query += " ORDER BY created_at DESC LIMIT ?"
+    # SAFE BECAUSE THIS ORDER CARRIES NO RELEVANCE, NOT BECAUSE NOTHING READS
+    # IT. Something does: the hybrid scorer's keyword-fallback branch turns a
+    # result's POSITION here into its score. But this is a substring LIKE
+    # search with no relevance signal of any kind, so the order was already
+    # pure recency, and adding the tiebreak reshuffles only records that are
+    # equally recent. Ranked search is the vector path's own ORDER BY on
+    # distance, which this does not touch.
+    query += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
     params.append(limit)
 
     cursor = conn.execute(query, params)

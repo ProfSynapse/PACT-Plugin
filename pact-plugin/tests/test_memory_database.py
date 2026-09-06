@@ -47,6 +47,39 @@ def db_conn(tmp_path):
 # Schema initialization
 # ---------------------------------------------------------------------------
 
+class TestTimestampColumnsAreRequired:
+    """Built through PRODUCTION's own `ensure_initialized`, NOT the fixture.
+
+    `db_conn` and every other schema in this suite is a test-local copy, so
+    none of them can see a change to production's CREATE TABLE. This class
+    exists because that makes a green suite no evidence about this column.
+    """
+
+    def _production_schema(self, tmp_path):
+        from scripts.database import ensure_initialized
+        conn = sqlite3.connect(str(tmp_path / "prod.db"))
+        ensure_initialized(conn)
+        return conn
+
+    @pytest.mark.parametrize("column", ["created_at", "updated_at"])
+    def test_an_insert_omitting_a_timestamp_is_refused(self, tmp_path, column):
+        conn = self._production_schema(tmp_path)
+        supplied = "updated_at" if column == "created_at" else "created_at"
+        with pytest.raises(sqlite3.IntegrityError, match=f"NOT NULL.*{column}"):
+            conn.execute(
+                f"INSERT INTO memories (id, {supplied}) VALUES ('x', '2026-01-01')"
+            )
+
+    def test_supplying_both_is_accepted(self, tmp_path):
+        """Control: the refusal above is about the omission, not the insert."""
+        conn = self._production_schema(tmp_path)
+        conn.execute(
+            "INSERT INTO memories (id, created_at, updated_at)"
+            " VALUES ('x', '2026-01-01', '2026-01-01')"
+        )
+        assert conn.execute("SELECT count(*) FROM memories").fetchone()[0] == 1
+
+
 class TestSchemaInit:
     def test_creates_memories_table(self, db_conn):
         cursor = db_conn.execute(
@@ -671,6 +704,115 @@ class TestSearchMemoriesByText:
     def test_empty_results(self, db_conn):
         from scripts.database import search_memories_by_text
         assert search_memories_by_text(db_conn, "nonexistent") == []
+
+    def test_records_sharing_a_created_at_come_newest_inserted_first(self, db_conn):
+        """This pins the DIRECTION of the `rowid` tiebreak, not its presence.
+
+        MEASURED DETECTION SET, so nobody has to re-run the ablation. Deleting
+        `, rowid DESC` does NOT redden this arm: SQLite already emits tied rows
+        in reverse rowid order under this plan, so the clause and its absence
+        are indistinguishable through the query's public behaviour. Changing it
+        to `rowid ASC` DOES redden it. So the clause's role as insurance -- for
+        a tie between rows the schema DEFAULT wrote -- stays UNTESTED, and it
+        stays untested for a reason internal to this query rather than because
+        anyone judged it unnecessary. No OUTPUT arm can cover it while removal
+        and presence produce the same rows, which is why the cover is
+        TestTheTiebreakReachesTheEngine below: it asserts the clause in the
+        statement the engine is handed and so does not need the rows to
+        differ.
+
+        THAT IS THE MUTATION WORTH CATCHING, because anyone optimising this
+        query's sort has a reason to flip the direction: an index on
+        `(project_id, created_at DESC)` still needs a temp b-tree for the last
+        term under `rowid DESC` and needs none under `rowid ASC`. DESC is what
+        makes a projection match the order the saves went in, so the flip
+        trades a correctness property for a sort this query does not need.
+        Measured, and narrower than it first looks: an ASCENDING index on
+        `(project_id, created_at)` satisfies `created_at DESC, rowid DESC`
+        outright with no sort, by scanning backward. So it is the DESC index
+        that cannot fully serve `rowid DESC`, not indexes in general.
+
+        The shared stamp is set by direct SQL because that is the only way to
+        reach the clause. `create_memory` stamps microsecond ISO and ignores a
+        caller's value, so saves cannot tie; in production a tie is reachable
+        only from a row the schema DEFAULT wrote.
+        """
+        from scripts.database import create_memory, search_memories_by_text
+        ids = [create_memory(db_conn, {"context": f"tied probe {i}"})
+               for i in range(3)]
+        db_conn.execute("UPDATE memories SET created_at = '2026-01-01 00:00:00'")
+        db_conn.commit()
+
+        # THE TIE IS A PRECONDITION AND IS ASSERTED, NOT ASSUMED. Distinct
+        # stamps produce this same expected order under `created_at DESC`
+        # alone, so a backdate that silently did nothing would leave the arm
+        # green while exercising no tie at all.
+        stamps = {r[0] for r in db_conn.execute("SELECT created_at FROM memories")}
+        assert len(stamps) == 1, f"the rows must tie; got {sorted(stamps)}"
+
+        found = [r["id"] for r in search_memories_by_text(db_conn, "tied probe")]
+
+        assert found == list(reversed(ids)), (
+            "tied rows must come back newest-inserted first; got the order "
+            f"{found} for insertion order {ids}"
+        )
+
+
+class TestTheTiebreakReachesTheEngine:
+    """Both ordering queries ASK the engine for `rowid DESC`, on any plan.
+
+    PLAN-INDEPENDENT BY CONSTRUCTION: these read the statement the driver is
+    handed and never look at rows, so they hold under every plan -- including
+    the ascending-index plan on which deleting the tiebreak returns identical
+    rows, where no output-based check can see the deletion at all. That is the
+    gap these close, and it is why the arms above cannot close it themselves.
+
+    WHAT THIS PROVES: the clause is asked for. WHAT IT DOES NOT: that the
+    clause has any effect, or that the ordering is correct. Those remain with
+    the output arms, which are not redundant -- they pin what the ordering
+    DOES under today's plan, which this cannot.
+
+    ITS OWN CONDITION, stated because removing a contingency must not add a
+    quieter one: this pins the clause AS TEXT, whitespace-normalised. A
+    deliberate rewrite of the ordering into an equivalent form must update
+    these arms; they will redden on such a rewrite though behaviour is right.
+    """
+
+    def _order_by_of_the_one_ordering_statement(self, tmp_path, call):
+        """The ORDER BY tail of the single ordering statement `call` issued.
+
+        Asserting the count is what makes the result attributable: with two
+        sites carrying the identical clause, a check that searched everything
+        traced could pass on evidence produced by the other query.
+        """
+        from scripts.database import ensure_initialized
+        conn = sqlite3.connect(str(tmp_path / "traced.db"))
+        ensure_initialized(conn)
+        seen = []
+        conn.set_trace_callback(seen.append)
+        call(conn)
+        conn.set_trace_callback(None)
+        ordered = [" ".join(s.split()) for s in seen if "ORDER BY" in s]
+        assert len(ordered) == 1, (
+            "this call must issue exactly one ordering statement or the "
+            f"assertion cannot be attributed to it; got {len(ordered)}"
+        )
+        return ordered[0].split("ORDER BY", 1)[1].strip()
+
+    def test_the_paged_list_asks_for_the_tiebreak(self, tmp_path):
+        from scripts.database import list_memories
+        clause = self._order_by_of_the_one_ordering_statement(
+            tmp_path, lambda c: list_memories(c, project_id="p", limit=3)
+        )
+        assert clause.startswith("created_at DESC, rowid DESC"), clause
+
+    def test_the_text_search_asks_for_the_tiebreak(self, tmp_path):
+        from scripts.database import search_memories_by_text
+        clause = self._order_by_of_the_one_ordering_statement(
+            tmp_path,
+            lambda c: search_memories_by_text(c, "probe", project_id="p", limit=3),
+        )
+        assert clause.startswith("created_at DESC, rowid DESC"), clause
 
 
 # ---------------------------------------------------------------------------

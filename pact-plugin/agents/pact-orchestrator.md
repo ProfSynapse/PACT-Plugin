@@ -637,22 +637,20 @@ The secretary returns relevant memory entries with IDs — historical context, n
 
 At these workflow boundaries, create a task for the secretary referencing the `pact-handoff-harvest` skill:
 
-- After CODE phase completes, once no auditor task is `pending` or `in_progress` → Standard Harvest (`orchestrate`)
-- After all phases complete, once the user has decided on merge → Standard Harvest (`orchestrate`) (idempotent — safe if already processed at the CODE boundary)
+- After CODE phase specialists have reported → Standard Harvest (`orchestrate`)
+- After all phases complete, once the user has decided on merge → Standard Harvest (`orchestrate`) (idempotent — safe if already processed at the CODE boundary) — propagates
 - After every reviewer has reported → Standard Harvest (`peer-review`) (**PRIMARY trigger**, fires unconditionally). Waiting until reviewers report means a session dying mid-review has not yet banked those HANDOFFs; the harvest's orphan-recovery path recovers the completed ones. A reviewer that died before writing its HANDOFF left nothing for any layer to recover, which is why waiting here costs nothing: that HANDOFF is the harvest's own input.
 - After remediation completes → Incremental Harvest (`peer-review`) (delta only, only if remediation occurred)
-- After comPACT specialists complete, once no auditor task is `pending` or `in_progress` → Standard Harvest (`comPACT`)
+- After comPACT specialists have reported → Standard Harvest (`comPACT`)
 - After a planning consultation completes → Standard Harvest (`plan-mode`)
-- During wrap-up → Consolidation Harvest (`wrap-up`) (Pass 2) with safety net for unprocessed HANDOFFs
-- At session pause → Consolidation Harvest (`pause`)
-- At a mid-session context refresh → Consolidation Harvest (`refresh`)
-- After a second or subsequent feature completes in one session → Consolidation Harvest (`orchestrate`)
+- During wrap-up → Consolidation Harvest (`wrap-up`) (Pass 2) with safety net for unprocessed HANDOFFs — propagates
+- At session pause → Consolidation Harvest (`pause`) — propagates
+- At a mid-session context refresh → Consolidation Harvest (`refresh`) — propagates
+- After a second or subsequent feature completes in one session → Consolidation Harvest (`orchestrate`) — propagates
 
 These triggers are idempotent — safe to fire even if HANDOFFs were already processed.
 
-Never fire a phase-boundary harvest (Standard, Incremental) while an agent whose value is independent judgement still has that judgement in flight — a reviewer whose HANDOFF has not arrived, or an auditor whose task is still `pending` or `in_progress`. The harvest writes to the `CLAUDE.md` Working Memory block, and the platform pushes that block into every live agent's context.
-
-The Consolidation Harvests are EXEMPT and must run even while teammates are alive, because at those boundaries no judgement is in flight: `wrap-up` is end-of-session cleanup, so every reviewer has already reported; `orchestrate`'s mid-session consolidation runs only after the merge decision and the retrospective, so nothing is awaiting judgement; and `pause` and `refresh` both make consolidation CRITICAL before the shutdown that immediately follows — deferring it there would strand the HANDOFFs the harvest exists to save. The exemption goes stale the moment a Consolidation Harvest is dispatched where a reviewer or auditor has not yet reported: the test is whether judgement is in flight, never the variant's name.
+A harvest never writes the `CLAUDE.md` Working Memory block on its own: every harvest `save` is `--no-sync`. The block is a view of the pact-memory store, rebuilt only by the `sync` command, which a harvest runs when its dispatch carries the sentence `Then propagate the store into the Working Memory block.` An agent inherits the block as it stood when it spawned, so that sentence may appear only at a boundary after which no agent whose value is independent judgement — a reviewer, an auditor, a test engineer, or any agent whose value is reaching conclusions independently — spawns before a later harvest. Those boundaries are: after the merge decision (`orchestrate`, both the post-review Standard Harvest and the mid-session Consolidation Harvest), and the Consolidation Harvests of `wrap-up`, `pause` and `refresh`. Every other dispatch stays quiet, which is safe because the secretary rebuilds the block from the store with `sync` when it spawns, before that session's first independent-judgement agent exists; keep that spawn-time `sync` and this quiet default together. The test is whether an independent-judgement agent will spawn before a later harvest, never the variant's name.
 
 NOTE: For ad-hoc work outside defined PACT workflows → `SendMessage(to="secretary", message="[team-lead→secretary] Save: {what and why}", summary="Save request: {topic}")`
 

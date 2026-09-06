@@ -655,3 +655,54 @@ class TestLedgerPruneRulings:
         step8 = skill_content[start:end]
         assert "exact on-disk names" in step8
         assert "resolve-session-dir" in step8
+
+
+class TestWorkingMemoryIsAViewOfTheStore:
+    """Harvests write the store; the Working Memory section is rebuilt from it
+    by `sync`, and only when the dispatch says so. Each arm pins a phrase the
+    quiet-harvest rule needs; removing it reopens a hand edit or a silent
+    block write."""
+
+    PROPAGATE_SENTENCE = "Then propagate the store into the Working Memory block."
+
+    def _step_4(self, skill_content):
+        start = skill_content.find("### Step 4: Reconcile Working Memory")
+        assert start != -1
+        end = skill_content.find("\n### Step 5", start)
+        assert end != -1
+        return skill_content[start:end]
+
+    def test_consolidation_step_4_rebuilds_with_sync_and_never_by_hand(self, skill_content):
+        step4 = self._step_4(skill_content)
+        assert "`sync`" in step4
+        assert "No command syncs Working Memory" not in step4
+        assert "rewrite the Working Memory section directly" not in step4
+        assert "exceeds the budget" not in step4
+
+    def test_preamble_states_the_propagation_rule(self, skill_content):
+        preamble = skill_content[:skill_content.find("## Standard Harvest Workflow")]
+        assert preamble, "the Standard Harvest heading moved; the preamble slice is empty"
+        assert self.PROPAGATE_SENTENCE in preamble
+        assert "--no-sync" in preamble
+
+    def test_propagate_step_sits_between_save_and_tracking(self, skill_content):
+        step7 = skill_content.find("### Step 7: Save to pact-memory")
+        step75 = skill_content.find("### Step 7.5: Propagate (only when dispatched)")
+        step8 = skill_content.find("### Step 8: Update Processed Task Tracking")
+        assert -1 not in (step7, step75, step8), (step7, step75, step8)
+        assert step7 < step75 < step8, (step7, step75, step8)
+
+    def test_secretary_rebuilds_at_spawn_instead_of_rewriting(self, secretary_content):
+        start = secretary_content.find("1. **Rebuild Working Memory from the store**")
+        assert start != -1
+        end = secretary_content.find("\n2. **Search pact-memory**", start)
+        assert end != -1
+        spawn_step = secretary_content[start:end]
+        assert "`sync`" in spawn_step
+        # The rebuild is the only write to the block, so an editor who makes it
+        # conditional silently reintroduces stale-block reads. Pin the declaration
+        # and its reason, not just the presence of the `sync` token.
+        assert "This step is unconditional" in spawn_step
+        assert "only write" in spawn_step
+        assert "Remove stale entries by rewriting the Working Memory section" not in secretary_content
+        assert "derived view" in secretary_content

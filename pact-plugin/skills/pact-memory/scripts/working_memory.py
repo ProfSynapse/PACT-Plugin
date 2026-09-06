@@ -80,10 +80,12 @@ WORKING_MEMORY_HEADER = "## Working Memory"
 # direction, because only OLDER entries lose their ID. The newest entry is
 # always full and always carries its Memory ID.
 #
-# MIRRORED IN TWO OTHER DEFINITIONS -- `hooks/shared/session_resume.py` and
-# `hooks/shared/claude_md_manager.py`. Change all three in ONE commit: fixing
-# two of three converts one consistent falsehood into a three-way disagreement.
-WORKING_MEMORY_COMMENT = "<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. -->"
+# MIRRORED IN ONE OTHER DEFINITION -- `hooks/shared/claude_md_manager.py`, the
+# only other file that spells this string. Change both in ONE commit: fixing
+# one converts a consistent statement into a disagreement.
+# `hooks/shared/session_resume.py` IMPORTS the name and must not be given a
+# definition of its own; the mirror gate names it the importer for that reason.
+WORKING_MEMORY_COMMENT = "<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. Keyed by folder name, so another checkout with the same name shares this section. -->"
 MAX_WORKING_MEMORIES = 3
 
 # Constants for retrieved context section (searched/retrieved memories)
@@ -1627,10 +1629,29 @@ def _recover_identifier(raw: str) -> str:
     return raw
 
 
+def _record_timestamp(value: Any) -> Optional[datetime]:
+    """Parse a record's `created_at` as stored or as `to_dict()` emits it.
+
+    The writer stores ISO-8601 with a `T`, microsecond precision and a
+    `+00:00` offset, and `MemoryObject.to_dict()` emits that form. The space
+    form `YYYY-MM-DD HH:MM:SS` reaches here only from the schema DEFAULT or
+    from direct SQL. Both parse. A value that parses as neither returns
+    None so the formatter stamps the entry with now: a malformed row still
+    renders, and the header that disagrees with `get` is what shows it.
+    """
+    if value is None or isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
 def _format_memory_entry(
     memory: Dict[str, Any],
     files: Optional[List[str]] = None,
-    memory_id: Optional[str] = None
+    memory_id: Optional[str] = None,
+    created_at: Optional[datetime] = None,
 ) -> str:
     """
     Format a memory as a markdown entry for CLAUDE.md.
@@ -1639,13 +1660,16 @@ def _format_memory_entry(
         memory: Memory dictionary with context, goal, decisions, etc.
         files: Optional list of file paths associated with this memory.
         memory_id: Optional memory ID to include for database reference.
+        created_at: Timestamp for the entry header. None stamps the entry
+            with the current time, which is what a save does; a projection
+            from the store passes the record's own `created_at`.
 
     Returns:
         Formatted markdown string for the memory entry.
     """
     # Get date and time for header
-    now = datetime.now(timezone.utc)
-    date_str = now.strftime("%Y-%m-%d %H:%M")
+    stamp = created_at if created_at is not None else datetime.now(timezone.utc)
+    date_str = stamp.strftime("%Y-%m-%d %H:%M")
 
     lines = [f"### {date_str}"]
 
@@ -2222,17 +2246,28 @@ def _refuse_ambient_sync_from_a_redirected_store(
 
 
 def sync_to_claude_md(
-    memory: Dict[str, Any],
+    memory: Optional[Dict[str, Any]],
     files: Optional[List[str]] = None,
     memory_id: Optional[str] = None,
     target: Optional[Path] = None,
-    claude_md_root: Optional[Path] = None
+    claude_md_root: Optional[Path] = None,
+    *,
+    entries: Optional[List[str]] = None,
 ) -> "SyncResult":
     """
     Sync a memory entry to the Working Memory section of CLAUDE.md.
 
     Maintains a rolling window of AT MOST MAX_WORKING_MEMORIES entries. New
     entries are added at the top of the section, and older ones are removed.
+
+    THE `entries` ARM REPLACES INSTEAD OF PREPENDING. When `entries` is given
+    it is the whole section: the pre-formatted entries, newest first, are
+    written in place of whatever the section holds, and the file's existing
+    entries are not consulted. `memory`, `files` and `memory_id` are ignored
+    on that arm. Everything else -- resolution, both ambient guards, the
+    lock, the splice window, the budget, containment and the `SyncResult` --
+    is the same code on both arms, which is why the replace is a keyword here
+    and not a second writer.
 
     THE COUNT IS A CAP, NOT A PROMISE, and this docstring said "the last 3"
     until the claim was measured. `_apply_token_budget` keeps the newest entry
@@ -2458,11 +2493,16 @@ def sync_to_claude_md(
                 return SyncResult(SyncResult.NO_WINDOW)
             before_section, section_header, after_section, existing_entries = parsed
 
-            # Format new memory entry
-            new_entry = _format_memory_entry(memory, files, memory_id)
-
-            # Build new entries list: new entry first, then existing (up to max - 1)
-            all_entries = [new_entry] + existing_entries
+            if entries is None:
+                # Format new memory entry, then prepend it to the file's own.
+                # A None here is a caller error; the raise lands in the
+                # handler below as FAILED, the same as any other bad input.
+                assert memory is not None, "the prepend arm needs a memory"
+                new_entry = _format_memory_entry(memory, files, memory_id)
+                all_entries = [new_entry] + existing_entries
+            else:
+                # REPLACE: the file's entries are not consulted
+                all_entries = list(entries)
             trimmed_entries = all_entries[:MAX_WORKING_MEMORIES]
 
             # Apply token budget: compress older entries if over budget
@@ -2502,6 +2542,32 @@ def sync_to_claude_md(
     except Exception as e:
         logger.warning(f"Failed to sync memory to CLAUDE.md: {e}")
         return SyncResult(SyncResult.FAILED)
+
+
+def project_memories_to_claude_md(
+    memories: List[Dict[str, Any]],
+    target: Optional[Path] = None,
+    claude_md_root: Optional[Path] = None,
+) -> "SyncResult":
+    """Replace the Working Memory section with `memories`, newest first.
+
+    Each dict is a `MemoryObject.to_dict()`; each entry's header is the
+    record's own `created_at`. Empty input returns EMPTY and touches nothing:
+    the check precedes the guards because nothing would be written, so
+    nothing is refused. Input past MAX_WORKING_MEMORIES is cut to it.
+    """
+    if not memories:
+        return SyncResult(SyncResult.EMPTY)
+    entries = [
+        _format_memory_entry(
+            m, m.get("files") or None, m.get("id"),
+            created_at=_record_timestamp(m.get("created_at")),
+        )
+        for m in memories[:MAX_WORKING_MEMORIES]
+    ]
+    return sync_to_claude_md(
+        None, target=target, claude_md_root=claude_md_root, entries=entries
+    )
 
 
 def _parse_retrieved_context_section(

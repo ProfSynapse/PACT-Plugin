@@ -410,15 +410,12 @@ JSON
   python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status done
   ```
   Report what you wrote. If the write is refused, report the refusal and carry on.
-- [ ] **Process specialist HANDOFFs** (dispatch once no auditor task is `pending` or `in_progress` — a contamination ordering, NOT a verdict wait):
+- [ ] **Process specialist HANDOFFs** (dispatch as soon as the specialists have reported; the auditor need not have finished — this harvest writes no Working Memory block, and a later harvest picks up the auditor's HANDOFF):
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",
     description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
   TaskUpdate(taskId, owner="secretary")
   ```
-  Do NOT move this earlier: the harvest writes to the `CLAUDE.md` Working Memory block, and the
-  platform pushes that block into every live agent's context, so running it alongside the auditor puts
-  this phase's conclusions into the context of the agent whose value is observing independently.
 - [ ] **Journal event**: Write `phase_transition` to mark comPACT completion:
   ```bash
   set -e
