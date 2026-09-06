@@ -242,6 +242,27 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     "session_refresh_consumed": {
         "refresh_ts": str,
     },
+    # commands/bootstrap.md writes session_pause_consumed at CONFIRMED
+    # resumption, symmetric with session_refresh_consumed above. pause_ts
+    # (quoted string) binds the consumption to ONE specific session_paused
+    # event's ts — a later pause is never retired by an earlier consumption.
+    # REQUIRED rather than optional on purpose: _pause_is_spent matches this
+    # value against the claim's ts by exact string compare, so an event that
+    # landed without it would never spend anything, silently and forever.
+    "session_pause_consumed": {
+        "pause_ts": str,
+    },
+    # hooks/session_init.py writes session_resumption_surfaced at step 8, in
+    # THIS session's journal, when check_resume_state produced a resume prompt.
+    # NO REQUIRED FIELDS, and that is the design, not an omission: the reader
+    # (the secretary, at spawn) checks only that the event EXISTS, and presence
+    # is the whole signal. A field carried here would have no reader, which
+    # makes it a drift surface — it can go wrong and nothing notices. The
+    # empty-dict registration is still structurally necessary: it activates
+    # baseline validation for the type rather than letting it fall through the
+    # unknown-type short-circuit, matching session_end / cleanup_summary /
+    # session_consolidated.
+    "session_resumption_surfaced": {},
     # hooks/session_end.py writes session_end with NO required fields — one
     # writer passes an optional `warning` (line 119), the other passes
     # nothing (line 316). commands/wrap-up.md CLI also writes session_end

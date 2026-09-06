@@ -790,13 +790,66 @@ def _check_journal_paused_state(session_dir: str) -> str | None:
     return _interpret_paused_event(event)
 
 
+def _compose_pause_key(event: dict) -> str:
+    """Compose the ` pause_ts=` consumption key for a session_paused event.
+
+    Single composition point shared by ``_interpret_paused_event`` and
+    ``_arbitrate``, so the interpreter and the losing-claim survival path can
+    never render the same event's key differently — the same reason
+    ``_compose_halt_line`` exists on the refreshed side.
+
+    ONE COMPOSITION POINT BECAUSE EVERY SURFACING PATH NEEDS THE KEY, AND
+    ARBITRATION IS ONE OF THEM. Anything that surfaces freezes the Working
+    Memory block for that session, and the write bootstrap makes from this
+    key is the only thing that retires the claim. The interpreter's three
+    prompt branches were covered; the fourth path was not — when a refreshed
+    claim is newer, ``_arbitrate`` returns the refresh prompt plus a bare
+    mention of the paused claim, so a reader was told a claim existed and
+    handed nothing to copy. Measured before the fix: that branch carried
+    `refresh_ts=` and no `pause_ts=`. An agent with nothing to copy either
+    skips the write or improvises from the rendered date, and `_claim_date`
+    renders a DATE, not a ts, so an improvised value can never string-match.
+
+    NOT SANITIZED, and this is the field in this module that must not be:
+    bootstrap copies the value VERBATIM into the consumption event, and
+    ``_pause_is_spent`` matches it against the claim's own ``ts`` by exact
+    string compare. A sanitized echo would never match, so a ts carrying
+    control characters renders UNAVAILABLE instead — failing toward
+    surfacing, which is the safe direction. The refreshed side reaches the
+    same answer through ``ts_valid``; keep the two separate (see
+    ``_pause_is_spent`` on why this module does not merge across the two
+    claim types).
+
+    Returns a leading-space-prefixed clause, always non-empty — a caller can
+    concatenate it unconditionally.
+    """
+    ts = event.get("ts", "")
+    if (
+        isinstance(ts, str)
+        and ts.strip()
+        and not _PROMPT_CONTROL_CHARS_RE.search(ts)
+    ):
+        return f" pause_ts={ts}"
+    return (
+        " pause_ts=UNAVAILABLE — consumption cannot be recorded; "
+        "prompt may re-surface once."
+    )
+
+
 def _interpret_paused_event(event: dict) -> str | None:
     """Interpret an already-read session_paused event into a resume prompt.
 
     Split from _check_journal_paused_state so check_resume_state can feed
     it the event it already read (one journal read per event type). The
-    body is byte-identical to the pre-split logic: pr_number type-narrowing,
-    14-day TTL, `gh` PR-state probe, and the silent-None branches.
+    split changed no DECISION: pr_number type-narrowing, the 14-day TTL,
+    the `gh` PR-state probe and the silent-None branches all resolve as
+    they did before it, and the branch structure is still the pre-split
+    one.
+
+    The PROMPT TEXT is not. Every branch that returns a prompt now appends
+    the ` pause_ts=` consumption key rendered by _compose_pause_key, which
+    bootstrap copies verbatim to retire the claim — so an audit of what
+    this function renders must read the returns, not this sentence.
 
     Fail direction: PR-GATED SILENT-None is CORRECT here — a paused claim
     whose PR is gone (or that never had a valid PR) has nothing to resume.
@@ -814,8 +867,10 @@ def _interpret_paused_event(event: dict) -> str | None:
     if not isinstance(pr_number, int) or isinstance(pr_number, bool) or pr_number <= 0:
         return None
 
-    # TTL check: ts older than 14 days
     ts_str = event.get("ts", "")
+    pause_key = _compose_pause_key(event)
+
+    # TTL check: ts older than 14 days
     if ts_str:
         try:
             paused_at = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
@@ -825,6 +880,7 @@ def _interpret_paused_event(event: dict) -> str | None:
                 return (
                     f"Stale paused state from {paused_date} "
                     f"(older than 14 days). PR #{pr_number} on {branch}."
+                    f"{pause_key}"
                 )
         except (ValueError, TypeError, OverflowError):
             pass
@@ -834,7 +890,7 @@ def _interpret_paused_event(event: dict) -> str | None:
     if pr_state in ("MERGED", "CLOSED"):
         return (
             f"Previously paused PR #{pr_number} has been "
-            f"{pr_state.lower()}."
+            f"{pr_state.lower()}.{pause_key}"
         )
 
     consolidation = event.get("consolidation_completed", False)
@@ -848,7 +904,8 @@ def _interpret_paused_event(event: dict) -> str | None:
     return (
         f"Paused work detected: PR #{pr_number} ({branch}) — awaiting merge. "
         f"Worktree at {worktree_path}. "
-        f"Run /PACT:peer-review to resume review/merge.{consolidation_note}"
+        f"Run /PACT:peer-review to resume review/merge."
+        f"{consolidation_note}{pause_key}"
     )
 
 
@@ -882,6 +939,8 @@ def check_resume_state(
     refreshed = read_last_event_from(prev_session_dir, "session_refreshed")
     if refreshed is not None and _refresh_is_spent(prev_session_dir, refreshed):
         refreshed = None
+    if paused is not None and _pause_is_spent(prev_session_dir, paused):
+        paused = None
     paused_msg = (
         _interpret_paused_event(paused) if paused is not None else None
     )  # may be None (correct for pause)
@@ -1093,15 +1152,98 @@ def _refresh_is_spent(session_dir: str, refreshed: dict) -> bool:
     UNSPENT (return False), so a malformed consumption can never suppress a
     prompt. The `>=` conjunct is a belt on the SUPPRESS direction only: the
     consumption must also be temporally sane (written at-or-after its
-    refresh). It can never wrongly KEEP a prompt (worst case one duplicate),
-    and it blocks the only wrong-spend shape — a consumption record
-    predating its claim.
+    refresh). It can never wrongly KEEP a prompt, and it blocks the only
+    wrong-spend shape — a consumption record predating its claim.
+
+    WHAT KEEPING A PROMPT NOW COSTS, because it is no longer one duplicate.
+    A surfaced claim also makes `session_init` record
+    `session_resumption_surfaced`, and the secretary reads that marker at
+    spawn and SKIPS its Working Memory rebuild. So the price of an UNSPENT
+    failure is a duplicate prompt AND a session whose block is not rebuilt.
+    UNSPENT is still the right direction — a wrongly-rebuilt block hands an
+    arc's own conclusions to the agents whose value is judging it
+    independently, which is the defect this mechanism exists to prevent,
+    while an unrebuilt block is recoverable and does not outlive its session
+    (the marker is written to the CURRENT session dir, the claim is read
+    from the PREVIOUS one, so no marker can freeze two sessions). Weigh both
+    costs before narrowing this predicate, not just the prompt.
     """
     ts = refreshed.get("ts")
     if not isinstance(ts, str) or not ts:
         return False  # fail toward surfacing
     for consumption in read_events_from(session_dir, "session_refresh_consumed"):
         if consumption.get("refresh_ts") != ts:  # exact string match — the ts IS the claim id
+            continue
+        try:
+            if _parse_ts(consumption.get("ts")) >= _parse_ts(ts):
+                return True
+        except Exception:
+            continue  # fail toward surfacing
+    return False
+
+
+def _pause_is_spent(session_dir: str, paused: dict) -> bool:
+    """True iff a session_pause_consumed event retires this paused claim.
+
+    A DELIBERATE MIRROR OF _refresh_is_spent. The two bodies are identical
+    apart from three tokens (`refreshed`/`paused`, `refresh_ts`/`pause_ts`,
+    `session_refresh_consumed`/`session_pause_consumed`) — measured, not
+    estimated — so treat this as a copy kept on purpose and know what the
+    purpose is and is not.
+
+    WHAT ACTUALLY HOLDS THE TWO APART IS THE EVENT TYPE, AND THE TESTS PIN
+    THAT AND NOTHING MORE. `test_a_pause_consumption_does_not_spend_a_refresh`
+    and its mirror assert that the two consumption STREAMS MUST NOT CROSS: a
+    `session_pause_consumed` must never retire a refresh claim, and the
+    reverse. That is the property to preserve. A merge into one helper taking
+    the consumed type and key field as arguments would keep both arms green;
+    what reddens them is a merge that DROPS those arguments. So the tests do
+    not forbid parameterising, and neither does this comment.
+
+    WHAT IS NOT A REASON, stated because it was written here before and is
+    the kind of claim that survives by sounding careful: that the two
+    INTERPRETERS above have opposite fail directions. They do, and it is
+    irrelevant to these two functions. Both predicates fail in the SAME
+    direction — every path lands on UNSPENT — and nothing structural couples
+    a merge here to a merge there; the interpreters differ in signature
+    (`str | None` vs `str`) and are several times the size. An argument about
+    what a later reader might be tempted to do next is not a property of the
+    code, and it should not be doing a measurement's work.
+
+    THREE COPIES REST ON THIS ONE CHOICE, so a change to any one of them
+    needs the other two checked in the same pass: this predicate against
+    `_refresh_is_spent`; `_compose_pause_key`'s validity triple against
+    `_interpret_refreshed_event`'s `ts_valid`; and the `UNAVAILABLE` clause
+    rendered in each. Nothing compares them, so a conjunct tightened in one
+    place stays loose in the other two, silently and with a green suite.
+
+    Fire-once via ts-bound consumption: the paused event's `ts` IS the claim
+    id; a consumption's `pause_ts` must match it exactly (string compare — no
+    parsing on the identity axis). Every failure path lands on UNSPENT (return
+    False), so a malformed consumption can never suppress a prompt. The `>=`
+    conjunct is a belt on the SUPPRESS direction only: the consumption must
+    also be temporally sane (written at-or-after its claim). It can never
+    wrongly KEEP a prompt, and it blocks the only wrong-spend shape — a
+    consumption record predating its claim.
+
+    WHAT KEEPING A PROMPT NOW COSTS, because it is no longer one duplicate —
+    see the same paragraph on `_refresh_is_spent`. A surfaced claim also makes
+    `session_init` record `session_resumption_surfaced`, and the secretary
+    skips its Working Memory rebuild for that session. UNSPENT remains the
+    right direction, and the cost of choosing it is a duplicate prompt AND an
+    unrebuilt block, not a duplicate prompt alone.
+
+    No public wrapper, unlike has_unspent_refresh: that one exists because
+    session_init's compact branch consumes it as a presentation signal. A
+    pause counterpart has no caller, and an exported function with no caller
+    is a thing the next reader deletes or wires up somewhere it does not
+    belong.
+    """
+    ts = paused.get("ts")
+    if not isinstance(ts, str) or not ts:
+        return False  # fail toward surfacing
+    for consumption in read_events_from(session_dir, "session_pause_consumed"):
+        if consumption.get("pause_ts") != ts:  # exact string match — the ts IS the claim id
             continue
         try:
             if _parse_ts(consumption.get("ts")) >= _parse_ts(ts):
@@ -1146,6 +1288,15 @@ def _arbitrate(
     one composition point with the interpreter) and is labeled
     "superseded", not "stale" — arbitration must never become a suppress
     path for an algedonic signal.
+
+    CONSUMPTION-KEY SURVIVAL, the same shape as HALT survival and the same
+    reason. A losing PAUSED claim keeps its ` pause_ts=` key (the
+    `_compose_pause_key` rendering — one composition point with the
+    interpreter). Mentioning a claim is not enough: any claim that surfaces
+    freezes the Working Memory block for that session, and bootstrap retires
+    it by copying this key, so a mention without a key names a freeze the
+    reader cannot end. The three branches that embed `paused_msg` carry the
+    key inside it; the refresh-wins branch does not, and appends it here.
     """
     p_ts, r_ts = paused_ev.get("ts"), refreshed_ev.get("ts")
     if not _both_parse(p_ts, r_ts):
@@ -1156,7 +1307,8 @@ def _arbitrate(
         )
     if _ts_supersedes(r_ts, p_ts):
         return refresh_msg + (
-            f" (A stale paused claim from {_claim_date(p_ts)} also exists.)"
+            f" (A stale paused claim from {_claim_date(p_ts)} also exists."
+            f"{_compose_pause_key(paused_ev)})"
         )
     halt_line = _compose_halt_line(refreshed_ev)
     if halt_line:

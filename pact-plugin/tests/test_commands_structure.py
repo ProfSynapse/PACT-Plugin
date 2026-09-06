@@ -1353,6 +1353,139 @@ class TestBootstrapRefreshClauses:
         assert "Check for inbound messages" in bootstrap_text
 
 
+class TestBootstrapPauseConsumptionClauses:
+    """Structural pins for bootstrap.md's PAUSED-state consumption write.
+
+    A sibling class rather than an addition to `TestBootstrapRefreshClauses`
+    above: that class is named for the refresh clauses, and a pin filed under a
+    name that does not describe it sends the next audit to the wrong place.
+
+    WHY THESE EXIST — MEASURED, NOT ASSUMED. Deleting the entire
+    `**Paused-state consumption write (fire-once)**` block from bootstrap.md
+    left the whole suite at its baseline: 15474 passed, 85 skipped, exit 0,
+    zero failures and zero errors. The refresh half of the same paragraph was
+    pinned by `test_consumption_write_template`; the pause half was pinned by
+    nothing.
+
+    THE CONSEQUENCE IS THE DANGEROUS SHAPE, not a missing feature.
+    `_pause_is_spent` in `hooks/shared/session_resume.py` works correctly and
+    is never reached, because this block is the only thing that emits the event
+    it consumes. The paused claim then never retires, so the prompt re-surfaces
+    on every later resumption that still reads this journal.
+
+    WHAT THE CONSUMPTION EVENT BOUNDS, stated precisely because an earlier
+    version of this docstring named the wrong mechanism and a first correction
+    then overshot in the other direction. Two bounds operate, and they are not
+    the same bound.
+
+    THE STRUCTURAL ONE NEEDS NO EVENT. `session_init` writes the marker into
+    the CURRENT session's journal via the implicit `append_event`, while
+    `check_resume_state` reads the claim from `prev_session_dir`, and
+    `_journal_path_from` joins the directory it is handed with no ancestor
+    resolution. So a single freeze cannot outlive its own session, and a claim
+    is visible one hop back and no further — with or without any consumption.
+
+    THE EVENT'S OWN BOUND IS REAL AND PATH-DEPENDENT. It retires the claim, so
+    it decides whether the prompt re-surfaces AND whether a NEW freeze is minted
+    from that same claim in the next session. That only works where the
+    consumption lands in the SAME journal as the claim, which is the `/compact`
+    and same-session `--resume` case: measured, a later session reading that
+    journal one hop back surfaces nothing and does not freeze, where without the
+    consumption it surfaces and freezes. On the quit-then-new-session path the
+    consumption lands in the NEW session's journal and retires nothing; there
+    the one-hop bound alone ends it.
+
+    THAT BOUND IS PER CLAIM, AND CLAIMS ARE MINTED PER SESSION — do not read
+    it as a bound on what a user experiences. `wrap-up` branch C writes a
+    `session_paused` event every time a session ends with the PR still open,
+    so the next session surfaces a NEW claim and freezes on that. A sequence
+    of one-session freezes is indistinguishable from a persistent one from
+    outside, and while the PR stays open it IS the steady state. Each freeze
+    expiring on its own is what makes the mechanism safe to reason about; it
+    is not a promise that the block gets rebuilt soon.
+
+    WHY THAT CORRECTION MATTERS HERE. The failure this docstring now exists to
+    prevent is a reader concluding the freeze is unbounded. Told the expiry is
+    an instruction-surface write an agent may skip, a careful reader correctly
+    judges it unreliable and restores the unconditional rebuild — reopening the
+    hole. The mechanism is more robust than the old wording claimed, and the
+    old wording is what supplied the revert argument.
+
+    WHAT THIS DOES NOT CLAIM. That the block was clean when the freeze began.
+    The freeze holds whatever the block held at the resumption boundary; a
+    dispatch that propagated earlier in the arc contaminates it before any
+    freeze starts, and nothing here detects or repairs that.
+
+    SCOPE, stated so a later green is not over-read: these are DELETION
+    detectors on the literals a reader must be able to copy. Each literal below
+    occurs exactly once in the file, so a red here names this block rather than
+    firing on a neighbour. A rewrite that preserves every literal while
+    changing the surrounding instruction is NOT caught, and no fragment pin
+    catches it.
+    """
+
+    @pytest.fixture
+    def bootstrap_text(self):
+        return (COMMANDS_DIR / "bootstrap.md").read_text(encoding="utf-8")
+
+    def test_pause_consumption_write_template(self, bootstrap_text):
+        """Detects: loss of the write itself, or of either condition governing
+        it. Mirrors `test_consumption_write_template` literal for literal, on
+        the paused side of the same paragraph."""
+        assert "--type session_pause_consumed" in bootstrap_text
+        assert '{"pause_ts": "{pause_ts}"}' in bootstrap_text
+        assert "pause_ts=UNAVAILABLE" in bootstrap_text
+        assert (
+            "never write a consumption event when no paused prompt surfaced"
+            in bootstrap_text
+        )
+
+    def test_every_surfaced_paused_prompt_is_retired(self, bootstrap_text):
+        """Detects: the write narrowing to the branch that resumes something.
+
+        This clause has no refresh counterpart and is the reason the pin above
+        is not sufficient on its own. The paused prompt surfaces on three
+        branches — normal, staleness-downgraded, and merged-or-closed PR — and
+        ALL THREE freeze the block, because the marker records that a claim
+        SURFACED, never that work resumed. A write narrowed to the first branch
+        leaves the other two unretirable: correct-looking, green, and a freeze
+        that never ends."""
+        assert "Write it for EVERY paused prompt that surfaces" in bootstrap_text
+
+    def test_pause_consumption_trigger_is_not_resumption_keyed(
+        self, bootstrap_text
+    ):
+        """The paused write fires on SURFACING, never on confirming resumption.
+
+        Detects: a trigger that reads "after confirming resumption" above a
+        correct closing enumeration. Step 3 lets the user DECLINE a paused
+        prompt ("or start fresh"), unlike its refresh sibling which calls a
+        refresh a declared continuation and auto-proceeds. So a resumption-
+        keyed trigger leaves the ordinary open-PR path unretired: the claim
+        survives, the prompt re-surfaces, and the briefing reports "resuming an
+        interrupted workstream" for a session the user chose not to resume.
+
+        WHY THE SIBLING PIN DOES NOT COVER THIS. `test_every_surfaced_paused_
+        prompt_is_retired` asserts the closing enumeration, and that literal
+        can be present while the trigger above it is still resumption-keyed —
+        which was the state on disk when this arm was written, with the suite
+        green. A pin on an enumeration does not reach the condition governing
+        it.
+
+        SLICED TO THE PAUSED BLOCK, not the file. The refresh block above it
+        legitimately says "immediately after confirming resumption" and must
+        keep saying so, so a file-wide assertion would be wrong in both
+        directions: green when the paused trigger is broken, red when the
+        refresh trigger is correct.
+        """
+        block = bootstrap_text.split("**Paused-state consumption write")[1]
+        block = block.split("## Step 4")[0]
+        assert "confirming resumption" not in block, (
+            "the paused consumption trigger is keyed on confirming resumption; "
+            "a user who declines the prompt never retires the claim"
+        )
+
+
 # =============================================================================
 # pause.md teammate-shutdown structural pins + cross-surface termination
 # skeleton — deliberate drift detectors, anchored on stable tokens agreed
@@ -1692,4 +1825,80 @@ class TestResolverVocabularyIsSingleSourced:
             "vocabulary alive, which is the generator of exactly this defect. "
             "The field is free-form, so nothing else will ever redden to tell "
             "you."
+        )
+
+
+class TestNextRoutesTheBacklogToolsActualExitCodes:
+    """`commands/next.md`'s exit-code branches against `backlog.py`'s constants.
+
+    WHY THIS EXISTS. The tool's refusal code moved and the command file kept
+    routing the old one. Nothing reddened: the tool's own tests reference the
+    CONSTANT, so they pass at any value, and nothing related the command file's
+    branches to the tool's actual codes. An external reviewer found it after
+    four internal lanes and a verify-only pass, from a commit that had shipped.
+
+    BOTH SIDES ARE DERIVED, NEITHER IS TYPED. The codes come from the module's
+    `_EXIT_*` constants by attribute scan, so a renamed or added constant is
+    picked up rather than missed, and the routed set comes from the command
+    file's own text. A literal on either side would be a value pin that reddens
+    on the next legitimate move — which is the failure this file has argued
+    against elsewhere.
+
+    THE EXTRACTION IS THE FRAGILE PART AND IS DELIBERATELY NARROW. A sweep for
+    integers over the section does not work: the prose contains "Step 5" many
+    times and an "exit 2" that is the INTERPRETER's code, named precisely
+    because it is not one the tool chooses. So the arm keys on the file's own
+    completeness sentence, anchored on the clause that carries its meaning
+    rather than on a phrasing. Whitespace is collapsed first, so re-wrapping
+    the paragraph cannot break it. If a future author states the set some other
+    way the anchor stops matching and the assertion fires on the empty
+    extraction — loudly, not silently.
+
+    WHAT THIS DOES NOT COVER. It relates TWO files. Any other surface that
+    routes on these codes is invisible to it, and the census that found the
+    known sites could not see a router naming neither the tool nor its exit
+    behaviour. It does not check that each branch's ADVICE is correct, only
+    that the codes agree. And the catch-all branch is not a number: it is
+    excluded by construction, never matched as one.
+    """
+
+    _CLAIM = "are the only ones the tool chooses"
+
+    def _defined(self):
+        from shared import backlog
+
+        codes = {v for k, v in vars(backlog).items() if k.startswith("_EXIT_")}
+        assert codes, (
+            "no _EXIT_* constants found on shared.backlog — the extraction "
+            "failed, which is not the same as agreement"
+        )
+        return codes, backlog
+
+    def test_next_md_routes_exactly_the_codes_the_tool_defines(self):
+        defined, backlog = self._defined()
+        text = (COMMANDS_DIR / "next.md").read_text(encoding="utf-8")
+        flat = re.sub(r"\s+", " ", text)
+
+        assert flat.count(self._CLAIM) == 1, (
+            f"expected exactly one {self._CLAIM!r} clause in next.md, found "
+            f"{flat.count(self._CLAIM)} — the anchor this arm keys on has moved"
+        )
+        span = re.search(rf"—([^—]*?){self._CLAIM}", flat)
+        assert span, "found the clause but not its enumeration — anchor moved"
+        routed = {int(n) for n in re.findall(r"\d+", span.group(1))}
+        assert routed, "the enumeration extracted no codes — extraction failure"
+
+        assert routed == defined, (
+            f"next.md routes {sorted(routed)} but backlog.py defines "
+            f"{sorted(defined)}; the unrouted/unknown codes are "
+            f"{sorted(defined ^ routed)}"
+        )
+
+        # Every non-success code also carries its own branch, so the
+        # enumeration and the branches cannot drift apart from each other.
+        headers = {int(m) for m in re.findall(r"^Exit code (\d+)\b", text, re.M)}
+        assert headers, "no 'Exit code N' branch headers found — extraction failure"
+        assert headers == defined - {backlog._EXIT_OK}, (
+            f"branch headers cover {sorted(headers)} but the tool's non-success "
+            f"codes are {sorted(defined - {backlog._EXIT_OK})}"
         )

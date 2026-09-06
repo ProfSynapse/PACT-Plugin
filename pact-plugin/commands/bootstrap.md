@@ -31,7 +31,7 @@ Spawn the secretary **only once per session** — reuse the same secretary for a
 
 ## Step 3 — Surface paused state
 
-Paused state is surfaced **automatically** by the `session_init` hook: when the previous session ran `/PACT:pause`, it wrote a `session_paused` event to the session journal, and `session_init` reads that event on resume and injects the paused-work prompt into the SessionStart context. There is **no `paused-state.json` file** — do not attempt to read one (nothing writes it). Watch the SessionStart context for a "Paused work detected" line. If it appears, **do not silently resume.** Surface it to the user and ask whether to continue the paused workflow or start fresh; their choice drives next-step dispatch.
+Paused state is surfaced **automatically** by the `session_init` hook: when the previous session ran `/PACT:pause` — or ran `/PACT:wrap-up` and took its branch for a PR that exists but is not merged, which writes the same event — it wrote a `session_paused` event to the session journal, and `session_init` reads that event on resume and injects the paused-work prompt into the SessionStart context. There is **no `paused-state.json` file** — do not attempt to read one (nothing writes it). Watch the SessionStart context for a "Paused work detected" line. If it appears, **do not silently resume.** Surface it to the user and ask whether to continue the paused workflow or start fresh; their choice drives next-step dispatch.
 
 **Refreshed state**: also watch the SessionStart context for a refreshed-workstream prompt (a "Refreshed workstream detected" line carrying a `refresh_ts=` key). If present, this is a DECLARED CONTINUATION, not a fresh start: surface the mid-flight state to the user (feature, next phase, worktrees, any HALT line) and AUTO-PROCEED to respawn the specialists the named next phase needs. Ask the user ONLY on inconsistency: the prompt's HALT line has no matching live blocker task in `TaskList` (or live blockers exist the prompt doesn't mention), a listed worktree path does not exist on disk, or the prompt's `team_name` (when present) does not match the `team_name` in the **Current Session** block. A HALT line always surfaces to the user regardless.
 
@@ -45,6 +45,21 @@ JSON
 ```
 
 If the prompt said `refresh_ts=UNAVAILABLE`, skip the write (the prompt may re-surface once; its staleness downgrade bounds the repetition). Never write a consumption event when no refresh prompt surfaced. On a quit-then-new-session resume the consumption event lands in the NEW session's journal (a harmless orphan record) — fire-once on that path is enforced by the one-hop-back journal read, while the ts-bound consumption covers the same-session paths (`/compact` and same-session `--resume`).
+
+**Paused-state consumption write (fire-once)**: the paused prompt carries a `pause_ts=` key the same way, but it is triggered differently and the difference is the point. Write it as soon as the paused prompt has SURFACED and you have put the choice to the user — before their answer, and whichever way they answer. Substitute the `pause_ts=` value copied VERBATIM from the surfaced prompt:
+
+```bash
+python3 "{plugin_root}/hooks/shared/session_journal.py" write \
+  --type session_pause_consumed --session-dir '{session_dir}' --stdin <<'JSON'
+{"pause_ts": "{pause_ts}"}
+JSON
+```
+
+The same three conditions apply unchanged: skip the write if the prompt said `pause_ts=UNAVAILABLE`, never write a consumption event when no paused prompt surfaced, and expect the event in the NEW session's journal on a quit-then-new-session resume. Write it for EVERY paused prompt that surfaces — a stale one, one reporting a merged or closed PR, one mentioned only as the losing claim beside a newer refreshed one, and **one the user answers by starting fresh rather than resuming**. Surfacing is the whole trigger. Do NOT gate this write on the user choosing to continue the paused workflow: that choice decides your next-step dispatch and decides nothing about this write.
+
+**Why it is keyed that way**, because the failure it prevents does not look like a failure. A surfaced prompt makes the session skip its Working Memory rebuild, and this write is the only thing that retires the claim. A session ended by `/PACT:wrap-up` with a PR still open writes a paused claim as a matter of course, so the next session surfaces one, freezes its block, and reports `Working Memory: not rebuilt — a resumption claim surfaced at session start`. If the user said start fresh and the write was skipped, that reported reason is false. Nothing errors, and no single session looks wrong — the freeze does not persist, it is re-created from a new claim each time, so every session on its own appears to be behaving correctly while the block is never rebuilt for as long as the PR stays open. Retiring the claim on surfacing is what keeps that from becoming the steady state.
+
+**What this write does and does not bound.** A single freeze is already bounded, structurally and without help: the marker is written to the CURRENT session's journal while a claim is read from the PREVIOUS session's, so no marker can freeze a second session, and a claim is visible one hop back and no further. What this write bounds is whether the PROMPT RE-SURFACES — and therefore whether a NEW freeze is minted from the same claim. It delivers that bound only where the consumption event lands in the SAME journal as the claim, which is the `/compact` and same-session `--resume` paths; on a quit-then-new-session resume it is the orphan record described above, it retires nothing, and the one-hop bound is doing all the work. Read that bound per claim, not in aggregate: a producer that mints a fresh claim every session, as an open PR does, regenerates the freeze whatever this write did about the last one. So a run of individually-expiring freezes is indistinguishable from a persistent one, and nothing here promises the block gets rebuilt soon.
 
 ## Step 4 — Plugin banner
 

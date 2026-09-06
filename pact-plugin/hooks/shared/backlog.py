@@ -60,8 +60,34 @@ from shared.backlog_store import (  # noqa: E402  # follows the sys.path bootstr
 from shared.paths import get_backlog_dir  # noqa: E402  # follows the bootstrap
 
 # Exit codes.
+#
+# WHEN A CODE HERE TURNS OUT TO COLLIDE, MOVE THIS TOOL'S VERDICT OFF IT — do
+# not teach the caller to disambiguate some other way, and do not keep the code
+# because it is still correct most of the time.
+#
+# CHOOSING THE REPLACEMENT: the test is NOT "is this number unused in this
+# file". Ask "can any layer beneath us emit it" — the interpreter, a shell, or
+# a library. Take the answer from sysexits.h's 64-78 band, which exists so a
+# program can state its OWN verdict: CPython exits 0, 1, 2 and 120, shells
+# reserve 126, 127 and 128+N, argparse exits 2, so a code from that band can
+# only have come from code that chose it. Then state the measurement at the
+# constant, as the three below do.
+#
+# The unused-here test is what failed all three times: 2 was free by this
+# file's own accounting on each occasion, and something underneath produced it
+# anyway.
 _EXIT_OK = 0
-_EXIT_REFUSED = 2
+# MOVED OFF 2 BECAUSE THE INTERPRETER ALSO EXITS 2 when it cannot open the
+# script it was handed, which made a process that NEVER STARTED read as one
+# that deliberately declined. Measured: a run from the wrong directory produced
+# six failures whose messages read as considered refusals, one of them stating
+# a design rationale — "unparseable=2, unreadable=2" — for a program that had
+# not run. Three agents spent about an hour on four wrong hypotheses. 65 is
+# EX_DATAERR, the neighbour of the _EXIT_USAGE below and the other half of the
+# same distinction: 64 says the command line was malformed, 65 says the command
+# line was fine and the DATA was not acceptable. That is what every refusal
+# here means — nothing was written, the store is untouched, fix the input.
+_EXIT_REFUSED = 65
 # A SEPARATE CODE FOR UNREADABLE, because repair is the one operation that moves
 # user data and it must be reachable ONLY from a file that genuinely will not
 # parse. Sharing code 2 with the refusal exits made a merely NON-CONFORMING file
@@ -1152,8 +1178,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except BacklogFileError as exc:
         # THE ADVICE DEPENDS ON THE SUBCLASS, because `repair` REFUSES an
         # unreadable file without --force. Promising a repair that declines is
-        # worse than saying nothing: the user runs it, gets exit 2, and learns
-        # only that two of our messages disagree. Exit code stays 3 for both —
+        # worse than saying nothing: the user runs it, gets a refusal, and
+        # learns only that two of our messages disagree. Exit code stays 3 for both —
         # the distinction the caller needs is already in `exc`, so a second
         # code would add a branch every consumer must learn for no new fact.
         advice = (
