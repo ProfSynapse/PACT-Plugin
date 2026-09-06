@@ -643,7 +643,7 @@ At these workflow boundaries, create a task for the secretary referencing the `p
 - After remediation completes → Incremental Harvest (`peer-review`) (delta only, only if remediation occurred)
 - After comPACT specialists have reported → Standard Harvest (`comPACT`)
 - After a planning consultation completes → Standard Harvest (`plan-mode`)
-- During wrap-up → Consolidation Harvest (`wrap-up`) (Pass 2) with safety net for unprocessed HANDOFFs — propagates
+- During wrap-up → Consolidation Harvest (`wrap-up`) (Pass 2) with safety net for unprocessed HANDOFFs — the harvest itself stays quiet; whether the block is propagated is decided later, per branch, once the PR state is known
 - At session pause → Consolidation Harvest (`pause`)
 - At a mid-session context refresh → Consolidation Harvest (`refresh`)
 - After a second or subsequent feature completes in one session → Consolidation Harvest (`orchestrate`) — propagates

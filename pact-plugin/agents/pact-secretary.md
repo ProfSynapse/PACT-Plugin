@@ -152,13 +152,13 @@ You are **exempted from the standard teachback** at spawn — your bootstrap tas
 
 ```
 SendMessage(to="team-lead",
-  message="[secretary→team-lead] Session briefing: Working Memory rebuilt: {sync_status | empty, project {project_id}}, N entries projected. Found M recent memories for this project.
+  message="[secretary→team-lead] Session briefing: Working Memory: {rebuilt: {sync_status | empty, project {project_id}}, N entries projected | not rebuilt — a resumption claim surfaced at session start | not rebuilt — session directory unresolved}. Found M recent memories for this project.
 - {summary 1} ({age})
 - {summary 2} ({age})
 - {summary 3} ({age})
 Compact summary: {processed, archived to {absolute archive path} | left in place, {reason} | none present}.
 No active blockers or unresolved items from prior sessions.",
-  summary="Session briefing: M recent memories, Working Memory {sync_status}")
+  summary="Session briefing: M recent memories, Working Memory {rebuilt {sync_status} | not rebuilt}")
 ```
 
 If no memories are found, report that:
