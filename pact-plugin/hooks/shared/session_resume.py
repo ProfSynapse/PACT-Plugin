@@ -841,8 +841,15 @@ def _interpret_paused_event(event: dict) -> str | None:
 
     Split from _check_journal_paused_state so check_resume_state can feed
     it the event it already read (one journal read per event type). The
-    body is byte-identical to the pre-split logic: pr_number type-narrowing,
-    14-day TTL, `gh` PR-state probe, and the silent-None branches.
+    split changed no DECISION: pr_number type-narrowing, the 14-day TTL,
+    the `gh` PR-state probe and the silent-None branches all resolve as
+    they did before it, and the branch structure is still the pre-split
+    one.
+
+    The PROMPT TEXT is not. Every branch that returns a prompt now appends
+    the ` pause_ts=` consumption key rendered by _compose_pause_key, which
+    bootstrap copies verbatim to retire the claim — so an audit of what
+    this function renders must read the returns, not this sentence.
 
     Fail direction: PR-GATED SILENT-None is CORRECT here — a paused claim
     whose PR is gone (or that never had a valid PR) has nothing to resume.
