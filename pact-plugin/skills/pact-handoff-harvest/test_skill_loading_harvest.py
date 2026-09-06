@@ -699,10 +699,19 @@ class TestWorkingMemoryIsAViewOfTheStore:
         assert end != -1
         spawn_step = secretary_content[start:end]
         assert "`sync`" in spawn_step
-        # The rebuild is the only write to the block, so an editor who makes it
-        # conditional silently reintroduces stale-block reads. Pin the declaration
-        # and its reason, not just the presence of the `sync` token.
-        assert "This step is unconditional" in spawn_step
-        assert "only write" in spawn_step
+        # The rebuild is skipped on a declared resumption so the arc's later
+        # agents judge from the same baseline as its earlier ones. An editor who
+        # removes the condition and makes the rebuild unconditional again hands
+        # the post-resumption cohort this arc's own conclusions, which is the
+        # contamination the condition exists to prevent. The block being older
+        # than the store on such a session is deliberate and has a named expiry;
+        # neglect has none. Two SEPARATE assertions, because one pin covering
+        # both goes green while half the behaviour is gone and cannot say which
+        # half regressed.
+        # The condition: the fact the step reads to decide.
+        assert "session_resumption_surfaced" in spawn_step
+        # The report: a skip nobody can see is indistinguishable from a rebuild
+        # that failed, so an unreported skip is the failure, not the feature.
+        assert "Working Memory: not rebuilt" in spawn_step
         assert "Remove stale entries by rewriting the Working Memory section" not in secretary_content
         assert "derived view" in secretary_content
