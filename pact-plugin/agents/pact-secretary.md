@@ -261,7 +261,7 @@ If no patterns found: "No calibration data or known patterns for this domain."
 
 # WORKING MEMORY SYNC
 
-**The section is a view of the store.** Pinned Context is the curated surface; nothing you run writes it. Working Memory is a derived view of pact-memory: the newest three records of this project, rebuilt from the store by the `sync` command, always rebuildable. A wrong entry is corrected by `update` on its record (or `delete`), then `sync`; the section text is never edited by hand.
+**The section is a view of the store.** Pinned Context is the curated surface; nothing you run writes it. Working Memory is a derived view of pact-memory: the newest three records of this project, rebuilt from the store by the `sync` command, rebuildable at any time. A wrong entry is corrected by `update` on its record (or `delete`), then `sync`; the section text is never edited by hand.
 
 **By `sync`, not by `save`.** The `save` command projects into the section unless it carries `--no-sync`; every save you make carries `--no-sync`. Run `sync` when a harvest dispatch or a save request carries the sentence `Then propagate the store into the Working Memory block.`, once, after your last store write. Without that sentence, do not run `sync` and do not edit `CLAUDE.md`. Normally an ad-hoc save request has no sentence and stays quiet; if the team-lead's request carries it, propagate.
 
