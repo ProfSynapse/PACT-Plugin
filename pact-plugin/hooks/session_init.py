@@ -2059,11 +2059,42 @@ def main():
             if resume_msg:
                 context_parts.append(resume_msg)
                 # Record that a resumption claim SURFACED, in THIS session's
-                # journal. The secretary reads the event's presence at spawn to
-                # learn that this session resumes an arc that is still running,
-                # and skips its Working Memory rebuild for that session — so
-                # the agents respawned to judge the arc read the same baseline
-                # as the agents that judged it before the interruption.
+                # journal. The secretary reads the event's presence at spawn
+                # and skips its Working Memory rebuild for that session.
+                #
+                # WHAT THE MARKER MEANS IS EXACTLY THAT: A CLAIM SURFACED. It
+                # does NOT mean an arc is still running, and wording it that
+                # way would be false on branches this very call reaches. A
+                # paused claim whose PR is MERGED or CLOSED surfaces — after
+                # the `gh` probe inside the interpreter has just established
+                # the arc is over — and so does one past its 14-day staleness
+                # cutoff. Both are reachable in ordinary operation. (A
+                # fieldless refreshed claim surfaces too, because that
+                # interpreter is total by signature, but no writer in this
+                # tree can produce one: the type's registration requires
+                # fields, so the write path refuses it and only a hand-edited
+                # or corrupt journal reaches the read path, which does not
+                # re-validate. That is the read-path totality this module
+                # wants, not a defect.)
+                #
+                # THE OVER-FIRING IS KEPT DELIBERATELY, ON FAIL DIRECTION. A
+                # marker written when the arc is over costs one session of a
+                # block that lags the store. A marker NOT written when the arc
+                # is live costs the contamination this whole mechanism exists
+                # to prevent. The asymmetry decides it, and it decides it the
+                # same way whichever branch surfaced.
+                #
+                # WHAT THE SKIP GUARANTEES, AND WHAT IT DEPENDS ON. It
+                # guarantees the block is not rewritten AT THIS BOUNDARY, so
+                # the post-resumption cohort reads what the boundary left. It
+                # does NOT by itself guarantee that what the boundary left is
+                # what the arc's earlier agents read — that holds only while
+                # every dispatch reachable before the boundary stays quiet. A
+                # site that propagates earlier in the arc contaminates the
+                # block before any freeze begins, and freezing then preserves
+                # the contamination rather than preventing it. The quiet
+                # default is what makes the guarantee whole; this write only
+                # holds the boundary.
                 #
                 # KEYED ON THE VERDICT, NOT ON THE RAW CLAIM EVENTS. Writing
                 # this from `session_refreshed` / `session_paused` directly
@@ -2089,6 +2120,22 @@ def main():
                 # it is made LOUD instead: never raises, never blocks session
                 # start, and says so when the write does not land. A hole that
                 # announces itself is recoverable; a silent one is the defect.
+                #
+                # WHAT LOUD COVERS, AND WHAT IT DOES NOT. It covers a failed
+                # marker WRITE, which is the only failure reachable from here.
+                # It does not cover a claim that never SURFACES, and that path
+                # reaches the identical end state — no marker, a rebuild, and
+                # nothing on either channel. `check_resume_state` returns None
+                # on its first line when `prev_session_dir` is falsy, so a
+                # missing CLAUDE.md, an absent Session dir line whose fallback
+                # also fails, or a path rejected by the under-pact-sessions
+                # validation all end here silently, having never entered this
+                # branch at all. Whether a session with no legitimate
+                # predecessor SHOULD announce anything is a noise-versus-signal
+                # question — most such sessions are simply the first in a
+                # project — and it is deliberately not answered here. What is
+                # answered is the narrower claim: this guard is loud about the
+                # write, not about the absence.
                 # TWO CHANNELS, TWO ACTORS, AND THE SECOND IS NOT A COPY OF
                 # THE FIRST. systemMessage reaches the human, who can diagnose
                 # this and little else; additionalContext reaches the lead,
@@ -2097,6 +2144,26 @@ def main():
                 # failure report in the channel every other failure in this
                 # hook uses, and the second is a DIRECTIVE in the channel that
                 # carries directives. Dropping either silently drops one actor.
+                #
+                # THE TWO CHANNELS ARE INDEPENDENT AT THIS SITE AND JOINT AT
+                # THE EMISSION SITE, which is where the guarantee actually
+                # rests. Here both appends sit inside this one guard with no
+                # return or raise between them, and neither call can fail:
+                # `append_event` is total and `make_event` with no fields
+                # cannot raise. But neither list is emitted here. Both render
+                # near the end of `main()` — `additionalContext` from
+                # `context_parts`, `systemMessage` from `system_messages` —
+                # and the cross-session backlog block runs in between. Any
+                # exception raised there reaches `main()`'s outer handler,
+                # which builds a fresh output from `_build_safety_net_context`
+                # and reads NEITHER list. So one raise between this append and
+                # that render drops the human's report and the lead's
+                # directive together, and the two-actor property becomes one
+                # of totality in the code that sits between, not of anything
+                # visible from here. No live defect: the intervening calls are
+                # total today. But the invariant lives in another file with
+                # nothing binding it to this claim, so a future raise between
+                # these two points silences both actors at once.
                 if not append_event(make_event("session_resumption_surfaced")):
                     system_messages.append(
                         "Resumption marker not recorded: the "
