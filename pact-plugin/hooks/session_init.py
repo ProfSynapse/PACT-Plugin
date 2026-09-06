@@ -16,7 +16,8 @@ Performs PACT environment initialization:
 5b. Writes session resume info (resume command, team, timestamp) to project CLAUDE.md
 6. Checks for in_progress Tasks (resumption context via Task integration)
 7. Restores last session snapshot for cross-session continuity
-8. Checks for paused or refreshed work from a previous /PACT:pause or /PACT:refresh
+8. Checks for paused or refreshed work from a previous /PACT:pause or /PACT:refresh,
+   and records session_resumption_surfaced when a resume claim surfaces
 
 Note: Plan detection (scanning docs/plans/) was removed from session startup
 to reduce latency. Plan detection is deferred to /PACT:orchestrate, which
@@ -2057,6 +2058,63 @@ def main():
             resume_msg = check_resume_state(prev_session_dir=prev_session_dir)
             if resume_msg:
                 context_parts.append(resume_msg)
+                # Record that a resumption claim SURFACED, in THIS session's
+                # journal. The secretary reads the event's presence at spawn to
+                # learn that this session resumes an arc that is still running,
+                # and skips its Working Memory rebuild for that session — so
+                # the agents respawned to judge the arc read the same baseline
+                # as the agents that judged it before the interruption.
+                #
+                # KEYED ON THE VERDICT, NOT ON THE RAW CLAIM EVENTS. Writing
+                # this from `session_refreshed` / `session_paused` directly
+                # looks equivalent and is smaller, and it silently drops a
+                # writer: `check_resume_state` already unifies every producer
+                # of a pause-shaped claim, wrap-up's open-PR branch included.
+                #
+                # NO FIELDS — PRESENCE IS THE WHOLE SIGNAL. The consumer checks
+                # only that the event exists. An earlier shape carried the
+                # winning claim's type and timestamp; neither had a reader, and
+                # `check_resume_state` returns a composed prompt that discards
+                # which claim won, so supplying them would have meant either
+                # splitting that resolver or re-applying its newest-wins rule
+                # here — a second copy of an ordering rule with nothing
+                # comparing the copies. The claim events stay in the journal
+                # for anyone debugging, so nothing is lost.
+                #
+                # THE FAIL DIRECTION IS THE UNSAFE ONE AND CANNOT BE MADE SAFE.
+                # No marker means the secretary rebuilds, which hands this
+                # arc's own conclusions to the agents whose value is reaching
+                # conclusions independently. The only safe alternative —
+                # refusing to start the session — is worse than the defect. So
+                # it is made LOUD instead: never raises, never blocks session
+                # start, and says so when the write does not land. A hole that
+                # announces itself is recoverable; a silent one is the defect.
+                # TWO CHANNELS, TWO ACTORS, AND THE SECOND IS NOT A COPY OF
+                # THE FIRST. systemMessage reaches the human, who can diagnose
+                # this and little else; additionalContext reaches the lead,
+                # which is the only actor that can PREVENT the consequence, by
+                # carrying the skip to the secretary by hand. So the first is a
+                # failure report in the channel every other failure in this
+                # hook uses, and the second is a DIRECTIVE in the channel that
+                # carries directives. Dropping either silently drops one actor.
+                if not append_event(make_event("session_resumption_surfaced")):
+                    system_messages.append(
+                        "Resumption marker not recorded: the "
+                        "session_resumption_surfaced journal write failed. "
+                        "The secretary will rebuild the Working Memory block "
+                        "at spawn, so agents spawned into this session may "
+                        "read conclusions reached during the arc they are "
+                        "resuming."
+                    )
+                    context_parts.append(
+                        "RESUMPTION MARKER MISSING: this session resumes an "
+                        "interrupted workstream, but the marker the secretary "
+                        "reads at spawn was not recorded. Tell the secretary "
+                        "NOT to rebuild the Working Memory block, in its spawn "
+                        "dispatch. Without that the block is rebuilt from the "
+                        "store, and agents spawned to judge this arc read the "
+                        "arc's own conclusions."
+                    )
 
         # Cross-session backlog. Deliberately OUTSIDE the frame_is_lead block:
         # every frame gets the block, and the INDENTATION IS THE WHOLE GATE —

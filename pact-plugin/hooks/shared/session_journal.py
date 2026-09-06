@@ -242,6 +242,17 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     "session_refresh_consumed": {
         "refresh_ts": str,
     },
+    # hooks/session_init.py writes session_resumption_surfaced at step 8, in
+    # THIS session's journal, when check_resume_state produced a resume prompt.
+    # NO REQUIRED FIELDS, and that is the design, not an omission: the reader
+    # (the secretary, at spawn) checks only that the event EXISTS, and presence
+    # is the whole signal. A field carried here would have no reader, which
+    # makes it a drift surface — it can go wrong and nothing notices. The
+    # empty-dict registration is still structurally necessary: it activates
+    # baseline validation for the type rather than letting it fall through the
+    # unknown-type short-circuit, matching session_end / cleanup_summary /
+    # session_consolidated.
+    "session_resumption_surfaced": {},
     # hooks/session_end.py writes session_end with NO required fields — one
     # writer passes an optional `warning` (line 119), the other passes
     # nothing (line 316). commands/wrap-up.md CLI also writes session_end

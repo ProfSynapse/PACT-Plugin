@@ -45,6 +45,7 @@ import io
 import json
 import re
 import sys
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -322,6 +323,154 @@ class TestMainPausedStateIntegration:
         output = json.loads(mock_stdout.getvalue())
         additional = output["hookSpecificOutput"]["additionalContext"]
         assert "Paused work" not in additional
+
+
+class TestResumptionMarker:
+    """Step 8 records session_resumption_surfaced when a claim surfaces.
+
+    The secretary reads the event's PRESENCE at spawn to learn that this
+    session resumes a running arc, and skips its Working Memory rebuild for
+    that session. Three properties, matching the three ways the marker can be
+    wrong: written when a prompt surfaces, NOT written when none does, and
+    loud when the write does not land.
+
+    The failure of the write is the unsafe direction and cannot be made safe —
+    no marker means the secretary rebuilds — so the third test is the one that
+    matters most: it pins that the hole announces itself instead of opening
+    silently.
+    """
+
+    _STDIN = json.dumps(_with_lead_role(
+        {"session_id": "aabb1122-0000-0000-0000-000000000000"}
+    ))
+
+    @staticmethod
+    def _patches(resume_msg, append_event_mock):
+        """The common patch stack; the two variables are what each test sets."""
+        return [
+            patch("session_init.setup_plugin_symlinks", return_value=None),
+            patch("session_init.ensure_project_memory_md", return_value=None),
+            patch("session_init.check_pinned_staleness", return_value=None),
+            patch("session_init.update_session_info", return_value=None),
+            patch("session_init.get_task_list", return_value=None),
+            patch("session_init.restore_last_session", return_value=None),
+            patch("session_init.check_resume_state", return_value=resume_msg),
+            patch("session_init.append_event", append_event_mock),
+            patch("sys.stdin", io.StringIO(TestResumptionMarker._STDIN)),
+        ]
+
+    def _run(self, monkeypatch, resume_msg, append_returns=True):
+        """Run main() and return (output_dict, marker_call_count)."""
+        monkeypatch.setenv(
+            "CLAUDE_PROJECT_DIR", "/Users/example/Sites/test-project"
+        )
+        # session_start is appended at step 5 through the SAME helper, so the
+        # mock must stay total; only the marker's own call is counted below.
+        append_event_mock = MagicMock(return_value=append_returns)
+
+        from session_init import main
+
+        with ExitStack() as stack:
+            for p in self._patches(resume_msg, append_event_mock):
+                stack.enter_context(p)
+            mock_stdout = stack.enter_context(
+                patch("sys.stdout", new_callable=io.StringIO)
+            )
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 0
+        marker_calls = [
+            call for call in append_event_mock.call_args_list
+            if call.args and call.args[0].get("type")
+            == "session_resumption_surfaced"
+        ]
+        return json.loads(mock_stdout.getvalue()), marker_calls
+
+    def test_marker_written_when_a_claim_surfaces(self, monkeypatch):
+        """A surfaced resume prompt records exactly one marker event."""
+        _output, marker_calls = self._run(
+            monkeypatch,
+            resume_msg="Paused work detected: PR #42 (feat/login).",
+        )
+
+        assert len(marker_calls) == 1
+        # No fields beyond the envelope: presence is the whole signal, and a
+        # field with no reader is a drift surface. `v`/`type`/`ts` are what
+        # make_event puts on every event.
+        assert set(marker_calls[0].args[0]) == {"v", "type", "ts"}
+
+    def test_no_marker_when_no_claim_surfaces(self, monkeypatch):
+        """A session that is not a resumption records nothing.
+
+        This is the arm that keeps the marker MEANINGFUL: if it were written
+        unconditionally, its presence would say nothing and the secretary
+        would skip every rebuild forever.
+        """
+        _output, marker_calls = self._run(monkeypatch, resume_msg=None)
+
+        assert marker_calls == []
+
+    def test_failed_marker_write_is_announced(self, monkeypatch):
+        """A marker write that does not land emits a system message.
+
+        The unsafe direction, made loud rather than safe. BOTH channels are
+        asserted because they reach different actors: the human reads
+        systemMessage and can diagnose, the lead reads additionalContext and
+        is the only actor that can prevent the consequence by carrying the
+        skip to the secretary by hand. A test that pinned one would let the
+        other be dropped silently.
+        """
+        output, marker_calls = self._run(
+            monkeypatch,
+            resume_msg="Paused work detected: PR #42 (feat/login).",
+            append_returns=False,
+        )
+
+        assert len(marker_calls) == 1
+
+        # Channel 1 — the human-facing failure report.
+        assert "session_resumption_surfaced" in output["systemMessage"]
+        # The consequence, not just the fact — a reader needs to know what the
+        # failure costs them, which is that the block gets rebuilt anyway.
+        assert "rebuild" in output["systemMessage"]
+
+        # Channel 2 — the lead-facing directive. Asserted on the ACTION it
+        # must ask for, not on the failure it reports: this channel exists so
+        # somebody can act, and a line that only restated the failure would
+        # satisfy a presence check while asking for nothing.
+        additional = output["hookSpecificOutput"]["additionalContext"]
+        assert "RESUMPTION MARKER MISSING" in additional
+        assert "NOT to rebuild" in additional
+
+    def test_marker_write_never_blocks_session_start(self, monkeypatch):
+        """A RAISING append helper must not take down SessionStart.
+
+        append_event is documented total, so this pins the contract the
+        marker site depends on rather than a branch of its own: §11 says the
+        write must never raise or block session start, and a future helper
+        that lost its internal guard would break that silently.
+        """
+        monkeypatch.setenv(
+            "CLAUDE_PROJECT_DIR", "/Users/example/Sites/test-project"
+        )
+        append_event_mock = MagicMock(side_effect=RuntimeError("journal gone"))
+
+        from session_init import main
+
+        with ExitStack() as stack:
+            for p in self._patches("Paused work detected.", append_event_mock):
+                stack.enter_context(p)
+            mock_stdout = stack.enter_context(
+                patch("sys.stdout", new_callable=io.StringIO)
+            )
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        # Exit 0 and parseable output: main()'s safety net absorbs it. The
+        # session still starts, which is the whole of the requirement.
+        assert exc_info.value.code == 0
+        assert json.loads(mock_stdout.getvalue())
 
 
 class TestMainPrevSessionDirOrdering:
