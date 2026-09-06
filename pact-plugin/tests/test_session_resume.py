@@ -1510,6 +1510,32 @@ class TestRefreshIsSpent:
         assert result is not None
         assert "refresh_ts=2026-07-10T12:00:00Z" in result
 
+    def test_a_pause_consumption_does_not_spend_a_refresh(self, tmp_path):
+        """The two consumption streams must not cross — this direction.
+
+        `TestPauseIsSpent` carries the mirror of this assertion, and one
+        direction cannot bound a symmetry: a merge of the two predicates that
+        dropped the type parameter would break BOTH, and an arm on one says
+        nothing about the other. The pair is what makes the do-not-merge rule
+        detectable rather than merely written down.
+
+        Same timestamp, wrong event type, and the field name differs too, so a
+        crossing predicate lands on UNSPENT by two independent routes. The
+        assertion is still worth its place: both routes disappear together
+        under exactly the parameterising refactor this arm exists to catch.
+        """
+        from shared.session_resume import _refresh_is_spent
+
+        sd = self._sd(tmp_path)
+        refreshed = _refresh_event(ts="2026-07-10T12:00:00Z")
+        _write_journal_events(sd, [
+            refreshed,
+            {"v": 1, "type": "session_pause_consumed",
+             "pause_ts": "2026-07-10T12:00:00Z",
+             "ts": "2026-07-10T12:05:00Z"},
+        ])
+        assert _refresh_is_spent(str(sd), refreshed) is False
+
 
 def _paused_event(ts="2026-07-10T12:00:00Z", **fields):
     """A well-formed session_paused event; `fields` override any key."""
