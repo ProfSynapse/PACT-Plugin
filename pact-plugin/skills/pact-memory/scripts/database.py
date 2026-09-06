@@ -285,19 +285,18 @@ def init_schema(conn: sqlite3.Connection) -> None:
             disagreements_resolved TEXT,
             project_id TEXT,
             session_id TEXT,
-            -- THESE DEFAULTS DISAGREE IN FORMAT WITH THE ONLY WRITER, AND A
-            -- STORE HOLDING BOTH SORTS WRONGLY IN SILENCE. `datetime('now')`
-            -- yields `YYYY-MM-DD HH:MM:SS`; create_memory yields ISO-8601
-            -- with a `T` and a `+00:00` offset. SQLite compares TEXT
-            -- bytewise and at index 10 a space (0x20) sorts below `T`
-            -- (0x54), so a default-written row ranks OLDER than a
-            -- writer-written row hours its senior. The rowid tiebreak on the
-            -- newest-first queries cannot rescue that: it is a wrong
-            -- comparison, not a tie. Unreached today, because the sole
-            -- INSERT always supplies both columns. Any new insert path must
-            -- supply them too, or change these defaults to the writer's form.
-            created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now'))
+            -- NOT NULL AND NO DEFAULT, SO AN OMITTING INSERT FAILS RATHER
+            -- THAN INVENTING A STAMP. A default has to pick a format, and
+            -- `datetime('now')` picks a different one from the sole writer's
+            -- `datetime.now(timezone.utc).isoformat()`; TEXT compares
+            -- bytewise, so the two forms interleave wrongly and the rowid
+            -- tiebreak cannot rescue it -- a wrong comparison is not a tie.
+            -- Dropping the default alone would be worse than keeping it:
+            -- the column would take NULL, which sorts lowest, burying the
+            -- row last forever instead of merely misplacing it.
+            -- Existing stores keep the schema they were created with.
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
     """)
 

@@ -47,6 +47,39 @@ def db_conn(tmp_path):
 # Schema initialization
 # ---------------------------------------------------------------------------
 
+class TestTimestampColumnsAreRequired:
+    """Built through PRODUCTION's own `ensure_initialized`, NOT the fixture.
+
+    `db_conn` and every other schema in this suite is a test-local copy, so
+    none of them can see a change to production's CREATE TABLE. This class
+    exists because that makes a green suite no evidence about this column.
+    """
+
+    def _production_schema(self, tmp_path):
+        from scripts.database import ensure_initialized
+        conn = sqlite3.connect(str(tmp_path / "prod.db"))
+        ensure_initialized(conn)
+        return conn
+
+    @pytest.mark.parametrize("column", ["created_at", "updated_at"])
+    def test_an_insert_omitting_a_timestamp_is_refused(self, tmp_path, column):
+        conn = self._production_schema(tmp_path)
+        supplied = "updated_at" if column == "created_at" else "created_at"
+        with pytest.raises(sqlite3.IntegrityError, match=f"NOT NULL.*{column}"):
+            conn.execute(
+                f"INSERT INTO memories (id, {supplied}) VALUES ('x', '2026-01-01')"
+            )
+
+    def test_supplying_both_is_accepted(self, tmp_path):
+        """Control: the refusal above is about the omission, not the insert."""
+        conn = self._production_schema(tmp_path)
+        conn.execute(
+            "INSERT INTO memories (id, created_at, updated_at)"
+            " VALUES ('x', '2026-01-01', '2026-01-01')"
+        )
+        assert conn.execute("SELECT count(*) FROM memories").fetchone()[0] == 1
+
+
 class TestSchemaInit:
     def test_creates_memories_table(self, db_conn):
         cursor = db_conn.execute(
