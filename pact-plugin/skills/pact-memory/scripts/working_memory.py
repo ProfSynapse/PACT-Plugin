@@ -80,10 +80,12 @@ WORKING_MEMORY_HEADER = "## Working Memory"
 # direction, because only OLDER entries lose their ID. The newest entry is
 # always full and always carries its Memory ID.
 #
-# MIRRORED IN TWO OTHER DEFINITIONS -- `hooks/shared/session_resume.py` and
-# `hooks/shared/claude_md_manager.py`. Change all three in ONE commit: fixing
-# two of three converts one consistent falsehood into a three-way disagreement.
-WORKING_MEMORY_COMMENT = "<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. -->"
+# MIRRORED IN ONE OTHER DEFINITION -- `hooks/shared/claude_md_manager.py`, the
+# only other file that spells this string. Change both in ONE commit: fixing
+# one converts a consistent statement into a disagreement.
+# `hooks/shared/session_resume.py` IMPORTS the name and must not be given a
+# definition of its own; the mirror gate names it the importer for that reason.
+WORKING_MEMORY_COMMENT = "<!-- Auto-managed by pact-memory skill. Full history searchable via pact-memory skill. Keyed by folder name, so another checkout with the same name shares this section. -->"
 MAX_WORKING_MEMORIES = 3
 
 # Constants for retrieved context section (searched/retrieved memories)
