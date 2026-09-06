@@ -272,7 +272,20 @@ class TestTheStoreIsWhatTheNextSyncShows:
         microsecond precision, so saves do not tie in production; `_backdate`
         sets these stamps to one value by direct SQL, which is one of the two
         ways a real tie can arise (the other is the schema default). The
-        ordering contract is worth pinning for those two, not for saves."""
+        ordering contract is worth pinning for those two, not for saves.
+
+        MEASURED DETECTION SET, so nobody has to re-run the ablation. Both
+        DELETING `, rowid DESC` from `list_memories` and flipping it to `rowid
+        ASC` redden this arm, and they redden it IDENTICALLY: with no tiebreak
+        the plan sorts through a temp b-tree that emits tied rows in ASCENDING
+        rowid, so deletion and flip return the same order. That is the opposite
+        of `search_memories_by_text`, where deletion is undetectable, so its
+        result does not transfer here and this one does not transfer back. One
+        asymmetry to keep: the FLIP is detected under any plan, because ASC
+        reverses DESC whenever two rows tie, while the DELETION is detected
+        only because today's plan emits ties ascending. A future index or plan
+        change that emitted them descending would make deletion invisible here
+        too, and this arm would not notice the day it happened."""
         ids = [self._save(project, db, f"tied {i}", "2026-04-01 12:00:00")
                for i in range(MAX_WORKING_MEMORIES)]
         result = self._sync(project, db)
