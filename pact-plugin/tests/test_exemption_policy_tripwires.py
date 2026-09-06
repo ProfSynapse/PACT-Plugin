@@ -330,20 +330,85 @@ def _enclosing_block(text, offset):
 PROPAGATE_SENTENCE = "Then propagate the store into the Working Memory block."
 PROPAGATION_PARAGRAPH_MARKER = "may appear only at a boundary"
 PROPAGATING_COMMANDS = frozenset({"orchestrate", "wrap-up"})
-_DISPATCH_RE = re.compile(r"Follow the (\w+) Harvest workflow")
+
+# Any literal a command hands an agent. NOT narrowed to a harvest dispatch
+# description -- see _propagating_sites.
+_CARRIER_RE = re.compile(r'(?:description|message)="((?:[^"\\]|\\.)*)"', re.S)
+
+_WRAP_UP = COMMANDS_DIR / "wrap-up.md"
+# wrap-up's step-6 branches, in document order. The propagation decision is
+# taken PER BRANCH, so these labels are the slice boundaries the branch arm
+# reads. They are also the labels tests/test_wrapup_datasafety_contracts.py
+# slices on, so a rename moves both files together or reddens both.
+_WRAP_UP_BRANCHES = (
+    "**A — PR is MERGED**",
+    "**B — No PR exists**",
+    "**C — PR exists but is not merged**",
+)
 
 
-def _propagating_dispatch_stems():
-    """Command stems whose harvest dispatch descriptions carry the propagate
-    sentence, one entry per carrying description (a list, so the count is
-    visible to the caller)."""
+def _propagating_sites():
+    """Command stems that instruct a propagation, one entry per instructing
+    site (a list, so the count is visible to the caller).
+
+    THE UNIT IS THE SITE, NOT THE COMMAND, and that is a correction rather than
+    a refinement. A command can hold several propagation sites and they need not
+    agree: `wrap-up` propagates on the two step-6 branches that END the arc, and
+    must not on the branch that preserves an open PR. While the unit was the
+    command, membership of the set asserted `wrap-up` propagates FULL STOP --
+    true of two branches, false of the third, and the third is the one that
+    respawns reviewers. A command-granular container cannot hold a branch-level
+    truth, so the container changed.
+
+    THE CARRIER IS NOT PINNED TO A DISPATCH DESCRIPTION. The sentence IS the
+    instruction; whatever literal carries it propagates. The earlier form also
+    required `Follow the ... Harvest workflow` in the SAME literal, which made a
+    propagate request sent to an already-running secretary invisible here -- and
+    that request is exactly what a per-branch decision needs, because the branch
+    is not known until long after the harvest is dispatched.
+    """
     stems = []
     for path in sorted(COMMANDS_DIR.glob("*.md")):
-        text = path.read_text(encoding="utf-8")
-        for literal in re.findall(r'description="((?:[^"\\]|\\.)*)"', text, re.S):
-            if _DISPATCH_RE.search(literal) and PROPAGATE_SENTENCE in literal:
+        for literal in _CARRIER_RE.findall(path.read_text(encoding="utf-8")):
+            if PROPAGATE_SENTENCE in literal:
                 stems.append(path.stem)
     return stems
+
+
+def _wrap_up_branch_slices():
+    """wrap-up's three step-6 branches, keyed by label.
+
+    Raises on a label that is absent, duplicated or out of order rather than
+    returning a partial map. An absence assertion over an empty slice passes for
+    the wrong reason, and a slice that ran to the wrong end reports a confident
+    wrong answer -- both read as agreement.
+    """
+    text = _WRAP_UP.read_text(encoding="utf-8")
+    starts = []
+    for label in _WRAP_UP_BRANCHES:
+        hits = [m.start() for m in re.finditer(re.escape(label), text)]
+        assert len(hits) == 1, (
+            f"expected exactly one {label!r} in {_WRAP_UP.name}, found "
+            f"{len(hits)}. These labels are the branch arm's slice boundaries: "
+            "re-anchor it on whatever now delimits the branches. Do not delete "
+            "the arm and do not let the slice run to the wrong end."
+        )
+        starts.append(hits[0])
+    assert starts == sorted(starts), (
+        f"the step-6 branch labels are out of document order in "
+        f"{_WRAP_UP.name}: {starts}"
+    )
+    slices = {}
+    for i, (label, start) in enumerate(zip(_WRAP_UP_BRANCHES, starts)):
+        # The last branch ends at the next top-level heading, not at EOF --
+        # otherwise its slice swallows every later step and an absence
+        # assertion over it is answering a question about the whole file.
+        nxt = text.find("\n## ", start)
+        end = starts[i + 1] if i + 1 < len(starts) else (
+            nxt if nxt != -1 else len(text)
+        )
+        slices[label] = text[start:end]
+    return slices
 
 
 class TestOnlyTheSafeBoundariesPropagateTheWorkingMemoryBlock:
@@ -357,19 +422,32 @@ class TestOnlyTheSafeBoundariesPropagateTheWorkingMemoryBlock:
     fact safe. That is a claim about spawn order inside a command, which has no
     machine-readable counterpart. These arms redden when a quiet site gains the
     sentence or the persona stops naming a site that carries it.
+
+    THE PERSONA NAMES COMMANDS AND THE SITES ARE FINER, so the two arms below
+    are deliberately at different grains and the third exists to cover the gap.
+    A command is a propagating BOUNDARY when any of its sites propagates, which
+    is what arm 2 compares; whether the RIGHT sites within it propagate is what
+    arm 3 holds, for the one command whose sites disagree.
     """
 
     def test_no_quiet_dispatch_carries_the_propagate_sentence(self):
-        """Reddens when a dispatch outside the propagating set gains the
-        sentence, or when the sentence vanishes from the tree (non-vacuity:
-        the count is pinned, so an empty extraction fails loudly)."""
-        carrying = _propagating_dispatch_stems()
+        """Reddens when a site outside the propagating set gains the sentence,
+        or when the sentence vanishes from the tree (non-vacuity: the count is
+        pinned, so an empty extraction fails loudly).
+
+        FOUR SITES, in two commands: `orchestrate`'s post-review Standard
+        Harvest and its mid-session Consolidation Harvest, and `wrap-up`'s two
+        arc-closing step-6 branches. The count is per SITE, so it moves when a
+        branch gains or loses its propagation even though the command set does
+        not -- which is the whole reason the unit changed.
+        """
+        carrying = _propagating_sites()
         assert carrying, (
-            "no harvest dispatch under %s carries %r -- either every site went "
-            "quiet or the description extraction stopped matching. Report this "
-            "as an extraction failure, not as agreement." % (COMMANDS_DIR, PROPAGATE_SENTENCE)
+            "nothing under %s carries %r -- either every site went quiet or "
+            "the carrier extraction stopped matching. Report this as an "
+            "extraction failure, not as agreement." % (COMMANDS_DIR, PROPAGATE_SENTENCE)
         )
-        assert len(carrying) == 3, carrying
+        assert len(carrying) == 4, carrying
         assert set(carrying) <= PROPAGATING_COMMANDS, sorted(set(carrying) - PROPAGATING_COMMANDS)
 
     def test_every_propagating_site_is_named_in_the_persona_paragraph(self):
@@ -382,7 +460,44 @@ class TestOnlyTheSafeBoundariesPropagateTheWorkingMemoryBlock:
             "was rewritten. Report this as an extraction failure, not as agreement."
             % PROPAGATION_PARAGRAPH_MARKER
         )
-        assert claimed == set(_propagating_dispatch_stems())
+        assert claimed == set(_propagating_sites())
+
+    def test_the_wrap_up_branch_that_preserves_an_open_pr_does_not_propagate(self):
+        """The branch-level fact a command-granular set could not hold.
+
+        `wrap-up`'s three step-6 branches do not agree, and the disagreement is
+        the point. A merged PR and no PR each END the arc: nothing whose value
+        is independent judgement spawns after them, so those two propagate. The
+        open-PR branch does the opposite -- it writes `session_paused`, which
+        makes the next session a declared resumption, and its own report sends
+        the user back into review. The agents that spawn next are therefore the
+        ones judging this arc, and a propagation here hands them this arc's own
+        conclusions. The resumption marker cannot undo that: it suppresses the
+        secretary's spawn rebuild, and this write has already landed on disk.
+
+        Reddens in both directions -- a propagation appearing on the open-PR
+        branch, and one disappearing from either branch that closes the arc.
+        Do not satisfy it by making the three branches symmetric: the asymmetry
+        is the fix, and symmetry here is the defect.
+        """
+        merged, no_pr, open_pr = (
+            _wrap_up_branch_slices()[label] for label in _WRAP_UP_BRANCHES
+        )
+        assert PROPAGATE_SENTENCE in merged, (
+            "wrap-up's merged-PR branch no longer propagates. The arc is over "
+            "there and nothing else propagates it, so the block never receives "
+            "this session's records."
+        )
+        assert PROPAGATE_SENTENCE in no_pr, (
+            "wrap-up's no-PR branch no longer propagates. Same consequence as "
+            "the merged branch: the arc is over and nothing else writes."
+        )
+        assert PROPAGATE_SENTENCE not in open_pr, (
+            "wrap-up's open-PR branch propagates. That branch keeps the arc "
+            "alive -- it writes session_paused and sends the user back into "
+            "review -- so this write reaches the agents spawned to judge the "
+            "arc, and the resumption marker cannot take it back."
+        )
 
     def test_auditor_shaped_task_is_not_self_complete_exempt(self):
         """The fact the propagation rule rests on: an auditor's task stays
