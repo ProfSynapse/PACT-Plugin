@@ -718,10 +718,16 @@ class TestSearchMemoriesByText:
         anyone judged it unnecessary. No arm can cover it while removal and
         presence produce the same rows.
 
-        THAT IS THE MUTATION WORTH CATCHING. An index can satisfy `rowid ASC`
-        and can never fully satisfy `rowid DESC`, so anyone optimising this
-        query's sort has a standing reason to flip the direction, and DESC is
-        what makes a projection match the order the saves went in.
+        THAT IS THE MUTATION WORTH CATCHING, because anyone optimising this
+        query's sort has a reason to flip the direction: an index on
+        `(project_id, created_at DESC)` still needs a temp b-tree for the last
+        term under `rowid DESC` and needs none under `rowid ASC`. DESC is what
+        makes a projection match the order the saves went in, so the flip
+        trades a correctness property for a sort this query does not need.
+        Measured, and narrower than it first looks: an ASCENDING index on
+        `(project_id, created_at)` satisfies `created_at DESC, rowid DESC`
+        outright with no sort, by scanning backward. So it is the DESC index
+        that cannot fully serve `rowid DESC`, not indexes in general.
 
         The shared stamp is set by direct SQL because that is the only way to
         reach the clause. `create_memory` stamps microsecond ISO and ignores a
