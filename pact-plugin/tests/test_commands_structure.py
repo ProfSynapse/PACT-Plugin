@@ -1370,10 +1370,51 @@ class TestBootstrapPauseConsumptionClauses:
     THE CONSEQUENCE IS THE DANGEROUS SHAPE, not a missing feature.
     `_pause_is_spent` in `hooks/shared/session_resume.py` works correctly and
     is never reached, because this block is the only thing that emits the event
-    it consumes. The paused claim then never retires, and the Working Memory
-    freeze it gates loses the bounded life the mechanism is built to give it —
-    a freeze with no expiry is the neglect the freeze was designed to be
-    distinguishable from.
+    it consumes. The paused claim then never retires, so the prompt re-surfaces
+    on every later resumption that still reads this journal.
+
+    WHAT THE CONSUMPTION EVENT BOUNDS, stated precisely because an earlier
+    version of this docstring named the wrong mechanism and a first correction
+    then overshot in the other direction. Two bounds operate, and they are not
+    the same bound.
+
+    THE STRUCTURAL ONE NEEDS NO EVENT. `session_init` writes the marker into
+    the CURRENT session's journal via the implicit `append_event`, while
+    `check_resume_state` reads the claim from `prev_session_dir`, and
+    `_journal_path_from` joins the directory it is handed with no ancestor
+    resolution. So a single freeze cannot outlive its own session, and a claim
+    is visible one hop back and no further — with or without any consumption.
+
+    THE EVENT'S OWN BOUND IS REAL AND PATH-DEPENDENT. It retires the claim, so
+    it decides whether the prompt re-surfaces AND whether a NEW freeze is minted
+    from that same claim in the next session. That only works where the
+    consumption lands in the SAME journal as the claim, which is the `/compact`
+    and same-session `--resume` case: measured, a later session reading that
+    journal one hop back surfaces nothing and does not freeze, where without the
+    consumption it surfaces and freezes. On the quit-then-new-session path the
+    consumption lands in the NEW session's journal and retires nothing; there
+    the one-hop bound alone ends it.
+
+    THAT BOUND IS PER CLAIM, AND CLAIMS ARE MINTED PER SESSION — do not read
+    it as a bound on what a user experiences. `wrap-up` branch C writes a
+    `session_paused` event every time a session ends with the PR still open,
+    so the next session surfaces a NEW claim and freezes on that. A sequence
+    of one-session freezes is indistinguishable from a persistent one from
+    outside, and while the PR stays open it IS the steady state. Each freeze
+    expiring on its own is what makes the mechanism safe to reason about; it
+    is not a promise that the block gets rebuilt soon.
+
+    WHY THAT CORRECTION MATTERS HERE. The failure this docstring now exists to
+    prevent is a reader concluding the freeze is unbounded. Told the expiry is
+    an instruction-surface write an agent may skip, a careful reader correctly
+    judges it unreliable and restores the unconditional rebuild — reopening the
+    hole. The mechanism is more robust than the old wording claimed, and the
+    old wording is what supplied the revert argument.
+
+    WHAT THIS DOES NOT CLAIM. That the block was clean when the freeze began.
+    The freeze holds whatever the block held at the resumption boundary; a
+    dispatch that propagated earlier in the arc contaminates it before any
+    freeze starts, and nothing here detects or repairs that.
 
     SCOPE, stated so a later green is not over-read: these are DELETION
     detectors on the literals a reader must be able to copy. Each literal below
@@ -1410,6 +1451,39 @@ class TestBootstrapPauseConsumptionClauses:
         leaves the other two unretirable: correct-looking, green, and a freeze
         that never ends."""
         assert "Write it for EVERY paused prompt that surfaces" in bootstrap_text
+
+    def test_pause_consumption_trigger_is_not_resumption_keyed(
+        self, bootstrap_text
+    ):
+        """The paused write fires on SURFACING, never on confirming resumption.
+
+        Detects: a trigger that reads "after confirming resumption" above a
+        correct closing enumeration. Step 3 lets the user DECLINE a paused
+        prompt ("or start fresh"), unlike its refresh sibling which calls a
+        refresh a declared continuation and auto-proceeds. So a resumption-
+        keyed trigger leaves the ordinary open-PR path unretired: the claim
+        survives, the prompt re-surfaces, and the briefing reports "resuming an
+        interrupted workstream" for a session the user chose not to resume.
+
+        WHY THE SIBLING PIN DOES NOT COVER THIS. `test_every_surfaced_paused_
+        prompt_is_retired` asserts the closing enumeration, and that literal
+        can be present while the trigger above it is still resumption-keyed —
+        which was the state on disk when this arm was written, with the suite
+        green. A pin on an enumeration does not reach the condition governing
+        it.
+
+        SLICED TO THE PAUSED BLOCK, not the file. The refresh block above it
+        legitimately says "immediately after confirming resumption" and must
+        keep saying so, so a file-wide assertion would be wrong in both
+        directions: green when the paused trigger is broken, red when the
+        refresh trigger is correct.
+        """
+        block = bootstrap_text.split("**Paused-state consumption write")[1]
+        block = block.split("## Step 4")[0]
+        assert "confirming resumption" not in block, (
+            "the paused consumption trigger is keyed on confirming resumption; "
+            "a user who declines the prompt never retires the claim"
+        )
 
 
 # =============================================================================

@@ -1661,9 +1661,41 @@ class TestPausedPromptCarriesItsConsumptionKey:
 
     Without it bootstrap has nothing to copy and `_pause_is_spent` can never
     match — the write would be unpopulatable and the predicate dead, green
-    tests and no behaviour. All three branches are covered because all three
-    surface, and anything that surfaces freezes the Working Memory block: a
-    branch with no key is a freeze with no expiry.
+    tests and no behaviour. A branch with no key is a branch whose claim can
+    never be retired, so its prompt re-surfaces on every later resumption that
+    still reads this journal.
+
+    SCOPE — THIS CLASS COVERS `_interpret_paused_event`, WHICH IS NOT EVERY
+    SURFACING SHAPE. Its three branches are the three covered here. When a
+    refreshed claim survives alongside a paused one, `_arbitrate` composes a
+    further prompt from them, and whether the losing claim's key survives that
+    composition is a property of `_arbitrate` and is tested with it. An earlier
+    version of this docstring said "all three branches are covered because all
+    three surface", which is true of this function and reads as a property of
+    the module — the same over-wide census this suite has had to correct
+    elsewhere. State the function, not the module.
+
+    TWO BOUNDS OPERATE ON THE WORKING MEMORY FREEZE AND THEY ARE DIFFERENT.
+    The structural one needs no event: `session_init` writes the marker into
+    the CURRENT session's journal while `check_resume_state` reads the claim
+    from `prev_session_dir`, and `_journal_path_from` does no ancestor
+    resolution, so a single freeze cannot outlive its session and a claim is
+    visible one hop back and no further. The key's own bound is narrower and
+    real: retiring the claim decides whether a NEW freeze is minted from it in
+    the next session, and that works only where the consumption lands in the
+    SAME journal as the claim — the `/compact` and same-session `--resume`
+    case. Measured: with it, the next session surfaces nothing and does not
+    freeze; without it, that session surfaces and freezes. On the
+    quit-then-new-session path the consumption is an orphan in the new
+    journal and the one-hop bound alone ends it.
+
+    THAT BOUND IS PER CLAIM, NOT PER USER. `wrap-up` branch C mints a fresh
+    `session_paused` event every time a session ends with the PR still open,
+    so the next session surfaces a new claim and freezes on that one. While
+    the PR stays open, a run of individually-expiring freezes is the steady
+    state and is indistinguishable from a persistent freeze from outside. Read
+    the per-claim bound as what makes the mechanism analysable, never as a
+    promise that the block is rebuilt soon.
     """
 
     def _interpret(self, event, pr_state="OPEN"):
