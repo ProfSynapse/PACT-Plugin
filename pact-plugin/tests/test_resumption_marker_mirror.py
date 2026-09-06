@@ -32,6 +32,38 @@ AN EMPTY EXTRACTION FAILS LOUDLY. When the anchor cannot be found the helper
 raises instead of returning nothing, because a gate that compares an empty set
 against anything agrees with everything.
 
+TWO POPULATIONS, ENUMERATED, BECAUSE THEY DIFFER AND THE DIFFERENCE IS THE
+POINT. They are not the same set and neither contains the other.
+
+The NAMING set — the surfaces this gate compares:
+  - `hooks/session_init.py`, located structurally and supplying the oracle
+  - `agents/pact-secretary.md`
+  - the registration table in `hooks/shared/session_journal.py`
+
+The REFACTOR set — the surfaces a coordinated rename actually touches:
+  - `hooks/session_init.py`
+  - `tests/test_session_init.py`
+  - `hooks/shared/session_journal.py`
+  - `tests/test_session_journal.py`
+
+Each set holds a member the other does not, and both asymmetries carry weight.
+`agents/pact-secretary.md` is named and NOT refactored: a code-side rename
+never touches a markdown agent body, which is exactly why the coordinated
+rename went unnoticed and exactly why this gate exists. The two test files are
+refactored and NOT compared, which costs nothing — each fails on its own if
+the literal moves out from under it, `tests/test_session_init.py` by asserting
+the type of the event the hook appends and the literal inside the failure
+systemMessage, `tests/test_session_journal.py` by pinning the type's entry in
+the registration table. A rename that reaches only one of those reddens that
+file directly, so comparing them here would duplicate coverage rather than add
+it.
+
+NO CARDINALITY PIN, DELIBERATELY. Asserting a count over either set reddens on
+every legitimate new mention — a new test naming the type, a second assertion
+in an existing one — and a check that fires on correct work is a check people
+learn to delete. The enumeration above is prose for a reader; the mechanical
+coverage is the per-surface comparison below.
+
 THE BOUND, stated here because a guarded claim carrying none is what let this
 gap stand. This gate catches a rename that moves one side alone, in either
 direction. It PERMITS a rename of all three surfaces together — that is a
