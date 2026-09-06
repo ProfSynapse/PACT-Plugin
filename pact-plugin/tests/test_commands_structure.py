@@ -1826,3 +1826,79 @@ class TestResolverVocabularyIsSingleSourced:
             "The field is free-form, so nothing else will ever redden to tell "
             "you."
         )
+
+
+class TestNextRoutesTheBacklogToolsActualExitCodes:
+    """`commands/next.md`'s exit-code branches against `backlog.py`'s constants.
+
+    WHY THIS EXISTS. The tool's refusal code moved and the command file kept
+    routing the old one. Nothing reddened: the tool's own tests reference the
+    CONSTANT, so they pass at any value, and nothing related the command file's
+    branches to the tool's actual codes. An external reviewer found it after
+    four internal lanes and a verify-only pass, from a commit that had shipped.
+
+    BOTH SIDES ARE DERIVED, NEITHER IS TYPED. The codes come from the module's
+    `_EXIT_*` constants by attribute scan, so a renamed or added constant is
+    picked up rather than missed, and the routed set comes from the command
+    file's own text. A literal on either side would be a value pin that reddens
+    on the next legitimate move — which is the failure this file has argued
+    against elsewhere.
+
+    THE EXTRACTION IS THE FRAGILE PART AND IS DELIBERATELY NARROW. A sweep for
+    integers over the section does not work: the prose contains "Step 5" many
+    times and an "exit 2" that is the INTERPRETER's code, named precisely
+    because it is not one the tool chooses. So the arm keys on the file's own
+    completeness sentence, anchored on the clause that carries its meaning
+    rather than on a phrasing. Whitespace is collapsed first, so re-wrapping
+    the paragraph cannot break it. If a future author states the set some other
+    way the anchor stops matching and the assertion fires on the empty
+    extraction — loudly, not silently.
+
+    WHAT THIS DOES NOT COVER. It relates TWO files. Any other surface that
+    routes on these codes is invisible to it, and the census that found the
+    known sites could not see a router naming neither the tool nor its exit
+    behaviour. It does not check that each branch's ADVICE is correct, only
+    that the codes agree. And the catch-all branch is not a number: it is
+    excluded by construction, never matched as one.
+    """
+
+    _CLAIM = "are the only ones the tool chooses"
+
+    def _defined(self):
+        from shared import backlog
+
+        codes = {v for k, v in vars(backlog).items() if k.startswith("_EXIT_")}
+        assert codes, (
+            "no _EXIT_* constants found on shared.backlog — the extraction "
+            "failed, which is not the same as agreement"
+        )
+        return codes, backlog
+
+    def test_next_md_routes_exactly_the_codes_the_tool_defines(self):
+        defined, backlog = self._defined()
+        text = (COMMANDS_DIR / "next.md").read_text(encoding="utf-8")
+        flat = re.sub(r"\s+", " ", text)
+
+        assert flat.count(self._CLAIM) == 1, (
+            f"expected exactly one {self._CLAIM!r} clause in next.md, found "
+            f"{flat.count(self._CLAIM)} — the anchor this arm keys on has moved"
+        )
+        span = re.search(rf"—([^—]*?){self._CLAIM}", flat)
+        assert span, "found the clause but not its enumeration — anchor moved"
+        routed = {int(n) for n in re.findall(r"\d+", span.group(1))}
+        assert routed, "the enumeration extracted no codes — extraction failure"
+
+        assert routed == defined, (
+            f"next.md routes {sorted(routed)} but backlog.py defines "
+            f"{sorted(defined)}; the unrouted/unknown codes are "
+            f"{sorted(defined ^ routed)}"
+        )
+
+        # Every non-success code also carries its own branch, so the
+        # enumeration and the branches cannot drift apart from each other.
+        headers = {int(m) for m in re.findall(r"^Exit code (\d+)\b", text, re.M)}
+        assert headers, "no 'Exit code N' branch headers found — extraction failure"
+        assert headers == defined - {backlog._EXIT_OK}, (
+            f"branch headers cover {sorted(headers)} but the tool's non-success "
+            f"codes are {sorted(defined - {backlog._EXIT_OK})}"
+        )
