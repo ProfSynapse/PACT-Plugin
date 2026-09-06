@@ -1511,6 +1511,229 @@ class TestRefreshIsSpent:
         assert "refresh_ts=2026-07-10T12:00:00Z" in result
 
 
+def _paused_event(ts="2026-07-10T12:00:00Z", **fields):
+    """A well-formed session_paused event; `fields` override any key."""
+    event = {
+        "v": 1, "type": "session_paused", "pr_number": 77,
+        "pr_url": "https://github.com/o/r/pull/77", "branch": "feat/p",
+        "worktree_path": "/tmp/wt-p", "consolidation_completed": True,
+        "ts": ts,
+    }
+    event.update(fields)
+    return event
+
+
+class TestPauseIsSpent:
+    """Spent-check for the paused claim — the mirror of TestRefreshIsSpent.
+
+    Same discipline, asserted separately because the two predicates are
+    deliberately NOT one function: the interpreters above them have opposite
+    fail directions, so a shared predicate would be the first step toward
+    merging those. Every failure path lands on UNSPENT; the `>=` conjunct
+    blocks only the wrong-spend shape.
+    """
+
+    def _sd(self, tmp_path):
+        sd = tmp_path / "sess"
+        sd.mkdir(parents=True, exist_ok=True)
+        return sd
+
+    def test_matching_consumption_at_or_after_is_spent(self, tmp_path):
+        from shared.session_resume import _pause_is_spent
+
+        sd = self._sd(tmp_path)
+        paused = _paused_event(ts="2026-07-10T12:00:00Z")
+        _write_journal_events(sd, [
+            paused,
+            {"v": 1, "type": "session_pause_consumed",
+             "pause_ts": "2026-07-10T12:00:00Z",
+             "ts": "2026-07-10T12:05:00Z"},
+        ])
+        assert _pause_is_spent(str(sd), paused) is True
+
+    def test_no_consumption_is_unspent(self, tmp_path):
+        from shared.session_resume import _pause_is_spent
+
+        sd = self._sd(tmp_path)
+        paused = _paused_event()
+        _write_journal_events(sd, [paused])
+        assert _pause_is_spent(str(sd), paused) is False
+
+    def test_pause_ts_mismatch_is_unspent(self, tmp_path):
+        from shared.session_resume import _pause_is_spent
+
+        sd = self._sd(tmp_path)
+        paused = _paused_event(ts="2026-07-10T12:00:00Z")
+        _write_journal_events(sd, [
+            paused,
+            {"v": 1, "type": "session_pause_consumed",
+             "pause_ts": "2026-07-09T09:00:00Z",  # binds a DIFFERENT claim
+             "ts": "2026-07-10T12:05:00Z"},
+        ])
+        assert _pause_is_spent(str(sd), paused) is False
+
+    @pytest.mark.parametrize(
+        "consumption",
+        [
+            {"v": 1, "type": "session_pause_consumed",
+             "ts": "2026-07-10T12:05:00Z"},                      # missing pause_ts
+            {"v": 1, "type": "session_pause_consumed",
+             "pause_ts": "2026-07-10T12:00:00Z"},                # missing own ts
+            {"v": 1, "type": "session_pause_consumed",
+             "pause_ts": "2026-07-10T12:00:00Z",
+             "ts": "not-a-timestamp"},                           # unparseable own ts
+            {"v": 1, "type": "session_pause_consumed",
+             "pause_ts": "2026-07-10T12:00:00Z",
+             "ts": "2026-07-10T11:00:00Z"},                      # PREDATES the claim
+        ],
+        ids=["missing-pause_ts", "missing-own-ts",
+             "unparseable-own-ts", "earlier-than-claim"],
+    )
+    def test_malformed_or_early_consumption_is_unspent(
+        self, tmp_path, consumption
+    ):
+        """The suppress-direction belt: every bad consumption ⇒ UNSPENT."""
+        from shared.session_resume import _pause_is_spent
+
+        sd = self._sd(tmp_path)
+        paused = _paused_event(ts="2026-07-10T12:00:00Z")
+        _write_journal_events(sd, [paused, consumption])
+        assert _pause_is_spent(str(sd), paused) is False
+
+    def test_pause_missing_ts_is_unspent(self, tmp_path):
+        """A paused event with no ts cannot be spent (fail toward surfacing)."""
+        from shared.session_resume import _pause_is_spent
+
+        sd = self._sd(tmp_path)
+        paused = _paused_event()
+        del paused["ts"]
+        _write_journal_events(sd, [paused])
+        assert _pause_is_spent(str(sd), paused) is False
+
+    def test_a_refresh_consumption_does_not_spend_a_pause(self, tmp_path):
+        """The two consumption streams must not cross.
+
+        Same timestamp, wrong event type. If these two predicates were ever
+        merged into one parameterised function, this is the assertion that
+        would catch the parameter being dropped.
+        """
+        from shared.session_resume import _pause_is_spent
+
+        sd = self._sd(tmp_path)
+        paused = _paused_event(ts="2026-07-10T12:00:00Z")
+        _write_journal_events(sd, [
+            paused,
+            {"v": 1, "type": "session_refresh_consumed",
+             "refresh_ts": "2026-07-10T12:00:00Z",
+             "ts": "2026-07-10T12:05:00Z"},
+        ])
+        assert _pause_is_spent(str(sd), paused) is False
+
+
+class TestPausedPromptCarriesItsConsumptionKey:
+    """Every paused branch that surfaces emits a copyable `pause_ts=`.
+
+    Without it bootstrap has nothing to copy and `_pause_is_spent` can never
+    match — the write would be unpopulatable and the predicate dead, green
+    tests and no behaviour. All three branches are covered because all three
+    surface, and anything that surfaces freezes the Working Memory block: a
+    branch with no key is a freeze with no expiry.
+    """
+
+    def _interpret(self, event, pr_state="OPEN"):
+        from unittest.mock import patch as mock_patch
+        from shared.session_resume import _interpret_paused_event
+
+        with mock_patch(
+            "shared.session_resume._check_pr_state", return_value=pr_state
+        ):
+            return _interpret_paused_event(event)
+
+    def test_normal_branch_carries_the_key(self, frozen_clock):
+        result = self._interpret(_paused_event(ts="2026-07-10T12:00:00Z"))
+
+        # Branch identity asserted FIRST. Every branch emits the key, so a
+        # key-only assertion passes on whichever branch the fixture happens
+        # to reach — and an absolute ts silently ages into the stale branch.
+        assert "Paused work detected" in result
+        assert "pause_ts=2026-07-10T12:00:00Z" in result
+
+    def test_merged_branch_carries_the_key(self, frozen_clock):
+        result = self._interpret(
+            _paused_event(ts="2026-07-10T12:00:00Z"), pr_state="MERGED"
+        )
+
+        assert "has been merged" in result
+        assert "pause_ts=2026-07-10T12:00:00Z" in result
+
+    def test_stale_branch_carries_the_key(self, frozen_clock):
+        """The 14-day-TTL branch. Uses a ts old enough to trip the TTL."""
+        result = self._interpret(_paused_event(ts="2020-01-01T00:00:00Z"))
+
+        assert "Stale paused state" in result
+        assert "pause_ts=2020-01-01T00:00:00Z" in result
+
+    def test_the_key_is_byte_exact_not_sanitized(self, frozen_clock):
+        """The echo is the spend key, so it must survive VERBATIM.
+
+        `_pause_is_spent` compares the consumption's `pause_ts` against the
+        claim's own `ts` by exact string equality. A sanitized or truncated
+        echo would produce a key that can never match, which fails silently:
+        bootstrap writes, nothing spends, the prompt surfaces forever.
+        """
+        odd_ts = "2026-07-10T12:00:00.123456+00:00"
+        result = self._interpret(_paused_event(ts=odd_ts))
+
+        assert f"pause_ts={odd_ts}" in result
+
+    def test_unusable_ts_renders_unavailable_rather_than_a_bad_key(
+        self, frozen_clock
+    ):
+        """Fail toward surfacing: a ts that cannot be echoed verbatim.
+
+        A control character cannot go into the prompt, and it cannot be
+        stripped either without breaking the exact-match. So the branch
+        renders UNAVAILABLE and the prompt may re-surface once — a duplicate
+        prompt, never a lost one.
+        """
+        result = self._interpret(_paused_event(ts="2026-07-10T12:00:00Z\ninjected"))
+
+        assert "pause_ts=UNAVAILABLE" in result
+        assert "injected" not in result
+
+
+class TestSpentPauseStopsSurfacing:
+    """End-to-end through the public seam: a consumed pause yields no prompt."""
+
+    def _resolve(self, sd):
+        from unittest.mock import patch as mock_patch
+        from shared.session_resume import check_resume_state
+
+        with mock_patch(
+            "shared.session_resume._check_pr_state", return_value="OPEN"
+        ):
+            return check_resume_state(prev_session_dir=str(sd))
+
+    def test_unconsumed_pause_surfaces(self, tmp_path, frozen_clock):
+        sd = tmp_path / "sess"
+        sd.mkdir(parents=True, exist_ok=True)
+        _write_journal_events(sd, [_paused_event(ts="2026-07-10T12:00:00Z")])
+
+        assert "Paused work detected" in self._resolve(sd)
+
+    def test_consumed_pause_does_not_surface(self, tmp_path, frozen_clock):
+        sd = tmp_path / "sess"
+        sd.mkdir(parents=True, exist_ok=True)
+        _write_journal_events(sd, [
+            _paused_event(ts="2026-07-10T12:00:00Z"),
+            {"v": 1, "type": "session_pause_consumed",
+             "pause_ts": "2026-07-10T12:00:00Z",
+             "ts": "2026-07-10T12:05:00Z"},
+        ])
+
+        assert self._resolve(sd) is None
+
+
 class TestResumeArbitration:
     """P0 arbitration (D-c): newest-ts-wins at ONE point; the losing claim
     is always mentioned; unordered timestamps surface BOTH claims."""
@@ -2001,6 +2224,7 @@ class TestCheckResumeState:
         assert result == (
             f"Stale paused state from {paused_at.strftime('%Y-%m-%d')} "
             f"(older than 14 days). PR #55 on feat/old."
+            f" pause_ts={paused_at.strftime('%Y-%m-%dT%H:%M:%SZ')}"
         )
         # The fresh branch must NOT be taken — this is the assertion that
         # inverts against the sibling's.

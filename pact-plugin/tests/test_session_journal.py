@@ -3421,6 +3421,9 @@ class TestValidateEventSchemaPerType:
         "session_refresh_consumed": {
             "refresh_ts": "2026-07-10T15:00:00Z",
         },
+        "session_pause_consumed": {
+            "pause_ts": "2026-07-10T15:00:00Z",
+        },
         # No required fields BY DESIGN, not by omission: presence of the event
         # is the whole signal the secretary reads at spawn.
         "session_resumption_surfaced": {},

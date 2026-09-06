@@ -814,8 +814,33 @@ def _interpret_paused_event(event: dict) -> str | None:
     if not isinstance(pr_number, int) or isinstance(pr_number, bool) or pr_number <= 0:
         return None
 
-    # TTL check: ts older than 14 days
     ts_str = event.get("ts", "")
+
+    # The consumption key, rendered once and appended to EVERY branch below
+    # that returns a prompt. All three branches surface, and anything that
+    # surfaces freezes the Working Memory block for the session — so a branch
+    # with no key could never be retired and its freeze would have no expiry,
+    # which is the one property the freeze has to have.
+    #
+    # NOT SANITIZED, and this is the field in this module that must not be:
+    # bootstrap copies the value VERBATIM into the consumption event, and
+    # _pause_is_spent matches it against the claim's own `ts` by exact string
+    # compare. A sanitized echo would never match, so a ts carrying control
+    # characters renders UNAVAILABLE instead — failing toward surfacing, which
+    # is the safe direction. Same reasoning as the refreshed interpreter's
+    # refresh_ts, arrived at separately because the two must not share one.
+    pause_key = (
+        f" pause_ts={ts_str}"
+        if isinstance(ts_str, str)
+        and ts_str.strip()
+        and not _PROMPT_CONTROL_CHARS_RE.search(ts_str)
+        else (
+            " pause_ts=UNAVAILABLE — consumption cannot be recorded; "
+            "prompt may re-surface once."
+        )
+    )
+
+    # TTL check: ts older than 14 days
     if ts_str:
         try:
             paused_at = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
@@ -825,6 +850,7 @@ def _interpret_paused_event(event: dict) -> str | None:
                 return (
                     f"Stale paused state from {paused_date} "
                     f"(older than 14 days). PR #{pr_number} on {branch}."
+                    f"{pause_key}"
                 )
         except (ValueError, TypeError, OverflowError):
             pass
@@ -834,7 +860,7 @@ def _interpret_paused_event(event: dict) -> str | None:
     if pr_state in ("MERGED", "CLOSED"):
         return (
             f"Previously paused PR #{pr_number} has been "
-            f"{pr_state.lower()}."
+            f"{pr_state.lower()}.{pause_key}"
         )
 
     consolidation = event.get("consolidation_completed", False)
@@ -848,7 +874,8 @@ def _interpret_paused_event(event: dict) -> str | None:
     return (
         f"Paused work detected: PR #{pr_number} ({branch}) — awaiting merge. "
         f"Worktree at {worktree_path}. "
-        f"Run /PACT:peer-review to resume review/merge.{consolidation_note}"
+        f"Run /PACT:peer-review to resume review/merge."
+        f"{consolidation_note}{pause_key}"
     )
 
 
@@ -882,6 +909,8 @@ def check_resume_state(
     refreshed = read_last_event_from(prev_session_dir, "session_refreshed")
     if refreshed is not None and _refresh_is_spent(prev_session_dir, refreshed):
         refreshed = None
+    if paused is not None and _pause_is_spent(prev_session_dir, paused):
+        paused = None
     paused_msg = (
         _interpret_paused_event(paused) if paused is not None else None
     )  # may be None (correct for pause)
@@ -1102,6 +1131,46 @@ def _refresh_is_spent(session_dir: str, refreshed: dict) -> bool:
         return False  # fail toward surfacing
     for consumption in read_events_from(session_dir, "session_refresh_consumed"):
         if consumption.get("refresh_ts") != ts:  # exact string match — the ts IS the claim id
+            continue
+        try:
+            if _parse_ts(consumption.get("ts")) >= _parse_ts(ts):
+                return True
+        except Exception:
+            continue  # fail toward surfacing
+    return False
+
+
+def _pause_is_spent(session_dir: str, paused: dict) -> bool:
+    """True iff a session_pause_consumed event retires this paused claim.
+
+    A DELIBERATE MIRROR OF _refresh_is_spent, NOT A CANDIDATE TO MERGE WITH
+    IT. The two interpreters above have OPPOSITE fail directions — the paused
+    one keeps its PR-gated silent-None, the refreshed one fails safe toward
+    surfacing — and a spend predicate sits directly under an interpreter with
+    that property. Parameterising these two into one function invites the next
+    reader to do the same to the interpreters, and that merge would hand one
+    of the two paths the wrong fail direction.
+
+    Fire-once via ts-bound consumption: the paused event's `ts` IS the claim
+    id; a consumption's `pause_ts` must match it exactly (string compare — no
+    parsing on the identity axis). Every failure path lands on UNSPENT (return
+    False), so a malformed consumption can never suppress a prompt. The `>=`
+    conjunct is a belt on the SUPPRESS direction only: the consumption must
+    also be temporally sane (written at-or-after its claim). It can never
+    wrongly KEEP a prompt (worst case one duplicate), and it blocks the only
+    wrong-spend shape — a consumption record predating its claim.
+
+    No public wrapper, unlike has_unspent_refresh: that one exists because
+    session_init's compact branch consumes it as a presentation signal. A
+    pause counterpart has no caller, and an exported function with no caller
+    is a thing the next reader deletes or wires up somewhere it does not
+    belong.
+    """
+    ts = paused.get("ts")
+    if not isinstance(ts, str) or not ts:
+        return False  # fail toward surfacing
+    for consumption in read_events_from(session_dir, "session_pause_consumed"):
+        if consumption.get("pause_ts") != ts:  # exact string match — the ts IS the claim id
             continue
         try:
             if _parse_ts(consumption.get("ts")) >= _parse_ts(ts):

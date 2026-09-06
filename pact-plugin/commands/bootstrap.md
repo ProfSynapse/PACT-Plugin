@@ -46,6 +46,17 @@ JSON
 
 If the prompt said `refresh_ts=UNAVAILABLE`, skip the write (the prompt may re-surface once; its staleness downgrade bounds the repetition). Never write a consumption event when no refresh prompt surfaced. On a quit-then-new-session resume the consumption event lands in the NEW session's journal (a harmless orphan record) — fire-once on that path is enforced by the one-hop-back journal read, while the ts-bound consumption covers the same-session paths (`/compact` and same-session `--resume`).
 
+**Paused-state consumption write (fire-once)**: the paused prompt carries a `pause_ts=` key the same way, and it is retired the same way — immediately after confirming resumption, substitute the `pause_ts=` value copied VERBATIM from the surfaced prompt:
+
+```bash
+python3 "{plugin_root}/hooks/shared/session_journal.py" write \
+  --type session_pause_consumed --session-dir '{session_dir}' --stdin <<'JSON'
+{"pause_ts": "{pause_ts}"}
+JSON
+```
+
+The same three conditions apply unchanged: skip the write if the prompt said `pause_ts=UNAVAILABLE`, never write a consumption event when no paused prompt surfaced, and expect the event in the NEW session's journal on a quit-then-new-session resume. Write it for EVERY paused prompt that surfaces, including a stale one and one reporting a merged or closed PR — any surfaced prompt freezes the Working Memory block for the session, so a prompt that cannot be retired is a freeze with no expiry.
+
 ## Step 4 — Plugin banner
 
 Surface the plugin banner — a single line beginning `PACT plugin: ` — in the bootstrap-confirmation reply. The banner is pre-rendered by the `format_plugin_banner()` helper in `hooks/shared/plugin_manifest.py` (reading the live version from `plugin.json`) and delivered through the `session_init` SessionStart system reminder + the per-prompt `peer_inject` surface; no manual composition is needed — echo what the hook already produced. If the session-start system reminder has been dropped (post-compaction), fall back in order: (a) read the `- Plugin root:` line in CLAUDE.md's Current Session block (the path embeds the version), then (b) read `plugin.json["version"]` directly.
