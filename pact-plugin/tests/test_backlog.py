@@ -429,6 +429,16 @@ from shared import backlog_store
 HOOKS_DIR = Path(__file__).resolve().parent.parent / "hooks"
 SHARED_DIR = HOOKS_DIR / "shared"
 
+# Absolute, matching what `test_a_usage_error_and_a_refusal_exit_DIFFERENTLY`
+# already does for the same script: every subprocess below is spawned WITHOUT
+# `cwd=`, so it inherits whatever directory the run was launched from. Under a
+# relative path a run rooted anywhere but `pact-plugin` cannot open the script:
+# the interpreter exits 2 before the CLI starts, and 2 is also this CLI's own
+# refusal code, so a process that never ran is indistinguishable from a
+# deliberate refusal. Measured: from the worktree root, 6 failed / 111 passed;
+# from `pact-plugin`, 117 passed.
+BACKLOG_CLI = str(SHARED_DIR / "backlog.py")
+
 
 # --------------------------------------------------------------------------
 # helpers
@@ -2430,9 +2440,13 @@ def test_only_an_unparseable_file_reports_as_unreadable(tmp_path):
         store.mkdir()
         (store / f"{name}.json").write_text(body, encoding="utf-8")
         r = subprocess.run(
-            [sys.executable, "hooks/shared/backlog.py", "--backlog-dir", str(store), *args],
+            [sys.executable, BACKLOG_CLI, "--backlog-dir", str(store), *args],
             capture_output=True, text=True)
-        return r.returncode, r.stdout
+        # stderr included, matching `_run_cli` below: a failure occurring BEFORE
+        # the CLI prints anything leaves its only explanation there, and
+        # returning stdout alone makes such a failure indistinguishable from a
+        # deliberate refusal.
+        return r.returncode, r.stdout + r.stderr
 
     conforming = json.dumps({**base, "items": [_item(title="CONTROL-TITLE")]})
     code, out = run(conforming, "show", "--no-reconcile")
@@ -2645,7 +2659,7 @@ def test_show_reports_a_non_iterable_items_rather_than_raising(tmp_path):
     good = _backlog(tmp_path, items=[control])
     (store / f"{name}.json").write_text(json.dumps(good), encoding="utf-8")
 
-    argv = [sys.executable, "hooks/shared/backlog.py", "--backlog-dir", str(store),
+    argv = [sys.executable, BACKLOG_CLI, "--backlog-dir", str(store),
             "show"]
     # COUPLED TO THE ARGV ABOVE, and asserted rather than left to a comment:
     # adding `--no-reconcile` here would make every assertion below pass with
@@ -3832,7 +3846,7 @@ def _cli_store(tmp_path, items, **top):
 
 def _run_cli(store, *args):
     r = subprocess.run(
-        [sys.executable, "hooks/shared/backlog.py", "--backlog-dir", str(store), *args],
+        [sys.executable, BACKLOG_CLI, "--backlog-dir", str(store), *args],
         capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr
 
