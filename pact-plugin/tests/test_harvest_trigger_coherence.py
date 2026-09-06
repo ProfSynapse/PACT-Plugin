@@ -197,7 +197,7 @@ def _claimed_boundaries(source, marker):
     }
 
 
-class TestConsolidationExemptionMatchesTheDispatchSites:
+class TestConsolidationClaimsMatchTheDispatchSites:
     """Every Consolidation boundary must appear wherever the set is enumerated.
 
     The unit here is the BOUNDARY-NAME SET, not the (command, variant) multiset
@@ -205,11 +205,15 @@ class TestConsolidationExemptionMatchesTheDispatchSites:
     constant — every member is a Consolidation Harvest — so pairing would
     compare a padded set. And multiplicity is wrong: a command with two trigger
     rows, one Standard and one Consolidation, is named ONCE here, correctly,
-    because these paragraphs claim a property of a boundary rather than a count
+    because such a paragraph claims a property of a boundary rather than a count
     of dispatch sites.
 
-    Completing one of these lists is what shortens the others, so they are
-    asserted against the dispatch sites rather than against each other.
+    EXTRACTION, stated because this module states the trigger arm's bound and a
+    silent arm reads as an unbounded one: the claimed set is every word of the located
+    paragraph that equals a ``commands/*.md`` stem. A command named there for
+    ANY reason is therefore claimed, so a contrastive mention — "unlike
+    `peer-review`" — would redden this arm. Today the located paragraph names only
+    the boundaries it triggers, and the extraction is exact.
 
     WHAT THIS DOES NOT CATCH: the per-boundary REASON. A reason that goes stale
     while its command name stays present is invisible here.
