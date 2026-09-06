@@ -286,7 +286,7 @@ See also: [Communication Charter](../protocols/pact-communication-charter.md) fo
 ---
 
 **After all reviews complete**:
-1. Synthesize findings into a unified review summary with consolidated recommendations, written to `docs/review/`. After writing it, confirm the review doc exists on disk and is non-empty before continuing.
+1. Synthesize findings into a unified review summary with consolidated recommendations, written to `docs/review/`. The summary carries one row per reviewer `open_questions` entry with its disposition: ruled, deferred with a reason, or superseded. Having nothing to say about a question is a disposition and is recorded as one; leaving a question out is not. After writing the summary, confirm the review doc exists on disk and is non-empty before continuing.
    - **Emit `artifact_paths`**: write a path-only `artifact_paths` journal event pointing at the review doc(s) so the consolidated review is recoverable after garbage-collection independently of any HANDOFF. The review doc is the lead's own product — enumerate its absolute path(s) here, not from any HANDOFF.
      ```bash
      set -e
@@ -427,7 +427,7 @@ JSON
          - Group all future="Create GitHub issue" items → Create GitHub issues
        - If any items fixed (minor or future addressed now) → re-run review to verify fixes only (see Verify-Only Re-Review above)
 
-4. State merge readiness (only after ALL blocking fixes complete AND minor/future item handling is done): "Ready to merge" or "Changes requested: [specifics]"
+4. State merge readiness (only after ALL blocking fixes complete AND minor/future item handling is done AND every reviewer `open_questions` entry carries a disposition in the review doc): "Ready to merge" or "Changes requested: [specifics]"
 
    > **Non-mocked seam-integration-test gate (projects with runtime hooks).** If this PR adds or changes a runtime hook whose observable value depends on an integration seam (task-dir resolution, the real session journal/inbox, an env-keyed path, or the platform task store), it MUST include at least one test that exercises that *real* seam rather than mocking it — a mocked-only suite can stay green while the one broken seam is the one every test stubs. See the non-mocked seam-test pattern in the pact-testing-strategies skill; the seam-dependent hook set is the SSOT in `hooks/shared/hook_infra_classifier.py`. Not applicable to projects without runtime hooks.
 
