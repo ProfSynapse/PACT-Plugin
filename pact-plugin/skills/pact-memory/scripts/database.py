@@ -365,10 +365,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # is on project_id, so idx_memories_project wins and the sort still runs.
     # It is a near miss rather than a counterexample.
     #
+    # WHAT SURVIVES AN INDEX EITHER WAY: TestTheTiebreakReachesTheEngine in
+    # tests/test_memory_database.py asserts the clause in the statement handed
+    # to the engine and never looks at rows, so a deletion still reddens on
+    # every plan. An index costs the output arm's deletion coverage, not all
+    # of it.
+    #
     # This is a condition on adding an index, not a prohibition. The sort is
-    # unneeded overhead today, not forbidden forever; if it ever costs
-    # something real, add the index and give the arms their coverage back by
-    # other means.
+    # unneeded overhead today, not forbidden forever.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at)")

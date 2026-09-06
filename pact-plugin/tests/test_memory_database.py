@@ -715,8 +715,11 @@ class TestSearchMemoriesByText:
         to `rowid ASC` DOES redden it. So the clause's role as insurance -- for
         a tie between rows the schema DEFAULT wrote -- stays UNTESTED, and it
         stays untested for a reason internal to this query rather than because
-        anyone judged it unnecessary. No arm can cover it while removal and
-        presence produce the same rows.
+        anyone judged it unnecessary. No OUTPUT arm can cover it while removal
+        and presence produce the same rows, which is why the cover is
+        TestTheTiebreakReachesTheEngine below: it asserts the clause in the
+        statement the engine is handed and so does not need the rows to
+        differ.
 
         THAT IS THE MUTATION WORTH CATCHING, because anyone optimising this
         query's sort has a reason to flip the direction: an index on
@@ -753,6 +756,63 @@ class TestSearchMemoriesByText:
             "tied rows must come back newest-inserted first; got the order "
             f"{found} for insertion order {ids}"
         )
+
+
+class TestTheTiebreakReachesTheEngine:
+    """Both ordering queries ASK the engine for `rowid DESC`, on any plan.
+
+    PLAN-INDEPENDENT BY CONSTRUCTION: these read the statement the driver is
+    handed and never look at rows, so they hold under every plan -- including
+    the ascending-index plan on which deleting the tiebreak returns identical
+    rows, where no output-based check can see the deletion at all. That is the
+    gap these close, and it is why the arms above cannot close it themselves.
+
+    WHAT THIS PROVES: the clause is asked for. WHAT IT DOES NOT: that the
+    clause has any effect, or that the ordering is correct. Those remain with
+    the output arms, which are not redundant -- they pin what the ordering
+    DOES under today's plan, which this cannot.
+
+    ITS OWN CONDITION, stated because removing a contingency must not add a
+    quieter one: this pins the clause AS TEXT, whitespace-normalised. A
+    deliberate rewrite of the ordering into an equivalent form must update
+    these arms; they will redden on such a rewrite though behaviour is right.
+    """
+
+    def _order_by_of_the_one_ordering_statement(self, tmp_path, call):
+        """The ORDER BY tail of the single ordering statement `call` issued.
+
+        Asserting the count is what makes the result attributable: with two
+        sites carrying the identical clause, a check that searched everything
+        traced could pass on evidence produced by the other query.
+        """
+        from scripts.database import ensure_initialized
+        conn = sqlite3.connect(str(tmp_path / "traced.db"))
+        ensure_initialized(conn)
+        seen = []
+        conn.set_trace_callback(seen.append)
+        call(conn)
+        conn.set_trace_callback(None)
+        ordered = [" ".join(s.split()) for s in seen if "ORDER BY" in s]
+        assert len(ordered) == 1, (
+            "this call must issue exactly one ordering statement or the "
+            f"assertion cannot be attributed to it; got {len(ordered)}"
+        )
+        return ordered[0].split("ORDER BY", 1)[1].strip()
+
+    def test_the_paged_list_asks_for_the_tiebreak(self, tmp_path):
+        from scripts.database import list_memories
+        clause = self._order_by_of_the_one_ordering_statement(
+            tmp_path, lambda c: list_memories(c, project_id="p", limit=3)
+        )
+        assert clause.startswith("created_at DESC, rowid DESC"), clause
+
+    def test_the_text_search_asks_for_the_tiebreak(self, tmp_path):
+        from scripts.database import search_memories_by_text
+        clause = self._order_by_of_the_one_ordering_statement(
+            tmp_path,
+            lambda c: search_memories_by_text(c, "probe", project_id="p", limit=3),
+        )
+        assert clause.startswith("created_at DESC, rowid DESC"), clause
 
 
 # ---------------------------------------------------------------------------

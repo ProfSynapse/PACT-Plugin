@@ -284,8 +284,13 @@ class TestTheStoreIsWhatTheNextSyncShows:
         asymmetry to keep: the FLIP is detected under any plan, because ASC
         reverses DESC whenever two rows tie, while the DELETION is detected
         only because today's plan emits ties ascending. A future index or plan
-        change that emitted them descending would make deletion invisible here
-        too, and this arm would not notice the day it happened."""
+        change that emitted them descending would make deletion invisible
+        HERE. It would not go unnoticed: TestTheTiebreakReachesTheEngine in
+        tests/test_memory_database.py asserts the clause in the statement the
+        engine is handed and never looks at rows, so it reddens on a deletion
+        under any plan. This arm's job is the narrower one it can actually do
+        -- showing the ordering DOES something today, which a check on the
+        statement text cannot show."""
         ids = [self._save(project, db, f"tied {i}", "2026-04-01 12:00:00")
                for i in range(MAX_WORKING_MEMORIES)]
         result = self._sync(project, db)
