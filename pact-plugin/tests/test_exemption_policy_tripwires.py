@@ -329,7 +329,7 @@ def _enclosing_block(text, offset):
 
 PROPAGATE_SENTENCE = "Then propagate the store into the Working Memory block."
 PROPAGATION_PARAGRAPH_MARKER = "may appear only at a boundary"
-PROPAGATING_COMMANDS = frozenset({"orchestrate", "wrap-up", "pause", "refresh"})
+PROPAGATING_COMMANDS = frozenset({"orchestrate", "wrap-up"})
 _DISPATCH_RE = re.compile(r"Follow the (\w+) Harvest workflow")
 
 
@@ -369,7 +369,7 @@ class TestOnlyTheSafeBoundariesPropagateTheWorkingMemoryBlock:
             "quiet or the description extraction stopped matching. Report this "
             "as an extraction failure, not as agreement." % (COMMANDS_DIR, PROPAGATE_SENTENCE)
         )
-        assert len(carrying) == 5, carrying
+        assert len(carrying) == 3, carrying
         assert set(carrying) <= PROPAGATING_COMMANDS, sorted(set(carrying) - PROPAGATING_COMMANDS)
 
     def test_every_propagating_site_is_named_in_the_persona_paragraph(self):

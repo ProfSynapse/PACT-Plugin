@@ -644,13 +644,15 @@ At these workflow boundaries, create a task for the secretary referencing the `p
 - After comPACT specialists have reported → Standard Harvest (`comPACT`)
 - After a planning consultation completes → Standard Harvest (`plan-mode`)
 - During wrap-up → Consolidation Harvest (`wrap-up`) (Pass 2) with safety net for unprocessed HANDOFFs — propagates
-- At session pause → Consolidation Harvest (`pause`) — propagates
-- At a mid-session context refresh → Consolidation Harvest (`refresh`) — propagates
+- At session pause → Consolidation Harvest (`pause`)
+- At a mid-session context refresh → Consolidation Harvest (`refresh`)
 - After a second or subsequent feature completes in one session → Consolidation Harvest (`orchestrate`) — propagates
 
 These triggers are idempotent — safe to fire even if HANDOFFs were already processed.
 
-A harvest never writes the `CLAUDE.md` Working Memory block on its own: every harvest `save` is `--no-sync`. The block is a view of the pact-memory store, rebuilt only by the `sync` command, which a harvest runs when its dispatch carries the sentence `Then propagate the store into the Working Memory block.` An agent inherits the block as it stood when it spawned, so that sentence may appear only at a boundary after which no agent whose value is independent judgement — a reviewer, an auditor, a test engineer, or any agent whose value is reaching conclusions independently — spawns before a later harvest. Those boundaries are: after the merge decision (`orchestrate`, both the post-review Standard Harvest and the mid-session Consolidation Harvest), and the Consolidation Harvests of `wrap-up`, `pause` and `refresh`. Every other dispatch stays quiet, which is safe because the secretary rebuilds the block from the store with `sync` when it spawns, before that session's first independent-judgement agent exists; keep that spawn-time `sync` and this quiet default together. The test is whether an independent-judgement agent will spawn before a later harvest, never the variant's name.
+A harvest never writes the `CLAUDE.md` Working Memory block on its own: every harvest `save` is `--no-sync`. The block is a view of the pact-memory store, rebuilt only by the `sync` command, which a harvest runs when its dispatch carries the sentence `Then propagate the store into the Working Memory block.` An agent inherits the block as it stood when it spawned, so that sentence may appear only at a boundary after which no agent whose value is independent judgement — a reviewer, an auditor, a test engineer, or any agent whose value is reaching conclusions independently — spawns before a later harvest. Those boundaries are: after the merge decision (`orchestrate`, both the post-review Standard Harvest and the mid-session Consolidation Harvest), and the Consolidation Harvest of `wrap-up`. Every other dispatch stays quiet, which is safe because the secretary rebuilds the block from the store with `sync` when it spawns into a session that is not resuming an arc, before that session's first independent-judgement agent exists; keep that spawn-time `sync` and this quiet default together. The test is whether an independent-judgement agent will spawn before a later harvest, never the variant's name.
+
+A Consolidation Harvest at a resumption boundary stays quiet, and the secretary's spawn rebuild is skipped for that session. The block stays as the arc's earlier agents read it — treat that as the current state, not a stale one, and do not restore either write to freshen it.
 
 NOTE: For ad-hoc work outside defined PACT workflows → `SendMessage(to="secretary", message="[team-lead→secretary] Save: {what and why}", summary="Save request: {topic}")`
 

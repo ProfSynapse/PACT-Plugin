@@ -25,7 +25,7 @@ Pause the current session for later resumption. This is a **memory-critical subs
 
 ```
 TaskCreate(subject="secretary: session consolidation (Pass 2)",
-  description="Run Consolidation Harvest for team {team_name}. Follow the Consolidation Harvest workflow in your pact-handoff-harvest skill. Then propagate the store into the Working Memory block. Report summary when done.")
+  description="Run Consolidation Harvest for team {team_name}. Follow the Consolidation Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
 TaskUpdate(taskId, owner="secretary")
 ```
 
