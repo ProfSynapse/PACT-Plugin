@@ -96,7 +96,7 @@ deliberate: a message nobody anticipated then defaults to Step 5, where
 `repair` declines harmlessly if it turns out not to apply — rather than to a
 stop, which would leave a fixable backlog unfixed.
 
-Exit code 2 is a REFUSAL, not a corruption: the file is readable and nothing was
+Exit code 65 is a REFUSAL, not a corruption: the file is readable and nothing was
 written. Report what the message names and fix that. Do NOT go to Step 5 — a
 readable file must never be repaired.
 
@@ -105,6 +105,15 @@ ran. Nothing was read and nothing was written, so the backlog says nothing about
 this. Fix the invocation the message names and run it again — a global flag such
 as `--backlog-dir` must come BEFORE the subcommand. Do NOT go to Step 5, and do
 NOT report it as a refusal.
+
+ANY OTHER exit code — 0, 3, 64 and 65 are the only ones the tool chooses, so
+anything else came from something that is not the tool. The usual cause is that
+the tool never started: a wrong path or a wrong working directory makes the
+interpreter exit 2 before any of our code runs, and stderr then holds a Python
+traceback rather than one of our messages. Check the invocation and the
+directory. Do NOT go to Step 5, and do NOT report it as a refusal — nothing read
+the backlog, so the backlog says nothing about this. Distrust any diagnosis of
+the backlog's contents drawn from such a run, including your own.
 
 A file that parses but breaks a schema rule reports as `schema:` flags and
 still renders. Fix the field the flag names.

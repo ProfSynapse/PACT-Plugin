@@ -294,7 +294,7 @@ afternoon.
   `--ref` clears unconditionally        test_ref_none_clears_and_an_unpassed_ref_does_not
   `_UNVERIFIABLE` collapses to None     test_an_unopenable_memory_store_is_distinct_from_an_unresolved_id
   duplicates note ASSERTS a cause       test_the_duplicates_message_reports_what_it_saw_and_claims_no_cause
-  exit 3 collapses back to 2            test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY
+  exit 3 collapses to the refusal       test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY
   unreadable returns the refusal code   test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY
   `_is_newer` compares instants         test_a_memory_record_flags_only_on_a_LATER_DAY
   the rung becomes plain containment    test_a_nested_project_with_its_own_git_is_declined
@@ -433,10 +433,15 @@ SHARED_DIR = HOOKS_DIR / "shared"
 # already does for the same script: every subprocess below is spawned WITHOUT
 # `cwd=`, so it inherits whatever directory the run was launched from. Under a
 # relative path a run rooted anywhere but `pact-plugin` cannot open the script:
-# the interpreter exits 2 before the CLI starts, and 2 is also this CLI's own
-# refusal code, so a process that never ran is indistinguishable from a
-# deliberate refusal. Measured: from the worktree root, 6 failed / 111 passed;
-# from `pact-plugin`, 117 passed.
+# the interpreter exits 2 before the CLI starts. Measured then: from the
+# worktree root, 6 failed / 111 passed; from `pact-plugin`, 117 passed.
+#
+# TWO SEPARATE DEFECTS MET HERE AND ONLY ONE OF THEM IS THIS PATH. At the time
+# the refusal code was ALSO 2, so a process that never ran was indistinguishable
+# from a deliberate refusal, and the six failures read as considered refusals.
+# The refusal has since moved to `_EXIT_REFUSED`, which separates those two
+# whatever the path does. The absolute path below remains necessary: it stops
+# the never-started case arising at all, rather than making it legible.
 BACKLOG_CLI = str(SHARED_DIR / "backlog.py")
 
 
@@ -2029,8 +2034,8 @@ def test_an_ancestor_checkout_does_not_claim_an_unrelated_project(tmp_path):
 
 
 def test_an_unreadable_file_and_a_refusal_exit_DIFFERENTLY(tmp_path, monkeypatch):
-    """Exit 3 means the file will not parse; exit 2 means it parsed and a rule
-    refused, with nothing written.
+    """Exit 3 means the file will not parse; `_EXIT_REFUSED` means it parsed
+    and a rule refused, with nothing written.
 
     The command file routes 3 to `repair`, which MOVES USER DATA. Collapsing
     the two makes an agent rename a READABLE file aside because one field was
@@ -4170,7 +4175,7 @@ def test_exit_three_gives_different_advice_for_unreadable_and_unparseable(tmp_pa
     IN THE ADVICE.
 
     `repair` REFUSES a file it never read, so telling that user to run repair
-    sends them to a command that exits 2 and teaches them only that two of our
+    sends them to a command that refuses and teaches them only that two of our
     messages disagree. The unparseable case is the one repair is FOR, and its
     advice must stay plain.
 
@@ -4421,8 +4426,8 @@ def test_a_usage_error_and_a_refusal_exit_DIFFERENTLY(tmp_path):
 
     # THE TWO REFUSALS MUST REFUSE FOR DIFFERENT REASONS. `accepted: real item`
     # proves the subprocess reads the fixture, but only under `cwd=project`; it
-    # says nothing about the `cwd=outside` row, and exit 2 is reachable from
-    # several conditions. Without this a change routing both refusals through
+    # says nothing about the `cwd=outside` row, and the refusal code is
+    # reachable from several conditions. Without this a change routing both refusals through
     # one cause leaves every code above unchanged. Fragments, not whole
     # sentences, so a reworded message survives.
     def stderr(store, *args, cwd):

@@ -1178,8 +1178,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except BacklogFileError as exc:
         # THE ADVICE DEPENDS ON THE SUBCLASS, because `repair` REFUSES an
         # unreadable file without --force. Promising a repair that declines is
-        # worse than saying nothing: the user runs it, gets exit 2, and learns
-        # only that two of our messages disagree. Exit code stays 3 for both —
+        # worse than saying nothing: the user runs it, gets a refusal, and
+        # learns only that two of our messages disagree. Exit code stays 3 for both —
         # the distinction the caller needs is already in `exc`, so a second
         # code would add a branch every consumer must learn for no new fact.
         advice = (
